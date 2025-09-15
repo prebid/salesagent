@@ -67,6 +67,32 @@ def health():
         return f"Database connection failed: {str(e)}", 500
 
 
+@core_bp.route("/health/config")
+def health_config():
+    """Configuration health check endpoint."""
+    try:
+        from src.core.startup import validate_startup_requirements
+
+        validate_startup_requirements()
+        return (
+            jsonify(
+                {
+                    "status": "healthy",
+                    "service": "admin-ui",
+                    "component": "configuration",
+                    "message": "All configuration validation passed",
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        logger.error(f"Configuration health check failed: {e}")
+        return (
+            jsonify({"status": "unhealthy", "service": "admin-ui", "component": "configuration", "error": str(e)}),
+            500,
+        )
+
+
 @core_bp.route("/create_tenant", methods=["GET", "POST"])
 @require_auth(admin_only=True)
 def create_tenant():

@@ -8,6 +8,23 @@ import sys
 
 def main():
     """Run the server with configurable port."""
+    # Initialize application with startup validation
+    try:
+        # Add current directory to path for imports
+        sys.path.insert(0, ".")
+        from src.core.startup import initialize_application
+
+        print("🚀 Initializing AdCP Sales Agent...")
+        initialize_application()
+        print("✅ Application initialization completed")
+
+    except SystemExit:
+        print("❌ Application initialization failed - check logs")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Startup error: {e}")
+        sys.exit(1)
+
     port = os.environ.get("ADCP_SALES_PORT", "8080")
     host = os.environ.get("ADCP_SALES_HOST", "0.0.0.0")
 

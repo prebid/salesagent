@@ -54,6 +54,24 @@ def run_uvicorn_asgi(app, port: int):
 
 def main():
     """Main entry point for the admin UI server."""
+    # Initialize application with startup validation
+    try:
+        import sys
+
+        sys.path.insert(0, ".")
+        from src.core.startup import initialize_application
+
+        logger.info("🚀 Initializing Admin UI...")
+        initialize_application()
+        logger.info("✅ Admin UI initialization completed")
+
+    except SystemExit:
+        logger.error("❌ Admin UI initialization failed - check logs")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"❌ Admin UI startup error: {e}")
+        sys.exit(1)
+
     # Import the app factory
     from src.admin.app import create_app
 

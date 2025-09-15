@@ -32,6 +32,14 @@ services:
       # Gemini API key (required for AI features)
       GEMINI_API_KEY: ${GEMINI_API_KEY}
 
+      # Super admin authorization (required for startup validation)
+      SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS}
+      SUPER_ADMIN_DOMAINS: ${SUPER_ADMIN_DOMAINS}
+
+      # Optional: Google OAuth credentials via environment
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+
       # GAM OAuth credentials (required for Google Ad Manager functionality)
       GAM_OAUTH_CLIENT_ID: ${GAM_OAUTH_CLIENT_ID:-}
       GAM_OAUTH_CLIENT_SECRET: ${GAM_OAUTH_CLIENT_SECRET:-}

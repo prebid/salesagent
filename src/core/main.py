@@ -4542,6 +4542,27 @@ async def health(request: Request):
     return JSONResponse({"status": "healthy", "service": "mcp"})
 
 
+@mcp.custom_route("/health/config", methods=["GET"])
+async def health_config(request: Request):
+    """Configuration health check endpoint."""
+    try:
+        from src.core.startup import validate_startup_requirements
+
+        validate_startup_requirements()
+        return JSONResponse(
+            {
+                "status": "healthy",
+                "service": "mcp",
+                "component": "configuration",
+                "message": "All configuration validation passed",
+            }
+        )
+    except Exception as e:
+        return JSONResponse(
+            {"status": "unhealthy", "service": "mcp", "component": "configuration", "error": str(e)}, status_code=500
+        )
+
+
 # Add admin UI routes when running unified
 if os.environ.get("ADCP_UNIFIED_MODE"):
     from fastapi.middleware.wsgi import WSGIMiddleware
