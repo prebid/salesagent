@@ -49,6 +49,21 @@ class TestGAMValidator:
         assert len(issues) == 1
         assert "File size 3,000,000 bytes exceeds GAM video limit of 2,200,000 bytes" in issues[0]
 
+    def test_validate_creative_size_html5_no_file_size_validation(self):
+        """Test HTML5 creative size validation - file size should be skipped."""
+        # HTML5 with normal file size - should pass
+        issues = self.validator.validate_creative_size(width=970, height=250, file_size=2000000, creative_type="html5")
+        assert issues == []
+
+        # HTML5 with large file size - should still pass (GAM API will handle validation)
+        issues = self.validator.validate_creative_size(width=970, height=250, file_size=10000000, creative_type="html5")
+        assert issues == []  # No file size validation for HTML5
+
+        # HTML5 with oversized dimensions - should fail dimension validation
+        issues = self.validator.validate_creative_size(width=2000, height=250, file_size=1000000, creative_type="html5")
+        assert len(issues) == 1
+        assert "Creative width 2000px exceeds GAM maximum of 1800px" in issues[0]
+
     def test_validate_creative_size_none_values(self):
         """Test that None values are handled gracefully."""
         issues = self.validator.validate_creative_size(width=None, height=None, file_size=None, creative_type="display")
@@ -206,6 +221,21 @@ class TestGAMValidator:
         asset = {"url": "https://example.com/media", "format": "video_display"}
         creative_type = self.validator._get_creative_type_from_asset(asset)
         assert creative_type == "video"
+
+        # HTML5 (by URL)
+        asset = {"media_url": "https://example.com/creative.html"}
+        creative_type = self.validator._get_creative_type_from_asset(asset)
+        assert creative_type == "html5"
+
+        # HTML5 (by ZIP URL)
+        asset = {"media_url": "https://example.com/creative.zip"}
+        creative_type = self.validator._get_creative_type_from_asset(asset)
+        assert creative_type == "html5"
+
+        # HTML5 (by format)
+        asset = {"url": "https://example.com/media", "format": "html5_interactive"}
+        creative_type = self.validator._get_creative_type_from_asset(asset)
+        assert creative_type == "html5"
 
         # Display (default)
         asset = {"url": "https://example.com/banner.jpg"}

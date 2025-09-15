@@ -5,6 +5,7 @@ This test suite verifies that the GAM adapter correctly integrates
 the validation logic and handles validation failures appropriately.
 """
 
+from datetime import datetime
 from unittest.mock import patch
 
 from src.adapters.google_ad_manager import GoogleAdManager
@@ -137,6 +138,64 @@ class TestGAMValidationIntegration:
 
         # Should return no issues
         assert issues == []
+
+    def test_html5_creative_type_detection_and_creation(self):
+        """Test that HTML5 creatives are detected and handled correctly."""
+        with patch.object(GoogleAdManager, "_init_client"):
+            adapter = GoogleAdManager(config=self.config, principal=self.principal, dry_run=True)
+
+        # Test HTML5 creative detection by file extension
+        html5_asset = {
+            "creative_id": "html5_creative_1",
+            "name": "HTML5 Banner",
+            "format": "display_970x250",
+            "media_url": "https://example.com/creative.html",
+            "click_url": "https://example.com/landing",
+            "package_assignments": ["test_package"],
+        }
+
+        # Check that it's detected as HTML5
+        creative_type = adapter._get_creative_type(html5_asset)
+        assert creative_type == "html5"
+
+        # Test HTML5 creative creation
+        with patch.object(adapter, "_validate_creative_for_gam") as mock_validate:
+            mock_validate.return_value = []  # No validation errors
+
+            result = adapter.add_creative_assets("test_media_buy", [html5_asset], datetime.now())
+
+            # Should succeed in dry-run mode
+            assert len(result) == 1
+            assert result[0].status == "approved"
+
+    def test_html5_creative_with_zip_file(self):
+        """Test HTML5 creative with ZIP file containing assets."""
+        with patch.object(GoogleAdManager, "_init_client"):
+            adapter = GoogleAdManager(config=self.config, principal=self.principal, dry_run=True)
+
+        zip_asset = {
+            "creative_id": "html5_zip_1",
+            "name": "HTML5 Interactive Banner",
+            "format": "html5_interactive",
+            "media_url": "https://example.com/creative.zip",
+            "click_url": "https://example.com/landing",
+            "backup_image_url": "https://example.com/backup.jpg",
+            "package_assignments": ["test_package"],
+        }
+
+        # Should be detected as HTML5
+        creative_type = adapter._get_creative_type(zip_asset)
+        assert creative_type == "html5"
+
+        # Test creation with validation
+        with patch.object(adapter, "_validate_creative_for_gam") as mock_validate:
+            mock_validate.return_value = []  # No validation errors
+
+            result = adapter.add_creative_assets("test_media_buy", [zip_asset], datetime.now())
+
+            # Should succeed
+            assert len(result) == 1
+            assert result[0].status == "approved"
 
     def test_validation_handles_different_creative_types(self):
         """Test validation works for different creative types."""

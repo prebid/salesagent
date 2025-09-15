@@ -1281,7 +1281,17 @@ class GoogleAdManager(AdServerAdapter):
         elif asset.get("template_variables"):
             return "native"
         elif asset.get("media_url") or asset.get("media_data"):
-            return "hosted_asset"
+            # Check if HTML5 based on file extension or format
+            media_url = asset.get("media_url", "")
+            format_str = asset.get("format", "")
+            if (
+                media_url.lower().endswith((".html", ".htm", ".html5", ".zip"))
+                or "html5" in format_str.lower()
+                or "rich_media" in format_str.lower()
+            ):
+                return "html5"
+            else:
+                return "hosted_asset"
         else:
             # Auto-detect from legacy patterns for backward compatibility
             url = asset.get("url", "")
@@ -1293,6 +1303,12 @@ class GoogleAdManager(AdServerAdapter):
                 return "native"
             elif url and (".xml" in url.lower() or "vast" in url.lower()):
                 return "vast"
+            elif (
+                url.lower().endswith((".html", ".htm", ".html5", ".zip"))
+                or "html5" in format_str.lower()
+                or "rich_media" in format_str.lower()
+            ):
+                return "html5"
             else:
                 return "hosted_asset"  # Default
 
@@ -1327,6 +1343,8 @@ class GoogleAdManager(AdServerAdapter):
             return self._create_third_party_creative(asset, base_creative)
         elif creative_type == "native":
             return self._create_native_creative(asset, base_creative)
+        elif creative_type == "html5":
+            return self._create_html5_creative(asset, base_creative)
         elif creative_type == "hosted_asset":
             return self._create_hosted_asset_creative(asset, base_creative)
         else:
@@ -1383,6 +1401,63 @@ class GoogleAdManager(AdServerAdapter):
         self._add_tracking_urls_to_creative(creative, asset)
 
         return creative
+
+    def _create_html5_creative(self, asset: dict[str, Any], base_creative: dict) -> dict[str, Any]:
+        """Create an Html5Creative for rich media HTML5 ads."""
+        width, height = self._extract_dimensions_from_format(asset.get("format", ""))
+
+        creative = {
+            **base_creative,
+            "xsi_type": "Html5Creative",
+            "size": {"width": width, "height": height},
+            "htmlAsset": {
+                "htmlSource": self._get_html5_source(asset),
+                "size": {"width": width, "height": height},
+            },
+            "overrideSize": False,  # Use the creative size for display
+            "isInterstitial": False,  # Default to non-interstitial
+        }
+
+        # Add backup image if provided (AdCP v1.3+ feature)
+        if "backup_image_url" in asset:
+            creative["backupImageAsset"] = {
+                "assetUrl": asset["backup_image_url"],
+                "size": {"width": width, "height": height},
+            }
+
+        # Configure interstitial setting if specified
+        if "delivery_settings" in asset and asset["delivery_settings"]:
+            settings = asset["delivery_settings"]
+            if "interstitial" in settings:
+                creative["isInterstitial"] = settings["interstitial"]
+            if "override_size" in settings:
+                creative["overrideSize"] = settings["override_size"]
+
+        # Add impression tracking URLs using unified method
+        self._add_tracking_urls_to_creative(creative, asset)
+
+        return creative
+
+    def _get_html5_source(self, asset: dict[str, Any]) -> str:
+        """Get HTML5 source content from asset."""
+        media_url = asset.get("media_url", "")
+
+        # For HTML5 creatives, we need to handle different scenarios:
+        # 1. Direct HTML content in media_url (if it's a data URL or inline HTML)
+        # 2. ZIP file URL containing HTML5 creative assets
+        # 3. Direct HTML file URL
+
+        if media_url.startswith("data:text/html"):
+            # Extract HTML content from data URL
+            return media_url.split(",", 1)[1] if "," in media_url else ""
+        elif media_url.lower().endswith(".zip"):
+            # For ZIP files, GAM expects the URL to be referenced
+            # The actual HTML content will be extracted by GAM
+            return f"<!-- HTML5 Creative ZIP: {media_url} -->"
+        else:
+            # For direct HTML files or URLs, reference the URL
+            # In real implementation, you might fetch and validate the HTML content
+            return f"<!-- HTML5 Creative URL: {media_url} -->"
 
     def _create_hosted_asset_creative(self, asset: dict[str, Any], base_creative: dict) -> dict[str, Any]:
         """Create ImageCreative or VideoCreative for hosted assets."""

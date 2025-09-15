@@ -21,11 +21,13 @@ class GAMValidator:
     """Validator for GAM creative assets and content."""
 
     # GAM creative size limits (in bytes)
+    # Note: HTML5 creative file size limits are not enforced here - GAM API handles validation
     MAX_FILE_SIZES = {
         "display": 150_000,  # 150KB for display creatives
         "video": 2_200_000,  # 2.2MB for video creatives
         "rich_media": 2_200_000,  # 2.2MB for rich media
         "native": 150_000,  # 150KB for native creatives
+        # "html5": removed - let GAM API handle file size validation
     }
 
     # GAM maximum creative dimensions
@@ -39,6 +41,7 @@ class GAMValidator:
         "display": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
         "video": [".mp4", ".webm", ".mov", ".avi"],
         "rich_media": [".swf", ".html", ".zip"],
+        "html5": [".html", ".htm", ".html5", ".zip"],
         "native": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
     }
 
@@ -66,26 +69,29 @@ class GAMValidator:
         """
         Validate creative dimensions and file size against GAM limits.
 
+        Note: HTML5 creatives skip file size validation as Google's actual limits
+        are not clearly documented. GAM API will handle file size validation.
+
         Args:
             width: Creative width in pixels
             height: Creative height in pixels
             file_size: File size in bytes
-            creative_type: Type of creative ("display", "video", "rich_media", "native")
+            creative_type: Type of creative ("display", "video", "rich_media", "native", "html5")
 
         Returns:
             List of validation error messages (empty if valid)
         """
         issues = []
 
-        # Validate dimensions
+        # Validate dimensions (applies to all creative types)
         if width and width > self.MAX_DIMENSIONS["width"]:
             issues.append(f"Creative width {width}px exceeds GAM maximum of {self.MAX_DIMENSIONS['width']}px")
 
         if height and height > self.MAX_DIMENSIONS["height"]:
             issues.append(f"Creative height {height}px exceeds GAM maximum of {self.MAX_DIMENSIONS['height']}px")
 
-        # Validate file size
-        if file_size and creative_type in self.MAX_FILE_SIZES:
+        # Validate file size (skip for HTML5 - let GAM API handle it)
+        if file_size and creative_type != "html5" and creative_type in self.MAX_FILE_SIZES:
             max_size = self.MAX_FILE_SIZES[creative_type]
             if file_size > max_size:
                 issues.append(f"File size {file_size:,} bytes exceeds GAM {creative_type} limit of {max_size:,} bytes")
@@ -304,10 +310,14 @@ class GAMValidator:
 
         # Determine creative type from format
         creative_type = "display"  # default
-        if any(file_path.endswith(ext) for ext in self.ALLOWED_EXTENSIONS["video"]):
+        if any(file_path.endswith(ext) for ext in self.ALLOWED_EXTENSIONS["html5"]):
+            creative_type = "html5"
+        elif any(file_path.endswith(ext) for ext in self.ALLOWED_EXTENSIONS["video"]):
             creative_type = "video"
         elif format_type and "video" in format_type.lower():
             creative_type = "video"
+        elif format_type and ("html5" in format_type.lower() or "rich_media" in format_type.lower()):
+            creative_type = "html5"
 
         allowed_extensions = self.ALLOWED_EXTENSIONS.get(creative_type, [])
         if not any(file_path.endswith(ext) for ext in allowed_extensions):
@@ -329,10 +339,18 @@ class GAMValidator:
         elif asset.get("template_variables"):
             return "native"
         elif asset.get("media_url") or asset.get("url"):
-            # Determine if it's video based on URL or format
+            # Determine type based on URL or format
             url = asset.get("media_url") or asset.get("url")
             format_type = asset.get("format", "")
-            if any(url.lower().endswith(ext) for ext in self.ALLOWED_EXTENSIONS["video"]):
+
+            # Check for HTML5 first
+            if (
+                any(url.lower().endswith(ext) for ext in self.ALLOWED_EXTENSIONS["html5"])
+                or "html5" in format_type.lower()
+                or "rich_media" in format_type.lower()
+            ):
+                return "html5"
+            elif any(url.lower().endswith(ext) for ext in self.ALLOWED_EXTENSIONS["video"]):
                 return "video"
             elif "video" in format_type.lower():
                 return "video"
