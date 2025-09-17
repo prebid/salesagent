@@ -1049,26 +1049,99 @@ result = await client.tools.get_products(brief="video ads")</pre>
                 <p>Manage who can access this tenant's admin interface</p>
             </div>
 
+            <!-- Authorized Domains Section -->
             <div class="form-section">
-                <h3>Authorized Users</h3>
-                <form method="POST" action="/tenant/{{ tenant.tenant_id }}/settings/users">
-                    <div class="form-group">
-                        <label for="authorized_emails">Authorized Email Addresses</label>
-                        <textarea id="authorized_emails" name="authorized_emails" rows="5"
-                                  placeholder="user1@example.com&#10;user2@example.com">{{ '\n'.join(tenant.authorized_emails or []) }}</textarea>
-                        <small>One email address per line</small>
-                    </div>
+                <h3>🏢 Authorized Domains</h3>
+                <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+                    Users from these domains get automatic admin access via OAuth
+                </p>
 
-                    <div class="form-group">
-                        <label for="authorized_domains">Authorized Email Domains</label>
-                        <textarea id="authorized_domains" name="authorized_domains" rows="3"
-                                  placeholder="example.com&#10;company.org">{{ '\n'.join(tenant.authorized_domains or []) }}</textarea>
-                        <small>Anyone with these email domains can access</small>
+                <!-- Current Domains -->
+                {% if tenant.authorized_domains %}
+                <div class="domain-list" style="margin-bottom: 1rem;">
+                    {% for domain in tenant.authorized_domains %}
+                    <div class="domain-item" style="display: flex; align-items: center; justify-content: between; padding: 0.5rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 0.5rem;">
+                        <div style="flex: 1;">
+                            <strong>{{ domain }}</strong>
+                            <small style="color: #6b7280; margin-left: 0.5rem;">@{{ domain }} users</small>
+                        </div>
+                        <form method="POST" action="{{ url_for('settings.remove_authorized_domain', tenant_id=tenant.tenant_id) }}" style="margin: 0;">
+                            <input type="hidden" name="domain" value="{{ domain }}">
+                            <button type="submit" class="btn btn-outline-danger btn-sm"
+                                    onclick="return confirm('Remove domain {{ domain }}? Users from this domain will lose access.')">Remove</button>
+                        </form>
                     </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div style="text-align: center; color: #9ca3af; font-style: italic; margin-bottom: 1rem;">
+                    No authorized domains configured
+                </div>
+                {% endif %}
 
-                    <div class="button-group">
-                        <button type="submit" class="btn btn-primary">Update Access</button>
+                <!-- Add Domain Form -->
+                <form method="POST" action="{{ url_for('settings.add_authorized_domain', tenant_id=tenant.tenant_id) }}" style="display: flex; gap: 0.5rem; align-items: end;">
+                    <div style="flex: 1;">
+                        <label for="new_domain" style="font-size: 0.875rem; font-weight: 500;">Add Domain</label>
+                        <input type="text" id="new_domain" name="domain" placeholder="company.com" style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px;">
                     </div>
+                    <button type="submit" class="btn btn-primary">Add</button>
+                </form>
+            </div>
+
+            <!-- Authorized Emails Section -->
+            <div class="form-section">
+                <h3>📧 Authorized Emails</h3>
+                <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+                    External users requiring explicit access (contractors, agencies, etc.)
+                </p>
+
+                <!-- Current Emails -->
+                {% if tenant.authorized_emails %}
+                <div class="email-list" style="margin-bottom: 1rem;">
+                    {% for email in tenant.authorized_emails %}
+                    <div class="email-item" style="display: flex; align-items: center; justify-content: between; padding: 0.5rem; background: #fef7ec; border: 1px solid #fed7aa; border-radius: 6px; margin-bottom: 0.5rem;">
+                        <div style="flex: 1;">
+                            <strong>{{ email }}</strong>
+                            <small style="color: #92400e; margin-left: 0.5rem;">External user</small>
+                        </div>
+                        <form method="POST" action="{{ url_for('settings.remove_authorized_email', tenant_id=tenant.tenant_id) }}" style="margin: 0;">
+                            <input type="hidden" name="email" value="{{ email }}">
+                            <button type="submit" class="btn btn-outline-danger btn-sm"
+                                    onclick="return confirm('Remove {{ email }}? This user will lose access.')">Remove</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div style="text-align: center; color: #9ca3af; font-style: italic; margin-bottom: 1rem;">
+                    No external emails configured
+                </div>
+                {% endif %}
+
+                <!-- Add Email Form -->
+                <form method="POST" action="{{ url_for('settings.add_authorized_email', tenant_id=tenant.tenant_id) }}" style="display: flex; gap: 0.5rem; align-items: end;">
+                    <div style="flex: 1;">
+                        <label for="new_email" style="font-size: 0.875rem; font-weight: 500;">Add Email</label>
+                        <input type="email" id="new_email" name="email" placeholder="contractor@agency.com" style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px;">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Add</button>
+                </form>
+            </div>
+
+            <!-- Test Access Section -->
+            <div class="form-section">
+                <h3>🧪 Test Access</h3>
+                <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+                    Test if an email address would have access to this tenant
+                </p>
+
+                <form method="POST" action="{{ url_for('settings.test_domain_access', tenant_id=tenant.tenant_id) }}" style="display: flex; gap: 0.5rem; align-items: end;">
+                    <div style="flex: 1;">
+                        <label for="test_email" style="font-size: 0.875rem; font-weight: 500;">Email to Test</label>
+                        <input type="email" id="test_email" name="test_email" placeholder="user@example.com" style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px;">
+                    </div>
+                    <button type="submit" class="btn btn-secondary">Test</button>
                 </form>
             </div>
 

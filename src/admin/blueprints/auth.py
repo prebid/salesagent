@@ -247,8 +247,13 @@ def google_callback():
                     session.clear()
                     return redirect(url_for("auth.tenant_login", tenant_id=tenant_id))
 
-        # Regular login flow - check if super admin
-        if is_super_admin(email):
+        # Domain-based access control using email domain extraction
+        from src.admin.domain_access import ensure_user_in_tenant, get_user_tenant_access
+
+        email_domain = email.split("@")[1] if "@" in email else ""
+
+        # 1. Scope3 super admin check
+        if email_domain == "scope3.com" or is_super_admin(email):
             session["is_super_admin"] = True
             session["role"] = "super_admin"
             session["authenticated"] = True
@@ -263,35 +268,63 @@ def google_callback():
             else:
                 return redirect(url_for("core.index"))
 
-        # Check if user is a tenant admin for any tenant
-        with get_db_session() as db_session:
-            user_tenants = (
-                db_session.query(User, Tenant)
-                .join(Tenant, User.tenant_id == Tenant.tenant_id)
-                .filter(User.email == email, User.is_active)
-                .all()
-            )
+        # 2. Check domain-based and email-based tenant access
+        tenant_access = get_user_tenant_access(email)
 
-            if user_tenants:
-                if len(user_tenants) == 1:
-                    # Single tenant - redirect directly
-                    user, tenant = user_tenants[0]
-                    session["tenant_id"] = tenant.tenant_id
-                    session["tenant_name"] = tenant.name
-                    session["is_tenant_admin"] = user.is_admin
-                    flash(f"Welcome {user.name or email}!", "success")
-                    return redirect(url_for("tenants.dashboard", tenant_id=tenant.tenant_id))
-                else:
-                    # Multiple tenants - let user choose
-                    session["available_tenants"] = [
-                        {"tenant_id": t.tenant_id, "name": t.name, "is_admin": u.is_admin} for u, t in user_tenants
-                    ]
-                    return redirect(url_for("auth.select_tenant"))
+        if tenant_access["total_access"] == 0:
+            # No access
+            flash("You don't have access to any tenants. Please contact your administrator.", "error")
+            session.clear()
+            return redirect(url_for("auth.login"))
+
+        elif tenant_access["total_access"] == 1:
+            # Single tenant - direct access
+            if tenant_access["domain_tenant"]:
+                tenant = tenant_access["domain_tenant"]
+                access_type = "domain"
             else:
-                # No access
-                flash("You don't have access to any tenants. Please contact your administrator.", "error")
-                session.clear()
-                return redirect(url_for("auth.login"))
+                tenant = tenant_access["email_tenants"][0]
+                access_type = "email"
+
+            # Ensure user record exists (auto-create if needed)
+            user_record = ensure_user_in_tenant(email, tenant.tenant_id, role="admin", name=user.get("name"))
+
+            session["tenant_id"] = tenant.tenant_id
+            session["tenant_name"] = tenant.name
+            session["is_tenant_admin"] = user_record.role == "admin"
+            flash(f"Welcome {user.get('name', email)}! ({access_type.title()} Access)", "success")
+
+            # Redirect to tenant-specific subdomain if accessed via subdomain
+            if tenant.subdomain and tenant.subdomain != "localhost" and os.environ.get("PRODUCTION") == "true":
+                return redirect(f"https://{tenant.subdomain}.sales-agent.scope3.com/admin/")
+            else:
+                return redirect(url_for("tenants.dashboard", tenant_id=tenant.tenant_id))
+
+        else:
+            # Multiple tenants - let user choose
+            session["available_tenants"] = []
+
+            if tenant_access["domain_tenant"]:
+                session["available_tenants"].append(
+                    {
+                        "tenant_id": tenant_access["domain_tenant"].tenant_id,
+                        "name": tenant_access["domain_tenant"].name,
+                        "access_type": "domain",
+                        "is_admin": True,  # Domain users get admin access
+                    }
+                )
+
+            for tenant in tenant_access["email_tenants"]:
+                # Check existing user record for role, default to admin
+                with get_db_session() as db_session:
+                    existing_user = db_session.query(User).filter_by(email=email, tenant_id=tenant.tenant_id).first()
+                    is_admin = existing_user.role == "admin" if existing_user else True
+
+                session["available_tenants"].append(
+                    {"tenant_id": tenant.tenant_id, "name": tenant.name, "access_type": "email", "is_admin": is_admin}
+                )
+
+            return redirect(url_for("auth.select_tenant"))
 
     except Exception as e:
         logger.error(f"OAuth callback error: {e}", exc_info=True)

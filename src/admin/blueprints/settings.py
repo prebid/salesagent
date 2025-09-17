@@ -396,3 +396,157 @@ def test_signals(tenant_id):
     except Exception as e:
         logger.error(f"Error testing signals connection: {e}", exc_info=True)
         return jsonify({"success": False, "error": f"Test failed: {str(e)}"}), 500
+
+
+# Domain and Email Management Routes
+@settings_bp.route("/domains/add", methods=["POST"])
+@require_tenant_access()
+def add_authorized_domain(tenant_id):
+    """Add domain to tenant's authorized domains list."""
+    from src.admin.domain_access import add_authorized_domain as add_domain
+
+    try:
+        domain = request.form.get("domain", "").strip().lower()
+
+        if not domain:
+            flash("Domain is required", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+        # Basic domain validation
+        if not domain or "." not in domain or "@" in domain:
+            flash("Please enter a valid domain (e.g., company.com)", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+        if add_domain(tenant_id, domain):
+            flash(f"Domain '{domain}' added successfully", "success")
+        else:
+            flash(f"Failed to add domain '{domain}'. It may already exist or be restricted.", "error")
+
+    except Exception as e:
+        logger.error(f"Error adding domain: {e}", exc_info=True)
+        flash("Error adding domain", "error")
+
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+
+@settings_bp.route("/domains/remove", methods=["POST"])
+@require_tenant_access()
+def remove_authorized_domain(tenant_id):
+    """Remove domain from tenant's authorized domains list."""
+    from src.admin.domain_access import remove_authorized_domain as remove_domain
+
+    try:
+        domain = request.form.get("domain", "").strip().lower()
+
+        if not domain:
+            flash("Domain is required", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+        if remove_domain(tenant_id, domain):
+            flash(f"Domain '{domain}' removed successfully", "success")
+        else:
+            flash(f"Failed to remove domain '{domain}'", "error")
+
+    except Exception as e:
+        logger.error(f"Error removing domain: {e}", exc_info=True)
+        flash("Error removing domain", "error")
+
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+
+@settings_bp.route("/emails/add", methods=["POST"])
+@require_tenant_access()
+def add_authorized_email(tenant_id):
+    """Add email to tenant's authorized emails list."""
+    from src.admin.domain_access import add_authorized_email as add_email
+
+    try:
+        email = request.form.get("email", "").strip().lower()
+
+        if not email:
+            flash("Email is required", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+        # Basic email validation
+        if not email or "@" not in email or "." not in email.split("@")[1]:
+            flash("Please enter a valid email address", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+        if add_email(tenant_id, email):
+            flash(f"Email '{email}' added successfully", "success")
+        else:
+            flash(f"Failed to add email '{email}'. It may already exist or be restricted.", "error")
+
+    except Exception as e:
+        logger.error(f"Error adding email: {e}", exc_info=True)
+        flash("Error adding email", "error")
+
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+
+@settings_bp.route("/emails/remove", methods=["POST"])
+@require_tenant_access()
+def remove_authorized_email(tenant_id):
+    """Remove email from tenant's authorized emails list."""
+    from src.admin.domain_access import remove_authorized_email as remove_email
+
+    try:
+        email = request.form.get("email", "").strip().lower()
+
+        if not email:
+            flash("Email is required", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+        if remove_email(tenant_id, email):
+            flash(f"Email '{email}' removed successfully", "success")
+        else:
+            flash(f"Failed to remove email '{email}'", "error")
+
+    except Exception as e:
+        logger.error(f"Error removing email: {e}", exc_info=True)
+        flash("Error removing email", "error")
+
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+
+# Test route for domain access functionality
+@settings_bp.route("/access/test", methods=["POST"])
+@require_tenant_access()
+def test_domain_access(tenant_id):
+    """Test email access for this tenant."""
+    from src.admin.domain_access import get_user_tenant_access
+
+    try:
+        test_email = request.form.get("test_email", "").strip().lower()
+
+        if not test_email:
+            flash("Email is required for testing", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+
+        # Test access for this email
+        tenant_access = get_user_tenant_access(test_email)
+
+        # Check if this tenant is in the results
+        has_access = False
+        access_type = None
+
+        if tenant_access["domain_tenant"] and tenant_access["domain_tenant"].tenant_id == tenant_id:
+            has_access = True
+            access_type = "domain"
+
+        for tenant in tenant_access["email_tenants"]:
+            if tenant.tenant_id == tenant_id:
+                has_access = True
+                access_type = "email"
+                break
+
+        if has_access:
+            flash(f"✅ Email '{test_email}' would have {access_type} access to this tenant", "success")
+        else:
+            flash(f"❌ Email '{test_email}' would NOT have access to this tenant", "warning")
+
+    except Exception as e:
+        logger.error(f"Error testing domain access: {e}", exc_info=True)
+        flash("Error testing email access", "error")
+
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
