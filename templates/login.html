@@ -11,10 +11,10 @@
     {% endif %}
 
     {% if tenant_context %}
-        <h2>{{ tenant_name or tenant_context }}</h2>
+        <h2>{{ tenant_name or tenant_context }} Sales Agent Admin</h2>
         <p style="color: #666; margin-bottom: 2rem;">Sign in to access your tenant</p>
     {% elif tenant_id %}
-        <h2>{{ tenant_name or tenant_id }}</h2>
+        <h2>{{ tenant_name or tenant_id }} Sales Agent Admin</h2>
         <p style="color: #666; margin-bottom: 2rem;">Sign in to access your account</p>
     {% else %}
         <h2>AdCP Sales Agent Admin</h2>
@@ -94,7 +94,7 @@
     {% endif %}
 
     <p style="color: #666; font-size: 14px; margin-top: 2rem;">
-        {% if tenant_id %}
+        {% if tenant_id or tenant_context %}
         Access is restricted to authorized users.<br>
         Contact your administrator if you need access.
         {% else %}
@@ -103,11 +103,11 @@
         {% endif %}
     </p>
 
-    {% if not tenant_id %}
+    {% if not tenant_id and not tenant_context %}
     <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid #eee;">
         <p style="color: #666; font-size: 13px;">
-            <strong>Tenant Users:</strong> Access your tenant at<br>
-            <code>/tenant/YOUR_TENANT_ID/login</code>
+            <strong>Tenant Access:</strong> Use your tenant-specific URL<br>
+            <code>https://[tenant-subdomain].sales-agent.scope3.com</code>
         </p>
     </div>
     {% endif %}

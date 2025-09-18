@@ -56,7 +56,7 @@ services:
 
     ports:
       - "${ADCP_SALES_PORT:-8092}:8080"
-      - "${A2A_PORT:-8093}:8091"
+      - "${A2A_PORT:-8094}:8091"
 
     volumes:
       # Optional: Mount audit logs
@@ -97,7 +97,7 @@ services:
 
       # Server ports for MCP and A2A testing
       ADCP_SALES_PORT: ${ADCP_SALES_PORT:-8080}
-      A2A_PORT: ${A2A_PORT:-8091}
+      A2A_PORT: ${A2A_PORT:-8094}
 
       # Skip nginx for standalone service
       SKIP_NGINX: "true"

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
+from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, Tenant
@@ -51,6 +52,22 @@ def list_principals(tenant_id):
                 }
                 principals_list.append(principal_dict)
 
+            # Get dashboard metrics that the template expects
+            dashboard_service = DashboardService(tenant_id)
+            metrics = dashboard_service.get_dashboard_metrics()
+
+            # Get recent media buys that the template expects
+            recent_media_buys = dashboard_service.get_recent_media_buys(limit=10)
+
+            # Get chart data that the template expects
+            chart_data_dict = dashboard_service.get_chart_data()
+
+            # Get tenant config for features
+            from src.admin.utils import get_tenant_config_from_db
+
+            config = get_tenant_config_from_db(tenant_id)
+            features = config.get("features", {})
+
             # The template expects this to be under the 'advertisers' key
             # since principals are advertisers in the UI
             return render_template(
@@ -58,6 +75,20 @@ def list_principals(tenant_id):
                 tenant=tenant,
                 tenant_id=tenant_id,
                 advertisers=principals_list,
+                # Template variables to match main dashboard
+                active_campaigns=metrics["active_buys"],
+                total_spend=metrics["total_revenue"],
+                principals_count=metrics["total_advertisers"],
+                products_count=metrics["products_count"],
+                recent_buys=recent_media_buys,
+                recent_media_buys=recent_media_buys,
+                features=features,
+                # Chart data
+                revenue_data=json.dumps(metrics["revenue_data"]),
+                chart_labels=chart_data_dict["labels"],
+                chart_data=chart_data_dict["data"],
+                # Metrics object
+                metrics=metrics,
                 show_advertisers_tab=True,
             )
 

@@ -17,12 +17,9 @@ inventory_bp = Blueprint("inventory", __name__)
 
 
 @inventory_bp.route("/tenant/<tenant_id>/targeting")
-@require_auth()
+@require_tenant_access()
 def targeting_browser(tenant_id):
     """Display targeting browser page."""
-    # Check access
-    if session.get("role") != "super_admin" and session.get("tenant_id") != tenant_id:
-        return "Access denied", 403
 
     with get_db_session() as db_session:
         tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
@@ -41,12 +38,9 @@ def targeting_browser(tenant_id):
 
 
 @inventory_bp.route("/tenant/<tenant_id>/inventory")
-@require_auth()
+@require_tenant_access()
 def inventory_browser(tenant_id):
     """Display inventory browser page."""
-    # Check access
-    if session.get("role") != "super_admin" and session.get("tenant_id") != tenant_id:
-        return "Access denied", 403
 
     with get_db_session() as db_session:
         tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()

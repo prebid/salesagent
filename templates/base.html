@@ -113,7 +113,13 @@
 
     <div class="header">
         <div class="container">
-            <h1>AdCP Sales Agent Admin</h1>
+            <h1>
+                {% if session.tenant_name and session.role != 'super_admin' %}
+                    {{ session.tenant_name }} Sales Agent Admin
+                {% else %}
+                    AdCP Sales Agent Admin
+                {% endif %}
+            </h1>
             <nav>
                 {% if session.authenticated %}
                     <span style="color: #ecf0f1; margin-right: 1rem;">
