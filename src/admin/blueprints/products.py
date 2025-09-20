@@ -604,7 +604,21 @@ def delete_product(tenant_id, product_id):
 
             # Check if any active media buys reference this product
             for buy in active_buys:
-                if product_id in (buy.config or {}).get("product_ids", []):
+                # Check both config (legacy) and raw_request (current) fields for backward compatibility
+                config_product_ids = []
+                try:
+                    # Legacy field: may not exist on older MediaBuy records
+                    config_data = getattr(buy, "config", None)
+                    if config_data:
+                        config_product_ids = config_data.get("product_ids", [])
+                except (AttributeError, TypeError):
+                    pass
+
+                # Current field: should always exist
+                raw_request_product_ids = (buy.raw_request or {}).get("product_ids", [])
+                all_product_ids = config_product_ids + raw_request_product_ids
+
+                if product_id in all_product_ids:
                     return (
                         jsonify(
                             {
@@ -624,7 +638,14 @@ def delete_product(tenant_id, product_id):
 
     except Exception as e:
         logger.error(f"Error deleting product {product_id}: {e}", exc_info=True)
-        return jsonify({"error": "Failed to delete product"}), 500
+        # Sanitize error messages to prevent information leakage
+        error_message = str(e)
+        if "ValidationError" in error_message or "pattern" in error_message.lower():
+            logger.warning(f"Product validation error for {product_id}: {error_message}")
+            return jsonify({"error": "Product data validation failed"}), 400
+
+        logger.error(f"Product deletion failed for {product_id}: {error_message}")
+        return jsonify({"error": "Failed to delete product. Please contact support."}), 500
 
 
 @products_bp.route("/create-bulk", methods=["POST"])

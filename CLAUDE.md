@@ -1344,6 +1344,109 @@ uv run pytest tests/e2e/test_adcp_full_lifecycle.py -v
 - **Update**: Manual updates when AdCP specification changes
 - **Versions**: Currently v1, structured for future v2+ support
 
+## Security & Authentication
+
+### Admin Authentication Architecture
+
+The admin authentication system uses a **environment-first approach** with database fallback for robust, secure access control:
+
+#### Current Implementation ✅
+```python
+def is_super_admin(email):
+    """Environment-first authentication with database fallback."""
+    # 1. Check environment variables first (deployment-time config)
+    env_emails = os.environ.get("SUPER_ADMIN_EMAILS", "")
+    if env_emails:
+        emails_list = [e.strip().lower() for e in env_emails.split(",") if e.strip()]
+        if email.lower() in emails_list:
+            return True
+
+    # 2. Fallback to database configuration (runtime config)
+    try:
+        with get_db_session() as db:
+            config = db.query(TenantManagementConfig).filter_by(
+                config_key="super_admin_emails"
+            ).first()
+            if config and config.config_value:
+                db_emails = [e.strip().lower() for e in config.config_value.split(",")]
+                return email.lower() in db_emails
+    except Exception as e:
+        logger.error(f"Database auth check failed: {e}")
+
+    return False
+```
+
+#### Session Optimization ✅
+- **Session Caching**: Super admin status cached in session to avoid redundant database calls
+- **Trust Session State**: `require_tenant_access()` checks session first, then validates if needed
+- **Automatic Caching**: Session updated when admin status is confirmed
+
+#### Security Recommendations for Future Enhancement
+
+**HIGH Priority:**
+1. **Session Timeout & Re-validation**:
+   ```python
+   # Add to require_tenant_access decorator
+   max_session_age = 3600  # 1 hour
+   session_start = session.get("authenticated_at", 0)
+   if time.time() - session_start > max_session_age:
+       session.clear()
+       return redirect(url_for("auth.login"))
+
+   # Re-validate admin status every 5 minutes
+   last_check = session.get("admin_check_at", 0)
+   if time.time() - last_check > 300:
+       session["is_super_admin"] = is_super_admin(email)
+       session["admin_check_at"] = time.time()
+   ```
+
+2. **Enhanced Audit Logging**:
+   ```python
+   def audit_admin_access(email, tenant_id, action, success=True):
+       """Log all admin access attempts with IP and user agent."""
+       audit_log = AuditLog(
+           email=email,
+           tenant_id=tenant_id,
+           action=f"admin_access_{action}",
+           success=success,
+           ip_address=request.remote_addr,
+           user_agent=request.user_agent.string,
+           timestamp=datetime.utcnow()
+       )
+   ```
+
+**MEDIUM Priority:**
+3. **Secure Session Configuration**:
+   ```python
+   app.config.update(
+       SESSION_COOKIE_SECURE=True,      # HTTPS only
+       SESSION_COOKIE_HTTPONLY=True,    # No JavaScript access
+       SESSION_COOKIE_SAMESITE='Lax',   # CSRF protection
+       PERMANENT_SESSION_LIFETIME=3600  # 1 hour timeout
+   )
+   ```
+
+4. **Secrets Management**: Move from `.env` files to proper secrets management (Fly.io secrets, Kubernetes secrets, etc.)
+
+#### Security Testing Requirements
+
+All authentication changes must include tests for:
+- Session timeout behavior
+- Re-validation logic
+- Environment vs database precedence
+- Audit logging completeness
+- Session security headers
+- CSRF protection
+
+**Test Location**: `tests/integration/test_product_deletion.py` contains comprehensive authentication tests including environment-first approach validation.
+
+### Access Control Patterns
+
+- **Super Admins**: Full access to all tenants via environment/database configuration
+- **Tenant Users**: Limited access to specific tenants via User model
+- **Principal Isolation**: Each advertiser (principal) has isolated access tokens
+- **Audit Trail**: All admin actions logged to `audit_logs` table
+
 ## Support
 
 For issues or questions:

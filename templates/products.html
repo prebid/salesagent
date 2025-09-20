@@ -191,8 +191,7 @@ function deleteProduct(productId, productName) {
         fetch(`/tenant/{{ tenant_id }}/products/${productId}/delete`, {
             method: 'DELETE',
             headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': getCsrfToken()
+                'Content-Type': 'application/json'
             }
         })
         .then(response => {

@@ -118,18 +118,53 @@ def get_tenant_config_from_db(tenant_id):
 
 
 def is_super_admin(email):
-    """Check if user is a super admin based on email or domain."""
+    """Check if user is a super admin based on email or domain.
+
+    Checks environment variables first, then falls back to database configuration.
+    This ensures robust authentication even if database initialization hasn't run.
+    """
     if not email:
         return False
 
-    # Check database for super admin configuration
+    email_lower = email.lower()
+
+    # 0. Check session cache first (if available) to avoid redundant checks
+    try:
+        if session.get("is_super_admin") and session.get("admin_email") == email_lower:
+            logger.debug(f"Super admin access granted via session cache: {email}")
+            return True
+    except (RuntimeError, KeyError):
+        # No session context available (e.g., outside request context)
+        pass
+
+    # 1. FIRST: Check environment variables (most reliable)
+    env_emails = os.environ.get("SUPER_ADMIN_EMAILS", "")
+    if env_emails:
+        env_emails_list = [e.strip().lower() for e in env_emails.split(",") if e.strip()]
+        if email_lower in env_emails_list:
+            logger.debug(f"Super admin access granted via environment: {email}")
+            _cache_admin_status(email_lower, True)
+            return True
+
+    env_domains = os.environ.get("SUPER_ADMIN_DOMAINS", "")
+    if env_domains:
+        env_domains_list = [d.strip().lower() for d in env_domains.split(",") if d.strip()]
+        email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
+        if email_domain in env_domains_list:
+            logger.debug(f"Super admin access granted via environment domain: {email}")
+            _cache_admin_status(email_lower, True)
+            return True
+
+    # 2. FALLBACK: Check database configuration
     try:
         with get_db_session() as db_session:
             # Check exact emails
             emails_config = db_session.query(TenantManagementConfig).filter_by(config_key="super_admin_emails").first()
             if emails_config and emails_config.config_value:
                 emails_list = [e.strip().lower() for e in emails_config.config_value.split(",")]
-                if email.lower() in emails_list:
+                if email_lower in emails_list:
+                    logger.debug(f"Super admin access granted via database: {email}")
+                    _cache_admin_status(email_lower, True)
                     return True
 
             # Check domains
@@ -138,14 +173,31 @@ def is_super_admin(email):
             )
             if domains_config and domains_config.config_value:
                 domains_list = [d.strip().lower() for d in domains_config.config_value.split(",")]
-                email_domain = email.split("@")[1].lower() if "@" in email else ""
+                email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
                 if email_domain in domains_list:
+                    logger.debug(f"Super admin access granted via database domain: {email}")
+                    _cache_admin_status(email_lower, True)
                     return True
 
     except Exception as e:
-        logger.error(f"Error checking super admin status: {e}")
+        logger.error(f"Error checking super admin status in database: {e}")
+        # Don't fail completely - environment check already happened above
 
+    # Cache negative result too (to avoid repeated expensive checks)
+    _cache_admin_status(email_lower, False)
     return False
+
+
+def _cache_admin_status(email, is_admin):
+    """Cache admin status in session if available."""
+    try:
+        session["is_super_admin"] = is_admin
+        session["admin_email"] = email
+        if is_admin:
+            logger.debug(f"Admin status cached in session: {email}")
+    except (RuntimeError, KeyError):
+        # Session not available or read-only
+        pass
 
 
 def is_tenant_admin(email, tenant_id=None):
@@ -259,7 +311,7 @@ def require_tenant_access(api_mode=False):
             else:
                 email = str(user_info)
 
-            # Super admins have access to all tenants
+            # Check super admin status (is_super_admin handles env + db + session caching internally)
             if is_super_admin(email):
                 return f(tenant_id, *args, **kwargs)
 

@@ -107,7 +107,7 @@ services:
         condition: service_healthy
 
     ports:
-      - "${ADMIN_UI_PORT:-8001}:8001"
+      - "${ADMIN_UI_PORT:-8001}:${ADMIN_UI_PORT:-8001}"
 
     volumes:
       # Mount OAuth credentials file
