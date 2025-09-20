@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any
 
 from fastmcp.server.context import Context
+from fastmcp.server.dependencies import get_http_headers
 from pydantic import BaseModel
 
 
@@ -77,11 +78,8 @@ class TestingContext(BaseModel):
         if not context:
             return cls()
 
-        request = context.get_http_request()
-        if not request:
-            return cls()
-
-        headers = request.headers
+        # Use modern FastMCP pattern for getting headers
+        headers = get_http_headers()
 
         # Extract all testing headers
         test_session_id = headers.get("X-Test-Session-ID")

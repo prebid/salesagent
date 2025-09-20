@@ -9,6 +9,7 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
+from fastmcp.server.dependencies import get_http_headers
 from rich.console import Console
 
 from src.adapters.google_ad_manager import GoogleAdManager
@@ -252,52 +253,50 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
 
 
 def get_principal_from_context(context: Context | None) -> str | None:
-    """Extract principal ID from the FastMCP context using x-adcp-auth header."""
+    """Extract principal ID from the FastMCP context using x-adcp-auth header.
+
+    Uses the current recommended FastMCP pattern with get_http_headers().
+    Requires FastMCP >= 2.11.0.
+    """
     if not context:
         return None
 
-    try:
-        # Get headers from FastMCP context metadata
-        headers = context.meta.get("headers", {}) if hasattr(context, "meta") else {}
-        if not headers:
-            return None
+    # Get headers using the recommended FastMCP approach
+    headers = get_http_headers()
 
-        # Get the x-adcp-auth header (FastMCP forwards this in context.meta)
-        auth_token = headers.get("x-adcp-auth")
-        if not auth_token:
-            return None
-
-        # Check if a specific tenant was requested via header or subdomain
-        requested_tenant_id = None
-        tenant_context = None
-
-        # 1. Check Apx-Incoming-Host header (for Approximated.app virtual hosts)
-        apx_host = headers.get("apx-incoming-host")
-        if apx_host:
-            tenant_context = get_tenant_by_virtual_host(apx_host)
-            if tenant_context:
-                requested_tenant_id = tenant_context["tenant_id"]
-                # Set tenant context immediately for virtual host routing
-                set_current_tenant(tenant_context)
-
-        # 2. Check x-adcp-tenant header (set by middleware for path-based routing)
-        if not requested_tenant_id:
-            requested_tenant_id = headers.get("x-adcp-tenant")
-
-        # 3. If not found, check host header for subdomain
-        if not requested_tenant_id:
-            host = headers.get("host", "")
-            subdomain = host.split(".")[0] if "." in host else None
-            if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www"]:
-                requested_tenant_id = subdomain
-
-        # Validate token and get principal
-        # If a specific tenant was requested, validate against it
-        # Otherwise, look up by token alone and set tenant context
-        return get_principal_from_token(auth_token, requested_tenant_id)
-    except Exception as e:
-        logger.warning(f"Authentication error: {e}")
+    # Get the x-adcp-auth header
+    auth_token = headers.get("x-adcp-auth")
+    if not auth_token:
         return None
+
+    # Check if a specific tenant was requested via header or subdomain
+    requested_tenant_id = None
+    tenant_context = None
+
+    # 1. Check Apx-Incoming-Host header (for Approximated.app virtual hosts)
+    apx_host = headers.get("apx-incoming-host")
+    if apx_host:
+        tenant_context = get_tenant_by_virtual_host(apx_host)
+        if tenant_context:
+            requested_tenant_id = tenant_context["tenant_id"]
+            # Set tenant context immediately for virtual host routing
+            set_current_tenant(tenant_context)
+
+    # 2. Check x-adcp-tenant header (set by middleware for path-based routing)
+    if not requested_tenant_id:
+        requested_tenant_id = headers.get("x-adcp-tenant")
+
+    # 3. If not found, check host header for subdomain
+    if not requested_tenant_id:
+        host = headers.get("host", "")
+        subdomain = host.split(".")[0] if "." in host else None
+        if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www"]:
+            requested_tenant_id = subdomain
+
+    # Validate token and get principal
+    # If a specific tenant was requested, validate against it
+    # Otherwise, look up by token alone and set tenant context
+    return get_principal_from_token(auth_token, requested_tenant_id)
 
 
 def get_principal_adapter_mapping(principal_id: str) -> dict[str, Any]:
