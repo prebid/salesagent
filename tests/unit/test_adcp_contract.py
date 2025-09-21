@@ -46,6 +46,7 @@ from src.core.schemas import (
     SyncCreativesRequest,
     SyncCreativesResponse,
     Targeting,
+    TaskStatus,
     UpdateMediaBuyResponse,
 )
 from src.core.schemas import (
@@ -1200,6 +1201,11 @@ class TestAdCPContract:
         for field in optional_fields:
             assert field in adcp_response, f"Optional AdCP field '{field}' missing from response"
 
+        # Verify optional status field (AdCP PR #77 - MCP Status System)
+        # Status field is optional and only present when explicitly set
+        if "status" in adcp_response:
+            assert isinstance(adcp_response["status"], str), "status must be string when present"
+
         # Verify specific field types and constraints
         assert isinstance(adcp_response["products"], list), "products must be array"
         assert len(adcp_response["products"]) > 0, "products array should not be empty"
@@ -1215,9 +1221,10 @@ class TestAdCPContract:
 
         empty_adcp_response = empty_response.model_dump()
         assert empty_adcp_response["products"] == [], "Empty products list should be empty array"
+        # Allow 3 or 4 fields (status is optional and may not be present)
         assert (
-            len(empty_adcp_response) == 3
-        ), f"GetProductsResponse should have exactly 3 fields, got {len(empty_adcp_response)}"
+            len(empty_adcp_response) >= 3 and len(empty_adcp_response) <= 4
+        ), f"GetProductsResponse should have 3-4 fields (status optional), got {len(empty_adcp_response)}"
 
     def test_list_creative_formats_response_adcp_compliance(self):
         """Test that ListCreativeFormatsResponse complies with AdCP list-creative-formats-response schema."""
@@ -1536,6 +1543,48 @@ class TestAdCPContract:
 
         # Verify field count expectations
         assert len(adcp_response) == 4
+
+    def test_task_status_mcp_integration(self):
+        """Test TaskStatus integration with MCP response schemas (AdCP PR #77)."""
+
+        # Test that TaskStatus enum has expected values
+        assert TaskStatus.SUBMITTED == "submitted"
+        assert TaskStatus.WORKING == "working"
+        assert TaskStatus.INPUT_REQUIRED == "input-required"
+        assert TaskStatus.COMPLETED == "completed"
+        assert TaskStatus.FAILED == "failed"
+        assert TaskStatus.AUTH_REQUIRED == "auth-required"
+
+        # Test TaskStatus helper method - basic cases
+        status = TaskStatus.from_operation_state("discovery")
+        assert status == TaskStatus.COMPLETED
+
+        status = TaskStatus.from_operation_state("creation", requires_approval=True)
+        assert status == TaskStatus.INPUT_REQUIRED
+
+        # Test precedence rules
+        status = TaskStatus.from_operation_state("creation", has_errors=True, requires_approval=True)
+        assert status == TaskStatus.FAILED  # Errors take precedence
+
+        status = TaskStatus.from_operation_state("discovery", requires_auth=True)
+        assert status == TaskStatus.AUTH_REQUIRED  # Auth requirement takes highest precedence
+
+        # Test edge cases
+        status = TaskStatus.from_operation_state("unknown_operation")
+        assert status == TaskStatus.UNKNOWN
+
+        # Test response schemas with status field
+        response = GetProductsResponse(products=[], message="Test with status", status=TaskStatus.COMPLETED)
+
+        data = response.model_dump()
+        assert "status" in data
+        assert data["status"] == TaskStatus.COMPLETED
+
+        # Test backward compatibility (no status field)
+        response_no_status = GetProductsResponse(products=[], message="Test without status")
+
+        data_no_status = response_no_status.model_dump()
+        assert "status" not in data_no_status  # Should be excluded when None
 
 
 if __name__ == "__main__":

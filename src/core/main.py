@@ -49,6 +49,7 @@ from src.core.database.models import Product as ModelProduct
 
 # Schema models (explicit imports to avoid collisions)
 from src.core.schemas import (
+    ActivateSignalResponse,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
     Creative,
@@ -76,6 +77,7 @@ from src.core.schemas import (
     ReportingPeriod,
     Signal,
     SyncCreativesResponse,
+    TaskStatus,
     UpdateMediaBuyRequest,
     UpdateMediaBuyResponse,
     UpdatePerformanceIndexRequest,
@@ -866,7 +868,12 @@ async def get_products(brief: str, promoted_offering: str, context: Context = No
     base_message = f"Found {len(modified_products)} matching products"
     final_message = f"{base_message}. {pricing_message}" if pricing_message else base_message
 
-    return GetProductsResponse(products=modified_products, message=final_message)
+    # Set status based on operation result
+    status = TaskStatus.from_operation_state(
+        operation_type="discovery", has_errors=False, requires_approval=False, requires_auth=principal_id is None
+    )
+
+    return GetProductsResponse(products=modified_products, message=final_message, status=status)
 
 
 @mcp.tool
@@ -961,8 +968,15 @@ def list_creative_formats(context: Context) -> ListCreativeFormatsResponse:
 
     message = f"Found {len(formats)} creative formats across {len({f.type for f in formats})} format types"
 
+    # Set status based on operation result
+    status = TaskStatus.from_operation_state(
+        operation_type="discovery", has_errors=False, requires_approval=False, requires_auth=principal_id is None
+    )
+
     # Create response with schema validation metadata
-    response = ListCreativeFormatsResponse(formats=formats, message=message, specification_version="AdCP v2.4")
+    response = ListCreativeFormatsResponse(
+        formats=formats, message=message, specification_version="AdCP v2.4", status=status
+    )
 
     # Add schema validation metadata for client validation
     from src.core.schema_validation import INCLUDE_SCHEMAS_IN_RESPONSES, enhance_mcp_response_with_schema
@@ -1650,7 +1664,98 @@ async def get_signals(req: GetSignalsRequest, context: Context = None) -> GetSig
     if req.limit:
         signals = signals[: req.limit]
 
-    return GetSignalsResponse(signals=signals)
+    # Set status based on operation result
+    status = TaskStatus.from_operation_state(
+        operation_type="discovery", has_errors=False, requires_approval=False, requires_auth=False
+    )
+
+    return GetSignalsResponse(signals=signals, status=status)
+
+
+@mcp.tool
+async def activate_signal(
+    signal_id: str,
+    campaign_id: str = None,
+    media_buy_id: str = None,
+    context: Context = None,
+) -> ActivateSignalResponse:
+    """Activate a signal for use in campaigns.
+
+    Args:
+        signal_id: Signal ID to activate
+        campaign_id: Optional campaign ID to activate signal for
+        media_buy_id: Optional media buy ID to activate signal for
+        context: FastMCP context (automatically provided)
+
+    Returns:
+        ActivateSignalResponse with activation status
+    """
+    start_time = time.time()
+
+    # Authentication required for signal activation
+    principal_id = _get_principal_id_from_context(context)
+
+    # Get tenant information
+    tenant = get_current_tenant()
+    if not tenant:
+        raise ToolError("No tenant context available")
+
+    # Get the Principal object with ad server mappings
+    principal = get_principal_object(principal_id)
+
+    # Apply testing hooks
+    testing_ctx = get_testing_context(context)
+    campaign_info = {"endpoint": "activate_signal", "signal_id": signal_id}
+    apply_testing_hooks(testing_ctx, campaign_info)
+
+    try:
+        # In a real implementation, this would:
+        # 1. Validate the signal exists and is available
+        # 2. Check if the principal has permission to activate the signal
+        # 3. Communicate with the signal provider's API to activate the signal
+        # 4. Update the campaign or media buy configuration to include the signal
+
+        # Mock implementation for demonstration
+        activation_success = True
+        requires_approval = signal_id.startswith("premium_")  # Mock rule: premium signals need approval
+
+        if requires_approval:
+            # Create a human task for approval
+            status = TaskStatus.INPUT_REQUIRED
+            message = f"Signal {signal_id} requires manual approval before activation"
+            activation_details = {
+                "approval_required": True,
+                "estimated_approval_time_hours": 24,
+                "contact": "signals-approval@example.com",
+            }
+        elif activation_success:
+            status = TaskStatus.WORKING  # Activation in progress
+            message = f"Signal {signal_id} activation initiated successfully"
+            activation_details = {
+                "activation_started": datetime.now(UTC).isoformat(),
+                "estimated_completion_minutes": 15,
+                "platform_segment_id": f"seg_{signal_id}_{uuid.uuid4().hex[:8]}",
+            }
+        else:
+            status = TaskStatus.FAILED
+            message = f"Failed to activate signal {signal_id}"
+            activation_details = {"error": "Signal provider unavailable"}
+
+        # Log activity
+        log_tool_activity(context, "activate_signal", start_time)
+
+        return ActivateSignalResponse(
+            signal_id=signal_id, status=status, message=message, activation_details=activation_details
+        )
+
+    except Exception as e:
+        logger.error(f"Error activating signal {signal_id}: {e}")
+        return ActivateSignalResponse(
+            signal_id=signal_id,
+            status=TaskStatus.FAILED,
+            message=f"Failed to activate signal: {str(e)}",
+            errors=[{"code": "ACTIVATION_ERROR", "message": str(e)}],
+        )
 
 
 @mcp.tool
@@ -1932,7 +2037,7 @@ def create_media_buy(
         # Return proper error response instead of raising ToolError
         return CreateMediaBuyResponse(
             media_buy_id="",
-            status="failed",
+            status=TaskStatus.FAILED,
             detail=str(e),
             creative_deadline=None,
             message=f"Media buy creation failed: {str(e)}",
@@ -1946,7 +2051,7 @@ def create_media_buy(
         ctx_manager.update_workflow_step(step.step_id, status="failed", error=error_msg)
         return CreateMediaBuyResponse(
             media_buy_id="",
-            status="failed",
+            status=TaskStatus.FAILED,
             detail=error_msg,
             creative_deadline=None,
             message=f"Media buy creation failed: {error_msg}",
@@ -1985,7 +2090,7 @@ def create_media_buy(
 
             return CreateMediaBuyResponse(
                 media_buy_id=pending_media_buy_id,
-                status="pending_manual",
+                status=TaskStatus.INPUT_REQUIRED,
                 detail=response_msg,
                 creative_deadline=None,
                 message="Your media buy request requires manual approval from the publisher. The request has been queued and will be reviewed shortly.",
@@ -2014,7 +2119,7 @@ def create_media_buy(
 
             return CreateMediaBuyResponse(
                 media_buy_id=pending_media_buy_id,
-                status="pending_manual",
+                status=TaskStatus.INPUT_REQUIRED,
                 detail=response_msg,
                 creative_deadline=None,
                 message=f"This media buy requires manual approval due to {reason.lower()}. Your request has been submitted for review.",
@@ -2070,7 +2175,7 @@ def create_media_buy(
                 end_date=req.end_time.date(),  # Legacy field for compatibility
                 start_time=req.start_time,  # AdCP v2.4 datetime scheduling
                 end_time=req.end_time,  # AdCP v2.4 datetime scheduling
-                status=response.status or "active",
+                status=response.status or TaskStatus.WORKING,
                 raw_request=req.model_dump(mode="json"),
             )
             session.add(new_media_buy)
@@ -2107,7 +2212,7 @@ def create_media_buy(
                     "package_id": f"{response.media_buy_id}_pkg_{i+1}",
                     "buyer_ref": package.buyer_ref,
                     "products": package.products,
-                    "status": "active",
+                    "status": TaskStatus.WORKING,
                 }
             )
 
@@ -2115,10 +2220,10 @@ def create_media_buy(
         adcp_response = CreateMediaBuyResponse(
             media_buy_id=response.media_buy_id,
             buyer_ref=req.buyer_ref,
-            status="active",  # Successful synchronous creation
+            status=TaskStatus.WORKING,  # Media buy creation in progress (async operation)
             packages=response_packages,
             creative_deadline=response.creative_deadline,
-            message="Media buy created successfully",
+            message="Media buy created successfully and is being activated",
         )
 
         # Log activity
@@ -2172,7 +2277,7 @@ def create_media_buy(
         # Return proper error response instead of raising ToolError
         return CreateMediaBuyResponse(
             media_buy_id="",
-            status="failed",
+            status=TaskStatus.FAILED,
             detail=str(e),
             creative_deadline=None,
             message=f"Media buy creation failed: {str(e)}",
