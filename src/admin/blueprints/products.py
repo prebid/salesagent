@@ -10,7 +10,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 
 from src.admin.utils import require_tenant_access
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Product, Tenant
+from src.core.database.models import CreativeFormat, Product, Tenant
 from src.core.validation import sanitize_form_data
 from src.services.ai_product_service import AIProductConfigurationService
 from src.services.default_products import get_default_products, get_industry_specific_products
@@ -19,6 +19,74 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 products_bp = Blueprint("products", __name__)
+
+
+def get_creative_formats():
+    """Get all available creative formats for the product form."""
+    try:
+        with get_db_session() as db_session:
+            # Get both foundational formats (tenant_id is None) and tenant-specific formats
+            formats = (
+                db_session.query(CreativeFormat)
+                .filter(
+                    CreativeFormat.tenant_id.is_(None)  # Only get foundational/standard formats for product creation
+                )
+                .order_by(CreativeFormat.type, CreativeFormat.name)
+                .all()
+            )
+
+            # Convert to dict format for template
+            formats_list = []
+            for fmt in formats:
+                format_dict = {
+                    "format_id": fmt.format_id,
+                    "name": fmt.name,
+                    "type": fmt.type,
+                    "description": fmt.description,
+                    "dimensions": None,
+                    "duration": None,
+                }
+
+                # Add dimensions for display formats
+                if fmt.width and fmt.height:
+                    format_dict["dimensions"] = f"{fmt.width}x{fmt.height}"
+
+                # Add duration for video/audio formats
+                if fmt.duration_seconds:
+                    format_dict["duration"] = f"{fmt.duration_seconds}s"
+
+                formats_list.append(format_dict)
+
+            return formats_list
+    except Exception as e:
+        logger.error(f"Error loading creative formats: {e}", exc_info=True)
+        # Return default formats as fallback
+        return [
+            {
+                "format_id": "display_300x250",
+                "name": "Medium Rectangle",
+                "type": "display",
+                "description": "Standard display banner",
+                "dimensions": "300x250",
+                "duration": None,
+            },
+            {
+                "format_id": "display_728x90",
+                "name": "Leaderboard",
+                "type": "display",
+                "description": "Top of page banner",
+                "dimensions": "728x90",
+                "duration": None,
+            },
+            {
+                "format_id": "video_30s",
+                "name": "30 Second Video",
+                "type": "video",
+                "description": "Standard video advertisement",
+                "dimensions": None,
+                "duration": "30s",
+            },
+        ]
 
 
 @products_bp.route("/")
@@ -142,7 +210,8 @@ def add_product(tenant_id):
             return redirect(url_for("products.add_product", tenant_id=tenant_id))
 
     # GET request - show form
-    return render_template("add_product.html", tenant_id=tenant_id)
+    formats = get_creative_formats()
+    return render_template("add_product.html", tenant_id=tenant_id, formats=formats)
 
 
 @products_bp.route("/<product_id>/edit", methods=["GET", "POST"])
@@ -427,7 +496,6 @@ def get_templates(tenant_id):
 @require_tenant_access()
 def browse_templates(tenant_id):
     """Browse and use product templates."""
-    from creative_formats import get_creative_formats
 
     # Get all available templates
     standard_templates = get_default_products()
@@ -561,8 +629,6 @@ def setup_wizard(tenant_id):
         )
 
         # Get creative formats for display
-        from creative_formats import get_creative_formats
-
         formats = get_creative_formats()
 
         return render_template(
