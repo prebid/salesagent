@@ -502,10 +502,6 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
         asset["snippet_type"] = creative.snippet_type or _detect_snippet_type(snippet)
         asset["url"] = creative.url  # Keep URL for fallback
 
-        # Add delivery settings
-        if creative.delivery_settings:
-            asset["delivery_settings"] = creative.delivery_settings
-
     elif creative_type == "native":
         # Native creative - use AdCP v1.3+ template_variables field
         template_vars = creative.get_template_variables_dict()
@@ -514,10 +510,6 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
 
         asset["template_variables"] = template_vars
         asset["url"] = creative.url  # Fallback URL
-
-        # Add delivery settings
-        if creative.delivery_settings:
-            asset["delivery_settings"] = creative.delivery_settings
 
     elif creative_type == "vast":
         # VAST reference
@@ -538,6 +530,11 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
         asset["height"] = creative.height
     if creative.duration:
         asset["duration"] = creative.duration
+
+    # Always preserve delivery_settings (including tracking_urls) for all creative types
+    # This ensures impression trackers from buyers flow through to ad servers
+    if creative.delivery_settings:
+        asset["delivery_settings"] = creative.delivery_settings
 
     return asset
 
