@@ -18,72 +18,41 @@ echo "Setting up Conductor workspace: $CONDUCTOR_WORKSPACE_NAME"
 echo "Workspace path: $CONDUCTOR_WORKSPACE_PATH"
 echo "Root path: $CONDUCTOR_ROOT_PATH"
 
-# Check environment variables
+# Check for secrets configuration
 echo ""
-echo "Checking environment variables..."
-MISSING_VARS=0
+echo "Checking secrets configuration..."
 
-# Check SUPER_ADMIN_EMAILS (required)
-if [ -n "$SUPER_ADMIN_EMAILS" ]; then
-    echo "✓ SUPER_ADMIN_EMAILS configured: $SUPER_ADMIN_EMAILS"
+# Check for .env.secrets file (REQUIRED - only supported method)
+SECRETS_FILE=""
+if [ -f ".env.secrets" ]; then
+    SECRETS_FILE=".env.secrets"
+    echo "✓ Found .env.secrets in current directory"
+elif [ -f "$CONDUCTOR_ROOT_PATH/.env.secrets" ]; then
+    SECRETS_FILE="$CONDUCTOR_ROOT_PATH/.env.secrets"
+    echo "✓ Found .env.secrets in root directory ($CONDUCTOR_ROOT_PATH)"
 else
-    echo "✗ SUPER_ADMIN_EMAILS is NOT set (REQUIRED for Admin UI access)"
-    MISSING_VARS=$((MISSING_VARS + 1))
-fi
-
-# Check GEMINI_API_KEY (required)
-if [ -n "$GEMINI_API_KEY" ]; then
-    echo "✓ GEMINI_API_KEY configured"
-else
-    echo "✗ GEMINI_API_KEY is NOT set (REQUIRED for creative generation)"
-    MISSING_VARS=$((MISSING_VARS + 1))
-fi
-
-# Check Google OAuth (required)
-if [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; then
-    echo "✓ Google OAuth configured via environment variables"
-elif [ -f "$CONDUCTOR_ROOT_PATH/client_secret"*.json ]; then
-    echo "✓ Google OAuth configured via client_secret.json file"
-else
-    echo "✗ Google OAuth is NOT configured (REQUIRED for Admin UI login)"
-    echo "  Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables"
-    MISSING_VARS=$((MISSING_VARS + 1))
-fi
-
-# Check GAM OAuth (optional but required for GAM functionality)
-if [ -n "$GAM_OAUTH_CLIENT_ID" ] && [ -n "$GAM_OAUTH_CLIENT_SECRET" ]; then
-    echo "✓ GAM OAuth configured via environment variables"
-else
-    echo "⚠️  GAM OAuth is NOT configured (OPTIONAL - only needed for Google Ad Manager functionality)"
-    echo "  Set GAM_OAUTH_CLIENT_ID and GAM_OAUTH_CLIENT_SECRET environment variables"
-fi
-
-# Check SUPER_ADMIN_DOMAINS (optional)
-if [ -n "$SUPER_ADMIN_DOMAINS" ]; then
-    echo "✓ SUPER_ADMIN_DOMAINS configured: $SUPER_ADMIN_DOMAINS"
-fi
-
-if [ $MISSING_VARS -gt 0 ]; then
+    echo "✗ ERROR: .env.secrets file not found!"
     echo ""
-    echo "⚠️  Warning: $MISSING_VARS required environment variable(s) missing!"
+    echo "Please create $CONDUCTOR_ROOT_PATH/.env.secrets with your secrets:"
     echo ""
-    echo "To fix this, add the following to your ~/.bashrc or ~/.zshrc:"
+    echo "# API Keys"
+    echo "GEMINI_API_KEY=your-gemini-api-key"
     echo ""
-    echo "# AdCP Conductor Configuration"
-    [ -z "$SUPER_ADMIN_EMAILS" ] && echo "export SUPER_ADMIN_EMAILS='your-email@example.com'"
-    [ -z "$GEMINI_API_KEY" ] && echo "export GEMINI_API_KEY='your-gemini-api-key'"
-    [ -z "$GOOGLE_CLIENT_ID" ] && [ ! -f "$CONDUCTOR_ROOT_PATH/client_secret"*.json ] && echo "export GOOGLE_CLIENT_ID='your-client-id.apps.googleusercontent.com'"
-    [ -z "$GOOGLE_CLIENT_SECRET" ] && [ ! -f "$CONDUCTOR_ROOT_PATH/client_secret"*.json ] && echo "export GOOGLE_CLIENT_SECRET='your-client-secret'"
-    [ -z "$GAM_OAUTH_CLIENT_ID" ] && echo "export GAM_OAUTH_CLIENT_ID='your-gam-client-id.apps.googleusercontent.com'"
-    [ -z "$GAM_OAUTH_CLIENT_SECRET" ] && echo "export GAM_OAUTH_CLIENT_SECRET='your-gam-client-secret'"
+    echo "# OAuth Configuration"
+    echo "GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com"
+    echo "GOOGLE_CLIENT_SECRET=your-client-secret"
+    echo "SUPER_ADMIN_EMAILS=your-email@example.com"
     echo ""
-    echo "The workspace will be created but may not function properly."
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+    echo "# GAM OAuth (optional - only needed for Google Ad Manager)"
+    echo "GAM_OAUTH_CLIENT_ID=your-gam-client-id.apps.googleusercontent.com"
+    echo "GAM_OAUTH_CLIENT_SECRET=your-gam-client-secret"
+    echo ""
+    echo "See .env.secrets.template for a full example."
+    echo ""
+    exit 1
 fi
+
+echo "✓ Secrets will be loaded from $SECRETS_FILE"
 echo ""
 
 # Check if port management script exists
@@ -217,44 +186,11 @@ elif [ -f "$CONDUCTOR_ROOT_PATH/.env.secrets" ]; then
     echo "Loading secrets from root directory ($CONDUCTOR_ROOT_PATH/.env.secrets)..."
 fi
 
-if [ -n "$SECRETS_FILE" ]; then
-    echo "" >> .env
-    echo "# Secrets from $SECRETS_FILE" >> .env
-    cat "$SECRETS_FILE" >> .env
-    echo "✓ Loaded secrets from $SECRETS_FILE"
-else
-    echo "No .env.secrets file found in current or root directory, using environment variables..."
-
-    # Add secrets from environment variables
-    cat >> .env << EOF
-
-# API Keys (from environment)
-GEMINI_API_KEY=${GEMINI_API_KEY:-}
-
-# OAuth Configuration (from environment)
-GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-SUPER_ADMIN_EMAILS=${SUPER_ADMIN_EMAILS:-}
-SUPER_ADMIN_DOMAINS=${SUPER_ADMIN_DOMAINS:-}
-
-# GAM OAuth Configuration (from environment)
-GAM_OAUTH_CLIENT_ID=${GAM_OAUTH_CLIENT_ID:-}
-GAM_OAUTH_CLIENT_SECRET=${GAM_OAUTH_CLIENT_SECRET:-}
-EOF
-
-    echo "✓ Created .env file with environment variables"
-    echo "ℹ️  Consider creating a .env.secrets file in current directory or $CONDUCTOR_ROOT_PATH/.env.secrets for consistent secrets across workspaces"
-fi
-
-# Copy OAuth credentials file if it exists (legacy method)
-oauth_files=$(ls $CONDUCTOR_ROOT_PATH/client_secret*.json 2>/dev/null)
-if [ -n "$oauth_files" ]; then
-    echo "ℹ️  Found OAuth credentials file (legacy method)"
-    for file in $oauth_files; do
-        cp "$file" .
-        echo "   Copied $(basename $file)"
-    done
-fi
+# Load secrets from .env.secrets file (already validated above)
+echo "" >> .env
+echo "# Secrets from $SECRETS_FILE" >> .env
+cat "$SECRETS_FILE" >> .env
+echo "✓ Loaded secrets from $SECRETS_FILE"
 
 # Update .env with unique ports
 echo "" >> .env
@@ -263,11 +199,6 @@ echo "POSTGRES_PORT=$POSTGRES_PORT" >> .env
 echo "ADCP_SALES_PORT=$ADCP_PORT" >> .env
 echo "ADMIN_UI_PORT=$ADMIN_PORT" >> .env
 echo "DATABASE_URL=postgresql://adcp_user:secure_password_change_me@localhost:$POSTGRES_PORT/adcp" >> .env
-echo "" >> .env
-echo "# OAuth Configuration (optional - admin UI will work without it)" >> .env
-echo "# GOOGLE_CLIENT_ID=your-client-id-here" >> .env
-echo "# GOOGLE_CLIENT_SECRET=your-client-secret-here" >> .env
-echo "# SUPER_ADMIN_EMAILS=admin@example.com" >> .env
 
 echo "✓ Updated .env with unique ports"
 
@@ -464,8 +395,7 @@ echo "✓ Workspace environment activated"
 
 echo ""
 echo "Setup complete! Next steps:"
-echo "1. Review .env file and ensure GEMINI_API_KEY is set"
-echo "2. Build and start services:"
+echo "1. Build and start services:"
 echo "   docker compose build"
 echo "   docker compose up -d"
 echo ""

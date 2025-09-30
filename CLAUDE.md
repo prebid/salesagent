@@ -750,36 +750,38 @@ adcp-server   # MCP server on port 8080
 admin-ui      # Admin interface on port 8001
 ```
 
-### Required Configuration (.env file)
+### Required Configuration (.env.secrets file)
+
+**🔒 Security**: Secrets are ONLY configured via `.env.secrets` file in the repository root. Environment variables are NOT supported to reduce security risks.
+
+Create `/Users/brianokelley/Developer/salesagent/.env.secrets`:
 
 ```bash
 # API Keys
 GEMINI_API_KEY=your-gemini-api-key-here
 
-# OAuth Configuration
+# OAuth Configuration (for Admin UI)
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
+SUPER_ADMIN_EMAILS=user1@example.com,user2@example.com
 
 # GAM OAuth Configuration (required for Google Ad Manager functionality)
 GAM_OAUTH_CLIENT_ID=your-gam-client-id.apps.googleusercontent.com
 GAM_OAUTH_CLIENT_SECRET=your-gam-client-secret
 
-# Admin Configuration
-SUPER_ADMIN_EMAILS=user1@example.com,user2@example.com
+# Optional
 SUPER_ADMIN_DOMAINS=example.com
-
-# Port Configuration (optional)
-ADCP_SALES_PORT=8080
-ADMIN_UI_PORT=8001
 ```
+
+**Note**: Ports are auto-configured per workspace by the setup script. Do not set ports in `.env.secrets`.
 
 ### Important Configuration Notes
 
-1. **GAM OAuth**: GAM OAuth credentials are configured via environment variables only (no longer stored in database)
-2. **Slack Webhooks**: Configure per-tenant in Admin UI, NOT via environment variables
-3. **Database**: Docker Compose manages PostgreSQL automatically
-4. **OAuth**: Mount your `client_secret*.json` file (see docker-compose.yml)
-5. **Ports**: 8080 (MCP), 8001 (Admin UI), 5432 (PostgreSQL)
+1. **Security**: All secrets MUST be in `.env.secrets` file. Environment variables are not supported.
+2. **Workspace Setup**: Run `scripts/setup/setup_conductor_workspace.sh` to copy secrets and configure ports
+3. **Slack Webhooks**: Configure per-tenant in Admin UI (not in `.env.secrets`)
+4. **Database**: Docker Compose manages PostgreSQL automatically
+5. **Ports**: Auto-assigned per workspace to avoid conflicts (MCP, Admin UI, PostgreSQL)
 
 ### Database Schema
 
