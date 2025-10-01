@@ -212,7 +212,7 @@ def _construct_agent_url(tenant_id: str, request) -> str:
     """Construct the agent URL using existing tenant resolution logic."""
     import os
 
-    from src.core.config_loader import get_current_tenant
+    from src.core.database.models import Tenant
 
     logger.info(f"🏗️ Constructing agent URL for tenant: {tenant_id}")
 
@@ -222,11 +222,15 @@ def _construct_agent_url(tenant_id: str, request) -> str:
         logger.info(f"🔧 Using ADCP_AGENT_URL override: {override_url}")
         return override_url
 
-    # Get tenant information from the existing resolution system
+    # Get tenant information directly from database using tenant_id parameter
     try:
-        tenant = get_current_tenant()
-        subdomain = tenant.get("subdomain", tenant_id)
-        virtual_host = tenant.get("virtual_host")
+        with get_db_session() as db_session:
+            tenant_obj = db_session.query(Tenant).filter(Tenant.tenant_id == tenant_id).first()
+            if not tenant_obj:
+                raise ValueError(f"Tenant {tenant_id} not found")
+
+            subdomain = tenant_obj.subdomain or tenant_id
+            virtual_host = tenant_obj.virtual_host
 
         logger.info(f"🏢 Tenant info - subdomain: '{subdomain}', virtual_host: '{virtual_host}'")
 
