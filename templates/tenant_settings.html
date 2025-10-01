@@ -636,11 +636,36 @@
                     {% endif %}
 
                     <div class="form-group" style="margin-top: 1rem;">
-                        <label for="gam_refresh_token">OAuth Refresh Token</label>
-                        <input type="text" id="gam_refresh_token" class="form-control"
-                               value="{{ adapter_config.get('refresh_token', '') if adapter_config else '' }}"
-                               placeholder="Your OAuth refresh token">
-                        <small class="form-text text-muted">Required for API access. Enter token and click "Auto-detect Network" to retrieve network code.</small>
+                        <label>OAuth Setup</label>
+                        {% if adapter_config and adapter_config.get('refresh_token') %}
+                        <div class="status-card success">
+                            <strong>✅ OAuth Token Configured</strong>
+                            <p>Your refresh token is active and ready to use.</p>
+                            <button onclick="startGAMOAuth()" class="btn btn-secondary btn-sm" style="margin-top: 0.5rem;">
+                                Refresh OAuth Token
+                            </button>
+                        </div>
+                        {% else %}
+                        <div class="status-card warning">
+                            <strong>OAuth Setup Required</strong>
+                            <p>Click the button below to authorize AdCP access to your Google Ad Manager account.</p>
+                            <button onclick="startGAMOAuth()" class="btn btn-primary" style="margin-top: 0.5rem;">
+                                🔑 Get OAuth Token
+                            </button>
+                        </div>
+                        {% endif %}
+
+                        <!-- Advanced option for manual token entry -->
+                        <details style="margin-top: 1rem;">
+                            <summary style="cursor: pointer; color: #666; font-size: 0.9em;">Advanced: Manual Token Entry</summary>
+                            <div style="margin-top: 0.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
+                                <label for="gam_refresh_token">Manual OAuth Refresh Token</label>
+                                <input type="text" id="gam_refresh_token" class="form-control"
+                                       value="{{ adapter_config.get('refresh_token', '') if adapter_config else '' }}"
+                                       placeholder="Paste your OAuth refresh token here">
+                                <small class="form-text text-muted">For advanced users: manually enter a refresh token if you have one.</small>
+                            </div>
+                        </details>
                     </div>
 
                     <div class="form-group">
@@ -1382,6 +1407,34 @@ function checkOAuthConfig() {
                 <p>Could not verify OAuth configuration: ${error.message}</p>
             `;
         });
+}
+
+// Start GAM OAuth flow
+function startGAMOAuth() {
+    // Open OAuth flow in a new window/tab
+    const tenantId = '{{ tenant.tenant_id }}';
+    const oauthUrl = '{{ script_name }}/gam/authorize/' + tenantId;
+
+    // Show loading state
+    const button = event.target;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Starting OAuth...';
+
+    // Store original button state for restoration
+    const restoreButton = () => {
+        button.disabled = false;
+        button.textContent = originalText;
+    };
+
+    // Navigate to OAuth URL
+    try {
+        window.location.href = oauthUrl;
+    } catch (error) {
+        console.error('Error starting OAuth flow:', error);
+        alert('Error starting OAuth flow. Please try again.');
+        restoreButton();
+    }
 }
 
 // Auto-detect GAM network code from refresh token

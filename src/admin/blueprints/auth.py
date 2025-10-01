@@ -520,3 +520,172 @@ def test_login_form():
         abort(404)
 
     return render_template("login.html", test_mode=True, test_only=True)
+
+
+# GAM OAuth Flow endpoints
+@auth_bp.route("/gam/authorize/<tenant_id>")
+def gam_authorize(tenant_id):
+    """Initiate GAM OAuth flow for tenant."""
+    # Verify tenant exists and user has access
+    with get_db_session() as db_session:
+        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("auth.login"))
+
+    # Check OAuth configuration
+    oauth = current_app.oauth if hasattr(current_app, "oauth") else None
+    if not oauth:
+        flash("OAuth not configured. Please contact your administrator.", "error")
+        return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+
+    try:
+        # Get GAM OAuth configuration
+        from src.core.config import get_gam_oauth_config
+        gam_config = get_gam_oauth_config()
+
+        # Store tenant context for callback
+        session["gam_oauth_tenant_id"] = tenant_id
+        session["gam_oauth_originating_host"] = request.headers.get("Host", "")
+
+        # Store external domain context if available
+        approximated_host = request.headers.get("Apx-Incoming-Host")
+        if approximated_host:
+            session["gam_oauth_external_domain"] = approximated_host
+            logger.info(f"Stored external domain for GAM OAuth redirect: {approximated_host}")
+
+        # Determine callback URI
+        if os.environ.get("PRODUCTION") == "true":
+            callback_uri = "https://sales-agent.scope3.com/admin/auth/gam/callback"
+        else:
+            callback_uri = url_for("auth.gam_callback", _external=True)
+
+        # Build authorization URL with GAM-specific scope
+        auth_url = (
+            "https://accounts.google.com/o/oauth2/v2/auth?"
+            f"client_id={gam_config.client_id}&"
+            f"redirect_uri={callback_uri}&"
+            "scope=https://www.googleapis.com/auth/dfp&"
+            "response_type=code&"
+            "access_type=offline&"
+            "prompt=consent&"  # Force consent to get refresh token
+            f"state={tenant_id}"
+        )
+
+        logger.info(f"Initiating GAM OAuth flow for tenant {tenant_id}")
+        return redirect(auth_url)
+
+    except Exception as e:
+        logger.error(f"Error initiating GAM OAuth for tenant {tenant_id}: {e}")
+        flash(f"Error starting OAuth flow: {str(e)}", "error")
+        return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+
+
+@auth_bp.route("/gam/callback")
+def gam_callback():
+    """Handle GAM OAuth callback and store refresh token."""
+    try:
+        # Get authorization code and state
+        code = request.args.get("code")
+        state = request.args.get("state")
+        error = request.args.get("error")
+
+        if error:
+            logger.error(f"GAM OAuth error: {error}")
+            flash(f"OAuth authorization failed: {error}", "error")
+            return redirect(url_for("auth.login"))
+
+        if not code:
+            flash("No authorization code received", "error")
+            return redirect(url_for("auth.login"))
+
+        # Get tenant context from session
+        tenant_id = session.pop("gam_oauth_tenant_id", state)
+        originating_host = session.pop("gam_oauth_originating_host", None)
+        external_domain = session.pop("gam_oauth_external_domain", None)
+
+        if not tenant_id:
+            flash("Invalid OAuth state - no tenant context", "error")
+            return redirect(url_for("auth.login"))
+
+        # Get GAM OAuth configuration
+        from src.core.config import get_gam_oauth_config
+        gam_config = get_gam_oauth_config()
+
+        # Determine callback URI (must match the one used in authorization)
+        if os.environ.get("PRODUCTION") == "true":
+            callback_uri = "https://sales-agent.scope3.com/admin/auth/gam/callback"
+        else:
+            callback_uri = url_for("auth.gam_callback", _external=True)
+
+        # Exchange authorization code for tokens
+        import requests
+        token_response = requests.post("https://oauth2.googleapis.com/token", data={
+            "client_id": gam_config.client_id,
+            "client_secret": gam_config.client_secret,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": callback_uri
+        })
+
+        if not token_response.ok:
+            logger.error(f"Token exchange failed: {token_response.text}")
+            flash("Failed to exchange authorization code for tokens", "error")
+            return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+
+        token_data = token_response.json()
+        refresh_token = token_data.get("refresh_token")
+
+        if not refresh_token:
+            logger.error("No refresh token in OAuth response")
+            flash("No refresh token received. Please try again or contact support.", "error")
+            return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+
+        # Store refresh token in tenant's adapter config
+        with get_db_session() as db_session:
+            from src.core.database.models import AdapterConfig
+
+            tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+            if not tenant:
+                flash("Tenant not found", "error")
+                return redirect(url_for("auth.login"))
+
+            # Get or create adapter config
+            adapter_config = db_session.query(AdapterConfig).filter_by(tenant_id=tenant_id).first()
+            if not adapter_config:
+                adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type="google_ad_manager")
+                db_session.add(adapter_config)
+
+            # Store the refresh token
+            adapter_config.gam_refresh_token = refresh_token
+
+            # Also update tenant's ad_server field
+            tenant.ad_server = "google_ad_manager"
+
+            db_session.commit()
+
+        logger.info(f"GAM OAuth completed successfully for tenant {tenant_id}")
+        flash("Google Ad Manager OAuth setup completed successfully! Your refresh token has been saved.", "success")
+
+        # Try to auto-detect network information
+        try:
+            # Import the detect network logic from GAM blueprint
+            from src.admin.blueprints.gam import detect_gam_network
+            # Note: We can't directly call detect_gam_network here as it expects a POST request
+            # The user will need to use the "Auto-detect Network" button in the UI
+            flash("Next step: Use the 'Auto-detect Network' button to complete your GAM configuration.", "info")
+        except Exception as detect_error:
+            logger.warning(f"Could not suggest auto-detect: {detect_error}")
+
+        # Redirect back to tenant settings
+        if external_domain and os.environ.get("PRODUCTION") == "true":
+            return redirect(f"https://{external_domain}/admin/tenant/{tenant_id}/settings")
+        elif originating_host and os.environ.get("PRODUCTION") == "true":
+            return redirect(f"https://{originating_host}/admin/tenant/{tenant_id}/settings")
+        else:
+            return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+
+    except Exception as e:
+        logger.error(f"Error in GAM OAuth callback: {e}", exc_info=True)
+        flash("OAuth callback failed. Please try again.", "error")
+        return redirect(url_for("auth.login"))
