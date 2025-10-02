@@ -47,7 +47,21 @@ def index():
     """Main index page - redirects based on authentication and user role."""
     # Check if user is authenticated
     if "user" not in session:
-        # Not authenticated - redirect to landing page for signup
+        # Not authenticated - check domain to decide where to send them
+        host = request.headers.get("Host", "")
+        approximated_host = request.headers.get("Apx-Incoming-Host")
+
+        # admin.sales-agent.scope3.com should go to login
+        if (approximated_host and approximated_host.startswith("admin.")) or host.startswith("admin."):
+            return redirect(url_for("auth.login"))
+
+        # Check if we're on a tenant-specific subdomain (not main domain)
+        tenant = get_tenant_from_hostname()
+        if tenant:
+            # Tenant subdomain - go to login (no signup on tenant domains)
+            return redirect(url_for("auth.login"))
+
+        # Main domain (sales-agent.scope3.com) - show signup landing
         return redirect(url_for("public.landing"))
 
     # Check if we're on a tenant-specific subdomain

@@ -36,6 +36,30 @@ RESERVED_SUBDOMAINS = {
 @public_bp.route("/signup")
 def landing():
     """Public landing page for self-service signup."""
+    # Only allow signup on main domain, not tenant subdomains
+    host = request.headers.get("Host", "")
+    approximated_host = request.headers.get("Apx-Incoming-Host")
+
+    # Check if we're on a tenant subdomain
+    with get_db_session() as db_session:
+        # Check Approximated host first
+        if approximated_host:
+            tenant = db_session.query(Tenant).filter_by(virtual_host=approximated_host).first()
+            if tenant:
+                # On a tenant domain - redirect to login instead
+                flash("Signup is only available at the main site.", "info")
+                return redirect(url_for("auth.login"))
+
+        # Check subdomain routing
+        if ".sales-agent.scope3.com" in host and not host.startswith("admin."):
+            tenant_subdomain = host.split(".")[0]
+            if tenant_subdomain and tenant_subdomain != "sales-agent":
+                tenant = db_session.query(Tenant).filter_by(subdomain=tenant_subdomain).first()
+                if tenant:
+                    # On a tenant subdomain - redirect to login instead
+                    flash("Signup is only available at the main site.", "info")
+                    return redirect(url_for("auth.login"))
+
     # If user is already authenticated, redirect to their dashboard
     if "user" in session:
         # Check if they already have a tenant
