@@ -115,6 +115,14 @@ repos:
         files: '^(src/core/schemas\.py|src/core/database/models\.py)$'
         pass_filenames: false
 
+      # Validate MCP tool-schema parameter alignment (prevents datetime.combine bugs)
+      - id: mcp-schema-alignment
+        name: MCP tool-schema parameter alignment
+        entry: uv run python tools/validate_mcp_schemas.py
+        language: system
+        files: '^(src/core/schemas\.py|src/core/main\.py)$'
+        pass_filenames: false
+
       # Test MCP endpoints (requires server running)
       - id: mcp-endpoint-tests
         name: Test MCP endpoints

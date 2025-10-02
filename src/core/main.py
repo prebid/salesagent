@@ -3139,12 +3139,15 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
         for media_buy_id, (buy_request, buy_principal_id) in media_buys.items():
             if buy_principal_id == principal_id:
                 # Determine current status
-                if reference_date < buy_request.flight_start_date:
-                    current_status = "pending"
-                elif reference_date > buy_request.flight_end_date:
-                    current_status = "completed"
+                if buy_request.flight_start_date and buy_request.flight_end_date:
+                    if reference_date < buy_request.flight_start_date:
+                        current_status = "pending"
+                    elif reference_date > buy_request.flight_end_date:
+                        current_status = "completed"
+                    else:
+                        current_status = "active"
                 else:
-                    current_status = "active"
+                    current_status = "active"  # Default to active if dates not set
 
                 if current_status in filter_statuses:
                     target_media_buys.append((media_buy_id, buy_request))
@@ -3163,28 +3166,37 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
                 simulation_datetime = testing_ctx.mock_time
             elif testing_ctx.jump_to_event:
                 # Calculate time based on event
-                simulation_datetime = TimeSimulator.jump_to_event_time(
-                    testing_ctx.jump_to_event,
-                    datetime.combine(buy_request.flight_start_date, datetime.min.time()),
-                    datetime.combine(buy_request.flight_end_date, datetime.min.time()),
-                )
+                if buy_request.flight_start_date and buy_request.flight_end_date:
+                    simulation_datetime = TimeSimulator.jump_to_event_time(
+                        testing_ctx.jump_to_event,
+                        datetime.combine(buy_request.flight_start_date, datetime.min.time()),
+                        datetime.combine(buy_request.flight_end_date, datetime.min.time()),
+                    )
+                else:
+                    simulation_datetime = datetime.now()
 
             # Determine status
-            if simulation_datetime.date() < buy_request.flight_start_date:
-                status = "pending"
-            elif simulation_datetime.date() > buy_request.flight_end_date:
-                status = "completed"
+            if buy_request.flight_start_date and buy_request.flight_end_date:
+                if simulation_datetime.date() < buy_request.flight_start_date:
+                    status = "pending"
+                elif simulation_datetime.date() > buy_request.flight_end_date:
+                    status = "completed"
+                else:
+                    status = "active"
             else:
-                status = "active"
+                status = "active"  # Default to active if dates not set
 
             # Create delivery metrics
             if any(
                 [testing_ctx.dry_run, testing_ctx.mock_time, testing_ctx.jump_to_event, testing_ctx.test_session_id]
             ):
                 # Use simulation for testing
-                start_dt = datetime.combine(buy_request.flight_start_date, datetime.min.time())
-                end_dt_campaign = datetime.combine(buy_request.flight_end_date, datetime.min.time())
-                progress = TimeSimulator.calculate_campaign_progress(start_dt, end_dt_campaign, simulation_datetime)
+                if buy_request.flight_start_date and buy_request.flight_end_date:
+                    start_dt = datetime.combine(buy_request.flight_start_date, datetime.min.time())
+                    end_dt_campaign = datetime.combine(buy_request.flight_end_date, datetime.min.time())
+                    progress = TimeSimulator.calculate_campaign_progress(start_dt, end_dt_campaign, simulation_datetime)
+                else:
+                    progress = 0.0
 
                 simulated_metrics = DeliverySimulator.calculate_simulated_metrics(
                     buy_request.total_budget, progress, testing_ctx
@@ -3257,11 +3269,12 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
         campaign_info = None
         if target_media_buys:
             first_buy = target_media_buys[0][1]
-            campaign_info = {
-                "start_date": datetime.combine(first_buy.flight_start_date, datetime.min.time()),
-                "end_date": datetime.combine(first_buy.flight_end_date, datetime.min.time()),
-                "total_budget": first_buy.total_budget,
-            }
+            if first_buy.flight_start_date and first_buy.flight_end_date:
+                campaign_info = {
+                    "start_date": datetime.combine(first_buy.flight_start_date, datetime.min.time()),
+                    "end_date": datetime.combine(first_buy.flight_end_date, datetime.min.time()),
+                    "total_budget": first_buy.total_budget,
+                }
 
         # Convert to dict for testing hooks
         response_data = response.model_dump()
@@ -3682,8 +3695,13 @@ def complete_task(req, context):
                         )
 
                     # Execute the actual creation
-                    start_time = datetime.combine(original_req.start_date, datetime.min.time())
-                    end_time = datetime.combine(original_req.end_date, datetime.max.time())
+                    if original_req.start_date and original_req.end_date:
+                        start_time = datetime.combine(original_req.start_date, datetime.min.time())
+                        end_time = datetime.combine(original_req.end_date, datetime.max.time())
+                    else:
+                        # Use start_time/end_time if dates are not provided
+                        start_time = original_req.start_time or datetime.now()
+                        end_time = original_req.end_time or (datetime.now() + timedelta(days=30))
                     response = adapter.create_media_buy(original_req, packages, start_time, end_time)
 
                     # Store the media buy in memory (for backward compatibility)
