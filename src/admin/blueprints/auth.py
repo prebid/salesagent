@@ -549,7 +549,14 @@ def gam_authorize(tenant_id):
         # Get GAM OAuth configuration
         from src.core.config import get_gam_oauth_config
 
-        gam_config = get_gam_oauth_config()
+        try:
+            gam_config = get_gam_oauth_config()
+            if not gam_config.client_id or not gam_config.client_secret:
+                raise ValueError("GAM OAuth credentials not configured")
+        except Exception as config_error:
+            logger.error(f"GAM OAuth configuration error: {config_error}")
+            flash(f"GAM OAuth not properly configured: {str(config_error)}", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
         # Store tenant context for callback
         session["gam_oauth_tenant_id"] = tenant_id
@@ -567,6 +574,9 @@ def gam_authorize(tenant_id):
         else:
             callback_uri = url_for("auth.gam_callback", _external=True)
 
+        # Log the callback URI for debugging
+        logger.info(f"Initiating GAM OAuth flow for tenant {tenant_id} with callback_uri: {callback_uri}")
+
         # Build authorization URL with GAM-specific scope
         auth_url = (
             "https://accounts.google.com/o/oauth2/v2/auth?"
@@ -579,7 +589,7 @@ def gam_authorize(tenant_id):
             f"state={tenant_id}"
         )
 
-        logger.info(f"Initiating GAM OAuth flow for tenant {tenant_id}")
+        logger.debug(f"GAM OAuth authorization URL (redacted): {auth_url.split('client_id=')[0]}client_id=REDACTED...")
         return redirect(auth_url)
 
     except Exception as e:
@@ -597,9 +607,14 @@ def gam_callback():
         state = request.args.get("state")
         error = request.args.get("error")
 
+        # Log all callback parameters for debugging
+        logger.info(f"GAM OAuth callback received - code present: {bool(code)}, state: {state}, error: {error}")
+        logger.debug(f"GAM OAuth callback full args: {dict(request.args)}")
+
         if error:
-            logger.error(f"GAM OAuth error: {error}")
-            flash(f"OAuth authorization failed: {error}", "error")
+            error_description = request.args.get("error_description", "No description provided")
+            logger.error(f"GAM OAuth error: {error} - {error_description}")
+            flash(f"OAuth authorization failed: {error_description}", "error")
             return redirect(url_for("auth.login"))
 
         if not code:
@@ -629,6 +644,9 @@ def gam_callback():
         # Exchange authorization code for tokens
         import requests
 
+        logger.info(f"Exchanging authorization code for tokens - tenant: {tenant_id}, callback_uri: {callback_uri}")
+        logger.debug(f"Token exchange request - client_id: {gam_config.client_id[:20]}...")
+
         token_response = requests.post(
             "https://oauth2.googleapis.com/token",
             data={
@@ -641,9 +659,27 @@ def gam_callback():
         )
 
         if not token_response.ok:
-            logger.error(f"Token exchange failed: {token_response.text}")
-            flash("Failed to exchange authorization code for tokens", "error")
-            return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+            error_details = (
+                token_response.json()
+                if token_response.headers.get("content-type", "").startswith("application/json")
+                else {"raw": token_response.text}
+            )
+            logger.error(f"Token exchange failed: status={token_response.status_code}, details={error_details}")
+
+            # Provide user-friendly error messages based on common issues
+            error_description = error_details.get("error_description", "")
+            if "redirect_uri_mismatch" in str(error_details):
+                flash("OAuth configuration error: Redirect URI mismatch. Please contact your administrator.", "error")
+            elif "invalid_grant" in str(error_details):
+                flash("Authorization code expired or invalid. Please try again.", "error")
+            elif "invalid_client" in str(error_details):
+                flash("Invalid OAuth credentials. Please contact your administrator.", "error")
+            else:
+                flash(
+                    f"Failed to exchange authorization code for tokens: {error_description or 'Unknown error'}", "error"
+                )
+
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
         token_data = token_response.json()
         refresh_token = token_data.get("refresh_token")
