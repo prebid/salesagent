@@ -93,7 +93,7 @@ function loadAdvertisers() {
     errorDiv.style.display = 'none';
 
     // Fetch advertisers from API
-    fetch('/tenant/{{ tenant_id }}/api/gam/get-advertisers', {
+    fetch('{{ script_name }}/tenant/{{ tenant_id }}/api/gam/get-advertisers', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
