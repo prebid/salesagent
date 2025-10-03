@@ -1,4 +1,4 @@
-# Docker Hub Authentication for Fly.io Deployment
+# Docker Hub Rate Limit Solution for Fly.io Deployment
 
 ## Problem
 Fly.io deployments fail with Docker Hub rate limit errors:
@@ -6,8 +6,25 @@ Fly.io deployments fail with Docker Hub rate limit errors:
 429 Too Many Requests - Server message: toomanyrequests: You have reached your unauthenticated pull rate limit.
 ```
 
-## Solution
-Configure Docker Hub authentication credentials in Fly.io.
+## Implemented Solution ✅
+**Use AWS Public ECR instead of Docker Hub.**
+
+The `Dockerfile.fly` now uses:
+```dockerfile
+FROM public.ecr.aws/docker/library/python:3.12-slim
+```
+
+**Benefits:**
+- ✅ No rate limits for public images
+- ✅ No authentication required
+- ✅ Mirrors official Docker images (same SHA)
+- ✅ No configuration needed in Fly.io
+- ✅ High availability and fast pulls
+
+AWS Public ECR provides a mirror of Docker's official images without rate limiting or authentication requirements. This is the simplest and most reliable solution for Fly.io deployments.
+
+## Alternative: Docker Hub Authentication (Advanced)
+If you specifically need Docker Hub, you can configure authentication (note: this is more complex and requires additional setup).
 
 ## Setup Steps
 
