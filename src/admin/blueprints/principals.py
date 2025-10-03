@@ -213,7 +213,7 @@ def get_principal(tenant_id, principal_id):
 
     except Exception as e:
         logger.error(f"Error getting principal {principal_id}: {e}", exc_info=True)
-        return jsonify({"error": "Failed to get principal"}), 500
+        return jsonify({"error": f"Failed to get principal: {str(e)}"}), 500
 
 
 @principals_bp.route("/principal/<principal_id>/update_mappings", methods=["POST"])
