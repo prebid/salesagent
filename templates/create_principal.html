@@ -38,6 +38,9 @@
         </div>
 
         {% if has_gam %}
+        <div class="alert alert-info" style="margin: 1rem 0;">
+            <strong>ℹ️ Note:</strong> This tenant uses Google Ad Manager. All campaigns will be executed through GAM and will write to your GAM network.
+        </div>
         <div class="form-group">
             <label for="gam_advertiser_id">GAM Advertiser <span style="color: red;">*</span></label>
             <select id="gam_advertiser_id" name="gam_advertiser_id" required
@@ -47,6 +50,11 @@
             <small>Select which advertiser company this is in Google Ad Manager.</small>
             <div id="advertiser-loading-error" style="display: none; color: red; margin-top: 0.5rem;"></div>
         </div>
+        {% else %}
+        <div class="alert alert-info" style="margin: 1rem 0;">
+            <strong>ℹ️ Note:</strong> This tenant uses the Mock adapter for testing. No real ad server API calls will be made.
+            <br><strong>To use a real ad server</strong>, configure GAM or another adapter in the Settings → Ad Server tab.
+        </div>
         {% endif %}
 
         <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; margin: 2rem 0;">
@@ -55,8 +63,9 @@
                 <li>A secure API token will be generated for this advertiser</li>
                 {% if has_gam %}
                 <li>The advertiser will be linked to their GAM account</li>
+                <li><strong>All campaigns will write to your GAM network</strong> - this is not a test environment</li>
                 {% else %}
-                <li>You can configure ad server mappings later if needed</li>
+                <li>This advertiser will use the Mock adapter for testing (no real API calls)</li>
                 {% endif %}
                 <li>Share the API token with the advertiser to access the MCP API</li>
                 <li>The advertiser can create and manage campaigns programmatically</li>
