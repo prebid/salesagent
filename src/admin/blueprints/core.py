@@ -58,8 +58,13 @@ def index():
         # Check if we're on a tenant-specific subdomain (not main domain)
         tenant = get_tenant_from_hostname()
         if tenant:
-            # Tenant subdomain - go to login (no signup on tenant domains)
-            return redirect(url_for("auth.login"))
+            # Tenant subdomain - show landing page if it's a virtual host, otherwise login
+            # Virtual hosts (like test-agent.adcontextprotocol.org) should show landing
+            if tenant.virtual_host:
+                return render_template("landing.html")
+            else:
+                # Regular subdomain routing - go to login
+                return redirect(url_for("auth.login"))
 
         # Main domain (sales-agent.scope3.com) - show signup landing
         return redirect(url_for("public.landing"))

@@ -181,8 +181,21 @@ def google_auth():
     if tenant_context:
         session["oauth_tenant_context"] = tenant_context
 
-    # Let Authlib manage the state parameter for CSRF protection
-    return oauth.google.authorize_redirect(redirect_uri)
+    # Build custom state parameter to handle cross-domain scenarios
+    # For cross-domain OAuth (virtual hosts), session cookies won't work
+    import base64
+
+    state_data = {
+        "signup_flow": session.get("signup_flow", False),
+        "external_domain": approximated_host
+        or (host if host != "sales-agent.scope3.com" and not host.startswith("admin.") else None),
+        "tenant_context": tenant_context,
+    }
+    state_json = json.dumps(state_data)
+    state_encoded = base64.urlsafe_b64encode(state_json.encode()).decode()
+
+    # Let Authlib manage the state parameter for CSRF protection, but pass our custom data
+    return oauth.google.authorize_redirect(redirect_uri, state=state_encoded)
 
 
 @auth_bp.route("/tenant/<tenant_id>/auth/google")
@@ -254,19 +267,35 @@ def google_callback():
         session["user_name"] = user.get("name", email)
         session["user_picture"] = user.get("picture", "")
 
-        # Check if this is a signup flow
-        if session.get("signup_flow"):
+        # Try to decode state parameter for cross-domain OAuth context
+        import base64
+
+        state_param = request.args.get("state")
+        state_data = {}
+        if state_param:
+            try:
+                state_json = base64.urlsafe_b64decode(state_param.encode()).decode()
+                state_data = json.loads(state_json)
+                logger.info(f"OAuth callback - decoded state: {state_data}")
+            except Exception as e:
+                logger.warning(f"Could not decode OAuth state parameter: {e}")
+
+        # Check if this is a signup flow (from state or session)
+        is_signup_flow = state_data.get("signup_flow") or session.get("signup_flow")
+        if is_signup_flow:
             logger.info(f"OAuth callback - signup flow detected for {email}")
+            # Set signup flow in session for onboarding
+            session["signup_flow"] = True
             # Redirect to onboarding wizard
             return redirect(url_for("public.signup_onboarding"))
 
         # Debug session state before popping values
         logger.info(f"OAuth callback - full session: {dict(session)}")
 
-        # Get originating host and tenant context from session
+        # Get originating host and tenant context from state parameter (preferred) or session (fallback)
         originating_host = session.pop("oauth_originating_host", None)
-        external_domain = session.pop("oauth_external_domain", None)
-        tenant_id = session.pop("oauth_tenant_context", None)
+        external_domain = state_data.get("external_domain") or session.pop("oauth_external_domain", None)
+        tenant_id = state_data.get("tenant_context") or session.pop("oauth_tenant_context", None)
 
         # Debug logging for OAuth redirect
         logger.info(f"OAuth callback debug - originating_host: {originating_host}")
