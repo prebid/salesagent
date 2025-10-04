@@ -724,10 +724,20 @@ class AdCPRequestHandler(RequestHandler):
                 brief=brief, promoted_offering=promoted_offering, context=tool_context
             )
 
+            # Handle both dict and object responses (defensive pattern)
+            if isinstance(response, dict):
+                products = response.get("products", [])
+                message = response.get("message", "Products retrieved successfully")
+                products_list = products
+            else:
+                products = response.products
+                message = response.message or "Products retrieved successfully"
+                products_list = [product.model_dump() for product in products]
+
             # Convert to A2A response format
             return {
-                "products": [product.model_dump() for product in response.products],
-                "message": response.message or "Products retrieved successfully",
+                "products": products_list,
+                "message": message,
             }
 
         except Exception as e:
@@ -856,15 +866,31 @@ class AdCPRequestHandler(RequestHandler):
                 context=tool_context,
             )
 
+            # Handle both dict and object responses (defensive pattern)
+            if isinstance(response, dict):
+                creatives_list = response.get("creatives", [])
+                total_count = response.get("total_count", 0)
+                page = response.get("page", 1)
+                limit = response.get("limit", 50)
+                has_more = response.get("has_more", False)
+                message = response.get("message", "Creatives retrieved successfully")
+            else:
+                creatives_list = [creative.model_dump() for creative in response.creatives]
+                total_count = response.total_count
+                page = response.page
+                limit = response.limit
+                has_more = response.has_more
+                message = response.message or "Creatives retrieved successfully"
+
             # Convert response to A2A format
             return {
                 "success": True,
-                "creatives": [creative.model_dump() for creative in response.creatives],
-                "total_count": response.total_count,
-                "page": response.page,
-                "limit": response.limit,
-                "has_more": response.has_more,
-                "message": response.message or "Creatives retrieved successfully",
+                "creatives": creatives_list,
+                "total_count": total_count,
+                "page": page,
+                "limit": limit,
+                "has_more": has_more,
+                "message": message,
             }
 
         except Exception as e:
@@ -1073,11 +1099,21 @@ class AdCPRequestHandler(RequestHandler):
             # Call core function directly
             response = await core_get_signals_tool(request, tool_context)
 
+            # Handle both dict and object responses (defensive pattern)
+            if isinstance(response, dict):
+                signals = response.get("signals", [])
+                message = response.get("message", "Signals retrieved successfully")
+                signals_list = signals
+            else:
+                signals = response.signals
+                message = response.message or "Signals retrieved successfully"
+                signals_list = [signal.model_dump() for signal in signals]
+
             # Convert response to A2A format
             return {
-                "signals": [signal.model_dump() for signal in response.signals],
-                "message": response.message or "Signals retrieved successfully",
-                "total_count": len(response.signals),
+                "signals": signals_list,
+                "message": message,
+                "total_count": len(signals_list),
             }
 
         except Exception as e:
@@ -1123,14 +1159,28 @@ class AdCPRequestHandler(RequestHandler):
             # Call core function directly - no parameters needed for this endpoint
             response = core_list_creative_formats_tool(context=tool_context)
 
+            # Handle both dict and object responses (core function may return either based on INCLUDE_SCHEMAS_IN_RESPONSES)
+            if isinstance(response, dict):
+                # Response is already a dict (schema enhancement enabled)
+                formats = response.get("formats", [])
+                message = response.get("message", "Creative formats retrieved successfully")
+                # Formats in dict are already serialized
+                formats_list = formats
+            else:
+                # Response is ListCreativeFormatsResponse object
+                formats = response.formats
+                message = response.message or "Creative formats retrieved successfully"
+                # Serialize Format objects to dicts
+                formats_list = [format_obj.model_dump() for format_obj in formats]
+
             # Convert response to A2A format with schema validation
             from src.core.schema_validation import INCLUDE_SCHEMAS_IN_RESPONSES, enhance_a2a_response_with_schema
 
             a2a_response = {
                 "success": True,
-                "formats": [format_obj.model_dump() for format_obj in response.formats],
-                "message": response.message or "Creative formats retrieved successfully",
-                "total_count": len(response.formats),
+                "formats": formats_list,
+                "message": message,
+                "total_count": len(formats_list),
                 "specification_version": "AdCP v2.4",
             }
 
@@ -1166,13 +1216,25 @@ class AdCPRequestHandler(RequestHandler):
             # Call core function directly
             response = core_list_authorized_properties_tool(req=request, context=tool_context)
 
+            # Handle both dict and object responses (defensive pattern)
+            if isinstance(response, dict):
+                properties = response.get("properties", [])
+                tag_definitions = response.get("tag_definitions", {})
+                message = response.get("message", "Authorized properties retrieved successfully")
+                properties_list = properties
+            else:
+                properties = response.properties
+                tag_definitions = response.tag_definitions
+                message = response.message or "Authorized properties retrieved successfully"
+                properties_list = [prop.model_dump() for prop in properties]
+
             # Convert response to A2A format
             return {
                 "success": True,
-                "properties": [prop.model_dump() for prop in response.properties],
-                "tag_definitions": response.tag_definitions,
-                "message": response.message or "Authorized properties retrieved successfully",
-                "total_count": len(response.properties),
+                "properties": properties_list,
+                "tag_definitions": tag_definitions,
+                "message": message,
+                "total_count": len(properties_list),
             }
 
         except Exception as e:
