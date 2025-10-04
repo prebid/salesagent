@@ -1902,8 +1902,8 @@ class CreateMediaBuyRequest(BaseModel):
                     end_date = date.fromisoformat(end_date)
                 values["end_time"] = datetime.combine(end_date, time.max, tzinfo=UTC)
 
-        # Convert total_budget to Budget object
-        if "total_budget" in values and not values.get("budget"):
+        # Convert total_budget to Budget object (only if not None)
+        if "total_budget" in values and values["total_budget"] is not None and not values.get("budget"):
             total_budget = values["total_budget"]
             pacing = values.get("pacing", "even")
             daily_cap = values.get("daily_budget")

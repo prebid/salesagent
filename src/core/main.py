@@ -3202,14 +3202,14 @@ def _update_media_buy_impl(
                 )
 
     # Validate update parameters (backwards compatibility)
-    if req.total_budget is not None and req.total_budget <= 0:
-        error_msg = f"Invalid budget: {req.total_budget}. Budget must be positive."
+    if req.budget is not None and req.budget.total <= 0:
+        error_msg = f"Invalid budget: {req.budget.total}. Budget must be positive."
         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
         return UpdateMediaBuyResponse(status="failed", detail=error_msg)
 
     buy_request, _ = media_buys[req.media_buy_id]
-    if req.total_budget is not None:
-        buy_request.total_budget = req.total_budget
+    if req.budget is not None:
+        buy_request.budget = req.budget
     if req.targeting_overlay is not None:
         # Validate targeting doesn't use managed-only dimensions
         from src.services.targeting_capabilities import validate_overlay_targeting
@@ -3470,7 +3470,7 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
                     progress = 0.0
 
                 simulated_metrics = DeliverySimulator.calculate_simulated_metrics(
-                    buy_request.total_budget, progress, testing_ctx
+                    buy_request.budget.total, progress, testing_ctx
                 )
 
                 spend = simulated_metrics["spend"]
@@ -3485,20 +3485,20 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
                 else:
                     progress = 1.0 if status == "completed" else 0.0
 
-                spend = float(buy_request.total_budget * progress)
+                spend = float(buy_request.budget.total * progress)
                 impressions = int(spend * 1000)  # Assume $1 CPM for simplicity
 
             # Create package delivery data
             package_deliveries = []
-            if hasattr(buy_request, "product_ids"):
-                for i, product_id in enumerate(buy_request.product_ids):
-                    package_spend = spend / len(buy_request.product_ids)
-                    package_impressions = impressions / len(buy_request.product_ids)
+            if buy_request.packages:
+                for package in buy_request.packages:
+                    package_spend = spend / len(buy_request.packages)
+                    package_impressions = impressions / len(buy_request.packages)
 
                     package_deliveries.append(
                         PackageDelivery(
-                            package_id=f"pkg_{product_id}_{i}",
-                            buyer_ref=getattr(buy_request, "buyer_ref", None),
+                            package_id=package.package_id,
+                            buyer_ref=package.buyer_ref,
                             impressions=package_impressions,
                             spend=package_spend,
                             pacing_index=1.0 if status == "active" else 0.0,

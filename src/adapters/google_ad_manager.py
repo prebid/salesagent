@@ -285,7 +285,7 @@ class GoogleAdManager(AdServerAdapter):
         # Automatic mode - create order directly
         order_id = self.orders_manager.create_order(
             order_name=f"{request.campaign_name} - {len(packages)} packages",
-            total_budget=request.total_budget,
+            total_budget=request.budget.total,
             start_time=start_time,
             end_time=end_time,
         )
