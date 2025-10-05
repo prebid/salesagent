@@ -170,7 +170,10 @@ def create_app(config=None):
         from src.core.config_loader import get_tenant_by_virtual_host
 
         # Check if this is an /admin request
-        if not request.path.startswith("/admin"):
+        # Note: CustomProxyFix middleware strips /admin from request.path, so we check script_root
+        # In production with SCRIPT_NAME=/admin, script_root will be '/admin'
+        is_admin_request = request.script_root == "/admin" or request.path.startswith("/admin")
+        if not is_admin_request:
             return None
 
         # Check for Apx-Incoming-Host header (indicates request from Approximated)
