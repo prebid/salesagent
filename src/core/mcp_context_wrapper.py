@@ -177,13 +177,30 @@ class MCPContextWrapper:
         """
         # Get authentication info
         principal_id = get_principal_from_context(fastmcp_context)
+
+        # Extract headers for debugging
+        headers = fastmcp_context.meta.get("headers", {}) if hasattr(fastmcp_context, "meta") else {}
+        auth_header = headers.get("x-adcp-auth", "NOT_PRESENT")
+        apx_host = headers.get("apx-incoming-host", "NOT_PRESENT")
+
         if not principal_id:
-            raise ValueError("Missing or invalid x-adcp-auth header for authentication")
+            # Determine if header is missing or just invalid
+            if auth_header == "NOT_PRESENT":
+                raise ValueError(f"Missing x-adcp-auth header. " f"Apx-Incoming-Host: {apx_host}")
+            else:
+                # Header present but invalid (token not found in DB)
+                raise ValueError(
+                    f"Invalid x-adcp-auth token (not found in database). "
+                    f"Token: {auth_header[:20]}..., "
+                    f"Apx-Incoming-Host: {apx_host}"
+                )
 
         # Get tenant info
         tenant = get_current_tenant()
         if not tenant:
-            raise ValueError("No tenant context available")
+            raise ValueError(
+                f"No tenant context available. " f"Principal: {principal_id}, " f"Apx-Incoming-Host: {apx_host}"
+            )
 
         # Extract or generate context_id
         headers = fastmcp_context.meta.get("headers", {}) if hasattr(fastmcp_context, "meta") else {}
