@@ -3031,14 +3031,23 @@ def _create_media_buy_impl(
         # Build packages list for response (AdCP v2.4 format)
         response_packages = []
         for i, package in enumerate(req.packages):
-            response_packages.append(
-                {
-                    "package_id": f"{response.media_buy_id}_pkg_{i+1}",
-                    "buyer_ref": package.buyer_ref,
-                    "products": package.products,
-                    "status": TaskStatus.WORKING,
-                }
-            )
+            # Serialize the package to dict to handle any nested Pydantic objects
+            # Use model_dump_internal to avoid validation that requires package_id (not set yet on request packages)
+            if hasattr(package, "model_dump_internal"):
+                package_dict = package.model_dump_internal()
+            elif hasattr(package, "model_dump"):
+                # Fallback: use model_dump with exclude_none to avoid validation errors
+                package_dict = package.model_dump(exclude_none=True, mode="python")
+            else:
+                package_dict = package
+
+            # Override/add response-specific fields (package_id and status are set by server)
+            response_package = {
+                **package_dict,
+                "package_id": f"{response.media_buy_id}_pkg_{i+1}",
+                "status": TaskStatus.WORKING,
+            }
+            response_packages.append(response_package)
 
         # Create AdCP v2.4 compliant response
         adcp_response = CreateMediaBuyResponse(
