@@ -306,6 +306,61 @@ class TestDatabaseProductsIntegration:
         assert "measurement" not in product_dict
         assert "creative_policy" not in product_dict
 
+    async def test_product_schema_excludes_internal_fields_regression(self, test_tenant_id, sample_product_data):
+        """
+        Regression test: Ensure internal-only fields don't leak to API responses.
+
+        This test prevents the recurrence of the 'Product' object has no attribute 'pricing' bug
+        where code tried to access non-existent fields on database models.
+
+        Background: The original bug occurred when the Product schema had a 'pricing' field
+        that didn't exist in the ProductModel database table, causing AttributeError in production.
+        """
+        # Create a real product in the database
+        with get_db_session() as session:
+            db_product = ProductModel(tenant_id=test_tenant_id, **sample_product_data)
+            session.add(db_product)
+            session.commit()
+            session.refresh(db_product)
+
+        # Get products through the catalog (simulates API path)
+        catalog = DatabaseProductCatalog(config={})
+        products = await catalog.get_products(brief="test", tenant_id=test_tenant_id)
+
+        assert len(products) > 0, "Should return at least one product"
+        product = products[0]
+
+        # Convert to dict (what API response returns)
+        schema_dict = product.model_dump()
+
+        # These fields caused the original "pricing" bug - they should NEVER appear in API responses
+        forbidden_internal_fields = [
+            "pricing",  # Original bug: accessed product.pricing which doesn't exist
+            "cost_basis",  # Would cause same AttributeError
+            "margin",  # Should be computed, not stored/accessed
+            "profit",  # Should be computed, not stored/accessed
+        ]
+
+        for field in forbidden_internal_fields:
+            assert field not in schema_dict, (
+                f"REGRESSION: Forbidden internal field '{field}' leaked to API response. "
+                f"This is a regression of the 'pricing' field access bug. "
+                f"Internal fields should not be in Product schema or should be marked as computed_field."
+            )
+
+        # Database-internal fields should also not leak
+        database_internal_fields = [
+            "tenant_id",  # Multi-tenancy field
+            "targeting_template",  # Internal targeting config
+            "implementation_config",  # Adapter-specific config
+        ]
+
+        for field in database_internal_fields:
+            assert field not in schema_dict, (
+                f"Database internal field '{field}' leaked to API response. "
+                f"These fields are for internal use only and should be filtered from API responses."
+            )
+
 
 class TestDatabasePerformanceOptimization:
     """Performance-optimized database tests with faster cleanup and connection pooling."""

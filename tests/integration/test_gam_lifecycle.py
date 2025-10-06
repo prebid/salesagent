@@ -68,7 +68,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 dry_run=True,
-                tenant_id="test"
+                tenant_id="test",
             )
             assert regular_adapter._is_admin_principal() is False
 
@@ -80,7 +80,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 dry_run=True,
-                tenant_id="test"
+                tenant_id="test",
             )
             assert gam_admin_adapter._is_admin_principal() is True
 
@@ -92,7 +92,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["is_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 dry_run=True,
-                tenant_id="test"
+                tenant_id="test",
             )
             assert is_admin_adapter._is_admin_principal() is True
 
@@ -107,7 +107,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 dry_run=True,
-                tenant_id="test"
+                tenant_id="test",
             )
 
             # Actions that should work for regular users
@@ -134,7 +134,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 dry_run=True,
-                tenant_id="test"
+                tenant_id="test",
             )
             response = admin_adapter.update_media_buy(
                 media_buy_id="12345", action="approve_order", package_id=None, budget=None, today=datetime.now()
@@ -179,7 +179,7 @@ class TestGAMOrderLifecycleIntegration:
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
                 dry_run=True,
-                tenant_id="test"
+                tenant_id="test",
             )
 
             # Test activation with non-guaranteed items (should succeed)

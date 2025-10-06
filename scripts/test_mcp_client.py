@@ -42,7 +42,7 @@ async def test_mcp_endpoint(url: str, auth_token: str = None):
                 return True
             except Exception as e:
                 print(f"⚠️  Could not list tools: {e}")
-                print(f"   (This might be expected if auth is required)")
+                print("   (This might be expected if auth is required)")
                 return True  # Connection worked, auth might be the issue
 
     except Exception as e:
@@ -78,7 +78,7 @@ async def main():
 
     results = []
 
-    for name, url, needs_auth in test_cases:
+    for name, url, _needs_auth in test_cases:
         print(f"\n{'='*80}")
         print(f"TEST: {name}")
         print(f"{'='*80}")

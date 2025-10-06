@@ -186,17 +186,17 @@ Integration tests should validate that database fields are accessed safely:
 def test_product_field_access_safety(self):
     with get_db_session() as session:
         product = session.query(ProductModel).first()
-        
+
         # Test that safe fields exist
         assert hasattr(product, 'product_id')
         assert hasattr(product, 'name')
         assert hasattr(product, 'cpm')
-        
+
         # Test that unsafe fields don't exist
         assert not hasattr(product, 'pricing')
         assert not hasattr(product, 'format_ids')
         assert not hasattr(product, 'cost')
-        
+
         # Test safe access patterns work
         cpm_value = getattr(product, 'cpm', None)
         # This shouldn't raise an exception

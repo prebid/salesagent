@@ -2046,7 +2046,6 @@ def main():
     app.router.routes = new_routes
 
     # Add debug endpoint for tenant detection
-    from starlette.responses import JSONResponse
     from starlette.routing import Route
 
     from src.core.config_loader import get_tenant_by_virtual_host

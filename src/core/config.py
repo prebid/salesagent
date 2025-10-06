@@ -4,7 +4,6 @@ Provides Pydantic-based configuration classes for type-safe, validated configura
 management using environment variables.
 """
 
-
 from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
 

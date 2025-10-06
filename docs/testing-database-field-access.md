@@ -6,7 +6,7 @@ This document describes the comprehensive testing strategy implemented to preven
 
 The original bug occurred because:
 1. **Over-mocking**: Tests mocked database layers extensively, hiding real field access issues
-2. **Schema-Database Misalignment**: No validation that Pydantic schema fields map to actual database columns  
+2. **Schema-Database Misalignment**: No validation that Pydantic schema fields map to actual database columns
 3. **Missing Integration Tests**: No tests exercising actual database-to-schema conversion
 4. **Unsafe Field Access Patterns**: Code accessed database fields without validation
 
@@ -34,7 +34,7 @@ def test_database_model_to_schema_conversion_without_mocking(self, test_tenant_i
         session.add(db_product)
         session.commit()
         session.refresh(db_product)
-        
+
         # This would catch 'pricing' attribute errors
         assert hasattr(db_product, 'cpm')
         assert not hasattr(db_product, 'pricing')  # Would have caused the bug
@@ -77,7 +77,7 @@ def test_database_model_to_schema_conversion_without_mocking(self, test_tenant_i
 async def test_a2a_field_access_regression_prevention(self, test_tenant_setup):
     """Specific test to prevent the 'pricing' field access regression."""
     response = await handler._handle_get_products_skill(...)
-    
+
     # If we get here without AttributeError, the bug is prevented
     for product in response["products"]:
         forbidden_fields = ["pricing", "cost_basis", "margin"]
@@ -253,7 +253,7 @@ pre-commit run --all-files
 This testing strategy successfully addresses the original issue by:
 
 - ✅ **Database Integration Tests**: Catch field access bugs with real ORM objects
-- ✅ **Schema-Database Mapping Validation**: Prevent field mismatches at development time  
+- ✅ **Schema-Database Mapping Validation**: Prevent field mismatches at development time
 - ✅ **Real Data Flow Tests**: Test complete A2A pipeline without excessive mocking
 - ✅ **Pre-commit Hook**: Automated validation prevents regression
 - ✅ **Reduced Mocking**: Focus mocking on external dependencies, not internal data boundaries
@@ -270,7 +270,7 @@ This testing strategy successfully addresses the original issue by:
 When adding new Pydantic schemas or database models:
 
 1. Add validation to `validate_schema_database_alignment.py`
-2. Create integration tests in appropriate test files  
+2. Create integration tests in appropriate test files
 3. Update field mapping documentation
 4. Verify pre-commit hooks pass
 

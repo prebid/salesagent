@@ -81,7 +81,7 @@ config/
 
 **Problem**: Nginx routing is complex with multiple domain types, headers, and backends. Easy to break.
 
-**Solution**: 
+**Solution**:
 - **Document** what should happen (routing guide)
 - **Visualize** how requests flow (diagrams)
 - **Test** that it actually works (test script)

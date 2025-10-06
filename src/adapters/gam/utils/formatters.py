@@ -231,7 +231,7 @@ def sanitize_for_logging(data: Any, max_length: int = 200) -> str:
         # Remove sensitive fields
         safe_data = {k: v for k, v in data.items() if k.lower() not in ["password", "token", "key", "secret", "auth"]}
         data_str = str(safe_data)
-    elif isinstance(data, (list, tuple)):
+    elif isinstance(data, list | tuple):
         # Limit list size for logging
         if len(data) > 10:
             data_str = f"[{len(data)} items: {str(data[:3])}...{str(data[-2:])}]"

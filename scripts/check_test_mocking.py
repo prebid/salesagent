@@ -51,7 +51,7 @@ def check_file(filepath: Path) -> tuple[bool, list[str]]:
     for pattern in DISALLOWED_PATTERNS:
         matches = re.findall(pattern, content)
         if matches:
-            # Get line numbers for better error messages (excluding comments)
+            # Get line numbers for better error messages (excluding comments and strings)
             lines = content.split("\n")
             line_nums = []
             for i, line in enumerate(lines):
@@ -59,10 +59,29 @@ def check_file(filepath: Path) -> tuple[bool, list[str]]:
                 stripped = line.strip()
                 if stripped.startswith("#"):
                     continue
+
                 # Skip inline comments after code
                 code_part = line.split("#")[0]
+
+                # Skip string literals - check if pattern is inside quotes
                 if re.search(pattern, code_part):
-                    line_nums.append(i + 1)
+                    # Check if this is in a string literal
+                    # Simple heuristic: if the pattern appears in quotes, skip it
+                    in_string = False
+                    for quote in ['"', "'"]:
+                        # Find all quoted strings
+                        quoted_parts = re.findall(rf"{quote}[^{quote}]*{pattern}[^{quote}]*{quote}", code_part)
+                        if quoted_parts:
+                            in_string = True
+                            break
+
+                    # Also check if it's in a list of strings (common pattern in tests)
+                    # e.g., required_methods = ["_handle_get_products_skill", ...]
+                    if re.search(rf'[\[\(]\s*["\'][^"\']*{pattern}', code_part):
+                        in_string = True
+
+                    if not in_string:
+                        line_nums.append(i + 1)
 
             if line_nums:  # Only add violation if found in actual code
                 violations.append(

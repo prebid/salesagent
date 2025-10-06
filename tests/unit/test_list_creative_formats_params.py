@@ -31,20 +31,29 @@ def test_list_creative_formats_request_with_all_params():
 
 def test_filtering_by_type():
     """Test that type filter works correctly."""
-    from unittest.mock import MagicMock, patch
+    from datetime import UTC, datetime
+    from unittest.mock import patch
 
-    from src.core.main import _list_creative_formats_impl
     from src.core.schemas import Format
+    from src.core.tool_context import ToolContext
+    from src.core.tools import list_creative_formats_raw
 
-    # Create mock context
-    context = MagicMock()
-    context.meta = {"headers": {}}
+    # Create real ToolContext
+    context = ToolContext(
+        context_id="test",
+        tenant_id="test_tenant",
+        principal_id="test_principal",
+        tool_name="list_creative_formats",
+        request_timestamp=datetime.now(UTC),
+        metadata={},
+        testing_context={},
+    )
 
     # Mock get_current_tenant to return a test tenant
     with patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}):
         # Test filtering by type
         req = ListCreativeFormatsRequest(type="video")
-        response = _list_creative_formats_impl(req, context)
+        response = list_creative_formats_raw(req, context)
 
         # Handle both dict and object responses
         if isinstance(response, dict):
@@ -62,19 +71,29 @@ def test_filtering_by_type():
 
 def test_filtering_by_standard_only():
     """Test that standard_only filter works correctly."""
-    from unittest.mock import MagicMock, patch
+    from datetime import UTC, datetime
+    from unittest.mock import patch
 
-    from src.core.main import _list_creative_formats_impl
     from src.core.schemas import Format
+    from src.core.tool_context import ToolContext
+    from src.core.tools import list_creative_formats_raw
 
-    context = MagicMock()
-    context.meta = {"headers": {}}
+    # Create real ToolContext
+    context = ToolContext(
+        context_id="test",
+        tenant_id="test_tenant",
+        principal_id="test_principal",
+        tool_name="list_creative_formats",
+        request_timestamp=datetime.now(UTC),
+        metadata={},
+        testing_context={},
+    )
 
     # Mock get_current_tenant to return a test tenant
     with patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}):
         # Test filtering by standard_only
         req = ListCreativeFormatsRequest(standard_only=True)
-        response = _list_creative_formats_impl(req, context)
+        response = list_creative_formats_raw(req, context)
 
         # Handle both dict and object responses
         if isinstance(response, dict):
@@ -91,20 +110,30 @@ def test_filtering_by_standard_only():
 
 def test_filtering_by_format_ids():
     """Test that format_ids filter works correctly."""
-    from unittest.mock import MagicMock, patch
+    from datetime import UTC, datetime
+    from unittest.mock import patch
 
-    from src.core.main import _list_creative_formats_impl
     from src.core.schemas import Format
+    from src.core.tool_context import ToolContext
+    from src.core.tools import list_creative_formats_raw
 
-    context = MagicMock()
-    context.meta = {"headers": {}}
+    # Create real ToolContext
+    context = ToolContext(
+        context_id="test",
+        tenant_id="test_tenant",
+        principal_id="test_principal",
+        tool_name="list_creative_formats",
+        request_timestamp=datetime.now(UTC),
+        metadata={},
+        testing_context={},
+    )
 
     # Mock get_current_tenant to return a test tenant
     with patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}):
         # Test filtering by specific format IDs
         target_ids = ["display_300x250", "display_728x90"]
         req = ListCreativeFormatsRequest(format_ids=target_ids)
-        response = _list_creative_formats_impl(req, context)
+        response = list_creative_formats_raw(req, context)
 
         # Handle both dict and object responses
         if isinstance(response, dict):
@@ -123,19 +152,29 @@ def test_filtering_by_format_ids():
 
 def test_filtering_combined():
     """Test that multiple filters work together."""
-    from unittest.mock import MagicMock, patch
+    from datetime import UTC, datetime
+    from unittest.mock import patch
 
-    from src.core.main import _list_creative_formats_impl
     from src.core.schemas import Format
+    from src.core.tool_context import ToolContext
+    from src.core.tools import list_creative_formats_raw
 
-    context = MagicMock()
-    context.meta = {"headers": {}}
+    # Create real ToolContext
+    context = ToolContext(
+        context_id="test",
+        tenant_id="test_tenant",
+        principal_id="test_principal",
+        tool_name="list_creative_formats",
+        request_timestamp=datetime.now(UTC),
+        metadata={},
+        testing_context={},
+    )
 
     # Mock get_current_tenant to return a test tenant
     with patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}):
         # Test combining type and standard_only filters
         req = ListCreativeFormatsRequest(type="display", standard_only=True)
-        response = _list_creative_formats_impl(req, context)
+        response = list_creative_formats_raw(req, context)
 
         # Handle both dict and object responses
         if isinstance(response, dict):

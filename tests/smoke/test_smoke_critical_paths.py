@@ -164,7 +164,7 @@ class TestMCPCriticalEndpoints:
         result = response.json()
         # Should succeed without authentication error
         assert "result" in result or ("error" in result and "authentication" not in result["error"]["message"].lower())
-        
+
         # If successful, verify pricing data is filtered for anonymous users
         if "result" in result and "content" in result["result"]:
             products_data = result["result"]["content"]

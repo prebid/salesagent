@@ -713,8 +713,8 @@ class TestCreativeLifecycleMCP:
             assert len(sync_response.synced_creatives) == 3
 
         # Import create_media_buy tool
-        from src.core.main import _create_media_buy_impl
         from src.core.schemas import Budget, Package
+        from src.core.tools import create_media_buy_raw
 
         # Create media buy with creative_ids in packages
         creative_ids = [c["creative_id"] for c in sample_creatives]
@@ -771,7 +771,8 @@ class TestCreativeLifecycleMCP:
             ]
 
             # Call create_media_buy with packages containing creative_ids
-            response = _create_media_buy_impl(
+            response = create_media_buy_raw(
+                po_number="PO-TEST-123",
                 promoted_offering="Test Campaign",
                 packages=packages,
                 start_time=datetime.now(UTC) + timedelta(days=1),

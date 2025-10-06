@@ -173,7 +173,9 @@ def create_app(config=None):
         # Note: CustomProxyFix middleware strips /admin from request.path, so we check script_root
         # In production with SCRIPT_NAME=/admin, script_root will be '/admin'
         # But we need to also check that the path isn't just root (/)
-        is_admin_request = (request.script_root == "/admin" and request.path != "/") or request.path.startswith("/admin")
+        is_admin_request = (request.script_root == "/admin" and request.path != "/") or request.path.startswith(
+            "/admin"
+        )
         if not is_admin_request:
             return None
 
@@ -202,7 +204,9 @@ def create_app(config=None):
 
         # Build redirect URL to tenant subdomain
         # Note: request.full_path is relative to script_root, so we need to add /admin back
-        path_with_admin = f"/admin{request.full_path}" if not request.full_path.startswith("/admin") else request.full_path
+        path_with_admin = (
+            f"/admin{request.full_path}" if not request.full_path.startswith("/admin") else request.full_path
+        )
 
         if os.environ.get("PRODUCTION") == "true":
             redirect_url = f"https://{tenant_subdomain}.sales-agent.scope3.com{path_with_admin}"
