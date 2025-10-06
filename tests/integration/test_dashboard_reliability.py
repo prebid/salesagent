@@ -126,9 +126,18 @@ class TestDashboardReliability:
         # If we have test audit log, should appear in activities
         if activities:
             activity = activities[0]
-            assert "operation" in activity
-            assert "success" in activity
+            # Check top-level fields
+            assert "type" in activity
+            assert "title" in activity
+            assert "description" in activity
+            assert "principal_name" in activity
+            assert "timestamp" in activity
+            assert "action_required" in activity
             assert "time_relative" in activity
+            # Check metadata contains operation details
+            assert "metadata" in activity
+            assert "operation" in activity["metadata"]
+            assert "success" in activity["metadata"]
 
     @pytest.mark.requires_db
     def test_dashboard_service_caching_works(self, test_tenant):
