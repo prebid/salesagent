@@ -63,6 +63,10 @@ def check_database_health() -> dict[str, any]:
                 "object_workflow_mapping",
                 "strategies",
                 "strategy_states",
+                "authorized_properties",
+                "property_tags",
+                "format_performance_metrics",
+                "push_notification_configs",
             }
 
             # Deprecated tables that may still exist but are not used
@@ -77,13 +81,18 @@ def check_database_health() -> dict[str, any]:
             extra = existing_tables - expected_tables - system_tables - deprecated_tables
             health_report["extra_tables"] = sorted(extra)
 
-            # Check migration status
+            # Check migration status (optional for in-memory databases)
             try:
                 result = db_session.execute(text("SELECT version_num FROM alembic_version"))
                 current_version = result.scalar()
-                health_report["migration_status"] = current_version
+                health_report["migration_status"] = current_version or "unknown"
             except Exception as e:
-                health_report["schema_issues"].append(f"Cannot read alembic_version: {e}")
+                # Not having alembic_version is normal for in-memory test databases
+                # that use Base.metadata.create_all() instead of migrations
+                if "alembic_version" not in existing_tables:
+                    health_report["migration_status"] = "no_migrations_table"
+                else:
+                    health_report["schema_issues"].append(f"Cannot read alembic_version: {e}")
 
             # Specific checks for problematic tables
             problematic_tables = ["workflow_steps", "object_workflow_mapping"]

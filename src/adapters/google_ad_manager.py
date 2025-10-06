@@ -150,7 +150,7 @@ class GoogleAdManager(AdServerAdapter):
         self.sync_manager = GAMSyncManager(
             self.client_manager, self.inventory_manager, self.orders_manager, tenant_id, dry_run
         )
-        self.workflow_manager = GAMWorkflowManager(tenant_id, audit_logger, self.log)
+        self.workflow_manager = GAMWorkflowManager(tenant_id, principal, audit_logger, self.log)
 
         # Initialize legacy validator for backward compatibility
         from .gam.utils.validation import GAMValidator

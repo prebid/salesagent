@@ -148,13 +148,13 @@ if [ "$MODE" == "ci" ]; then
 
     echo "📦 Step 1/4: Validating imports..."
 
-    # Check all critical imports
-    if ! uv run python -c "from src.core.tools import get_products_raw, create_media_buy_raw, get_media_buy_delivery_raw, sync_creatives_raw, list_creatives_raw, list_creative_formats_raw, list_authorized_properties_raw" 2>/dev/null; then
+    # Check all critical imports (unset DATABASE_URL to avoid connection attempts)
+    if ! env -u DATABASE_URL uv run python -c "from src.core.tools import get_products_raw, create_media_buy_raw, get_media_buy_delivery_raw, sync_creatives_raw, list_creatives_raw, list_creative_formats_raw, list_authorized_properties_raw" 2>/dev/null; then
         echo -e "${RED}❌ Import validation failed!${NC}"
         exit 1
     fi
 
-    if ! uv run python -c "from src.core.main import _get_products_impl, _create_media_buy_impl, _get_media_buy_delivery_impl, _sync_creatives_impl, _list_creatives_impl, _list_creative_formats_impl, _list_authorized_properties_impl" 2>/dev/null; then
+    if ! env -u DATABASE_URL uv run python -c "from src.core.main import _get_products_impl, _create_media_buy_impl, _get_media_buy_delivery_impl, _sync_creatives_impl, _list_creatives_impl, _list_creative_formats_impl, _list_authorized_properties_impl" 2>/dev/null; then
         echo -e "${RED}❌ Import validation failed!${NC}"
         exit 1
     fi
@@ -163,7 +163,8 @@ if [ "$MODE" == "ci" ]; then
     echo ""
 
     echo "🧪 Step 2/4: Running unit tests..."
-    if ! uv run pytest tests/unit/ -x --tb=short -q; then
+    # Set TEST_DATABASE_URL to use PostgreSQL container, unset DATABASE_URL to avoid conflicts
+    if ! env -u DATABASE_URL TEST_DATABASE_URL="$DATABASE_URL" ADCP_TESTING=true uv run pytest tests/unit/ -x --tb=short -q; then
         echo -e "${RED}❌ Unit tests failed!${NC}"
         exit 1
     fi
@@ -172,7 +173,8 @@ if [ "$MODE" == "ci" ]; then
 
     echo "🔗 Step 3/4: Running integration tests (WITH database)..."
     # Run ALL integration tests (including requires_db) - exactly like CI
-    if ! uv run pytest tests/integration/ -x --tb=short -q -m "not requires_server and not skip_ci"; then
+    # Set TEST_DATABASE_URL to use PostgreSQL container, unset DATABASE_URL to avoid conflicts
+    if ! env -u DATABASE_URL TEST_DATABASE_URL="$DATABASE_URL" ADCP_TESTING=true uv run pytest tests/integration/ -x --tb=short -q -m "not requires_server and not skip_ci"; then
         echo -e "${RED}❌ Integration tests failed!${NC}"
         exit 1
     fi
@@ -180,7 +182,8 @@ if [ "$MODE" == "ci" ]; then
     echo ""
 
     echo "�� Step 4/4: Running e2e tests..."
-    if ! uv run pytest tests/e2e/ -x --tb=short -q --skip-docker; then
+    # Set TEST_DATABASE_URL to use PostgreSQL container, unset DATABASE_URL to avoid conflicts
+    if ! env -u DATABASE_URL TEST_DATABASE_URL="$DATABASE_URL" ADCP_TESTING=true uv run pytest tests/e2e/ -x --tb=short -q --skip-docker; then
         echo -e "${RED}❌ E2E tests failed!${NC}"
         exit 1
     fi

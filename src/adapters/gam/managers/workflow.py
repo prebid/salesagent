@@ -12,7 +12,7 @@ from typing import Any
 
 from src.core.config_loader import get_tenant_config
 from src.core.database.database_session import get_db_session
-from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
+from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.schemas import CreateMediaBuyRequest, MediaPackage
 
 logger = logging.getLogger(__name__)
@@ -21,15 +21,17 @@ logger = logging.getLogger(__name__)
 class GAMWorkflowManager:
     """Manages Human-in-the-Loop workflows for Google Ad Manager operations."""
 
-    def __init__(self, tenant_id: str, audit_logger=None, log_func=None):
+    def __init__(self, tenant_id: str, principal=None, audit_logger=None, log_func=None):
         """Initialize workflow manager.
 
         Args:
             tenant_id: Tenant identifier for configuration
+            principal: Principal object for context creation
             audit_logger: Audit logging instance
             log_func: Logging function for output
         """
         self.tenant_id = tenant_id
+        self.principal = principal
         self.audit_logger = audit_logger
         self.log = log_func or logger.info
 
@@ -65,8 +67,14 @@ class GAMWorkflowManager:
 
         try:
             with get_db_session() as db_session:
-                # Create a context for this workflow if needed
+                # Create a context for this workflow
                 context_id = f"ctx_{uuid.uuid4().hex[:12]}"
+                context = Context(
+                    context_id=context_id,
+                    tenant_id=self.tenant_id,
+                    principal_id=self.principal.principal_id,
+                )
+                db_session.add(context)
 
                 # Create workflow step
                 workflow_step = WorkflowStep(
@@ -166,8 +174,14 @@ class GAMWorkflowManager:
 
         try:
             with get_db_session() as db_session:
-                # Create a context for this workflow if needed
+                # Create a context for this workflow
                 context_id = f"ctx_{uuid.uuid4().hex[:12]}"
+                context = Context(
+                    context_id=context_id,
+                    tenant_id=self.tenant_id,
+                    principal_id=self.principal.principal_id,
+                )
+                db_session.add(context)
 
                 # Create workflow step
                 workflow_step = WorkflowStep(
@@ -239,7 +253,14 @@ class GAMWorkflowManager:
 
         try:
             with get_db_session() as db_session:
+                # Create a context for this workflow
                 context_id = f"ctx_{uuid.uuid4().hex[:12]}"
+                context = Context(
+                    context_id=context_id,
+                    tenant_id=self.tenant_id,
+                    principal_id=self.principal.principal_id,
+                )
+                db_session.add(context)
 
                 workflow_step = WorkflowStep(
                     step_id=step_id,

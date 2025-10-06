@@ -370,32 +370,43 @@ uv run pytest tests/ -x
 
 #### Pre-Push Validation
 
-**⚠️ RECOMMENDED WORKFLOW:**
+**✅ AUTOMATIC CI MODE:**
+The pre-push hook now automatically runs CI mode tests (with PostgreSQL) before every push.
+This catches database-specific issues before they hit GitHub Actions.
+
 ```bash
-# 1. Before pushing - run CI mode (catches database issues)
+# Pre-push hook automatically runs:
 ./run_all_tests.sh ci        # ~3-5 min, exactly like GitHub Actions
 
-# 2. Push - quick mode runs automatically
-git push                      # ~1 min validation, blocks if tests fail
+# To skip (not recommended):
+git push --no-verify
+```
+
+**🔧 Setup Pre-Push Hook:**
+If the hook isn't installed or you want to update it:
+```bash
+./scripts/setup/setup_hooks.sh
 ```
 
 **Test Modes:**
 
-**CI Mode (RECOMMENDED before pushing):**
+**CI Mode (runs automatically on push):**
 - Starts PostgreSQL container automatically (postgres:15)
 - Runs ALL tests including database-dependent tests
 - Exactly matches GitHub Actions environment
-- Catches issues before CI does
+- Catches database issues before CI does
 - Automatically cleans up container
 
-**Quick Mode (runs automatically on push):**
+**Quick Mode (for fast development iteration):**
 - Fast validation: unit tests + integration tests (no database)
-- Pre-push hook uses this mode
-- Blocks push if tests fail (override with `git push --no-verify`)
+- Skips database-dependent tests
+- Good for rapid testing during development
+- Run manually: `./run_all_tests.sh quick`
 
 **Full Mode (comprehensive, no Docker):**
 - All tests with SQLite instead of PostgreSQL
 - Good for development without Docker
+- Run manually: `./run_all_tests.sh full`
 
 **Command Reference:**
 ```bash
