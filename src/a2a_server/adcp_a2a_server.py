@@ -1004,7 +1004,17 @@ class AdCPRequestHandler(RequestHandler):
             raise ServerError(InternalError(message=f"Unable to retrieve products: {str(e)}"))
 
     async def _handle_create_media_buy_skill(self, parameters: dict, auth_token: str) -> dict:
-        """Handle explicit create_media_buy skill invocation."""
+        """Handle explicit create_media_buy skill invocation.
+
+        IMPORTANT: This handler ONLY accepts AdCP spec-compliant format:
+        - packages[] (required)
+        - budget{} (required)
+        - start_time (required)
+        - end_time (required)
+        - promoted_offering (required)
+
+        Legacy format (product_ids, total_budget, start_date, end_date) is NOT supported.
+        """
         try:
             # Create ToolContext from A2A auth info
             tool_context = self._create_tool_context_from_a2a(
@@ -1012,69 +1022,37 @@ class AdCPRequestHandler(RequestHandler):
                 tool_name="create_media_buy",
             )
 
-            # Validate required parameter: promoted_offering
-            if "promoted_offering" not in parameters:
+            # Validate AdCP spec required parameters
+            required_params = [
+                "promoted_offering",
+                "packages",
+                "budget",
+                "start_time",
+                "end_time",
+            ]
+            missing_params = [param for param in required_params if param not in parameters]
+
+            if missing_params:
                 return {
                     "success": False,
-                    "message": "Missing required parameter: 'promoted_offering'",
-                    "required_parameters": ["promoted_offering"],
+                    "message": f"Missing required AdCP parameters: {missing_params}",
+                    "required_parameters": required_params,
                     "received_parameters": list(parameters.keys()),
+                    "error": "This endpoint only accepts AdCP v2.4 spec-compliant format. See https://adcontextprotocol.org/docs/",
                 }
 
-            # Check if using AdCP spec format (packages, budget, start_time, end_time)
-            # or legacy format (product_ids, total_budget, flight_start_date, flight_end_date)
-            has_packages = "packages" in parameters
-            has_budget_obj = "budget" in parameters
-            has_start_time = "start_time" in parameters
-            has_end_time = "end_time" in parameters
-
-            has_product_ids = "product_ids" in parameters
-            has_total_budget = "total_budget" in parameters
-            has_flight_start = "flight_start_date" in parameters
-            has_flight_end = "flight_end_date" in parameters
-
-            # Determine which format is being used
-            if has_packages and has_budget_obj:
-                # AdCP spec format - pass through to core function
-                response = core_create_media_buy_tool(
-                    promoted_offering=parameters["promoted_offering"],
-                    po_number=parameters.get("po_number", f"A2A-{uuid.uuid4().hex[:8]}"),
-                    buyer_ref=parameters.get("buyer_ref", f"A2A-{tool_context.principal_id}"),
-                    packages=parameters["packages"],
-                    start_time=parameters.get("start_time"),
-                    end_time=parameters.get("end_time"),
-                    budget=parameters.get("budget"),
-                    targeting_overlay=parameters.get("custom_targeting", {}),
-                    context=tool_context,
-                )
-            elif has_product_ids and has_total_budget:
-                # Legacy flat format - convert to spec format
-                response = core_create_media_buy_tool(
-                    promoted_offering=parameters["promoted_offering"],
-                    po_number=parameters.get("po_number", f"A2A-{uuid.uuid4().hex[:8]}"),
-                    product_ids=parameters["product_ids"],
-                    total_budget=float(parameters["total_budget"]),
-                    start_date=parameters.get("flight_start_date"),
-                    end_date=parameters.get("flight_end_date"),
-                    targeting_overlay=parameters.get("custom_targeting", {}),
-                    buyer_ref=parameters.get("buyer_ref", f"A2A-{tool_context.principal_id}"),
-                    context=tool_context,
-                )
-            else:
-                # Missing required parameters for both formats
-                return {
-                    "success": False,
-                    "message": "Invalid parameters. Must provide either AdCP spec format (packages, budget, start_time, end_time) or legacy format (product_ids, total_budget, flight_start_date, flight_end_date)",
-                    "required_parameters_spec": ["promoted_offering", "packages", "budget", "start_time", "end_time"],
-                    "required_parameters_legacy": [
-                        "promoted_offering",
-                        "product_ids",
-                        "total_budget",
-                        "flight_start_date",
-                        "flight_end_date",
-                    ],
-                    "received_parameters": list(parameters.keys()),
-                }
+            # Call core function with AdCP spec-compliant parameters
+            response = core_create_media_buy_tool(
+                promoted_offering=parameters["promoted_offering"],
+                po_number=parameters.get("po_number", f"A2A-{uuid.uuid4().hex[:8]}"),
+                buyer_ref=parameters.get("buyer_ref", f"A2A-{tool_context.principal_id}"),
+                packages=parameters["packages"],
+                start_time=parameters["start_time"],
+                end_time=parameters["end_time"],
+                budget=parameters["budget"],
+                targeting_overlay=parameters.get("custom_targeting", {}),
+                context=tool_context,
+            )
 
             # Convert response to A2A format
             # Note: response.packages is already list[dict] per CreateMediaBuyResponse schema
@@ -1831,16 +1809,24 @@ class AdCPRequestHandler(RequestHandler):
 
             return {
                 "success": False,
-                "message": f"Authentication successful for {tool_context.principal_id}, but media buy creation needs more details",
-                "required_fields": ["product_ids", "total_budget", "flight_start_date", "flight_end_date"],
+                "message": f"Authentication successful for {tool_context.principal_id}. To create a media buy, use explicit skill invocation with AdCP v2.4 spec-compliant format.",
+                "required_fields": ["promoted_offering", "packages", "budget", "start_time", "end_time"],
                 "authenticated_tenant": tool_context.tenant_id,
                 "authenticated_principal": tool_context.principal_id,
                 "example": {
-                    "product_ids": ["video_premium"],
-                    "total_budget": 10000,
-                    "flight_start_date": "2025-02-01",
-                    "flight_end_date": "2025-02-28",
+                    "promoted_offering": "https://example.com/product",
+                    "packages": [
+                        {
+                            "buyer_ref": "pkg_1",
+                            "products": ["video_premium"],
+                            "budget": {"total": 10000, "currency": "USD"},
+                        }
+                    ],
+                    "budget": {"total": 10000, "currency": "USD"},
+                    "start_time": "2025-02-01T00:00:00Z",
+                    "end_time": "2025-02-28T23:59:59Z",
                 },
+                "documentation": "https://adcontextprotocol.org/docs/",
             }
         except Exception as e:
             logger.error(f"Error in media buy creation: {e}")

@@ -116,6 +116,14 @@ repos:
         files: ^src/a2a_server/
         pass_filenames: false
 
+      # Validate A2A AdCP spec compliance (prevents legacy format acceptance)
+      - id: a2a-adcp-compliance
+        name: A2A AdCP spec compliance validation
+        entry: uv run python scripts/validate_a2a_adcp_compliance.py
+        language: system
+        files: ^src/a2a_server/
+        pass_filenames: false
+
       # Prevent problematic function call patterns
       - id: no-fn-calls
         name: No .fn() call patterns

@@ -355,13 +355,24 @@ class TestA2ASkillInvocation:
             mock_get_principal.return_value = sample_principal["principal_id"]
             mock_get_tenant.return_value = {"tenant_id": sample_tenant["tenant_id"]}
 
-            # Create explicit skill invocation message
+            # Create explicit skill invocation message using AdCP spec format
+            from datetime import UTC, datetime, timedelta
+
+            start_date = datetime.now(UTC) + timedelta(days=1)
+            end_date = start_date + timedelta(days=30)
+
             skill_params = {
                 "promoted_offering": "Test Campaign",
-                "product_ids": sample_products,
-                "total_budget": 10000.0,
-                "flight_start_date": "2025-02-01",
-                "flight_end_date": "2025-02-28",
+                "packages": [
+                    {
+                        "buyer_ref": f"pkg_{sample_products[0]}",
+                        "products": [sample_products[0]],
+                        "budget": {"total": 10000.0, "currency": "USD"},
+                    }
+                ],
+                "budget": {"total": 10000.0, "currency": "USD"},
+                "start_time": start_date.isoformat(),
+                "end_time": end_date.isoformat(),
             }
             message = self.create_message_with_skill("create_media_buy", skill_params)
             params = MessageSendParams(message=message)
