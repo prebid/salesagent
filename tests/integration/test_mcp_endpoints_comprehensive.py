@@ -210,9 +210,8 @@ class TestMCPEndpointsComprehensive:
             targeting_overlay={"geo_country_any_of": ["US"]},
         )
 
-        # Should auto-generate buyer_ref
-        assert legacy_request.buyer_ref is not None
-        assert legacy_request.buyer_ref.startswith("buy_")
+        # buyer_ref should NOT be auto-generated (it's the buyer's identifier)
+        assert legacy_request.buyer_ref is None
 
         # Should auto-create budget from total_budget
         assert legacy_request.get_total_budget() == 5000.0

@@ -56,7 +56,8 @@ def test_mock_ad_server_create_media_buy(sample_packages):
 
     # Assert
     assert response.media_buy_id == "buy_PO-12345"
-    assert response.buyer_ref.startswith("buy_")  # Should have auto-generated buyer_ref
+    # buyer_ref is None since not provided by client (it's their identifier, not ours)
+    assert response.buyer_ref is None
 
     # Check the internal state of the mock server
     internal_buy = adapter._media_buys.get("buy_PO-12345")

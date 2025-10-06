@@ -67,8 +67,8 @@ class TestMCPContractValidation:
         request = CreateMediaBuyRequest(promoted_offering="Nike Air Jordan 2025 basketball shoes", po_number="PO-12345")
 
         assert request.po_number == "PO-12345"
-        # buyer_ref is auto-generated, which is expected behavior
-        assert request.buyer_ref is not None
+        # buyer_ref should NOT be auto-generated (it's the buyer's identifier)
+        assert request.buyer_ref is None
         assert request.packages is None
         assert request.pacing == "even"  # Should have default
 

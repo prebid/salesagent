@@ -1914,13 +1914,10 @@ class CreateMediaBuyRequest(BaseModel):
 
         # If using legacy format, convert to new format
         if "product_ids" in values and not values.get("packages"):
-            # Generate buyer_ref if not provided
-            if not values.get("buyer_ref"):
-                values["buyer_ref"] = f"buy_{uuid.uuid4().hex[:8]}"
-
             # Convert product_ids to packages
-            # Note: AdCP create-media-buy-request only requires buyer_ref+products from client
+            # Note: AdCP create-media-buy-request only requires products from client
             # Server generates package_id and initial status per AdCP package schema
+            # buyer_ref is optional and should only be set by the buyer/client
             product_ids = values.get("product_ids", [])
             packages = []
             for i, pid in enumerate(product_ids):
@@ -1928,7 +1925,7 @@ class CreateMediaBuyRequest(BaseModel):
                 packages.append(
                     {
                         "package_id": f"pkg_{i}_{package_uuid}",  # Server-generated per AdCP spec
-                        "buyer_ref": f"pkg_{i}_{package_uuid}",  # Client reference for tracking
+                        # buyer_ref is NOT auto-generated - it's the buyer's identifier
                         "products": [pid],
                         "status": "draft",  # Server sets initial status per AdCP package schema
                     }
@@ -1965,9 +1962,8 @@ class CreateMediaBuyRequest(BaseModel):
                 "daily_cap": daily_cap,
             }
 
-        # Ensure required fields are present after conversion
-        if not values.get("buyer_ref"):
-            values["buyer_ref"] = f"buy_{uuid.uuid4().hex[:8]}"
+        # buyer_ref is optional and should NOT be auto-generated
+        # It's the buyer's identifier, not ours to create
 
         return values
 
