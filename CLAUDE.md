@@ -321,6 +321,89 @@ tests/
 
 **🚨 MANDATORY**: When CI tests fail, FIX THE TESTS PROPERLY. Skipping or weakening tests to make CI pass is NEVER acceptable. The tests exist to catch real issues - if they fail, there's a problem that needs fixing, not hiding.
 
+### Testing Workflow - MANDATORY for Refactoring
+
+**⚠️ CRITICAL**: Pre-commit hooks can't catch import errors or integration issues. You MUST run the full test suite for refactorings.
+
+#### Before Committing Code Changes
+
+**For ALL changes:**
+```bash
+# 1. Run unit tests (fast, always required)
+uv run pytest tests/unit/ -x
+
+# 2. Verify imports work (catches missing imports)
+python -c "from src.core.tools import get_products_raw"  # Example
+python -c "from src.core.main import _get_products_impl"  # For impl functions
+```
+
+**For refactorings (shared implementation, moving code, import changes):**
+```bash
+# 3. Run integration tests (REQUIRED - catches real bugs)
+uv run pytest tests/integration/ -x
+
+# 4. Run specific A2A/MCP tests if you changed those paths
+uv run pytest tests/integration/test_a2a*.py -x
+uv run pytest tests/integration/test_mcp*.py -x
+```
+
+**For critical changes (protocol changes, schema updates):**
+```bash
+# 5. Run full suite including e2e
+uv run pytest tests/ -x
+```
+
+#### Why This Matters
+
+**Unit tests alone are NOT enough because:**
+- ✅ Unit tests pass with mocked imports (don't catch missing imports)
+- ✅ Unit tests don't execute real code paths (don't catch integration bugs)
+- ✅ Unit tests use fake data (don't catch validation issues)
+
+**Real example from this codebase:**
+```python
+# Refactored get_products_raw to use GetProductsRequest
+# Unit tests: PASSED ✓ (they mock everything)
+# Integration tests: FAILED ✗ (import GetProductsRequest was missing)
+# CI caught it after 2 failed runs
+```
+
+#### Pre-Push Validation
+
+**⚠️ RECOMMENDED WORKFLOW:**
+```bash
+# 1. Before pushing - run CI mode (catches database issues)
+./run_all_tests.sh ci        # ~3-5 min, exactly like GitHub Actions
+
+# 2. Push - quick mode runs automatically
+git push                      # ~1 min validation, blocks if tests fail
+```
+
+**Test Modes:**
+
+**CI Mode (RECOMMENDED before pushing):**
+- Starts PostgreSQL container automatically (postgres:15)
+- Runs ALL tests including database-dependent tests
+- Exactly matches GitHub Actions environment
+- Catches issues before CI does
+- Automatically cleans up container
+
+**Quick Mode (runs automatically on push):**
+- Fast validation: unit tests + integration tests (no database)
+- Pre-push hook uses this mode
+- Blocks push if tests fail (override with `git push --no-verify`)
+
+**Full Mode (comprehensive, no Docker):**
+- All tests with SQLite instead of PostgreSQL
+- Good for development without Docker
+
+**Command Reference:**
+```bash
+./run_all_tests.sh ci      # Like CI (PostgreSQL container) - USE THIS!
+./run_all_tests.sh quick   # Fast pre-push validation (automatic)
+./run_all_tests.sh full    # Full suite (SQLite, no Docker)
+```
+
 See `docs/testing/` for detailed patterns and case studies.
 
 ## Pre-Commit Hooks

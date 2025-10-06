@@ -11,6 +11,7 @@ to improve test coverage and catch real bugs.
 """
 
 
+import pytest
 from sqlalchemy import text
 
 from src.core.database.database_session import get_db_session
@@ -174,6 +175,7 @@ class TestDatabaseHealthIntegration:
             assert tenant_count >= 1, "Should have at least one tenant"
             assert product_count >= 1, "Should have at least one product"
 
+    @pytest.mark.requires_db
     def test_health_check_performance_with_real_database(self, clean_db):
         """Test that health check completes in reasonable time with real database."""
         import time

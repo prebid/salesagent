@@ -101,8 +101,17 @@ def main():
     all_violations = []
     checked_files = 0
 
+    # Files that are exempt from mocking checks (e.g., tests for the validator itself)
+    exempt_files = [
+        "test_mcp_schema_validator.py",  # Tests validator tool, needs _impl in test data
+    ]
+
     # Check all test files
     for test_file in test_dir.rglob("test_*.py"):
+        # Skip exempt files
+        if test_file.name in exempt_files:
+            continue
+
         checked_files += 1
         is_valid, violations = check_file(test_file)
 

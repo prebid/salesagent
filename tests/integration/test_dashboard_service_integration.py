@@ -103,6 +103,7 @@ class TestDashboardServiceIntegration:
         assert service.tenant_id == "valid_tenant_id"
         assert service._tenant is None  # Not loaded yet
 
+    @pytest.mark.requires_db
     def test_get_tenant_with_real_database(self, test_tenant_data):
         """Test get_tenant with actual database connection."""
         tenant_id = test_tenant_data["tenant_id"]
@@ -120,6 +121,7 @@ class TestDashboardServiceIntegration:
         tenant2 = service.get_tenant()
         assert tenant2 is tenant  # Same object reference (cached)
 
+    @pytest.mark.requires_db
     def test_dashboard_service_field_access_safety(self, test_tenant_data):
         """Test that dashboard service safely accesses all database fields without AttributeError."""
         tenant_id = test_tenant_data["tenant_id"]

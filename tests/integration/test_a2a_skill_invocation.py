@@ -481,7 +481,7 @@ class TestA2ASkillInvocation:
                             kind="data",
                             data={
                                 "skill": "get_products",
-                                "parameters": {"brief": "video ads", "promoted_offering": "Test"},
+                                "parameters": {"brief": "video ads", "promoted_offering": "Test Brand Product"},
                             },
                         )
                     ),

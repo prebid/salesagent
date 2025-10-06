@@ -713,42 +713,20 @@ def log_tool_activity(context: Context, tool_name: str, start_time: float = None
 # --- MCP Tools (Full Implementation) ---
 
 
-@mcp.tool
-async def get_products(
-    promoted_offering: str,
-    brief: str = "",
-    min_exposures: int | None = None,
-    filters: dict | None = None,
-    strategy_id: str | None = None,
-    context: Context = None,
-) -> GetProductsResponse:
-    """Get available products matching the brief.
+async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetProductsResponse:
+    """Shared implementation for get_products.
+
+    Contains all business logic for product discovery including policy checks,
+    product catalog providers, dynamic pricing, and filtering.
 
     Args:
-        promoted_offering: What is being promoted/advertised (required per AdCP spec)
-        brief: Brief description of the advertising campaign or requirements (optional)
-        min_exposures: Minimum impressions needed for measurement validity (AdCP PR #79, optional)
-        filters: Structured filters for product discovery (optional)
-        strategy_id: Optional strategy ID for linking operations (optional)
-        context: FastMCP context (automatically provided)
+        req: GetProductsRequest with all query parameters
+        context: FastMCP Context for tenant/principal resolution
 
     Returns:
         GetProductsResponse containing matching products
     """
-    from src.core.schemas import ProductFilters
     from src.core.tool_context import ToolContext
-
-    # Convert filters dict to ProductFilters if provided
-    filters_obj = ProductFilters(**filters) if filters else None
-
-    # Create request object from individual parameters (MCP-compliant)
-    req = GetProductsRequest(
-        brief=brief or "",
-        promoted_offering=promoted_offering,
-        min_exposures=min_exposures,
-        filters=filters_obj,
-        strategy_id=strategy_id,
-    )
 
     start_time = time.time()
 
@@ -1094,6 +1072,51 @@ async def get_products(
     )
 
     return GetProductsResponse(products=modified_products, message=final_message, status=status)
+
+
+@mcp.tool
+async def get_products(
+    promoted_offering: str,
+    brief: str = "",
+    adcp_version: str = "1.0.0",
+    min_exposures: int | None = None,
+    filters: dict | None = None,
+    strategy_id: str | None = None,
+    context: Context = None,
+) -> GetProductsResponse:
+    """Get available products matching the brief.
+
+    MCP tool wrapper that delegates to the shared implementation.
+
+    Args:
+        promoted_offering: What is being promoted/advertised (required per AdCP spec)
+        brief: Brief description of the advertising campaign or requirements (optional)
+        adcp_version: AdCP schema version for this request (default: 1.0.0)
+        min_exposures: Minimum impressions needed for measurement validity (AdCP PR #79, optional)
+        filters: Structured filters for product discovery (optional)
+        strategy_id: Optional strategy ID for linking operations (optional)
+        context: FastMCP context (automatically provided)
+
+    Returns:
+        GetProductsResponse containing matching products
+    """
+    from src.core.schemas import ProductFilters
+
+    # Convert filters dict to ProductFilters if provided
+    filters_obj = ProductFilters(**filters) if filters else None
+
+    # Create request object from individual parameters (MCP-compliant)
+    req = GetProductsRequest(
+        brief=brief or "",
+        promoted_offering=promoted_offering,
+        adcp_version=adcp_version,
+        min_exposures=min_exposures,
+        filters=filters_obj,
+        strategy_id=strategy_id,
+    )
+
+    # Call shared implementation
+    return await _get_products_impl(req, context)
 
 
 def _list_creative_formats_impl(

@@ -95,27 +95,31 @@ class ToolSchemaValidator:
         return tools
 
     def find_schema_constructions(self, main_py_path: Path, tool_name: str) -> list[str]:
-        """Find which schema classes are constructed in a tool function."""
+        """Find which schema classes are constructed in a tool function or its _impl."""
         with open(main_py_path) as f:
             tree = ast.parse(f.read())
 
         schemas_used = []
 
-        # Find the tool function
+        # Check both the tool function and potential _toolname_impl function
+        function_names_to_check = [tool_name, f"_{tool_name}_impl"]
+
+        # Find the tool function(s)
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == tool_name:
-                # Look for schema constructions within this function
-                for child in ast.walk(node):
-                    if isinstance(child, ast.Call):
-                        if isinstance(child.func, ast.Name):
-                            # Direct call like UpdateMediaBuyRequest(...)
-                            func_name = child.func.id
-                            if func_name.endswith("Request"):
-                                schemas_used.append(func_name)
-                        elif isinstance(child.func, ast.Attribute):
-                            # Attribute call like schemas.UpdateMediaBuyRequest(...)
-                            if child.func.attr.endswith("Request"):
-                                schemas_used.append(child.func.attr)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                if node.name in function_names_to_check:
+                    # Look for schema constructions within this function
+                    for child in ast.walk(node):
+                        if isinstance(child, ast.Call):
+                            if isinstance(child.func, ast.Name):
+                                # Direct call like UpdateMediaBuyRequest(...)
+                                func_name = child.func.id
+                                if func_name.endswith("Request"):
+                                    schemas_used.append(func_name)
+                            elif isinstance(child.func, ast.Attribute):
+                                # Attribute call like schemas.UpdateMediaBuyRequest(...)
+                                if child.func.attr.endswith("Request"):
+                                    schemas_used.append(child.func.attr)
 
         return schemas_used
 
@@ -163,38 +167,101 @@ class ToolSchemaValidator:
                     # May be used for other purposes
                     pass
 
-        # Check for missing required schema fields in tool parameters
+        # Check for missing schema fields in tool parameters
+        # We check ALL fields (required and optional) because if a client passes an optional
+        # field but the tool doesn't accept it, that's a parameter mismatch bug
         for field_name, field_info in schema_fields.items():
             if field_name not in tool_param_set:
                 # Check if field is required using Pydantic's is_required() method
-                # This properly handles fields with defaults, not just None types
                 is_required = field_info.is_required()
 
-                if is_required and field_name not in ["buyer_ref", "media_buy_id"]:  # OneOf fields
-                    self.errors.append(
-                        f"❌ {tool_name}: required field '{field_name}' from {schema_class.__name__} "
-                        f"missing in tool parameters"
-                    )
+                # Only check if tool constructs this schema directly
+                if schema_class.__name__ in constructed_schemas:
+                    if is_required and field_name not in ["buyer_ref", "media_buy_id"]:  # OneOf fields
+                        self.errors.append(
+                            f"❌ {tool_name}: required field '{field_name}' from {schema_class.__name__} "
+                            f"missing in tool parameters"
+                        )
+                    elif not is_required:
+                        # Optional field missing - this is a BUG!
+                        # Clients can pass this field but tool will reject it with "Unexpected keyword argument"
+                        self.errors.append(
+                            f"❌ {tool_name}: optional field '{field_name}' from {schema_class.__name__} "
+                            f"missing in tool parameters (clients can pass it but tool will reject it)"
+                        )
+
+    def parse_tools_py_for_raw_functions(self, tools_py_path: Path) -> dict[str, list[str]]:
+        """Parse tools.py to extract *_raw function signatures."""
+        with open(tools_py_path) as f:
+            tree = ast.parse(f.read())
+
+        raw_functions = {}
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                if node.name.endswith("_raw"):
+                    # Extract parameter names (skip context, self, cls, req)
+                    params = []
+                    for arg in node.args.args:
+                        if arg.arg not in ["context", "self", "cls", "req"]:
+                            params.append(arg.arg)
+
+                    raw_functions[node.name] = params
+
+        return raw_functions
 
     def validate_all(self) -> bool:
-        """Validate all registered tool-schema mappings."""
-        print("🔍 Validating MCP tool-schema alignment...\n")
+        """Validate all registered tool-schema mappings for both MCP and A2A."""
+        print("🔍 Validating MCP and A2A tool-schema alignment...\n")
 
         main_py_path = Path(__file__).parent.parent / "src" / "core" / "main.py"
+        tools_py_path = Path(__file__).parent.parent / "src" / "core" / "tools.py"
+
         tools_in_main = self.parse_main_py_for_tools(main_py_path)
+        tools_in_tools_py = self.parse_tools_py_for_raw_functions(tools_py_path)
 
         for tool_name, schema_class in self.tool_schema_mappings.items():
+            # Check MCP tool
             if tool_name not in tools_in_main:
-                self.warnings.append(f"⚠️  Tool '{tool_name}' not found in main.py")
-                continue
+                self.warnings.append(f"⚠️  MCP tool '{tool_name}' not found in main.py")
+            else:
+                tool_params = tools_in_main[tool_name]
+                print(f"Checking MCP: {tool_name} → {schema_class.__name__}")
+                print(f"  Tool params: {', '.join(tool_params)}")
+                print(f"  Schema fields: {', '.join(self.get_schema_fields(schema_class).keys())}")
+                self.validate_tool(tool_name, tool_params, schema_class)
+                print()
 
-            tool_params = tools_in_main[tool_name]
+            # Check A2A raw function
+            raw_function_name = f"{tool_name}_raw"
+            if raw_function_name not in tools_in_tools_py:
+                self.warnings.append(f"⚠️  A2A raw function '{raw_function_name}' not found in tools.py")
+            else:
+                raw_params = tools_in_tools_py[raw_function_name]
+                print(f"Checking A2A: {raw_function_name} → {schema_class.__name__}")
+                print(f"  Raw params: {', '.join(raw_params)}")
+                print(f"  Schema fields: {', '.join(self.get_schema_fields(schema_class).keys())}")
 
-            print(f"Checking {tool_name} → {schema_class.__name__}")
-            print(f"  Tool params: {', '.join(tool_params)}")
-            print(f"  Schema fields: {', '.join(self.get_schema_fields(schema_class).keys())}")
-            self.validate_tool(tool_name, tool_params, schema_class)
-            print()
+                # For A2A raw functions, they should either:
+                # 1. Take a 'req' parameter (schema-first), OR
+                # 2. Have matching parameters like MCP tools
+                # Since we filtered out 'req' in parsing, if params is empty, it's schema-first
+                original_raw_params = []
+                with open(tools_py_path) as f:
+                    tree = ast.parse(f.read())
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                        if node.name == raw_function_name:
+                            for arg in node.args.args:
+                                if arg.arg not in ["context", "self", "cls"]:
+                                    original_raw_params.append(arg.arg)
+
+                if original_raw_params == ["req"]:
+                    print(f"  ✅ Schema-first A2A function (takes 'req' parameter)")
+                else:
+                    # Validate like a normal tool
+                    self.validate_tool(raw_function_name, raw_params, schema_class)
+                print()
 
         # Print results
         print("=" * 70)

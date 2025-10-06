@@ -13,10 +13,6 @@ from typing import Any
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 
-from src.core.testing_hooks import (
-    get_testing_context,
-)
-
 logger = logging.getLogger(__name__)
 
 # Database models
@@ -24,17 +20,14 @@ logger = logging.getLogger(__name__)
 # Other imports
 from src.core.config_loader import (
     get_current_tenant,
-    get_tenant_by_virtual_host,
-    safe_json_loads,
 )
-from src.core.database.database_session import get_db_session
-from src.core.database.models import Product as ModelProduct
 
 # Schema models (explicit imports to avoid collisions)
 from src.core.schemas import (
     CreateMediaBuyResponse,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
+    GetProductsRequest,
     GetProductsResponse,
     GetSignalsRequest,
     GetSignalsResponse,
@@ -43,7 +36,6 @@ from src.core.schemas import (
     ListCreativeFormatsRequest,
     ListCreativeFormatsResponse,
     ListCreativesResponse,
-    Product,
     SyncCreativesResponse,
 )
 
@@ -89,7 +81,15 @@ def get_principal_from_context(context: Context | None) -> str | None:
         return None
 
 
-async def get_products_raw(brief: str, promoted_offering: str, context: Context = None) -> GetProductsResponse:
+async def get_products_raw(
+    brief: str,
+    promoted_offering: str,
+    adcp_version: str = "1.0.0",
+    min_exposures: int | None = None,
+    filters: dict | None = None,
+    strategy_id: str | None = None,
+    context: Context = None,
+) -> GetProductsResponse:
     """Get available products matching the brief.
 
     Raw function without @mcp.tool decorator for A2A server use.
@@ -97,92 +97,34 @@ async def get_products_raw(brief: str, promoted_offering: str, context: Context 
     Args:
         brief: Brief description of the advertising campaign or requirements
         promoted_offering: What is being promoted/advertised (required per AdCP spec)
+        adcp_version: AdCP schema version for this request (default: 1.0.0)
+        min_exposures: Minimum impressions needed for measurement validity (optional)
+        filters: Structured filters for product discovery (optional)
+        strategy_id: Optional strategy ID for linking operations (optional)
         context: FastMCP context (automatically provided)
 
     Returns:
         GetProductsResponse containing matching products
     """
-    # Import the implementation from main.py and call it
-    # We can't import the decorated function directly, so we'll implement it here
+    # Use lazy import to avoid circular dependencies
+    from src.core.main import _get_products_impl
+    from src.core.schemas import ProductFilters
 
-    # Use ToolContext if available
-    if hasattr(context, "tenant_id") and hasattr(context, "principal_id"):
-        # ToolContext provided directly
-        principal_id = context.principal_id
-        tenant = {"tenant_id": context.tenant_id}  # Simplified tenant info
-    else:
-        # Legacy path - extract from FastMCP Context
-        testing_ctx = get_testing_context(context)
-        # For discovery endpoints, authentication is optional
-        principal_id = get_principal_from_context(context)  # Returns None if no auth
+    # Convert filters dict to ProductFilters if provided
+    filters_obj = ProductFilters(**filters) if filters else None
 
-        # Get tenant info - required for product lookup
-        tenant = get_current_tenant()
-        if not tenant:
-            # Try to get tenant from virtual host if context available
-            if context and hasattr(context, "meta") and context.meta.get("headers"):
-                headers = context.meta["headers"]
-                host = headers.get("host", "").split(":")[0]  # Remove port if present
-                tenant = get_tenant_by_virtual_host(host)
+    # Create request object
+    req = GetProductsRequest(
+        brief=brief or "",
+        promoted_offering=promoted_offering,
+        adcp_version=adcp_version,
+        min_exposures=min_exposures,
+        filters=filters_obj,
+        strategy_id=strategy_id,
+    )
 
-        if not tenant:
-            raise ToolError("No tenant configuration found", "NO_TENANT")
-
-    # Get tenant ID
-    tenant_id = tenant["tenant_id"]
-
-    # Load products from database
-    logger.info(f"Loading products for tenant {tenant_id}")
-    with get_db_session() as session:
-        db_products = session.query(ModelProduct).filter_by(tenant_id=tenant_id).all()
-
-    # Convert to schema objects and filter based on brief
-    products = []
-    for db_product in db_products:
-        product_data = {
-            "product_id": db_product.product_id,
-            "name": db_product.name,
-            "description": db_product.description or "",
-            "formats": safe_json_loads(db_product.formats, []),
-            "delivery_type": db_product.delivery_type,
-            "is_fixed_price": db_product.is_fixed_price,
-            "cpm": float(db_product.cpm) if db_product.cpm else None,
-            "min_spend": float(db_product.min_spend) if db_product.min_spend else None,
-            "measurement": safe_json_loads(db_product.measurement, None) if db_product.measurement else None,
-            "creative_policy": (
-                safe_json_loads(db_product.creative_policy, None) if db_product.creative_policy else None
-            ),
-            "is_custom": db_product.is_custom or False,
-            "expires_at": db_product.expires_at,
-            "implementation_config": (
-                safe_json_loads(db_product.implementation_config, None) if db_product.implementation_config else None
-            ),
-        }
-        products.append(Product(**product_data))
-
-    # Simple filtering based on brief (can be enhanced)
-    if brief:
-        brief_lower = brief.lower()
-        filtered_products = []
-        for product in products:
-            # Convert format IDs to Format objects for proper type checking
-            from src.core.schemas import convert_format_ids_to_formats
-
-            format_objects = convert_format_ids_to_formats(product.formats)
-
-            if (
-                brief_lower in product.name.lower()
-                or brief_lower in product.description.lower()
-                or any(brief_lower in fmt.type.lower() for fmt in format_objects)
-                or any(brief_lower in fmt_id.lower() for fmt_id in product.formats)
-            ):
-                filtered_products.append(product)
-
-        if filtered_products:
-            products = filtered_products
-
-    message = f"Found {len(products)} matching products for your requirements"
-    return GetProductsResponse(products=products, message=message)
+    # Call shared implementation
+    return await _get_products_impl(req, context)
 
 
 async def get_signals_raw(req: GetSignalsRequest, context: Context = None) -> GetSignalsResponse:

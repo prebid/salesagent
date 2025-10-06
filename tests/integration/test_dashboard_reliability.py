@@ -144,6 +144,7 @@ class TestDashboardReliability:
         tenant2 = service.get_tenant()
         assert tenant2 is tenant1  # Same object
 
+    @pytest.mark.requires_db
     def test_dashboard_service_error_handling(self):
         """Test that dashboard service handles errors appropriately."""
         # Invalid tenant ID should raise ValueError
