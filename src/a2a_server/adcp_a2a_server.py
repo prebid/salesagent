@@ -128,15 +128,31 @@ class AdCPRequestHandler(RequestHandler):
         Raises:
             ValueError: If authentication fails
         """
+        # Get request headers for debugging
+        headers = getattr(_request_context, "request_headers", {})
+        apx_host = headers.get("apx-incoming-host", "NOT_PRESENT")
+
         # Authenticate using the token
         principal_id = get_principal_from_token(auth_token)
         if not principal_id:
-            raise ServerError(InvalidRequestError(message="Invalid or missing authentication token"))
+            raise ServerError(
+                InvalidRequestError(
+                    message=f"Invalid authentication token (not found in database). "
+                    f"Token: {auth_token[:20]}..., "
+                    f"Apx-Incoming-Host: {apx_host}"
+                )
+            )
 
         # Get tenant info (set as side effect of authentication)
         tenant = get_current_tenant()
         if not tenant:
-            raise ServerError(InvalidRequestError(message="Unable to determine tenant from authentication"))
+            raise ServerError(
+                InvalidRequestError(
+                    message=f"Unable to determine tenant from authentication. "
+                    f"Principal: {principal_id}, "
+                    f"Apx-Incoming-Host: {apx_host}"
+                )
+            )
 
         # Generate context ID if not provided
         if not context_id:
@@ -2145,18 +2161,22 @@ def main():
 
             if auth_header.startswith("Bearer "):
                 token = auth_header[7:]  # Remove "Bearer " prefix
-                # Store token in thread-local storage for handler access
+                # Store token and headers in thread-local storage for handler access
                 _request_context.auth_token = token
+                _request_context.request_headers = dict(request.headers)
                 logger.info(f"Extracted Bearer token for A2A request: {token[:10]}...")
             else:
                 logger.warning(f"A2A request to {request.url.path} missing Bearer token in Authorization header")
                 _request_context.auth_token = None
+                _request_context.request_headers = dict(request.headers)
 
         response = await call_next(request)
 
         # Clean up thread-local storage
         if hasattr(_request_context, "auth_token"):
             delattr(_request_context, "auth_token")
+        if hasattr(_request_context, "request_headers"):
+            delattr(_request_context, "request_headers")
 
         return response
 
