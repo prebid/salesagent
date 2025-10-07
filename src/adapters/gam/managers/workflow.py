@@ -140,19 +140,33 @@ class GAMWorkflowManager:
         """
         step_id = f"c{uuid.uuid4().hex[:5]}"  # 6 chars total
 
+        # Use naming template from adapter config, or fallback to default
+        from src.adapters.gam.utils.naming import apply_naming_template, build_order_name_context
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AdapterConfig
+
+        order_name_template = "{campaign_name|promoted_offering} - {date_range}"  # Default
+        with get_db_session() as db_session:
+            adapter_config = db_session.query(AdapterConfig).filter_by(tenant_id=self.tenant_id).first()
+            if adapter_config and adapter_config.gam_order_name_template:
+                order_name_template = adapter_config.gam_order_name_template
+
+        context = build_order_name_context(request, packages, start_time, end_time)
+        order_name = apply_naming_template(order_name_template, context)
+
         # Build detailed action list for humans to manually create the order
         action_details = {
             "action_type": "create_gam_order",
             "order_id": media_buy_id,
             "platform": "Google Ad Manager",
             "automation_mode": "manual_creation_required",
-            "campaign_name": request.campaign_name,
+            "campaign_name": order_name,
             "total_budget": request.budget.total,
             "flight_start": start_time.isoformat(),
             "flight_end": end_time.isoformat(),
             "instructions": [
                 "Navigate to Google Ad Manager and create a new order",
-                f"Set order name to: {request.campaign_name}",
+                f"Set order name to: {order_name}",
                 f"Set total budget to: ${request.budget.total:,.2f}",
                 f"Set flight dates: {start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')}",
                 "Create line items for each package according to the specifications below",
@@ -193,7 +207,7 @@ class GAMWorkflowManager:
                     status="approval",  # Shortened to fit database field
                     owner="publisher",  # Publisher needs to create GAM order manually
                     assigned_to=None,  # Will be assigned by admin
-                    transaction_details={"campaign_name": request.campaign_name},
+                    transaction_details={"campaign_name": order_name},
                 )
 
                 db_session.add(workflow_step)

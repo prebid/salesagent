@@ -294,8 +294,22 @@ class GoogleAdManager(AdServerAdapter):
                 )
 
         # Automatic mode - create order directly
+        # Use naming template from adapter config, or fallback to default
+        from src.adapters.gam.utils.naming import apply_naming_template, build_order_name_context
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AdapterConfig
+
+        order_name_template = "{campaign_name|promoted_offering} - {date_range}"  # Default
+        with get_db_session() as db_session:
+            adapter_config = db_session.query(AdapterConfig).filter_by(tenant_id=self.tenant_id).first()
+            if adapter_config and adapter_config.gam_order_name_template:
+                order_name_template = adapter_config.gam_order_name_template
+
+        context = build_order_name_context(request, packages, start_time, end_time)
+        order_name = apply_naming_template(order_name_template, context)
+
         order_id = self.orders_manager.create_order(
-            order_name=f"{request.campaign_name} - {len(packages)} packages",
+            order_name=order_name,
             total_budget=request.budget.total,
             start_time=start_time,
             end_time=end_time,

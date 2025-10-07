@@ -701,7 +701,101 @@
                         <small class="form-text text-muted">The GAM user ID who will create line items. Auto-detected when you click "Auto-detect Network" above.</small>
                     </div>
 
-                    <div class="form-group">
+                    <div class="form-section" style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb;">
+                        <h3>Naming Templates</h3>
+                        <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1.5rem;">
+                            Configure how orders and line items are named in Google Ad Manager. Use variables like <code>{campaign_name}</code>, <code>{promoted_offering}</code>, <code>{date_range}</code>, etc.
+                        </p>
+
+                        <!-- Preset Template Buttons -->
+                        <div class="form-group">
+                            <label>Quick Start Templates</label>
+                            <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="useNamingPreset('simple')">
+                                    📊 Simple
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="useNamingPreset('campaign')">
+                                    🎯 Campaign-First
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="useNamingPreset('detailed')">
+                                    📅 Detailed
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="gam_order_name_template">Order Name Template</label>
+                            <input type="text" id="gam_order_name_template" class="form-control"
+                                   value="{{ adapter_config.get('order_name_template', '{campaign_name|promoted_offering} - {date_range}') if adapter_config else '{campaign_name|promoted_offering} - {date_range}' }}"
+                                   placeholder="{campaign_name|promoted_offering} - {date_range}"
+                                   oninput="updateNamingPreview()">
+                            <details style="margin-top: 0.5rem;">
+                                <summary style="cursor: pointer; color: #666; font-size: 0.875rem;">Show available variables</summary>
+                                <div style="margin-top: 0.5rem; padding: 0.75rem; background: #f8f9fa; border-radius: 4px; font-size: 0.875rem;">
+                                    <strong>Available variables:</strong>
+                                    <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                                        <li><code>{campaign_name}</code> - Campaign name (optional - may be empty)</li>
+                                        <li><code>{promoted_offering}</code> - What's being advertised (always present)</li>
+                                        <li><code>{buyer_ref}</code> - Buyer's internal reference (optional)</li>
+                                        <li><code>{date_range}</code> - Flight dates (e.g., "Oct 7-14, 2025")</li>
+                                        <li><code>{month_year}</code> - Month and year (e.g., "Oct 2025")</li>
+                                        <li><code>{package_count}</code> - Number of packages in order</li>
+                                    </ul>
+                                    <strong>Fallback syntax:</strong> <code>{var1|var2}</code> uses var1 if present, otherwise var2
+                                    <br><strong>Example:</strong> <code>{campaign_name|promoted_offering}</code> tries campaign_name first, falls back to promoted_offering
+                                </div>
+                            </details>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="gam_line_item_name_template">Line Item Name Template</label>
+                            <input type="text" id="gam_line_item_name_template" class="form-control"
+                                   value="{{ adapter_config.get('line_item_name_template', '{order_name} - {product_name}') if adapter_config else '{order_name} - {product_name}' }}"
+                                   placeholder="{order_name} - {product_name}"
+                                   oninput="updateNamingPreview()">
+                            <details style="margin-top: 0.5rem;">
+                                <summary style="cursor: pointer; color: #666; font-size: 0.875rem;">Show available variables</summary>
+                                <div style="margin-top: 0.5rem; padding: 0.75rem; background: #f8f9fa; border-radius: 4px; font-size: 0.875rem;">
+                                    <strong>Available variables:</strong>
+                                    <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                                        <li><code>{product_name}</code> - Product/inventory name (e.g., "Display 300x250")</li>
+                                        <li><code>{order_name}</code> - Parent order name (provides campaign context)</li>
+                                        <li><code>{package_index}</code> - Package position number (1, 2, 3...)</li>
+                                    </ul>
+                                    <strong>Tip:</strong> Including <code>{order_name}</code> helps identify campaigns in line-item reports
+                                </div>
+                            </details>
+                        </div>
+
+                        <!-- Live Preview -->
+                        <div class="form-group" style="margin-top: 1.5rem;">
+                            <label>Preview with Sample Data</label>
+                            <div id="naming-preview" style="padding: 1rem; background: #f0f9ff; border: 1px solid #bfdbfe; border-radius: 8px;">
+                                <div style="margin-bottom: 0.75rem;">
+                                    <strong style="color: #1e40af;">Order Name:</strong>
+                                    <div id="order-preview" style="padding: 0.5rem; background: white; border-radius: 4px; margin-top: 0.25rem; font-family: monospace; color: #059669;">
+                                        Nike Shoes Q1 - Oct 7-14, 2025
+                                    </div>
+                                </div>
+                                <div>
+                                    <strong style="color: #1e40af;">Line Item Names:</strong>
+                                    <div id="lineitem-preview" style="padding: 0.5rem; background: white; border-radius: 4px; margin-top: 0.25rem; font-family: monospace; color: #059669;">
+                                        1. Nike Shoes Q1 - Oct 7-14, 2025 - Display 300x250<br>
+                                        2. Nike Shoes Q1 - Oct 7-14, 2025 - Video Pre-roll<br>
+                                        3. Nike Shoes Q1 - Oct 7-14, 2025 - Native Article
+                                    </div>
+                                </div>
+                                <div id="validation-messages" style="margin-top: 0.75rem; font-size: 0.875rem;">
+                                    <!-- Validation messages will appear here -->
+                                </div>
+                                <small style="color: #64748b; display: block; margin-top: 0.5rem;">
+                                    Using sample: campaign_name=null, promoted_offering="Nike Shoes Q1", dates=Oct 7-14, 2025, 3 products
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 2rem;">
                         <button onclick="saveGAMConfig()" class="btn btn-primary">Save GAM Configuration</button>
                         {% if adapter_config and adapter_config.get('refresh_token') %}
                         <button onclick="testGAMConnection()" class="btn btn-secondary" style="margin-left: 0.5rem;">Test Connection</button>
@@ -1566,11 +1660,138 @@ function detectGAMNetwork() {
     });
 }
 
+// Naming template preset configurations
+const NAMING_PRESETS = {
+    simple: {
+        order: '{promoted_offering} - {date_range}',
+        lineItem: '{product_name}'
+    },
+    campaign: {
+        order: '{campaign_name|promoted_offering} - {month_year}',
+        lineItem: '{order_name} - {product_name}'
+    },
+    detailed: {
+        order: '{campaign_name|promoted_offering} - {date_range} - {package_count}pkg',
+        lineItem: '{order_name} - {product_name}'
+    }
+};
+
+// Apply a naming preset
+function useNamingPreset(presetName) {
+    const preset = NAMING_PRESETS[presetName];
+    if (!preset) return;
+
+    document.getElementById('gam_order_name_template').value = preset.order;
+    document.getElementById('gam_line_item_name_template').value = preset.lineItem;
+    updateNamingPreview();
+}
+
+// Simple template variable substitution
+function applyTemplateVariables(template, context) {
+    let result = template;
+
+    // Handle fallback syntax {var1|var2|var3}
+    const pattern = /\{([^}]+)\}/g;
+    result = result.replace(pattern, (match, variables) => {
+        const varList = variables.split('|').map(v => v.trim());
+
+        for (const varName of varList) {
+            if (context[varName] !== null && context[varName] !== undefined && context[varName] !== '') {
+                return context[varName];
+            }
+        }
+
+        return ''; // No value found
+    });
+
+    return result;
+}
+
+// Update live preview
+function updateNamingPreview() {
+    const orderTemplate = document.getElementById('gam_order_name_template').value;
+    const lineItemTemplate = document.getElementById('gam_line_item_name_template').value;
+
+    // Sample context data
+    const orderContext = {
+        campaign_name: null,  // Intentionally null to show fallback behavior
+        promoted_offering: 'Nike Shoes Q1',
+        buyer_ref: 'nike_q1_ref',
+        date_range: 'Oct 7-14, 2025',
+        month_year: 'Oct 2025',
+        package_count: '3',
+        start_date: '2025-10-07',
+        end_date: '2025-10-14'
+    };
+
+    // Generate order name
+    const orderName = applyTemplateVariables(orderTemplate, orderContext);
+
+    // Generate line item names
+    const products = ['Display 300x250', 'Video Pre-roll', 'Native Article'];
+    const lineItemNames = products.map((product, index) => {
+        const lineItemContext = {
+            order_name: orderName,
+            product_name: product,
+            package_index: String(index + 1)
+        };
+        return applyTemplateVariables(lineItemTemplate, lineItemContext);
+    });
+
+    // Update preview display
+    document.getElementById('order-preview').textContent = orderName || '(empty)';
+    document.getElementById('lineitem-preview').innerHTML = lineItemNames
+        .map((name, i) => `${i + 1}. ${name || '(empty)'}`)
+        .join('<br>');
+
+    // Validation
+    const validationDiv = document.getElementById('validation-messages');
+    const errors = [];
+
+    if (!orderName || orderName.trim() === '') {
+        errors.push('⚠️ Order template produces empty name - add fallback variables');
+    }
+
+    if (orderName.length > 255) {
+        errors.push('❌ Order name too long (' + orderName.length + ' chars, max 255)');
+    }
+
+    lineItemNames.forEach((name, i) => {
+        if (!name || name.trim() === '') {
+            errors.push(`⚠️ Line item ${i + 1} template produces empty name`);
+        }
+        if (name.length > 255) {
+            errors.push(`❌ Line item ${i + 1} name too long (${name.length} chars, max 255)`);
+        }
+    });
+
+    // Check for risky patterns
+    if (orderTemplate.includes('{campaign_name}') && !orderTemplate.includes('|')) {
+        errors.push('💡 Tip: {campaign_name} is optional - consider adding fallback like {campaign_name|promoted_offering}');
+    }
+
+    if (errors.length > 0) {
+        validationDiv.innerHTML = errors.map(err => `<div style="color: ${err.startsWith('❌') ? '#dc2626' : '#f59e0b'};">${err}</div>`).join('');
+    } else {
+        validationDiv.innerHTML = '<div style="color: #059669;">✅ Templates look good (' + orderName.length + ' chars for order, ' + Math.max(...lineItemNames.map(n => n.length)) + ' chars max for line items)</div>';
+    }
+}
+
+// Initialize preview on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize preview if templates section exists
+    if (document.getElementById('gam_order_name_template')) {
+        updateNamingPreview();
+    }
+});
+
 // Save GAM configuration
 function saveGAMConfig() {
     const networkCode = document.getElementById('gam_network_code').value;
     const refreshToken = document.getElementById('gam_refresh_token').value;
     const traffickerId = document.getElementById('gam_trafficker_id').value;
+    const orderNameTemplate = document.getElementById('gam_order_name_template').value;
+    const lineItemNameTemplate = document.getElementById('gam_line_item_name_template').value;
 
     if (!refreshToken) {
         alert('Please provide a Refresh Token');
@@ -1599,7 +1820,9 @@ function saveGAMConfig() {
         body: JSON.stringify({
             network_code: networkCode,
             refresh_token: refreshToken,
-            trafficker_id: traffickerId
+            trafficker_id: traffickerId,
+            order_name_template: orderNameTemplate,
+            line_item_name_template: lineItemNameTemplate
         })
     })
     .then(response => {

@@ -239,6 +239,8 @@ def configure_gam(tenant_id):
         network_code = str(data.get("network_code", "")).strip() if data.get("network_code") else None
         refresh_token = data.get("refresh_token", "").strip()
         trafficker_id = str(data.get("trafficker_id", "")).strip() if data.get("trafficker_id") else None
+        order_name_template = data.get("order_name_template", "").strip() or None
+        line_item_name_template = data.get("line_item_name_template", "").strip() or None
 
         # Log what we received (without exposing sensitive token)
         logger.info(
@@ -269,6 +271,8 @@ def configure_gam(tenant_id):
             adapter_config.gam_network_code = network_code
             adapter_config.gam_refresh_token = refresh_token
             adapter_config.gam_trafficker_id = trafficker_id
+            adapter_config.gam_order_name_template = order_name_template
+            adapter_config.gam_line_item_name_template = line_item_name_template
 
             # Also update tenant's ad_server field
             tenant.ad_server = "google_ad_manager"

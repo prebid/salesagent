@@ -376,6 +376,8 @@ class AdapterConfig(Base):
     gam_refresh_token = Column(Text)
     gam_trafficker_id = Column(String(50))  # Tenant-level: publisher's trafficker (defaults to authenticated user)
     gam_manual_approval_required = Column(Boolean, default=False)
+    gam_order_name_template = Column(String(500))  # Template for order names, e.g., "{campaign_name} - {date_range}"
+    gam_line_item_name_template = Column(String(500))  # Template for line item names, e.g., "{product_name}"
     # NOTE: gam_company_id (advertiser_id) is per-principal, stored in Principal.platform_mappings
 
     # Kevel
