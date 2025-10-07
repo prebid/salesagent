@@ -10,7 +10,7 @@ class MockSetup:
 
     @staticmethod
     def create_mock_db_session_with_property(property_data):
-        """Create mock database session with property."""
+        """Create mock database session with property (SQLAlchemy 2.0 compatible)."""
         mock_session = Mock()
         mock_db_session_patcher = patch("src.services.property_verification_service.get_db_session")
         mock_db_session = mock_db_session_patcher.start()
@@ -21,7 +21,11 @@ class MockSetup:
             for key, value in property_data.items():
                 setattr(mock_property, key, value)
 
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_property
+        # Mock SQLAlchemy 2.0 pattern: session.scalars(stmt).first()
+        mock_scalars = Mock()
+        mock_scalars.first.return_value = mock_property
+        mock_session.scalars.return_value = mock_scalars
+
         return mock_db_session_patcher, mock_session, mock_property
 
     @staticmethod
@@ -157,8 +161,7 @@ class TestPropertyVerificationService:
         # No matching agent URL
         assert not self.service._check_agent_authorization(agents, "https://other-agent.example.com", property_obj)
 
-    @patch("requests.Session.get")
-    def test_verify_property_success(self, mock_get):
+    def test_verify_property_success(self):
         """Test successful property verification."""
         # Use centralized mock setup
         property_data = {
@@ -180,22 +183,24 @@ class TestPropertyVerificationService:
 
         # Setup mocks using centralized helper
         db_patcher, _, _ = MockSetup.create_mock_db_session_with_property(property_data)
-        mock_get.return_value = MockSetup.create_mock_http_response(response_data)
 
-        try:
-            # Test verification
-            is_verified, error = self.service.verify_property("tenant1", "prop1", "https://sales-agent.scope3.com")
+        # Mock the service's session.get method
+        with patch.object(self.service.session, "get") as mock_get:
+            mock_get.return_value = MockSetup.create_mock_http_response(response_data)
 
-            assert is_verified
-            assert error is None
+            try:
+                # Test verification
+                is_verified, error = self.service.verify_property("tenant1", "prop1", "https://sales-agent.scope3.com")
 
-            # Verify HTTP request was made
-            mock_get.assert_called_once_with("https://example.com/.well-known/adagents.json", timeout=10)
-        finally:
-            db_patcher.stop()
+                assert is_verified
+                assert error is None
 
-    @patch("requests.Session.get")
-    def test_verify_property_not_authorized(self, mock_get):
+                # Verify HTTP request was made
+                mock_get.assert_called_once_with("https://example.com/.well-known/adagents.json", timeout=10)
+            finally:
+                db_patcher.stop()
+
+    def test_verify_property_not_authorized(self):
         """Test property verification when agent is not authorized."""
         # Use centralized mock setup
         property_data = {
@@ -217,19 +222,20 @@ class TestPropertyVerificationService:
 
         # Setup mocks using centralized helper
         db_patcher, _, _ = MockSetup.create_mock_db_session_with_property(property_data)
-        mock_get.return_value = MockSetup.create_mock_http_response(response_data)
 
-        try:
-            # Test verification
-            is_verified, error = self.service.verify_property("tenant1", "prop1", "https://sales-agent.scope3.com")
+        with patch.object(self.service.session, "get") as mock_get:
+            mock_get.return_value = MockSetup.create_mock_http_response(response_data)
 
-            assert not is_verified
-            assert "not found in authorized agents list" in error
-        finally:
-            db_patcher.stop()
+            try:
+                # Test verification
+                is_verified, error = self.service.verify_property("tenant1", "prop1", "https://sales-agent.scope3.com")
 
-    @patch("requests.Session.get")
-    def test_verify_property_http_error(self, mock_get):
+                assert not is_verified
+                assert "not found in authorized agents list" in error
+            finally:
+                db_patcher.stop()
+
+    def test_verify_property_http_error(self):
         """Test property verification when HTTP request fails."""
         from requests.exceptions import RequestException
 
@@ -238,16 +244,18 @@ class TestPropertyVerificationService:
 
         # Setup mocks using centralized helper
         db_patcher, _, _ = MockSetup.create_mock_db_session_with_property(property_data)
-        mock_get.side_effect = RequestException("Connection failed")
 
-        try:
-            # Test verification
-            is_verified, error = self.service.verify_property("tenant1", "prop1", "https://sales-agent.scope3.com")
+        with patch.object(self.service.session, "get") as mock_get:
+            mock_get.side_effect = RequestException("Connection failed")
 
-            assert not is_verified
-            assert "Failed to fetch adagents.json" in error
-        finally:
-            db_patcher.stop()
+            try:
+                # Test verification
+                is_verified, error = self.service.verify_property("tenant1", "prop1", "https://sales-agent.scope3.com")
+
+                assert not is_verified
+                assert "Failed to fetch adagents.json" in error
+            finally:
+                db_patcher.stop()
 
     def test_verify_property_not_found(self):
         """Test property verification when property doesn't exist."""
@@ -255,10 +263,14 @@ class TestPropertyVerificationService:
         with patch("src.services.property_verification_service.get_db_session") as mock_db_session:
             mock_session = Mock()
             mock_db_session.return_value.__enter__.return_value = mock_session
-            mock_session.query.return_value.filter.return_value.first.return_value = None
 
-        # Test verification
-        is_verified, error = self.service.verify_property("tenant1", "prop1", "https://sales-agent.scope3.com")
+            # Mock SQLAlchemy 2.0 pattern: session.scalars(stmt).first() returns None
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_session.scalars.return_value = mock_scalars
+
+            # Test verification
+            is_verified, error = self.service.verify_property("tenant1", "prop1", "https://sales-agent.scope3.com")
 
         assert not is_verified
         assert error == "Property not found"

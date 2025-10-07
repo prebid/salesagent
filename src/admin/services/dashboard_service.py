@@ -8,8 +8,6 @@ table for activity data, eliminating dependencies on workflow_steps, tasks, etc.
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy.orm import joinedload
-
 from src.admin.services.business_activity_service import get_business_activities
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
@@ -35,7 +33,10 @@ class DashboardService:
         """Get tenant object, cached for this service instance."""
         if self._tenant is None:
             with get_db_session() as db_session:
-                self._tenant = db_session.query(Tenant).filter_by(tenant_id=self.tenant_id).first()
+                from sqlalchemy import select
+
+                stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
+                self._tenant = db_session.scalars(stmt).first()
         return self._tenant
 
     def get_dashboard_metrics(self) -> dict[str, any]:
@@ -55,16 +56,22 @@ class DashboardService:
                 readiness_summary = MediaBuyReadinessService.get_tenant_readiness_summary(self.tenant_id)
 
                 # Core business metrics
-                principals_count = db_session.query(Principal).filter_by(tenant_id=self.tenant_id).count()
-                products_count = db_session.query(Product).filter_by(tenant_id=self.tenant_id).count()
+                from sqlalchemy import func, select
+
+                principals_count = db_session.scalar(
+                    select(func.count()).select_from(Principal).where(Principal.tenant_id == self.tenant_id)
+                )
+                products_count = db_session.scalar(
+                    select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id)
+                )
 
                 # Calculate total spend from live and completed media buys
-                total_spend_buys = (
-                    db_session.query(MediaBuy)
+                stmt = (
+                    select(MediaBuy)
                     .filter_by(tenant_id=self.tenant_id)
-                    .filter(MediaBuy.status.in_(["active", "completed"]))
-                    .all()
+                    .where(MediaBuy.status.in_(["active", "completed"]))
                 )
+                total_spend_buys = db_session.scalars(stmt).all()
                 total_spend_amount = float(sum(buy.budget or 0 for buy in total_spend_buys))
 
                 # Revenue trend data (last 30 days)
@@ -124,15 +131,18 @@ class DashboardService:
         """Get recent media buys with relationships loaded and readiness state."""
         try:
             with get_db_session() as db_session:
-                recent_buys = (
-                    db_session.query(MediaBuy)
-                    .filter(MediaBuy.tenant_id == self.tenant_id)
-                    .filter(MediaBuy.media_buy_id.isnot(None))  # Defensive: ensure valid ID
+                from sqlalchemy import select
+                from sqlalchemy.orm import joinedload
+
+                stmt = (
+                    select(MediaBuy)
+                    .where(MediaBuy.tenant_id == self.tenant_id)
+                    .where(MediaBuy.media_buy_id.isnot(None))  # Defensive: ensure valid ID
                     .options(joinedload(MediaBuy.principal))  # Eager load to avoid N+1
                     .order_by(MediaBuy.created_at.desc())
                     .limit(limit)
-                    .all()
                 )
+                recent_buys = db_session.scalars(stmt).all()
 
                 # Transform for template consumption
                 for media_buy in recent_buys:
@@ -171,14 +181,16 @@ class DashboardService:
             date = today - timedelta(days=days - 1 - i)
 
             # Calculate revenue for this date
-            daily_buys = (
-                db_session.query(MediaBuy)
+            from sqlalchemy import select
+
+            stmt = (
+                select(MediaBuy)
                 .filter_by(tenant_id=self.tenant_id)
-                .filter(MediaBuy.start_date <= date)
-                .filter(MediaBuy.end_date >= date)
-                .filter(MediaBuy.status.in_(["active", "completed"]))
-                .all()
+                .where(MediaBuy.start_date <= date)
+                .where(MediaBuy.end_date >= date)
+                .where(MediaBuy.status.in_(["active", "completed"]))
             )
+            daily_buys = db_session.scalars(stmt).all()
 
             daily_revenue = 0
             for buy in daily_buys:

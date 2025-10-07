@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import requests
 from requests.exceptions import RequestException
+from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty
@@ -43,14 +44,11 @@ class PropertyVerificationService:
             logger.info(f"🔍 Starting verification - tenant: {tenant_id}, property: {property_id}, agent: {agent_url}")
 
             with get_db_session() as session:
-                property_obj = (
-                    session.query(AuthorizedProperty)
-                    .filter(
-                        AuthorizedProperty.tenant_id == tenant_id,
-                        AuthorizedProperty.property_id == property_id,
-                    )
-                    .first()
+                stmt = select(AuthorizedProperty).where(
+                    AuthorizedProperty.tenant_id == tenant_id,
+                    AuthorizedProperty.property_id == property_id,
                 )
+                property_obj = session.scalars(stmt).first()
 
                 if not property_obj:
                     logger.error(f"❌ Property not found: {property_id} in tenant {tenant_id}")
@@ -324,13 +322,10 @@ class PropertyVerificationService:
         try:
             with get_db_session() as session:
                 # Get all pending properties
-                pending_properties = (
-                    session.query(AuthorizedProperty)
-                    .filter(
-                        AuthorizedProperty.tenant_id == tenant_id, AuthorizedProperty.verification_status == "pending"
-                    )
-                    .all()
+                stmt = select(AuthorizedProperty).where(
+                    AuthorizedProperty.tenant_id == tenant_id, AuthorizedProperty.verification_status == "pending"
                 )
+                pending_properties = session.scalars(stmt).all()
 
                 results["total_checked"] = len(pending_properties)
 

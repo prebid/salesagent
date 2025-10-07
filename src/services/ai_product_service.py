@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import google.generativeai as genai
+from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalModel
@@ -255,13 +256,15 @@ class AIProductConfigurationService:
         # Get adapter configuration and principal
         with get_db_session() as db_session:
             # Get tenant ad server
-            tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+            tenant = db_session.scalars(stmt).first()
             if not tenant:
                 logger.error(f"Tenant {tenant_id} not found")
                 return AdServerInventory(ad_units=[], targeting_keys=[], formats=[])
 
             # Get a principal for this tenant (use first available)
-            principal_model = db_session.query(PrincipalModel).filter_by(tenant_id=tenant_id).first()
+            stmt = select(PrincipalModel).filter_by(tenant_id=tenant_id)
+            principal_model = db_session.scalars(stmt).first()
 
             if not principal_model:
                 # Create a temporary principal for inventory fetching
@@ -305,7 +308,8 @@ class AIProductConfigurationService:
 
         # Get adapter config from adapter_config table
         with get_db_session() as db_session:
-            adapter_config_row = db_session.query(AdapterConfig).filter_by(tenant_id=tenant_id).first()
+            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
+            adapter_config_row = db_session.scalars(stmt).first()
             adapter_config = {}
             if adapter_config_row:
                 # Build config from individual fields based on adapter type
@@ -372,14 +376,14 @@ class AIProductConfigurationService:
         with get_db_session() as db_session:
             from sqlalchemy import or_
 
-            formats_query = (
-                db_session.query(CreativeFormat)
-                .filter(or_(CreativeFormat.tenant_id.is_(None), CreativeFormat.tenant_id == tenant_id))
+            stmt = (
+                select(CreativeFormat)
+                .where(or_(CreativeFormat.tenant_id.is_(None), CreativeFormat.tenant_id == tenant_id))
                 .order_by(CreativeFormat.is_standard.desc(), CreativeFormat.type, CreativeFormat.name)
             )
 
             formats = []
-            for format_obj in formats_query:
+            for format_obj in db_session.scalars(stmt):
                 format_dict = {
                     "format_id": format_obj.format_id,
                     "name": format_obj.name,
@@ -644,7 +648,8 @@ async def analyze_product_description(
 
     # Get tenant's adapter type
     with get_db_session() as db_session:
-        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        tenant = db_session.scalars(stmt).first()
         if not tenant:
             raise ValueError(f"Tenant {tenant_id} not found")
 

@@ -7,6 +7,7 @@ connections and actual ORM objects to catch schema and field access bugs.
 from datetime import datetime
 
 import pytest
+from sqlalchemy import delete
 
 from src.admin.services.dashboard_service import DashboardService
 from src.core.database.database_session import get_db_session
@@ -24,10 +25,12 @@ class TestDashboardServiceIntegration:
         principal_id = "dashboard_test_principal"
 
         with get_db_session() as session:
-            # Clean up existing test data
-            session.query(Product).filter_by(tenant_id=tenant_id).delete()
-            session.query(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            # Clean up existing test data (SQLAlchemy 2.0 pattern)
+            session.execute(delete(Product).where(Product.tenant_id == tenant_id))
+            session.execute(
+                delete(Principal).where(Principal.tenant_id == tenant_id, Principal.principal_id == principal_id)
+            )
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
 
             # Create test tenant with proper timestamps using helper
             tenant = create_tenant_with_timestamps(
@@ -83,10 +86,12 @@ class TestDashboardServiceIntegration:
 
             yield {"tenant_id": tenant_id, "principal_id": principal_id, "tenant": tenant, "principal": principal}
 
-            # Cleanup
-            session.query(Product).filter_by(tenant_id=tenant_id).delete()
-            session.query(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            # Cleanup (SQLAlchemy 2.0 pattern)
+            session.execute(delete(Product).where(Product.tenant_id == tenant_id))
+            session.execute(
+                delete(Principal).where(Principal.tenant_id == tenant_id, Principal.principal_id == principal_id)
+            )
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
             session.commit()
 
     def test_dashboard_service_init_validation(self):

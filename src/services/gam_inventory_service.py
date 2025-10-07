@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import String, and_, create_engine, func, or_
+from sqlalchemy import String, and_, create_engine, func, or_, select
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.adapters.gam.client import GAMClientManager
@@ -780,7 +780,8 @@ def create_inventory_endpoints(app):
             from src.adapters.google_ad_manager import GoogleAdManager
             from src.core.database.models import AdapterConfig, Tenant
 
-            tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+            tenant = db_session.scalars(stmt).first()
             if not tenant:
                 db_session.remove()
                 return jsonify({"error": "Tenant not found"}), 404
@@ -791,7 +792,8 @@ def create_inventory_endpoints(app):
                 return jsonify({"error": "GAM not enabled for tenant"}), 400
 
             # Get adapter config from adapter_config table
-            adapter_config = db_session.query(AdapterConfig).filter_by(tenant_id=tenant_id).first()
+            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
+            adapter_config = db_session.scalars(stmt).first()
 
             if not adapter_config:
                 db_session.remove()

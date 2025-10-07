@@ -127,7 +127,10 @@ def tenant_settings(tenant_id, section=None):
     """
     try:
         with get_db_session() as db_session:
-            tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+            from sqlalchemy import select
+
+            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+            tenant = db_session.scalars(stmt).first()
             if not tenant:
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
@@ -150,7 +153,8 @@ def tenant_settings(tenant_id, section=None):
             # Get advertiser data for the advertisers section
             from src.core.database.models import Principal
 
-            principals = db_session.query(Principal).filter_by(tenant_id=tenant_id).all()
+            stmt = select(Principal).filter_by(tenant_id=tenant_id)
+            principals = db_session.scalars(stmt).all()
             advertiser_count = len(principals)
             active_advertisers = len(principals)  # For now, assume all are active
 
@@ -179,7 +183,8 @@ def tenant_settings(tenant_id, section=None):
             # Get product counts
             from src.core.database.models import Product
 
-            products = db_session.query(Product).filter_by(tenant_id=tenant_id).all()
+            stmt = select(Product).filter_by(tenant_id=tenant_id)
+            products = db_session.scalars(stmt).all()
             product_count = len(products)
             active_products = len([p for p in products if p.status == "active"])
             draft_products = len([p for p in products if p.status == "draft"])
@@ -187,7 +192,8 @@ def tenant_settings(tenant_id, section=None):
             # Get creative formats
             from src.core.database.models import CreativeFormat
 
-            creative_formats = db_session.query(CreativeFormat).filter_by(tenant_id=tenant_id).all()
+            stmt = select(CreativeFormat).filter_by(tenant_id=tenant_id)
+            creative_formats = db_session.scalars(stmt).all()
 
             # Get admin port
             admin_port = int(os.environ.get("ADMIN_UI_PORT", 8001))

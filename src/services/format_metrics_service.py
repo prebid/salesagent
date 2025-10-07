@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from src.adapters.gam_reporting_service import GAMReportingService
@@ -275,17 +275,17 @@ def aggregate_all_tenants(period_days: int = 30) -> dict[str, Any]:
 
     with get_db_session() as db_session:
         # Get all active tenants with GAM configured
-        tenants = (
-            db_session.query(Tenant, AdapterConfig)
+        stmt = (
+            select(Tenant, AdapterConfig)
             .join(AdapterConfig, Tenant.tenant_id == AdapterConfig.tenant_id)
-            .filter(
+            .where(
                 Tenant.ad_server == "google_ad_manager",
                 Tenant.is_active,
                 AdapterConfig.gam_network_code.isnot(None),
                 AdapterConfig.gam_refresh_token.isnot(None),
             )
-            .all()
         )
+        tenants = db_session.execute(stmt).all()
 
         summary = {"total_tenants": len(tenants), "successful": 0, "failed": 0, "details": []}
 

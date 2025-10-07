@@ -18,6 +18,7 @@ from typing import Any
 import aiohttp
 import google.generativeai as genai
 from bs4 import BeautifulSoup
+from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CreativeFormat
@@ -808,7 +809,8 @@ async def sync_standard_formats():
         for fmt in formats:
             try:
                 # Check if format already exists
-                existing = session.query(CreativeFormat).filter_by(format_id=fmt.format_id).first()
+                stmt = select(CreativeFormat).filter_by(format_id=fmt.format_id)
+                existing = session.scalars(stmt).first()
 
                 if not existing:
                     # Insert new format
