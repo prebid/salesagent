@@ -4,6 +4,7 @@ from datetime import date
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import delete, select
 
 from src.admin.app import create_app
 
@@ -30,9 +31,9 @@ def test_tenant_and_products(integration_db):
     with get_db_session() as session:
         # Clean up any existing test data
         try:
-            session.query(MediaBuy).filter_by(tenant_id="test_delete").delete()
-            session.query(Product).filter_by(tenant_id="test_delete").delete()
-            session.query(Tenant).filter_by(tenant_id="test_delete").delete()
+            session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == "test_delete"))
+            session.execute(delete(Product).where(Product.tenant_id == "test_delete"))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == "test_delete"))
             session.commit()
         except:
             session.rollback()
@@ -86,9 +87,9 @@ def test_tenant_and_products(integration_db):
 
         # Cleanup
         try:
-            session.query(MediaBuy).filter_by(tenant_id="test_delete").delete()
-            session.query(Product).filter_by(tenant_id="test_delete").delete()
-            session.query(Tenant).filter_by(tenant_id="test_delete").delete()
+            session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == "test_delete"))
+            session.execute(delete(Product).where(Product.tenant_id == "test_delete"))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == "test_delete"))
             session.commit()
         except:
             pass
@@ -111,7 +112,7 @@ def setup_super_admin_config():
     """Setup super admin configuration in database."""
     with get_db_session() as session:
         # Clean up existing config
-        session.query(TenantManagementConfig).filter_by(config_key="super_admin_emails").delete()
+        session.execute(delete(TenantManagementConfig).where(TenantManagementConfig.config_key == "super_admin_emails"))
 
         # Create super admin config
         config = TenantManagementConfig(
@@ -123,7 +124,7 @@ def setup_super_admin_config():
         yield
 
         # Cleanup
-        session.query(TenantManagementConfig).filter_by(config_key="super_admin_emails").delete()
+        session.execute(delete(TenantManagementConfig).where(TenantManagementConfig.config_key == "super_admin_emails"))
         session.commit()
 
 
@@ -146,7 +147,7 @@ class TestProductDeletion:
 
         # Verify product is actually deleted from database
         with get_db_session() as session:
-            product = session.query(Product).filter_by(tenant_id=tenant_id, product_id=product_id).first()
+            product = session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
             assert product is None
 
     def test_delete_nonexistent_product(
@@ -197,7 +198,7 @@ class TestProductDeletion:
 
         # Verify product still exists
         with get_db_session() as session:
-            product = session.query(Product).filter_by(tenant_id=tenant_id, product_id=product_id).first()
+            product = session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
             assert product is not None
 
     def test_delete_product_with_pending_media_buy(

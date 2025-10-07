@@ -5,7 +5,7 @@ import tempfile
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 # Import our new utilities
@@ -67,7 +67,7 @@ class TestSessionManagement:
 
         # Verify it was created
         with get_db_session() as session:
-            retrieved = session.query(Tenant).filter_by(tenant_id="test_tenant").first()
+            retrieved = session.scalars(select(Tenant).filter_by(tenant_id="test_tenant")).first()
             assert retrieved is not None
             assert retrieved.name == "Test Tenant"
             assert retrieved.authorized_emails == ["admin@test.com"]
@@ -97,7 +97,7 @@ class TestSessionManagement:
 
         # Verify creation
         with get_db_session() as session:
-            retrieved = session.query(Tenant).filter_by(tenant_id="test2").first()
+            retrieved = session.scalars(select(Tenant).filter_by(tenant_id="test2")).first()
             assert retrieved is not None
             assert retrieved.name == "Test 2"
 
@@ -263,7 +263,7 @@ class TestJSONValidation:
             session.commit()
 
             # Retrieve and verify
-            retrieved = session.query(Tenant).filter_by(tenant_id="json_test").first()
+            retrieved = session.scalars(select(Tenant).filter_by(tenant_id="json_test")).first()
             assert retrieved.authorized_emails == ["test@example.com"]
             # PolicySettingsModel adds default values
             assert retrieved.policy_settings["enabled"] is True
@@ -299,7 +299,7 @@ class TestJSONValidation:
             session.commit()
 
             # Retrieve and verify
-            retrieved = session.query(Principal).filter_by(principal_id="test_principal").first()
+            retrieved = session.scalars(select(Principal).filter_by(principal_id="test_principal")).first()
             assert retrieved.platform_mappings == {"mock": {"enabled": True}}
 
     def test_workflow_step_comments(self, test_db):
@@ -322,7 +322,7 @@ class TestJSONValidation:
             session.commit()
 
             # Retrieve and verify
-            retrieved = session.query(WorkflowStep).filter_by(step_id="step_test").first()
+            retrieved = session.scalars(select(WorkflowStep).filter_by(step_id="step_test")).first()
             assert len(retrieved.comments) == 1
             assert retrieved.comments[0]["text"] == "Please review"
 
@@ -395,20 +395,20 @@ class TestIntegration:
         # Verify everything was created with proper JSON
         with get_db_session() as session:
             # Check tenant
-            t = session.query(Tenant).filter_by(tenant_id="workflow_test").first()
+            t = session.scalars(select(Tenant).filter_by(tenant_id="workflow_test")).first()
             assert t is not None
             assert t.auto_approve_formats == ["display_300x250", "video_16x9"]
             assert t.policy_settings["max_daily_budget"] == 10000.0
 
             # Check product
-            p = session.query(Product).filter_by(product_id="prod_1").first()
+            p = session.scalars(select(Product).filter_by(product_id="prod_1")).first()
             assert p is not None
             assert len(p.formats) == 1
             assert p.formats[0] == "display_300x250"  # Format now stored as string ID
             assert p.targeting_template["geo_targets"] == ["US", "CA"]
 
             # Check principal
-            pr = session.query(Principal).filter_by(principal_id="buyer_1").first()
+            pr = session.scalars(select(Principal).filter_by(principal_id="buyer_1")).first()
             assert pr is not None
             assert "google_ad_manager" in pr.platform_mappings
             assert pr.platform_mappings["mock"]["test_mode"] is True

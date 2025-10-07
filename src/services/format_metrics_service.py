@@ -185,19 +185,16 @@ class FormatMetricsAggregationService:
             p90_cpm = self._calculate_percentile(line_item_cpms, 90)
 
             # Upsert to database
-            existing = (
-                self.db.query(FormatPerformanceMetrics)
-                .filter(
-                    and_(
-                        FormatPerformanceMetrics.tenant_id == tenant_id,
-                        FormatPerformanceMetrics.country_code == country_code,
-                        FormatPerformanceMetrics.creative_size == creative_size,
-                        FormatPerformanceMetrics.period_start == start_date.date(),
-                        FormatPerformanceMetrics.period_end == end_date.date(),
-                    )
+            stmt = select(FormatPerformanceMetrics).where(
+                and_(
+                    FormatPerformanceMetrics.tenant_id == tenant_id,
+                    FormatPerformanceMetrics.country_code == country_code,
+                    FormatPerformanceMetrics.creative_size == creative_size,
+                    FormatPerformanceMetrics.period_start == start_date.date(),
+                    FormatPerformanceMetrics.period_end == end_date.date(),
                 )
-                .first()
             )
+            existing = self.db.scalars(stmt).first()
 
             if existing:
                 # Update existing record

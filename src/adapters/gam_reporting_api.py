@@ -13,6 +13,7 @@ from functools import wraps
 
 import pytz
 from flask import Blueprint, jsonify, request, session
+from sqlalchemy import select
 
 from scripts.ops.gam_helper import get_ad_manager_client_for_tenant
 from src.adapters.gam_reporting_service import GAMReportingService
@@ -117,7 +118,8 @@ def get_gam_reporting(tenant_id: str):
 
     # Check if tenant is using GAM
     with get_db_session() as db_session:
-        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        tenant = db_session.scalars(stmt).first()
 
     if not tenant or tenant.ad_server != "google_ad_manager":
         return jsonify({"error": "GAM reporting is only available for tenants using Google Ad Manager"}), 400
@@ -219,7 +221,8 @@ def get_advertiser_summary(tenant_id: str, advertiser_id: str):
 
     # Check if tenant is using GAM
     with get_db_session() as db_session:
-        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        tenant = db_session.scalars(stmt).first()
 
     if not tenant or tenant.ad_server != "google_ad_manager":
         return jsonify({"error": "GAM reporting is only available for tenants using Google Ad Manager"}), 400
@@ -282,7 +285,8 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
 
     # Get the principal's advertiser_id
     with get_db_session() as db_session:
-        principal = db_session.query(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id).first()
+        stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+        principal = db_session.scalars(stmt).first()
 
     if not principal:
         return jsonify({"error": "Principal not found"}), 404
@@ -324,9 +328,8 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
         from src.core.database.models import AdapterConfig
 
         with get_db_session() as db_session:
-            adapter_config = (
-                db_session.query(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager").first()
-            )
+            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
+            adapter_config = db_session.scalars(stmt).first()
 
         if not adapter_config:
             # Default to America/New_York if no config found
@@ -396,7 +399,8 @@ def get_country_breakdown(tenant_id: str):
 
     # Check if tenant is using GAM
     with get_db_session() as db_session:
-        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        tenant = db_session.scalars(stmt).first()
 
     if not tenant or tenant.ad_server != "google_ad_manager":
         return jsonify({"error": "GAM reporting is only available for tenants using Google Ad Manager"}), 400
@@ -479,7 +483,8 @@ def get_ad_unit_breakdown(tenant_id: str):
 
     # Check if tenant is using GAM
     with get_db_session() as db_session:
-        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        tenant = db_session.scalars(stmt).first()
 
     if not tenant or tenant.ad_server != "google_ad_manager":
         return jsonify({"error": "GAM reporting is only available for tenants using Google Ad Manager"}), 400
@@ -564,7 +569,8 @@ def get_principal_summary(tenant_id: str, principal_id: str):
 
     # Get the principal's advertiser_id
     with get_db_session() as db_session:
-        principal = db_session.query(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id).first()
+        stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+        principal = db_session.scalars(stmt).first()
 
     if not principal:
         return jsonify({"error": "Principal not found"}), 404
@@ -596,9 +602,8 @@ def get_principal_summary(tenant_id: str, principal_id: str):
         from src.core.database.models import AdapterConfig
 
         with get_db_session() as db_session:
-            adapter_config = (
-                db_session.query(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager").first()
-            )
+            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
+            adapter_config = db_session.scalars(stmt).first()
 
         if not adapter_config:
             # Default to America/New_York if no config found

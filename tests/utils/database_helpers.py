@@ -7,6 +7,8 @@ timestamp handling and field validation to prevent common test issues.
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import delete
+
 from src.core.database.models import Principal, Product, Tenant
 
 
@@ -155,11 +157,13 @@ def cleanup_test_data(session, tenant_id: str, principal_id: str = None):
     """
     # Clean up in reverse dependency order
     if principal_id:
-        session.query(Product).filter_by(tenant_id=tenant_id).delete()
-        session.query(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id).delete()
+        session.execute(delete(Product).where(Product.tenant_id == tenant_id))
+        session.execute(
+            delete(Principal).where(Principal.tenant_id == tenant_id, Principal.principal_id == principal_id)
+        )
     else:
-        session.query(Product).filter_by(tenant_id=tenant_id).delete()
-        session.query(Principal).filter_by(tenant_id=tenant_id).delete()
+        session.execute(delete(Product).where(Product.tenant_id == tenant_id))
+        session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
 
-    session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+    session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
     session.commit()

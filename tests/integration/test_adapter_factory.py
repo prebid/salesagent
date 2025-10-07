@@ -9,6 +9,7 @@ adapter type, especially important for adapters with keyword-only arguments.
 """
 
 import pytest
+from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as ModelPrincipal
@@ -153,35 +154,41 @@ class TestAdapterFactory:
             yield adapters_to_test
 
             # Cleanup
-            session.query(ModelPrincipal).filter(
-                ModelPrincipal.tenant_id.in_(
-                    [
-                        "test_factory_mock",
-                        "test_factory_gam",
-                        "test_factory_kevel",
-                        "test_factory_triton",
-                    ]
+            session.execute(
+                delete(ModelPrincipal).where(
+                    ModelPrincipal.tenant_id.in_(
+                        [
+                            "test_factory_mock",
+                            "test_factory_gam",
+                            "test_factory_kevel",
+                            "test_factory_triton",
+                        ]
+                    )
                 )
-            ).delete()
-            session.query(AdapterConfig).filter(
-                AdapterConfig.tenant_id.in_(
-                    [
-                        "test_factory_gam",
-                        "test_factory_kevel",
-                        "test_factory_triton",
-                    ]
+            )
+            session.execute(
+                delete(AdapterConfig).where(
+                    AdapterConfig.tenant_id.in_(
+                        [
+                            "test_factory_gam",
+                            "test_factory_kevel",
+                            "test_factory_triton",
+                        ]
+                    )
                 )
-            ).delete()
-            session.query(ModelTenant).filter(
-                ModelTenant.tenant_id.in_(
-                    [
-                        "test_factory_mock",
-                        "test_factory_gam",
-                        "test_factory_kevel",
-                        "test_factory_triton",
-                    ]
+            )
+            session.execute(
+                delete(ModelTenant).where(
+                    ModelTenant.tenant_id.in_(
+                        [
+                            "test_factory_mock",
+                            "test_factory_gam",
+                            "test_factory_kevel",
+                            "test_factory_triton",
+                        ]
+                    )
                 )
-            ).delete()
+            )
             session.commit()
 
     def test_get_adapter_instantiates_all_adapter_types(self, setup_adapters):
@@ -210,12 +217,12 @@ class TestAdapterFactory:
         for adapter_type, tenant_id, principal_id in setup_adapters:
             with get_db_session() as session:
                 # Load principal from database
-                db_principal = (
-                    session.query(ModelPrincipal).filter_by(tenant_id=tenant_id, principal_id=principal_id).first()
-                )
+                db_principal = session.scalars(
+                    select(ModelPrincipal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+                ).first()
 
                 # Load tenant for context
-                db_tenant = session.query(ModelTenant).filter_by(tenant_id=tenant_id).first()
+                db_tenant = session.scalars(select(ModelTenant).filter_by(tenant_id=tenant_id)).first()
 
                 # Set tenant context for get_adapter()
                 set_current_tenant(
@@ -271,14 +278,12 @@ class TestAdapterFactory:
         from src.core.config_loader import set_current_tenant
 
         with get_db_session() as session:
-            db_principal = (
-                session.query(ModelPrincipal)
-                .filter_by(tenant_id="test_factory_gam", principal_id="gam_principal")
-                .first()
-            )
+            db_principal = session.scalars(
+                select(ModelPrincipal).filter_by(tenant_id="test_factory_gam", principal_id="gam_principal")
+            ).first()
 
             # Load tenant for context
-            db_tenant = session.query(ModelTenant).filter_by(tenant_id="test_factory_gam").first()
+            db_tenant = session.scalars(select(ModelTenant).filter_by(tenant_id="test_factory_gam")).first()
 
             # Set tenant context for get_adapter()
             set_current_tenant(

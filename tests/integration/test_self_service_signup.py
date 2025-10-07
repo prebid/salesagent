@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant, User
@@ -86,19 +87,21 @@ class TestSelfServiceSignupFlow:
 
         # Verify tenant was created
         with get_db_session() as db_session:
-            tenant = db_session.query(Tenant).filter_by(subdomain="testpub").first()
+            tenant = db_session.scalars(select(Tenant).filter_by(subdomain="testpub")).first()
             assert tenant is not None
             assert tenant.name == "Test Publisher"
             assert tenant.ad_server == "mock"
             assert tenant.is_active is True
 
             # Verify adapter config
-            adapter_config = db_session.query(AdapterConfig).filter_by(tenant_id=tenant.tenant_id).first()
+            adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant.tenant_id)).first()
             assert adapter_config is not None
             assert adapter_config.adapter_type == "mock"
 
             # Verify admin user was created
-            user = db_session.query(User).filter_by(tenant_id=tenant.tenant_id, email="admin@testpublisher.com").first()
+            user = db_session.scalars(
+                select(User).filter_by(tenant_id=tenant.tenant_id, email="admin@testpublisher.com")
+            ).first()
             assert user is not None
             assert user.role == "admin"
             assert user.is_active is True
@@ -132,18 +135,18 @@ class TestSelfServiceSignupFlow:
 
         # Verify tenant and adapter config
         with get_db_session() as db_session:
-            tenant = db_session.query(Tenant).filter_by(subdomain="keveltest").first()
+            tenant = db_session.scalars(select(Tenant).filter_by(subdomain="keveltest")).first()
             assert tenant is not None
             assert tenant.ad_server == "kevel"
 
-            adapter_config = db_session.query(AdapterConfig).filter_by(tenant_id=tenant.tenant_id).first()
+            adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant.tenant_id)).first()
             assert adapter_config is not None
             assert adapter_config.adapter_type == "kevel"
             assert adapter_config.kevel_network_id == "12345"
             assert adapter_config.kevel_api_key == "test_api_key_12345"
 
             # Cleanup
-            user = db_session.query(User).filter_by(tenant_id=tenant.tenant_id).first()
+            user = db_session.scalars(select(User).filter_by(tenant_id=tenant.tenant_id)).first()
             if user:
                 db_session.delete(user)
             db_session.delete(adapter_config)
@@ -171,18 +174,18 @@ class TestSelfServiceSignupFlow:
 
         # Verify tenant was created with GAM adapter (no credentials yet)
         with get_db_session() as db_session:
-            tenant = db_session.query(Tenant).filter_by(subdomain="gamtest").first()
+            tenant = db_session.scalars(select(Tenant).filter_by(subdomain="gamtest")).first()
             assert tenant is not None
             assert tenant.ad_server == "google_ad_manager"
 
-            adapter_config = db_session.query(AdapterConfig).filter_by(tenant_id=tenant.tenant_id).first()
+            adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant.tenant_id)).first()
             assert adapter_config is not None
             assert adapter_config.adapter_type == "google_ad_manager"
             # Refresh token should be empty (to be configured later)
             assert adapter_config.gam_refresh_token is None or adapter_config.gam_refresh_token == ""
 
             # Cleanup
-            user = db_session.query(User).filter_by(tenant_id=tenant.tenant_id).first()
+            user = db_session.scalars(select(User).filter_by(tenant_id=tenant.tenant_id)).first()
             if user:
                 db_session.delete(user)
             db_session.delete(adapter_config)
@@ -229,7 +232,7 @@ class TestSelfServiceSignupFlow:
         finally:
             # Cleanup
             with get_db_session() as db_session:
-                tenant = db_session.query(Tenant).filter_by(subdomain="existingpub").first()
+                tenant = db_session.scalars(select(Tenant).filter_by(subdomain="existingpub")).first()
                 if tenant:
                     db_session.delete(tenant)
                     db_session.commit()
@@ -285,7 +288,7 @@ class TestSelfServiceSignupFlow:
         finally:
             # Cleanup
             with get_db_session() as db_session:
-                tenant = db_session.query(Tenant).filter_by(tenant_id="completiontest").first()
+                tenant = db_session.scalars(select(Tenant).filter_by(tenant_id="completiontest")).first()
                 if tenant:
                     db_session.delete(tenant)
                     db_session.commit()
@@ -342,10 +345,10 @@ class TestSelfServiceSignupFlow:
 
         # Cleanup
         with get_db_session() as db_session:
-            tenant = db_session.query(Tenant).filter_by(subdomain="sessiontest").first()
+            tenant = db_session.scalars(select(Tenant).filter_by(subdomain="sessiontest")).first()
             if tenant:
-                user = db_session.query(User).filter_by(tenant_id=tenant.tenant_id).first()
-                adapter_config = db_session.query(AdapterConfig).filter_by(tenant_id=tenant.tenant_id).first()
+                user = db_session.scalars(select(User).filter_by(tenant_id=tenant.tenant_id)).first()
+                adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant.tenant_id)).first()
                 if user:
                     db_session.delete(user)
                 if adapter_config:

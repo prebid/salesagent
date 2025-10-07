@@ -272,14 +272,14 @@ class TestAdcpServerV2_3(unittest.TestCase):
         self.assertIsNotNone(tenant)
 
         # Use the same database connection as setUpClass
-        from sqlalchemy import create_engine
+        from sqlalchemy import create_engine, select
         from sqlalchemy.orm import sessionmaker
 
         engine = create_engine(os.environ["DATABASE_URL"])
         Session = sessionmaker(bind=engine)
 
         with Session() as db_session:
-            products = db_session.query(ProductModel).filter_by(tenant_id=tenant["tenant_id"]).all()
+            products = db_session.scalars(select(ProductModel).filter_by(tenant_id=tenant["tenant_id"])).all()
 
             # Convert to list of dicts for consistency
             rows = []

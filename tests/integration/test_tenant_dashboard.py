@@ -7,6 +7,7 @@ field mappings are correct between the database schema and the application code.
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, Tenant
@@ -157,7 +158,7 @@ class TestTenantDashboard:
             db_session.commit()
 
             # Retrieve and check
-            tenant_obj = db_session.query(Tenant).filter_by(tenant_id="test_config").first()
+            tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id="test_config")).first()
 
             # Build config like the application does
             features_config = {

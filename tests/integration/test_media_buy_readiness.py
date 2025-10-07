@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import delete
 
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
@@ -22,7 +23,7 @@ def test_tenant(integration_db, request):
 
     # Cleanup
     with get_db_session() as session:
-        session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+        session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
         session.commit()
 
 
@@ -45,7 +46,9 @@ def test_principal(integration_db, test_tenant):
 
     # Cleanup
     with get_db_session() as session:
-        session.query(Principal).filter_by(tenant_id=test_tenant, principal_id=principal_id).delete()
+        session.execute(
+            delete(Principal).where(Principal.tenant_id == test_tenant, Principal.principal_id == principal_id)
+        )
         session.commit()
 
 
@@ -84,7 +87,7 @@ class TestMediaBuyReadinessService:
 
         # Cleanup
         with get_db_session() as session:
-            session.query(MediaBuy).filter_by(media_buy_id=media_buy_id).delete()
+            session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
     def test_needs_creatives_state(self, test_tenant, test_principal):
@@ -121,7 +124,7 @@ class TestMediaBuyReadinessService:
 
         # Cleanup
         with get_db_session() as session:
-            session.query(MediaBuy).filter_by(media_buy_id=media_buy_id).delete()
+            session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
     def test_needs_approval_state(self, test_tenant, test_principal):
@@ -180,9 +183,9 @@ class TestMediaBuyReadinessService:
 
         # Cleanup
         with get_db_session() as session:
-            session.query(CreativeAssignment).filter_by(media_buy_id=media_buy_id).delete()
-            session.query(Creative).filter_by(creative_id=creative_id).delete()
-            session.query(MediaBuy).filter_by(media_buy_id=media_buy_id).delete()
+            session.execute(delete(CreativeAssignment).where(CreativeAssignment.media_buy_id == media_buy_id))
+            session.execute(delete(Creative).where(Creative.creative_id == creative_id))
+            session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
     def test_scheduled_state(self, test_tenant, test_principal):
@@ -241,9 +244,9 @@ class TestMediaBuyReadinessService:
 
         # Cleanup
         with get_db_session() as session:
-            session.query(CreativeAssignment).filter_by(media_buy_id=media_buy_id).delete()
-            session.query(Creative).filter_by(creative_id=creative_id).delete()
-            session.query(MediaBuy).filter_by(media_buy_id=media_buy_id).delete()
+            session.execute(delete(CreativeAssignment).where(CreativeAssignment.media_buy_id == media_buy_id))
+            session.execute(delete(Creative).where(Creative.creative_id == creative_id))
+            session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
     def test_live_state(self, test_tenant, test_principal):
@@ -300,9 +303,9 @@ class TestMediaBuyReadinessService:
 
         # Cleanup
         with get_db_session() as session:
-            session.query(CreativeAssignment).filter_by(media_buy_id=media_buy_id).delete()
-            session.query(Creative).filter_by(creative_id=creative_id).delete()
-            session.query(MediaBuy).filter_by(media_buy_id=media_buy_id).delete()
+            session.execute(delete(CreativeAssignment).where(CreativeAssignment.media_buy_id == media_buy_id))
+            session.execute(delete(Creative).where(Creative.creative_id == creative_id))
+            session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
     def test_completed_state(self, test_tenant, test_principal):
@@ -335,7 +338,7 @@ class TestMediaBuyReadinessService:
 
         # Cleanup
         with get_db_session() as session:
-            session.query(MediaBuy).filter_by(media_buy_id=media_buy_id).delete()
+            session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
     def test_tenant_readiness_summary(self, test_tenant, test_principal):
@@ -385,5 +388,5 @@ class TestMediaBuyReadinessService:
 
         # Cleanup
         with get_db_session() as session:
-            session.query(MediaBuy).filter_by(tenant_id=test_tenant).delete()
+            session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == test_tenant))
             session.commit()

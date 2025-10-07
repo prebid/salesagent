@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
@@ -163,7 +164,7 @@ class TestCreativeLifecycleMCP:
 
             # Verify database persistence
             with get_db_session() as session:
-                db_creatives = session.query(DBCreative).filter_by(tenant_id=self.test_tenant_id).all()
+                db_creatives = session.scalars(select(DBCreative).filter_by(tenant_id=self.test_tenant_id)).all()
                 assert len(db_creatives) == 3
 
                 # Verify display creative
@@ -238,11 +239,9 @@ class TestCreativeLifecycleMCP:
 
             # Verify database update
             with get_db_session() as session:
-                updated_creative = (
-                    session.query(DBCreative)
-                    .filter_by(tenant_id=self.test_tenant_id, creative_id="creative_update_test")
-                    .first()
-                )
+                updated_creative = session.scalars(
+                    select(DBCreative).filter_by(tenant_id=self.test_tenant_id, creative_id="creative_update_test")
+                ).first()
 
                 assert updated_creative.name == "Updated Creative Name"
                 assert updated_creative.data.get("url") == "https://example.com/updated.jpg"
@@ -275,11 +274,11 @@ class TestCreativeLifecycleMCP:
 
             # Verify database assignments
             with get_db_session() as session:
-                assignments = (
-                    session.query(CreativeAssignment)
-                    .filter_by(tenant_id=self.test_tenant_id, media_buy_id=self.test_media_buy_id)
-                    .all()
-                )
+                assignments = session.scalars(
+                    select(CreativeAssignment).filter_by(
+                        tenant_id=self.test_tenant_id, media_buy_id=self.test_media_buy_id
+                    )
+                ).all()
 
                 assert len(assignments) == 2
                 package_ids = [a.package_id for a in assignments]
@@ -341,7 +340,7 @@ class TestCreativeLifecycleMCP:
 
             # Verify only valid creative was persisted
             with get_db_session() as session:
-                db_creatives = session.query(DBCreative).filter_by(tenant_id=self.test_tenant_id).all()
+                db_creatives = session.scalars(select(DBCreative).filter_by(tenant_id=self.test_tenant_id)).all()
                 creative_ids = [c.creative_id for c in db_creatives]
                 assert "valid_creative" in creative_ids
                 assert "invalid_creative" not in creative_ids
@@ -815,11 +814,9 @@ class TestCreativeLifecycleMCP:
 
             # Verify creative assignments were created in database
             with get_db_session() as session:
-                assignments = (
-                    session.query(CreativeAssignment)
-                    .filter_by(tenant_id=self.test_tenant_id, media_buy_id="test_buy_123")
-                    .all()
-                )
+                assignments = session.scalars(
+                    select(CreativeAssignment).filter_by(tenant_id=self.test_tenant_id, media_buy_id="test_buy_123")
+                ).all()
 
                 # Should have 3 assignments (one per creative)
                 assert len(assignments) == 3

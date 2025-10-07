@@ -12,6 +12,7 @@ errors to reach production.
 
 
 import pytest
+from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, MediaBuy, Principal, Tenant
@@ -76,8 +77,8 @@ class TestSchemaFieldMapping:
         tenant_id = "test_field_access"
         with get_db_session() as session:
             # Clean up any existing test data
-            session.query(ProductModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
 
             # Create test tenant
             tenant = create_tenant_with_timestamps(
@@ -144,8 +145,8 @@ class TestSchemaFieldMapping:
 
         with get_db_session() as session:
             # Create test data
-            session.query(ProductModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
 
             tenant = create_tenant_with_timestamps(
                 tenant_id=tenant_id, name="Conversion Safety Test", subdomain="conversion-test"
@@ -264,8 +265,8 @@ class TestSchemaFieldMapping:
 
         with get_db_session() as session:
             # Cleanup
-            session.query(ProductModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
 
             tenant = create_tenant_with_timestamps(
                 tenant_id=tenant_id, name="JSON Handling Test", subdomain="json-test"
@@ -316,8 +317,8 @@ class TestSchemaFieldMapping:
 
         with get_db_session() as session:
             # Cleanup
-            session.query(ProductModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
 
             tenant = create_tenant_with_timestamps(
                 tenant_id=tenant_id, name="Schema Validation Test", subdomain="schema-validation"

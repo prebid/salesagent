@@ -25,6 +25,8 @@ async def test_ai_provider_bug():
     # First, let's create a problematic product in the database to test with
     # This simulates what might be causing the issue on the external server
 
+    from sqlalchemy import select
+
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Product as ProductModel
 
@@ -89,9 +91,9 @@ async def test_ai_provider_bug():
     finally:
         # Clean up test product
         with get_db_session() as session:
-            test_product = (
-                session.query(ProductModel).filter_by(tenant_id="default", product_id="test_audio_bug").first()
-            )
+            test_product = session.scalars(
+                select(ProductModel).filter_by(tenant_id="default", product_id="test_audio_bug")
+            ).first()
             if test_product:
                 session.delete(test_product)
                 session.commit()

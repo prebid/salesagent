@@ -19,6 +19,7 @@ or with Docker Compose running for PostgreSQL.
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.schemas import Budget, Package, Targeting
@@ -97,9 +98,9 @@ class TestCreateMediaBuyV24Format:
             }
 
             # Cleanup
-            session.query(ModelProduct).filter_by(tenant_id="test_tenant_v24").delete()
-            session.query(ModelPrincipal).filter_by(tenant_id="test_tenant_v24").delete()
-            session.query(ModelTenant).filter_by(tenant_id="test_tenant_v24").delete()
+            session.execute(delete(ModelProduct).where(ModelProduct.tenant_id == "test_tenant_v24"))
+            session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == "test_tenant_v24"))
+            session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == "test_tenant_v24"))
             session.commit()
 
             # Clear global tenant context to avoid polluting other tests

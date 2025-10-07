@@ -3,6 +3,8 @@ import os
 import secrets
 from datetime import datetime
 
+from sqlalchemy import func, select
+
 from scripts.ops.migrate import run_migrations
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Principal, Product, Tenant
@@ -23,7 +25,8 @@ def init_db(exit_on_error=False):
 
     # Check if we need to create a default tenant
     with get_db_session() as db_session:
-        tenant_count = db_session.query(Tenant).count()
+        stmt = select(func.count()).select_from(Tenant)
+        tenant_count = db_session.scalar(stmt)
 
         if tenant_count == 0:
             # No tenants exist - create a default one for simple use case

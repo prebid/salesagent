@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastmcp.server.context import Context
+from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
@@ -38,7 +39,7 @@ class TestSignalsAgentWorkflow:
         }
 
         with get_db_session() as db_session:
-            tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             tenant.signals_agent_config = signals_config
             db_session.commit()
 

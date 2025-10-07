@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
+from sqlalchemy import delete, select
+
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Strategy as StrategyModel
 from src.core.database.models import StrategyState
@@ -83,7 +85,8 @@ class StrategyManager:
     def get_or_create_strategy(self, strategy_id: str, create_if_missing: bool = True) -> "StrategyContext":
         """Get existing strategy or create new one."""
         with get_db_session() as session:
-            strategy = session.query(StrategyModel).filter_by(strategy_id=strategy_id).first()
+            stmt = select(StrategyModel).filter_by(strategy_id=strategy_id)
+            strategy = session.scalars(stmt).first()
 
             if not strategy and create_if_missing:
                 strategy = self._create_default_strategy(strategy_id)
@@ -286,7 +289,8 @@ class SimulationContext:
     def _load_state(self):
         """Load persistent simulation state."""
         with get_db_session() as session:
-            states = session.query(StrategyState).filter_by(strategy_id=self.strategy_id).all()
+            stmt = select(StrategyState).filter_by(strategy_id=self.strategy_id)
+            states = session.scalars(stmt).all()
 
             for state in states:
                 if state.state_key == "current_time":
@@ -312,7 +316,8 @@ class SimulationContext:
 
     def _upsert_state(self, session, key: str, value: dict[str, Any]):
         """Insert or update strategy state."""
-        existing = session.query(StrategyState).filter_by(strategy_id=self.strategy_id, state_key=key).first()
+        stmt = select(StrategyState).filter_by(strategy_id=self.strategy_id, state_key=key)
+        existing = session.scalars(stmt).first()
 
         if existing:
             existing.state_value = value
@@ -419,7 +424,8 @@ class SimulationContext:
 
         # Clear persistent state
         with get_db_session() as session:
-            session.query(StrategyState).filter_by(strategy_id=self.strategy_id).delete()
+            stmt = delete(StrategyState).where(StrategyState.strategy_id == self.strategy_id)
+            session.execute(stmt)
             session.commit()
 
         return {
@@ -433,7 +439,8 @@ class SimulationContext:
         """Change simulation scenario."""
         # Update strategy config with new scenario
         with get_db_session() as session:
-            strategy = session.query(StrategyModel).filter_by(strategy_id=self.strategy_id).first()
+            stmt = select(StrategyModel).filter_by(strategy_id=self.strategy_id)
+            strategy = session.scalars(stmt).first()
             if strategy:
                 strategy.config["scenario"] = scenario
                 session.commit()

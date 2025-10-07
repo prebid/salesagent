@@ -6,6 +6,7 @@ Test complete lifecycle of workflows in the system.
 import uuid
 
 import pytest
+from sqlalchemy import delete, func, select
 
 from src.core.context_manager import ContextManager
 from src.core.database.database_session import get_db_session
@@ -27,15 +28,15 @@ class TestWorkflowLifecycle:
         # Clean up any existing test data before each test
         with get_db_session() as session:
             # First delete workflow steps through context relationship
-            contexts = session.query(Context).filter(Context.tenant_id == self.tenant_id).all()
+            contexts = session.scalars(select(Context).where(Context.tenant_id == self.tenant_id)).all()
             for ctx in contexts:
-                session.query(WorkflowStep).filter(WorkflowStep.context_id == ctx.context_id).delete()
+                session.execute(delete(WorkflowStep).where(WorkflowStep.context_id == ctx.context_id))
             # Then delete contexts
-            session.query(Context).filter(Context.tenant_id == self.tenant_id).delete()
+            session.execute(delete(Context).where(Context.tenant_id == self.tenant_id))
             # Delete principal
-            session.query(Principal).filter(Principal.tenant_id == self.tenant_id).delete()
+            session.execute(delete(Principal).where(Principal.tenant_id == self.tenant_id))
             # Delete tenant
-            session.query(Tenant).filter(Tenant.tenant_id == self.tenant_id).delete()
+            session.execute(delete(Tenant).where(Tenant.tenant_id == self.tenant_id))
             session.commit()
 
             # Create test tenant and principal for the tests
@@ -62,14 +63,18 @@ class TestWorkflowLifecycle:
         with get_db_session() as session:
             # Verify no workflow steps exist for this tenant
             # Need to check through context relationship
-            contexts = session.query(Context).filter(Context.tenant_id == self.tenant_id).all()
+            contexts = session.scalars(select(Context).where(Context.tenant_id == self.tenant_id)).all()
             steps_count = 0
             for ctx in contexts:
-                steps_count += session.query(WorkflowStep).filter(WorkflowStep.context_id == ctx.context_id).count()
+                steps_count += session.scalar(
+                    select(func.count()).select_from(WorkflowStep).where(WorkflowStep.context_id == ctx.context_id)
+                )
             assert steps_count == 0
 
             # No context needed for sync operations
-            context_count = session.query(Context).filter(Context.tenant_id == self.tenant_id).count()
+            context_count = session.scalar(
+                select(func.count()).select_from(Context).where(Context.tenant_id == self.tenant_id)
+            )
             assert context_count == 0
 
     def test_async_operation_creates_workflow(self):
@@ -93,7 +98,7 @@ class TestWorkflowLifecycle:
 
         # Verify step is persisted
         with get_db_session() as session:
-            persisted_step = session.query(WorkflowStep).filter_by(step_id=step.step_id).first()
+            persisted_step = session.scalars(select(WorkflowStep).filter_by(step_id=step.step_id)).first()
             assert persisted_step is not None
 
     def test_manual_approval_workflow(self):
@@ -137,7 +142,7 @@ class TestWorkflowLifecycle:
 
         # Verify approval
         with get_db_session() as session:
-            approved_step = session.query(WorkflowStep).filter_by(step_id=step1.step_id).first()
+            approved_step = session.scalars(select(WorkflowStep).filter_by(step_id=step1.step_id)).first()
             assert approved_step.status == "completed"
             assert approved_step.response_data["approved"] is True
             assert len(approved_step.comments) == 1
@@ -167,7 +172,7 @@ class TestWorkflowLifecycle:
 
         # Verify failure is recorded
         with get_db_session() as session:
-            failed_step = session.query(WorkflowStep).filter_by(step_id=step.step_id).first()
+            failed_step = session.scalars(select(WorkflowStep).filter_by(step_id=step.step_id)).first()
             assert failed_step.status == "failed"
             assert "not found" in failed_step.error_message
 
@@ -266,10 +271,10 @@ class TestWorkflowLifecycle:
 
         # Verify all are active
         with get_db_session() as session:
-            active_count = (
-                session.query(WorkflowStep)
-                .filter(WorkflowStep.context_id == context.context_id, WorkflowStep.status == "active")
-                .count()
+            active_count = session.scalar(
+                select(func.count())
+                .select_from(WorkflowStep)
+                .where(WorkflowStep.context_id == context.context_id, WorkflowStep.status == "active")
             )
             assert active_count == 3
 

@@ -54,6 +54,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
 
+from sqlalchemy import select
+
 from src.core.audit_logger import get_audit_logger
 from src.core.auth_utils import get_principal_from_token
 from src.core.config_loader import get_current_tenant
@@ -633,16 +635,13 @@ class AdCPRequestHandler(RequestHandler):
 
             # Query database for config
             with get_db_session() as db:
-                config = (
-                    db.query(DBPushNotificationConfig)
-                    .filter_by(
-                        id=config_id,
-                        tenant_id=tool_context.tenant_id,
-                        principal_id=tool_context.principal_id,
-                        is_active=True,
-                    )
-                    .first()
+                stmt = select(DBPushNotificationConfig).filter_by(
+                    id=config_id,
+                    tenant_id=tool_context.tenant_id,
+                    principal_id=tool_context.principal_id,
+                    is_active=True,
                 )
+                config = db.scalars(stmt).first()
 
                 if not config:
                     raise ServerError(NotFoundError(message=f"Push notification config not found: {config_id}"))
@@ -723,11 +722,10 @@ class AdCPRequestHandler(RequestHandler):
             # Create or update configuration
             with get_db_session() as db:
                 # Check if config exists
-                existing_config = (
-                    db.query(DBPushNotificationConfig)
-                    .filter_by(id=config_id, tenant_id=tool_context.tenant_id, principal_id=tool_context.principal_id)
-                    .first()
+                stmt = select(DBPushNotificationConfig).filter_by(
+                    id=config_id, tenant_id=tool_context.tenant_id, principal_id=tool_context.principal_id
                 )
+                existing_config = db.scalars(stmt).first()
 
                 if existing_config:
                     # Update existing config
@@ -797,11 +795,10 @@ class AdCPRequestHandler(RequestHandler):
 
             # Query database for all active configs
             with get_db_session() as db:
-                configs = (
-                    db.query(DBPushNotificationConfig)
-                    .filter_by(tenant_id=tool_context.tenant_id, principal_id=tool_context.principal_id, is_active=True)
-                    .all()
+                stmt = select(DBPushNotificationConfig).filter_by(
+                    tenant_id=tool_context.tenant_id, principal_id=tool_context.principal_id, is_active=True
                 )
+                configs = db.scalars(stmt).all()
 
                 # Convert to A2A format
                 configs_list = []
@@ -862,11 +859,10 @@ class AdCPRequestHandler(RequestHandler):
 
             # Query database and mark as inactive
             with get_db_session() as db:
-                config = (
-                    db.query(DBPushNotificationConfig)
-                    .filter_by(id=config_id, tenant_id=tool_context.tenant_id, principal_id=tool_context.principal_id)
-                    .first()
+                stmt = select(DBPushNotificationConfig).filter_by(
+                    id=config_id, tenant_id=tool_context.tenant_id, principal_id=tool_context.principal_id
                 )
+                config = db.scalars(stmt).first()
 
                 if not config:
                     raise ServerError(NotFoundError(message=f"Push notification config not found: {config_id}"))

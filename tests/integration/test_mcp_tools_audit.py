@@ -23,6 +23,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy as MediaBuyModel
@@ -47,13 +48,13 @@ class TestMCPToolsAudit:
         tenant_id = "audit_test_tenant"
         with get_db_session() as session:
             # Clean up any existing test data
-            session.query(MediaBuyModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(ProductModel).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(MediaBuyModel).where(MediaBuyModel.tenant_id == tenant_id))
+            session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
             # Clean up principals
             from src.core.database.models import Principal as PrincipalModel
 
-            session.query(PrincipalModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(PrincipalModel).where(PrincipalModel.tenant_id == tenant_id))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
 
             # Create test tenant
             tenant = create_tenant_with_timestamps(
@@ -66,13 +67,13 @@ class TestMCPToolsAudit:
 
         # Cleanup
         with get_db_session() as session:
-            session.query(MediaBuyModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(ProductModel).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(MediaBuyModel).where(MediaBuyModel.tenant_id == tenant_id))
+            session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
             # Clean up principals
             from src.core.database.models import Principal as PrincipalModel
 
-            session.query(PrincipalModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(PrincipalModel).where(PrincipalModel.tenant_id == tenant_id))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
             session.commit()
 
     def test_get_media_buy_delivery_roundtrip_safety(self, test_tenant_id):

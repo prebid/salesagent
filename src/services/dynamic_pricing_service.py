@@ -10,7 +10,7 @@ Uses historical GAM reporting data aggregated by country + creative format.
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import FormatPerformanceMetrics
@@ -111,7 +111,7 @@ class DynamicPricingService:
         normalized_sizes = [size.replace(" ", "").lower() for size in creative_sizes]
 
         # Query all metrics and filter with normalized comparison
-        query = self.db.query(FormatPerformanceMetrics).filter(
+        stmt = select(FormatPerformanceMetrics).where(
             and_(
                 FormatPerformanceMetrics.tenant_id == tenant_id,
                 FormatPerformanceMetrics.period_end >= cutoff_date,
@@ -120,9 +120,9 @@ class DynamicPricingService:
 
         # Filter by country if specified
         if country_code:
-            query = query.filter(FormatPerformanceMetrics.country_code == country_code)
+            stmt = stmt.where(FormatPerformanceMetrics.country_code == country_code)
 
-        all_metrics = query.all()
+        all_metrics = self.db.scalars(stmt).all()
 
         # Filter metrics by normalized creative_size matching
         metrics = [m for m in all_metrics if m.creative_size.replace(" ", "").lower() in normalized_sizes]

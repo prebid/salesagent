@@ -59,7 +59,8 @@ def get_db_session() -> Generator[Session, None, None]:
 
     Usage:
         with get_db_session() as session:
-            result = session.query(Model).filter(...).first()
+            stmt = select(Model).filter_by(...)
+            result = session.scalars(stmt).first()
             session.add(new_object)
             session.commit()  # Explicit commit needed
 

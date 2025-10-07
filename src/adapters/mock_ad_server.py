@@ -1062,9 +1062,12 @@ class MockAdServer(AdServerAdapter):
             @require_auth()
             @wraps(mock_product_config)
             def wrapped_view():
+                from sqlalchemy import select
+
                 with get_db_session() as session:
                     # Get product details
-                    product_obj = session.query(Product).filter_by(tenant_id=tenant_id, product_id=product_id).first()
+                    stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
+                    product_obj = session.scalars(stmt).first()
 
                     if not product_obj:
                         return "Product not found", 404

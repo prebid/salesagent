@@ -8,6 +8,7 @@ Focused integration tests using real database connections and minimal mocking.
 from datetime import datetime
 
 import pytest
+from sqlalchemy import delete, select
 
 from src.adapters.google_ad_manager import GUARANTEED_LINE_ITEM_TYPES, NON_GUARANTEED_LINE_ITEM_TYPES
 from src.core.database.database_session import get_db_session
@@ -101,8 +102,8 @@ class TestGAMProductConfiguration:
 
         # Cleanup
         with get_db_session() as db_session:
-            db_session.query(Product).filter_by(tenant_id=tenant_id).delete()
-            db_session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            db_session.execute(delete(Product).where(Product.tenant_id == tenant_id))
+            db_session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
             db_session.commit()
 
     def test_product_automation_config_parsing(self, test_tenant_data):
@@ -111,7 +112,9 @@ class TestGAMProductConfiguration:
 
         with get_db_session() as db_session:
             # Test automatic product
-            auto_product = db_session.query(Product).filter_by(tenant_id=tenant_id, product_id=auto_product_id).first()
+            auto_product = db_session.scalars(
+                select(Product).filter_by(tenant_id=tenant_id, product_id=auto_product_id)
+            ).first()
 
             assert auto_product is not None
             # JSONType automatically deserializes, no json.loads() needed
@@ -120,7 +123,9 @@ class TestGAMProductConfiguration:
             assert config["line_item_type"] == "NETWORK"
 
             # Test confirmation required product
-            conf_product = db_session.query(Product).filter_by(tenant_id=tenant_id, product_id=conf_product_id).first()
+            conf_product = db_session.scalars(
+                select(Product).filter_by(tenant_id=tenant_id, product_id=conf_product_id)
+            ).first()
 
             assert conf_product is not None
             # JSONType automatically deserializes, no json.loads() needed

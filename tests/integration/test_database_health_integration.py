@@ -12,7 +12,7 @@ to improve test coverage and catch real bugs.
 
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from src.core.database.database_session import get_db_session
 from src.core.database.health_check import check_database_health, print_health_report
@@ -169,8 +169,8 @@ class TestDatabaseHealthIntegration:
 
         # Verify we can query the data successfully (indicates schema is correct)
         with get_db_session() as session:
-            tenant_count = session.query(Tenant).count()
-            product_count = session.query(Product).count()
+            tenant_count = session.scalar(select(func.count()).select_from(Tenant))
+            product_count = session.scalar(select(func.count()).select_from(Product))
 
             assert tenant_count >= 1, "Should have at least one tenant"
             assert product_count >= 1, "Should have at least one product"

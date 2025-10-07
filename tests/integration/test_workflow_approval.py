@@ -6,6 +6,7 @@ Test workflow approval system for manual approvals.
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import delete, select
 
 from src.core.context_manager import ContextManager
 from src.core.database.database_session import get_db_session
@@ -31,11 +32,11 @@ class TestWorkflowApproval:
         with get_db_session() as db_session:
             # Clean up any existing test data
             # First delete workflow steps through context relationship
-            contexts = db_session.query(Context).filter(Context.tenant_id == tenant_id).all()
+            contexts = db_session.scalars(select(Context).where(Context.tenant_id == tenant_id)).all()
             for ctx in contexts:
-                db_session.query(WorkflowStep).filter(WorkflowStep.context_id == ctx.context_id).delete()
+                db_session.execute(delete(WorkflowStep).where(WorkflowStep.context_id == ctx.context_id))
             # Then delete contexts
-            db_session.query(Context).filter(Context.tenant_id == tenant_id).delete()
+            db_session.execute(delete(Context).where(Context.tenant_id == tenant_id))
             db_session.commit()
 
         # Create context for async workflow
@@ -65,11 +66,9 @@ class TestWorkflowApproval:
 
         # Verify object mapping was created
         with get_db_session() as db_session:
-            mapping = (
-                db_session.query(ObjectWorkflowMapping)
-                .filter_by(object_type="media_buy", object_id=media_buy_id)
-                .first()
-            )
+            mapping = db_session.scalars(
+                select(ObjectWorkflowMapping).filter_by(object_type="media_buy", object_id=media_buy_id)
+            ).first()
             assert mapping is not None
             assert mapping.action == "approve"
 
@@ -104,7 +103,7 @@ class TestWorkflowApproval:
 
         # Verify the update
         with get_db_session() as db_session:
-            updated_step = db_session.query(WorkflowStep).filter_by(step_id=step.step_id).first()
+            updated_step = db_session.scalars(select(WorkflowStep).filter_by(step_id=step.step_id)).first()
 
             assert updated_step.status == "completed"
             assert updated_step.response_data["approved"] is True
@@ -138,7 +137,7 @@ class TestWorkflowApproval:
 
         # Verify the rejection
         with get_db_session() as db_session:
-            updated_step = db_session.query(WorkflowStep).filter_by(step_id=step.step_id).first()
+            updated_step = db_session.scalars(select(WorkflowStep).filter_by(step_id=step.step_id)).first()
 
             assert updated_step.status == "failed"
             assert "Budget exceeds" in updated_step.error_message
@@ -150,9 +149,9 @@ class TestWorkflowApproval:
         with get_db_session() as db_session:
             # Clean up existing data
             # First delete workflow steps through context relationship
-            contexts = db_session.query(Context).filter(Context.tenant_id == tenant_id).all()
+            contexts = db_session.scalars(select(Context).where(Context.tenant_id == tenant_id)).all()
             for ctx in contexts:
-                db_session.query(WorkflowStep).filter(WorkflowStep.context_id == ctx.context_id).delete()
+                db_session.execute(delete(WorkflowStep).where(WorkflowStep.context_id == ctx.context_id))
             db_session.commit()
 
         # Create multiple workflow steps with different statuses
@@ -201,7 +200,7 @@ class TestWorkflowApproval:
 
         with get_db_session() as db_session:
             # Clean up
-            db_session.query(ObjectWorkflowMapping).filter(ObjectWorkflowMapping.object_id == media_buy_id).delete()
+            db_session.execute(delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.object_id == media_buy_id))
             db_session.commit()
 
         context = context_manager.create_context(tenant_id=tenant_id, principal_id="test_principal")

@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import String, and_, create_engine, func, or_, select
+from sqlalchemy import String, and_, create_engine, delete, func, or_, select
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.adapters.gam.client import GAMClientManager
@@ -192,29 +192,33 @@ class GAMInventoryService:
         stale_cutoff = sync_time - timedelta(seconds=1)
 
         # Don't mark ad units as STALE - they should remain ACTIVE
-        self.db.query(GAMInventory).filter(
-            and_(
-                GAMInventory.tenant_id == tenant_id,
-                GAMInventory.last_synced < stale_cutoff,
-                GAMInventory.inventory_type != "ad_unit",  # Keep ad units active
+        from sqlalchemy import update
+
+        stmt = (
+            update(GAMInventory)
+            .where(
+                and_(
+                    GAMInventory.tenant_id == tenant_id,
+                    GAMInventory.last_synced < stale_cutoff,
+                    GAMInventory.inventory_type != "ad_unit",  # Keep ad units active
+                )
             )
-        ).update({"status": "STALE"})
+            .values(status="STALE")
+        )
+        self.db.execute(stmt)
 
         self.db.commit()
 
     def _upsert_inventory_item(self, **kwargs):
         """Insert or update inventory item."""
-        existing = (
-            self.db.query(GAMInventory)
-            .filter(
-                and_(
-                    GAMInventory.tenant_id == kwargs["tenant_id"],
-                    GAMInventory.inventory_type == kwargs["inventory_type"],
-                    GAMInventory.inventory_id == kwargs["inventory_id"],
-                )
+        stmt = select(GAMInventory).where(
+            and_(
+                GAMInventory.tenant_id == kwargs["tenant_id"],
+                GAMInventory.inventory_type == kwargs["inventory_type"],
+                GAMInventory.inventory_id == kwargs["inventory_id"],
             )
-            .first()
         )
+        existing = self.db.scalars(stmt).first()
 
         if existing:
             # Update existing
@@ -236,17 +240,14 @@ class GAMInventoryService:
             Hierarchical tree structure
         """
         # Get all ad units
-        ad_units = (
-            self.db.query(GAMInventory)
-            .filter(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "ad_unit",
-                    GAMInventory.status != "STALE",
-                )
+        stmt = select(GAMInventory).where(
+            and_(
+                GAMInventory.tenant_id == tenant_id,
+                GAMInventory.inventory_type == "ad_unit",
+                GAMInventory.status != "STALE",
             )
-            .all()
         )
+        ad_units = self.db.scalars(stmt).all()
 
         # Build lookup maps
         unit_map = {}
@@ -275,9 +276,8 @@ class GAMInventoryService:
                 unit_map[parent_id]["children"].append(unit_map[unit.inventory_id])
 
         # Get last sync info from gam_inventory table
-        last_sync_result = (
-            self.db.query(func.max(GAMInventory.last_synced)).filter(GAMInventory.tenant_id == tenant_id).scalar()
-        )
+        stmt = select(func.max(GAMInventory.last_synced)).where(GAMInventory.tenant_id == tenant_id)
+        last_sync_result = self.db.scalar(stmt)
         last_sync = last_sync_result.isoformat() if last_sync_result else None
 
         return {
@@ -333,7 +333,8 @@ class GAMInventoryService:
                 or_(GAMInventory.name.ilike(f"%{query}%"), func.cast(GAMInventory.path, String).ilike(f"%{query}%"))
             )
 
-        results = self.db.query(GAMInventory).filter(and_(*filters)).all()
+        stmt = select(GAMInventory).where(and_(*filters))
+        results = self.db.scalars(stmt).all()
 
         # Filter by sizes if specified
         if sizes and inventory_type in (None, "ad_unit"):
@@ -390,40 +391,31 @@ class GAMInventoryService:
             Product inventory configuration
         """
         # Get product
-        product = (
-            self.db.query(Product)
-            .filter(and_(Product.tenant_id == tenant_id, Product.product_id == product_id))
-            .first()
-        )
+        stmt = select(Product).where(and_(Product.tenant_id == tenant_id, Product.product_id == product_id))
+        product = self.db.scalars(stmt).first()
 
         if not product:
             return None
 
         # Get mappings
-        mappings = (
-            self.db.query(ProductInventoryMapping)
-            .filter(
-                and_(ProductInventoryMapping.tenant_id == tenant_id, ProductInventoryMapping.product_id == product_id)
-            )
-            .all()
+        stmt = select(ProductInventoryMapping).where(
+            and_(ProductInventoryMapping.tenant_id == tenant_id, ProductInventoryMapping.product_id == product_id)
         )
+        mappings = self.db.scalars(stmt).all()
 
         # Get inventory details
         ad_units = []
         placements = []
 
         for mapping in mappings:
-            inventory = (
-                self.db.query(GAMInventory)
-                .filter(
-                    and_(
-                        GAMInventory.tenant_id == tenant_id,
-                        GAMInventory.inventory_type == mapping.inventory_type,
-                        GAMInventory.inventory_id == mapping.inventory_id,
-                    )
+            stmt = select(GAMInventory).where(
+                and_(
+                    GAMInventory.tenant_id == tenant_id,
+                    GAMInventory.inventory_type == mapping.inventory_type,
+                    GAMInventory.inventory_id == mapping.inventory_id,
                 )
-                .first()
             )
+            inventory = self.db.scalars(stmt).first()
 
             if inventory:
                 item = {
@@ -470,19 +462,17 @@ class GAMInventoryService:
         """
         try:
             # Verify product exists
-            product = (
-                self.db.query(Product)
-                .filter(and_(Product.tenant_id == tenant_id, Product.product_id == product_id))
-                .first()
-            )
+            stmt = select(Product).where(and_(Product.tenant_id == tenant_id, Product.product_id == product_id))
+            product = self.db.scalars(stmt).first()
 
             if not product:
                 return False
 
             # Delete existing mappings
-            self.db.query(ProductInventoryMapping).filter(
+            stmt = delete(ProductInventoryMapping).where(
                 and_(ProductInventoryMapping.tenant_id == tenant_id, ProductInventoryMapping.product_id == product_id)
-            ).delete()
+            )
+            self.db.execute(stmt)
 
             # Add new ad unit mappings
             for ad_unit_id in ad_unit_ids:
@@ -536,11 +526,8 @@ class GAMInventoryService:
             List of suggested inventory items with scores
         """
         # Get product
-        product = (
-            self.db.query(Product)
-            .filter(and_(Product.tenant_id == tenant_id, Product.product_id == product_id))
-            .first()
-        )
+        stmt = select(Product).where(and_(Product.tenant_id == tenant_id, Product.product_id == product_id))
+        product = self.db.scalars(stmt).first()
 
         if not product:
             return []
@@ -568,17 +555,14 @@ class GAMInventoryService:
         suggestions = []
 
         # Get active ad units
-        ad_units = (
-            self.db.query(GAMInventory)
-            .filter(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "ad_unit",
-                    GAMInventory.status == "ACTIVE",
-                )
+        stmt = select(GAMInventory).where(
+            and_(
+                GAMInventory.tenant_id == tenant_id,
+                GAMInventory.inventory_type == "ad_unit",
+                GAMInventory.status == "ACTIVE",
             )
-            .all()
         )
+        ad_units = self.db.scalars(stmt).all()
 
         for unit in ad_units:
             score = 0
@@ -638,31 +622,25 @@ class GAMInventoryService:
             Dictionary with all targeting data organized by type
         """
         # Get custom targeting keys
-        custom_keys = (
-            self.db.query(GAMInventory)
-            .filter(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "custom_targeting_key",
-                    GAMInventory.status != "STALE",
-                )
+        stmt = select(GAMInventory).where(
+            and_(
+                GAMInventory.tenant_id == tenant_id,
+                GAMInventory.inventory_type == "custom_targeting_key",
+                GAMInventory.status != "STALE",
             )
-            .all()
         )
+        custom_keys = self.db.scalars(stmt).all()
 
         # Get custom targeting values grouped by key
         custom_values = {}
-        all_values = (
-            self.db.query(GAMInventory)
-            .filter(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "custom_targeting_value",
-                    GAMInventory.status != "STALE",
-                )
+        stmt = select(GAMInventory).where(
+            and_(
+                GAMInventory.tenant_id == tenant_id,
+                GAMInventory.inventory_type == "custom_targeting_value",
+                GAMInventory.status != "STALE",
             )
-            .all()
         )
+        all_values = self.db.scalars(stmt).all()
 
         for value in all_values:
             key_id = value.inventory_metadata.get("custom_targeting_key_id")
@@ -680,35 +658,28 @@ class GAMInventoryService:
                 )
 
         # Get audience segments
-        audiences = (
-            self.db.query(GAMInventory)
-            .filter(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "audience_segment",
-                    GAMInventory.status != "STALE",
-                )
+        stmt = select(GAMInventory).where(
+            and_(
+                GAMInventory.tenant_id == tenant_id,
+                GAMInventory.inventory_type == "audience_segment",
+                GAMInventory.status != "STALE",
             )
-            .all()
         )
+        audiences = self.db.scalars(stmt).all()
 
         # Get labels
-        labels = (
-            self.db.query(GAMInventory)
-            .filter(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "label",
-                    GAMInventory.status != "STALE",
-                )
+        stmt = select(GAMInventory).where(
+            and_(
+                GAMInventory.tenant_id == tenant_id,
+                GAMInventory.inventory_type == "label",
+                GAMInventory.status != "STALE",
             )
-            .all()
         )
+        labels = self.db.scalars(stmt).all()
 
         # Get last sync info from gam_inventory table
-        last_sync_result = (
-            self.db.query(func.max(GAMInventory.last_synced)).filter(GAMInventory.tenant_id == tenant_id).scalar()
-        )
+        stmt = select(func.max(GAMInventory.last_synced)).where(GAMInventory.tenant_id == tenant_id)
+        last_sync_result = self.db.scalar(stmt)
         last_sync = last_sync_result.isoformat() if last_sync_result else None
 
         # Format response

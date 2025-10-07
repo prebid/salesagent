@@ -17,7 +17,7 @@ def test_workflow_architecture():
     console.print("=" * 60)
 
     # Import after setting up path
-    from sqlalchemy import create_engine
+    from sqlalchemy import create_engine, delete, select
     from sqlalchemy.orm import sessionmaker
 
     from src.core.context_manager import ContextManager
@@ -41,11 +41,11 @@ def test_workflow_architecture():
     with SessionLocal() as session:
         try:
             # Clean up any existing test data
-            session.query(ObjectWorkflowMapping).filter(
-                ObjectWorkflowMapping.object_id.in_([media_buy_id, creative_id])
-            ).delete()
-            session.query(WorkflowStep).filter(WorkflowStep.context_id.like("ctx_%")).delete()
-            session.query(Context).filter_by(tenant_id=tenant_id, principal_id=principal_id).delete()
+            session.execute(
+                delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.object_id.in_([media_buy_id, creative_id]))
+            )
+            session.execute(delete(WorkflowStep).where(WorkflowStep.context_id.like("ctx_%")))
+            session.execute(delete(Context).where(Context.tenant_id == tenant_id, Context.principal_id == principal_id))
             session.commit()
 
             console.print("\n[yellow]Test 1: Create context for async workflow[/yellow]")
@@ -152,7 +152,7 @@ def test_workflow_architecture():
 
             # Verify comment was added
             session.expire_all()
-            updated_step = session.query(WorkflowStep).filter_by(step_id=step2.step_id).first()
+            updated_step = session.scalars(select(WorkflowStep).filter_by(step_id=step2.step_id)).first()
             if updated_step and updated_step.comments:
                 console.print(f"  Comments: {len(updated_step.comments)}")
                 for comment in updated_step.comments:
@@ -180,7 +180,7 @@ def test_workflow_architecture():
                     console.print(f"    - {stat}: {count}")
 
             console.print("\n[yellow]Test 10: Verify simplified Context model[/yellow]")
-            ctx = session.query(Context).filter_by(context_id=context.context_id).first()
+            ctx = session.scalars(select(Context).filter_by(context_id=context.context_id)).first()
 
             # These fields should NOT exist
             assert not hasattr(ctx, "status"), "Context should not have status field"
@@ -199,15 +199,15 @@ def test_workflow_architecture():
             console.print("✓ Context model correctly simplified")
 
             console.print("\n[yellow]Test 11: Verify WorkflowStep has no started_at[/yellow]")
-            step = session.query(WorkflowStep).filter_by(step_id=step1.step_id).first()
+            step = session.scalars(select(WorkflowStep).filter_by(step_id=step1.step_id)).first()
             assert not hasattr(step, "started_at"), "WorkflowStep should not have started_at field"
             assert hasattr(step, "comments"), "WorkflowStep should have comments field"
             console.print("✓ WorkflowStep correctly updated (no started_at, has comments)")
 
             console.print("\n[yellow]Test 12: Verify ObjectWorkflowMapping works[/yellow]")
-            mappings = (
-                session.query(ObjectWorkflowMapping).filter_by(object_type="media_buy", object_id=media_buy_id).all()
-            )
+            mappings = session.scalars(
+                select(ObjectWorkflowMapping).filter_by(object_type="media_buy", object_id=media_buy_id)
+            ).all()
             console.print(f"✓ Found {len(mappings)} mappings for media_buy {media_buy_id}")
             for mapping in mappings:
                 console.print(f"  - Action: {mapping.action}, Step: {mapping.step_id}")

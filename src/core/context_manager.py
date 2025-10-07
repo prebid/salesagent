@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from rich.console import Console
+from sqlalchemy import select
 
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
@@ -76,7 +77,9 @@ class ContextManager(DatabaseManager):
         """
         session = self.session
         try:
-            context = session.query(Context).filter_by(context_id=context_id).first()
+            stmt = select(Context).filter_by(context_id=context_id)
+
+            context = session.scalars(stmt).first()
             if context:
                 # Detach from session
                 session.expunge(context)
@@ -116,7 +119,8 @@ class ContextManager(DatabaseManager):
             context_id: The context ID
         """
         try:
-            context = self.session.query(Context).filter_by(context_id=context_id).first()
+            stmt = select(Context).filter_by(context_id=context_id)
+            context = self.session.scalars(stmt).first()
             if context:
                 context.last_activity_at = datetime.now(UTC)
                 self.session.commit()
@@ -234,7 +238,9 @@ class ContextManager(DatabaseManager):
         """
         session = self.session
         try:
-            step = session.query(WorkflowStep).filter_by(step_id=step_id).first()
+            stmt = select(WorkflowStep).filter_by(step_id=step_id)
+
+            step = session.scalars(stmt).first()
             if step:
                 old_status = step.status  # Capture old status before changing
 
@@ -339,14 +345,14 @@ class ContextManager(DatabaseManager):
         """
         session = self.session
         try:
-            query = session.query(WorkflowStep).filter(WorkflowStep.status.in_(["pending", "requires_approval"]))
+            stmt = select(WorkflowStep).where(WorkflowStep.status.in_(["pending", "requires_approval"]))
 
             if owner:
-                query = query.filter(WorkflowStep.owner == owner)
+                stmt = stmt.where(WorkflowStep.owner == owner)
             if assigned_to:
-                query = query.filter(WorkflowStep.assigned_to == assigned_to)
+                stmt = stmt.where(WorkflowStep.assigned_to == assigned_to)
 
-            steps = query.all()
+            steps = session.scalars(stmt).all()
             # Detach all from session
             for step in steps:
                 session.expunge(step)
@@ -367,16 +373,18 @@ class ContextManager(DatabaseManager):
         session = self.session
         try:
             # Query object mappings to find all related steps
-            mappings = (
-                session.query(ObjectWorkflowMapping)
+            stmt = (
+                select(ObjectWorkflowMapping)
                 .filter_by(object_type=object_type, object_id=object_id)
                 .order_by(ObjectWorkflowMapping.created_at)
-                .all()
             )
+            mappings = session.scalars(stmt).all()
 
             lifecycle = []
             for mapping in mappings:
-                step = session.query(WorkflowStep).filter_by(step_id=mapping.step_id).first()
+                stmt = select(WorkflowStep).filter_by(step_id=mapping.step_id)
+
+                step = session.scalars(stmt).first()
                 if step:
                     lifecycle.append(
                         {
@@ -411,7 +419,9 @@ class ContextManager(DatabaseManager):
         """
         session = self.session
         try:
-            context = session.query(Context).filter_by(context_id=context_id).first()
+            stmt = select(Context).filter_by(context_id=context_id)
+
+            context = session.scalars(stmt).first()
             if context:
                 if not isinstance(context.conversation_history, list):
                     context.conversation_history = []
@@ -451,7 +461,8 @@ class ContextManager(DatabaseManager):
         """
         session = self.session
         try:
-            steps = session.query(WorkflowStep).filter_by(context_id=context_id).all()
+            stmt = select(WorkflowStep).filter_by(context_id=context_id)
+            steps = session.scalars(stmt).all()
 
             if not steps:
                 return {"status": "no_steps", "summary": "No workflow steps created"}
@@ -490,13 +501,13 @@ class ContextManager(DatabaseManager):
         """
         session = self.session
         try:
-            contexts = (
-                session.query(Context)
+            stmt = (
+                select(Context)
                 .filter_by(tenant_id=tenant_id, principal_id=principal_id)
                 .order_by(Context.last_activity_at.desc())
                 .limit(limit)
-                .all()
             )
+            contexts = session.scalars(stmt).all()
 
             # Detach all from session
             for context in contexts:
@@ -519,14 +530,16 @@ class ContextManager(DatabaseManager):
             from src.core.database.models import PushNotificationConfig
 
             # Get object mappings for this step
-            mappings = session.query(ObjectWorkflowMapping).filter_by(step_id=step.step_id).all()
+            stmt = select(ObjectWorkflowMapping).filter_by(step_id=step.step_id)
+            mappings = session.scalars(stmt).all()
 
             if not mappings:
                 console.print(f"[yellow]No object mappings found for step {step.step_id}[/yellow]")
                 return
 
             # Get context to find tenant_id
-            context = session.query(Context).filter_by(context_id=step.context_id).first()
+            stmt = select(Context).filter_by(context_id=step.context_id)
+            context = session.scalars(stmt).first()
             if not context:
                 console.print(f"[yellow]No context found for step {step.step_id}[/yellow]")
                 return
@@ -537,15 +550,12 @@ class ContextManager(DatabaseManager):
             # Find registered webhooks for this principal
             # NOTE: PushNotificationConfig doesn't have object_type/object_id columns
             # Those are in ObjectWorkflowMapping which we already have via 'mappings'
-            webhooks = (
-                session.query(PushNotificationConfig)
-                .filter_by(
-                    tenant_id=tenant_id,
-                    principal_id=principal_id,
-                    is_active=True,
-                )
-                .all()
+            stmt = select(PushNotificationConfig).filter_by(
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                is_active=True,
             )
+            webhooks = session.scalars(stmt).all()
 
             console.print(f"[cyan]🔍 Found {len(webhooks)} active webhook configs for principal {principal_id}[/cyan]")
 

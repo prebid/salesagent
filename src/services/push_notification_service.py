@@ -10,10 +10,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import and_
+from sqlalchemy import and_, select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, WorkflowStep
+from src.core.database.models import MediaBuy, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 
 logger = logging.getLogger(__name__)
@@ -64,11 +64,10 @@ class PushNotificationService:
                 f"[WEBHOOK DEBUG] Querying push_notification_configs with tenant_id={tenant_id}, principal_id={principal_id}"
             )
 
-            configs = (
-                db.query(DBPushNotificationConfig)
-                .filter_by(tenant_id=tenant_id, principal_id=principal_id, is_active=True)
-                .all()
+            stmt = select(DBPushNotificationConfig).filter_by(
+                tenant_id=tenant_id, principal_id=principal_id, is_active=True
             )
+            configs = db.scalars(stmt).all()
 
             # DEBUG: Log query results
             logger.info(f"[WEBHOOK DEBUG] Found {len(configs)} webhook configs")
@@ -139,7 +138,8 @@ class PushNotificationService:
             Dictionary with delivery results
         """
         with get_db_session() as db:
-            media_buy = db.query(MediaBuy).filter_by(media_buy_id=media_buy_id).first()
+            stmt = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
+            media_buy = db.scalars(stmt).first()
             if not media_buy:
                 logger.warning(f"Media buy not found: {media_buy_id}")
                 return {"sent": 0, "failed": 0, "configs": [], "errors": {"error": "Media buy not found"}}
@@ -259,7 +259,8 @@ class PushNotificationService:
         with get_db_session() as db:
             # Find the workflow step and associated media buy
             logger.info(f"[WEBHOOK DEBUG] 1️⃣ Querying for WorkflowStep with step_id={step_id}")
-            step = db.query(WorkflowStep).filter_by(step_id=step_id).first()
+            stmt = select(WorkflowStep).filter_by(step_id=step_id)
+            step = db.scalars(stmt).first()
             if not step:
                 logger.warning(f"[WEBHOOK DEBUG] ❌ EARLY RETURN: Workflow step not found: {step_id}")
                 return {"sent": 0, "failed": 0, "configs": [], "errors": {"error": "Workflow step not found"}}
@@ -268,11 +269,11 @@ class PushNotificationService:
             # Find associated media buy via object_workflow_mappings
             # Note: ObjectWorkflowMapping has step_id, not workflow_id
             # We need to find mappings for steps in this workflow (context_id)
-            from src.core.database.models import ObjectWorkflowMapping
 
             # Find all workflow steps for this context (workflow_id is actually context_id)
             logger.info(f"[WEBHOOK DEBUG] 2️⃣ Querying for WorkflowSteps with context_id={workflow_id}")
-            workflow_steps = db.query(WorkflowStep).filter(WorkflowStep.context_id == workflow_id).all()
+            stmt = select(WorkflowStep).where(WorkflowStep.context_id == workflow_id)
+            workflow_steps = db.scalars(stmt).all()
 
             if not workflow_steps:
                 logger.warning(f"[WEBHOOK DEBUG] ❌ EARLY RETURN: No workflow steps found for context {workflow_id}")
@@ -282,13 +283,10 @@ class PushNotificationService:
             # Find media buy mapping for any step in this workflow
             step_ids = [s.step_id for s in workflow_steps]
             logger.info(f"[WEBHOOK DEBUG] 3️⃣ Querying ObjectWorkflowMapping for step_ids={step_ids}")
-            mapping = (
-                db.query(ObjectWorkflowMapping)
-                .filter(
-                    and_(ObjectWorkflowMapping.step_id.in_(step_ids), ObjectWorkflowMapping.object_type == "media_buy")
-                )
-                .first()
+            stmt = select(ObjectWorkflowMapping).where(
+                and_(ObjectWorkflowMapping.step_id.in_(step_ids), ObjectWorkflowMapping.object_type == "media_buy")
             )
+            mapping = db.scalars(stmt).first()
 
             if not mapping:
                 logger.warning(f"[WEBHOOK DEBUG] ❌ EARLY RETURN: No media buy associated with workflow {workflow_id}")

@@ -174,11 +174,12 @@ import sys
 sys.path.insert(0, '/app')
 from src.core.database.models import Principal, Tenant
 from src.core.database.connection import get_db_session
+from sqlalchemy import select
 import secrets
 
 with get_db_session() as session:
     # Use the default tenant that already exists
-    tenant = session.query(Tenant).filter_by(tenant_id='default').first()
+    tenant = session.scalars(select(Tenant).filter_by(tenant_id='default')).first()
     if not tenant:
         # Create default tenant if it doesn't exist
         tenant = Tenant(
@@ -192,10 +193,10 @@ with get_db_session() as session:
         session.commit()
 
     # Check if test principal exists in default tenant
-    principal = session.query(Principal).filter_by(
+    principal = session.scalars(select(Principal).filter_by(
         tenant_id='default',
         name='E2E Test Advertiser'
-    ).first()
+    )).first()
 
     if not principal:
         principal = Principal(

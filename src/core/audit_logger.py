@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
+
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
 
@@ -136,7 +138,8 @@ class AuditLogger:
                     with get_db_session() as db_session:
                         from src.core.database.models import Tenant
 
-                        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+                        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+                        tenant = db_session.scalars(stmt).first()
                         if tenant:
                             tenant_name = tenant.name
                 except:
@@ -237,7 +240,8 @@ class AuditLogger:
                     with get_db_session() as db_session:
                         from src.core.database.models import Tenant
 
-                        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+                        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+                        tenant = db_session.scalars(stmt).first()
                         if tenant:
                             tenant_name = tenant.name
                 except:

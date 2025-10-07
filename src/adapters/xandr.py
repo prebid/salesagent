@@ -147,7 +147,10 @@ class XandrAdapter(AdServerAdapter):
             pass
 
             # Get tenant config for Slack webhooks
-            tenant = session.query(Tenant).filter_by(tenant_id=self.tenant_id).first()
+            from sqlalchemy import select
+
+            stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
+            tenant = session.scalars(stmt).first()
 
             if tenant and tenant.slack_webhook_url:
                 # Send Slack notification

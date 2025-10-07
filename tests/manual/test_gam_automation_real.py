@@ -30,6 +30,8 @@ from typing import Any
 # Add project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+from sqlalchemy import delete
+
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
@@ -65,7 +67,7 @@ class GAMAutomationTester:
 
         with get_db_session() as db_session:
             # Remove any existing test products
-            db_session.query(Product).filter_by(tenant_id=self.test_tenant_id).delete()
+            db_session.execute(delete(Product).where(Product.tenant_id == self.test_tenant_id))
 
             # Automatic activation product (NETWORK type)
             product_auto = Product(
@@ -252,7 +254,7 @@ class GAMAutomationTester:
         """Remove test products from database."""
         print("🧹 Cleaning up test products...")
         with get_db_session() as db_session:
-            db_session.query(Product).filter_by(tenant_id=self.test_tenant_id).delete()
+            db_session.execute(delete(Product).where(Product.tenant_id == self.test_tenant_id))
             db_session.commit()
         print("✅ Test products cleaned up")
 

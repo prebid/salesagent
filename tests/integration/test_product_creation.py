@@ -1,6 +1,7 @@
 """Integration tests for product creation via UI and API."""
 
 import pytest
+from sqlalchemy import delete, select
 
 from src.admin.app import create_app
 
@@ -31,11 +32,11 @@ def test_tenant(integration_db):
         try:
             from src.core.database.models import CreativeFormat
 
-            session.query(Product).filter(Product.tenant_id == "test_product_tenant").delete()
-            session.query(Tenant).filter(Tenant.tenant_id == "test_product_tenant").delete()
-            session.query(CreativeFormat).filter(
-                CreativeFormat.format_id.in_(["display_300x250", "display_728x90"])
-            ).delete()
+            session.execute(delete(Product).where(Product.tenant_id == "test_product_tenant"))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == "test_product_tenant"))
+            session.execute(
+                delete(CreativeFormat).where(CreativeFormat.format_id.in_(["display_300x250", "display_728x90"]))
+            )
             session.commit()
         except Exception:
             session.rollback()  # Ignore errors if tables don't exist yet
@@ -86,11 +87,11 @@ def test_tenant(integration_db):
         yield tenant
 
         # Cleanup
-        session.query(Product).filter(Product.tenant_id == "test_product_tenant").delete()
-        session.query(Tenant).filter(Tenant.tenant_id == "test_product_tenant").delete()
-        session.query(CreativeFormat).filter(
-            CreativeFormat.format_id.in_(["display_300x250", "display_728x90"])
-        ).delete()
+        session.execute(delete(Product).where(Product.tenant_id == "test_product_tenant"))
+        session.execute(delete(Tenant).where(Tenant.tenant_id == "test_product_tenant"))
+        session.execute(
+            delete(CreativeFormat).where(CreativeFormat.format_id.in_(["display_300x250", "display_728x90"]))
+        )
         session.commit()
 
 
@@ -160,9 +161,9 @@ def test_add_product_json_encoding(client, test_tenant, integration_db):
 
     # Verify product was created correctly in database
     with get_db_session() as session:
-        product = (
-            session.query(Product).filter_by(tenant_id="test_product_tenant", product_id="test_product_json").first()
-        )
+        product = session.scalars(
+            select(Product).filter_by(tenant_id="test_product_tenant", product_id="test_product_json")
+        ).first()
 
         assert product is not None
         assert product.name == "Test Product JSON"
@@ -200,7 +201,7 @@ def test_add_product_empty_json_fields(client, test_tenant, integration_db):
 
     with get_db_session() as session:
         # Check if user already exists
-        existing = session.query(User).filter_by(email="test@example.com").first()
+        existing = session.scalars(select(User).filter_by(email="test@example.com")).first()
         if not existing:
             user = User(
                 user_id=str(uuid.uuid4()),
@@ -247,9 +248,9 @@ def test_add_product_empty_json_fields(client, test_tenant, integration_db):
 
     # Verify empty arrays/objects are stored correctly
     with get_db_session() as session:
-        product = (
-            session.query(Product).filter_by(tenant_id="test_product_tenant", product_id="test_product_empty").first()
-        )
+        product = session.scalars(
+            select(Product).filter_by(tenant_id="test_product_tenant", product_id="test_product_empty")
+        ).first()
 
         # Product should be created (may fail if form validation rejected it)
         if product is not None:
@@ -317,7 +318,7 @@ def test_list_products_json_parsing(client, test_tenant, integration_db):
 
     with get_db_session() as session:
         # Check if user already exists
-        existing = session.query(User).filter_by(email="test@example.com", tenant_id=tenant_id).first()
+        existing = session.scalars(select(User).filter_by(email="test@example.com", tenant_id=tenant_id)).first()
         if not existing:
             user = User(
                 user_id=str(uuid.uuid4()),

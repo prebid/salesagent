@@ -394,6 +394,8 @@ class GoogleAdManager(AdServerAdapter):
     ) -> CreateMediaBuyResponse:
         """Creates a new Order and associated LineItems in Google Ad Manager."""
         # Get products to access implementation_config
+        from sqlalchemy import select
+
         from src.core.database.database_session import get_db_session
         from src.core.database.models import Product
 
@@ -401,13 +403,10 @@ class GoogleAdManager(AdServerAdapter):
         products_map = {}
         with get_db_session() as db_session:
             for package in packages:
-                product = (
-                    db_session.query(Product)
-                    .filter_by(
-                        tenant_id=self.tenant_id, product_id=package.package_id  # package_id is actually product_id
-                    )
-                    .first()
+                stmt = select(Product).filter_by(
+                    tenant_id=self.tenant_id, product_id=package.package_id  # package_id is actually product_id
                 )
+                product = db_session.scalars(stmt).first()
                 if product:
                     products_map[package.package_id] = {
                         "product_id": product.product_id,
@@ -1826,14 +1825,16 @@ class GoogleAdManager(AdServerAdapter):
         # Second try database lookup (only if not in dry-run mode to avoid mocking issues)
         if not self.dry_run:
             try:
+                from sqlalchemy import select
+
                 from src.core.database.database_session import get_db_session
                 from src.core.database.models import CreativeFormat
 
                 with get_db_session() as session:
                     # First try tenant-specific format, then standard/foundational
-                    format_record = (
-                        session.query(CreativeFormat)
-                        .filter(
+                    stmt = (
+                        select(CreativeFormat)
+                        .where(
                             CreativeFormat.format_id == format_id, CreativeFormat.tenant_id.in_([self.tenant_id, None])
                         )
                         .order_by(
@@ -1842,8 +1843,8 @@ class GoogleAdManager(AdServerAdapter):
                             CreativeFormat.is_standard.desc(),
                             CreativeFormat.is_foundational.desc(),
                         )
-                        .first()
                     )
+                    format_record = session.scalars(stmt).first()
 
                     if format_record and format_record.width and format_record.height:
                         self.log(
@@ -2446,17 +2447,16 @@ class GoogleAdManager(AdServerAdapter):
         try:
             from datetime import datetime
 
+            from sqlalchemy import select
+
             from src.core.database.database_session import get_db_session
             from src.core.database.models import WorkflowStep
 
             with get_db_session() as db_session:
-                workflow_step = (
-                    db_session.query(WorkflowStep)
-                    .filter_by(
-                        tenant_id=self.tenant_id, workflow_id=f"approval_{media_buy_id}", step_type="order_approval"
-                    )
-                    .first()
+                stmt = select(WorkflowStep).filter_by(
+                    tenant_id=self.tenant_id, workflow_id=f"approval_{media_buy_id}", step_type="order_approval"
                 )
+                workflow_step = db_session.scalars(stmt).first()
 
                 if workflow_step:
                     workflow_step.status = new_status
@@ -2767,16 +2767,20 @@ class GoogleAdManager(AdServerAdapter):
         @app.route("/adapters/gam/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
         def gam_product_config(tenant_id, product_id):
             # Get tenant and product
+            from sqlalchemy import select
+
             from src.core.database.database_session import get_db_session
             from src.core.database.models import AdapterConfig, Product, Tenant
 
             with get_db_session() as db_session:
-                tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+                stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+                tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash("Tenant not found", "error")
                     return redirect(url_for("tenants"))
 
-                product = db_session.query(Product).filter_by(tenant_id=tenant_id, product_id=product_id).first()
+                stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
+                product = db_session.scalars(stmt).first()
 
             if not product:
                 flash("Product not found", "error")
@@ -2788,11 +2792,8 @@ class GoogleAdManager(AdServerAdapter):
 
             # Get network code from adapter config
             with get_db_session() as db_session:
-                adapter_config = (
-                    db_session.query(AdapterConfig)
-                    .filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-                    .first()
-                )
+                stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
+                adapter_config = db_session.scalars(stmt).first()
                 network_code = adapter_config.gam_network_code if adapter_config else "XXXXX"
 
             if request.method == "POST":
@@ -2899,9 +2900,8 @@ class GoogleAdManager(AdServerAdapter):
                     if validation_result[0]:
                         # Save to database
                         with get_db_session() as db_session:
-                            product = (
-                                db_session.query(Product).filter_by(tenant_id=tenant_id, product_id=product_id).first()
-                            )
+                            stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
+                            product = db_session.scalars(stmt).first()
                             if product:
                                 product.implementation_config = json.dumps(config)
                                 db_session.commit()
@@ -2958,7 +2958,7 @@ class GoogleAdManager(AdServerAdapter):
         """
         try:
             # Get inventory from database cache instead of fetching from GAM
-            from sqlalchemy import and_, create_engine
+            from sqlalchemy import and_, create_engine, func, select
             from sqlalchemy.orm import sessionmaker
 
             from src.core.database.db_config import DatabaseConfig
@@ -2970,7 +2970,9 @@ class GoogleAdManager(AdServerAdapter):
 
             with Session() as session:
                 # Check if inventory has been synced
-                inventory_count = session.query(GAMInventory).filter(GAMInventory.tenant_id == self.tenant_id).count()
+
+                stmt = select(func.count()).select_from(GAMInventory).where(GAMInventory.tenant_id == self.tenant_id)
+                inventory_count = session.scalar(stmt)
 
                 if inventory_count == 0:
                     # No inventory synced yet
@@ -2985,29 +2987,23 @@ class GoogleAdManager(AdServerAdapter):
 
                 # Get custom targeting keys from database
                 logger.debug(f"Fetching inventory for tenant_id={self.tenant_id}")
-                custom_keys = (
-                    session.query(GAMInventory)
-                    .filter(
-                        and_(
-                            GAMInventory.tenant_id == self.tenant_id,
-                            GAMInventory.inventory_type == "custom_targeting_key",
-                        )
+                stmt = select(GAMInventory).where(
+                    and_(
+                        GAMInventory.tenant_id == self.tenant_id,
+                        GAMInventory.inventory_type == "custom_targeting_key",
                     )
-                    .all()
                 )
+                custom_keys = session.scalars(stmt).all()
                 logger.debug(f"Found {len(custom_keys)} custom targeting keys")
 
                 # Get custom targeting values from database
-                custom_values = (
-                    session.query(GAMInventory)
-                    .filter(
-                        and_(
-                            GAMInventory.tenant_id == self.tenant_id,
-                            GAMInventory.inventory_type == "custom_targeting_value",
-                        )
+                stmt = select(GAMInventory).where(
+                    and_(
+                        GAMInventory.tenant_id == self.tenant_id,
+                        GAMInventory.inventory_type == "custom_targeting_value",
                     )
-                    .all()
                 )
+                custom_values = session.scalars(stmt).all()
 
                 # Group values by key
                 values_by_key = {}
@@ -3045,12 +3041,12 @@ class GoogleAdManager(AdServerAdapter):
                 logger.debug(f"Formatted {len(key_values)} key-value pairs for wizard")
 
                 # Get ad units for placements
-                ad_units = (
-                    session.query(GAMInventory)
-                    .filter(and_(GAMInventory.tenant_id == self.tenant_id, GAMInventory.inventory_type == "ad_unit"))
+                stmt = (
+                    select(GAMInventory)
+                    .where(and_(GAMInventory.tenant_id == self.tenant_id, GAMInventory.inventory_type == "ad_unit"))
                     .limit(20)
-                    .all()
                 )
+                ad_units = session.scalars(stmt).all()
 
                 placements = []
                 for unit in ad_units:
@@ -3065,16 +3061,16 @@ class GoogleAdManager(AdServerAdapter):
                     )
 
                 # Get audience segments if available
-                audience_segments = (
-                    session.query(GAMInventory)
-                    .filter(
+                stmt = (
+                    select(GAMInventory)
+                    .where(
                         and_(
                             GAMInventory.tenant_id == self.tenant_id, GAMInventory.inventory_type == "audience_segment"
                         )
                     )
                     .limit(20)
-                    .all()
                 )
+                audience_segments = session.scalars(stmt).all()
 
                 audiences = []
                 for segment in audience_segments:
@@ -3089,12 +3085,12 @@ class GoogleAdManager(AdServerAdapter):
                     )
 
                 # Get last sync time
-                last_sync = (
-                    session.query(GAMInventory.last_synced)
-                    .filter(GAMInventory.tenant_id == self.tenant_id)
-                    .OrderBy(GAMInventory.last_synced.desc())
-                    .first()
+                stmt = (
+                    select(GAMInventory.last_synced)
+                    .where(GAMInventory.tenant_id == self.tenant_id)
+                    .order_by(GAMInventory.last_synced.desc())
                 )
+                last_sync = session.execute(stmt).first()
 
                 last_sync_time = last_sync[0].isoformat() if last_sync else None
 

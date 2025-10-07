@@ -22,6 +22,7 @@ from contextlib import nullcontext
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ProductModel
@@ -40,8 +41,8 @@ class TestMCPToolRoundtripValidation:
         tenant_id = "roundtrip_test_tenant"
         with get_db_session() as session:
             # Clean up any existing test data
-            session.query(ProductModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
 
             # Create test tenant
             tenant = create_tenant_with_timestamps(
@@ -54,8 +55,8 @@ class TestMCPToolRoundtripValidation:
 
         # Cleanup
         with get_db_session() as session:
-            session.query(ProductModel).filter_by(tenant_id=tenant_id).delete()
-            session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
+            session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
+            session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
             session.commit()
 
     @pytest.fixture

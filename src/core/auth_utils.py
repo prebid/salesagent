@@ -2,6 +2,7 @@
 
 from fastmcp.server import Context
 from rich.console import Console
+from sqlalchemy import select
 
 from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import execute_with_retry
@@ -27,12 +28,14 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
     def _lookup_principal(session):
         if tenant_id:
             # If tenant_id specified, ONLY look in that tenant
-            principal = session.query(Principal).filter_by(access_token=token, tenant_id=tenant_id).first()
+            stmt = select(Principal).filter_by(access_token=token, tenant_id=tenant_id)
+            principal = session.scalars(stmt).first()
             if principal:
                 return principal.principal_id
 
             # Also check if it's the admin token for this specific tenant
-            tenant = session.query(Tenant).filter_by(tenant_id=tenant_id, is_active=True).first()
+            stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
+            tenant = session.scalars(stmt).first()
             if tenant and token == tenant.admin_token:
                 # Set tenant context for admin token
                 tenant_dict = {
@@ -45,10 +48,12 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
                 return f"admin_{tenant.tenant_id}"
         else:
             # No tenant specified - search globally
-            principal = session.query(Principal).filter_by(access_token=token).first()
+            stmt = select(Principal).filter_by(access_token=token)
+            principal = session.scalars(stmt).first()
             if principal:
                 # Found principal - set tenant context
-                tenant = session.query(Tenant).filter_by(tenant_id=principal.tenant_id, is_active=True).first()
+                stmt = select(Tenant).filter_by(tenant_id=principal.tenant_id, is_active=True)
+                tenant = session.scalars(stmt).first()
                 if tenant:
                     tenant_dict = {
                         "tenant_id": tenant.tenant_id,
@@ -132,7 +137,8 @@ def get_principal_object(principal_id: str) -> Principal | None:
         from src.core.schemas import Principal as PrincipalSchema
 
         # Query the database for the principal
-        db_principal = session.query(Principal).filter_by(principal_id=principal_id).first()
+        stmt = select(Principal).filter_by(principal_id=principal_id)
+        db_principal = session.scalars(stmt).first()
 
         if db_principal:
             # Convert to Pydantic model

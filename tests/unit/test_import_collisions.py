@@ -93,11 +93,11 @@ def test_models_use_correct_imports():
     with open(main_file) as f:
         content = f.read()
 
-    # Check for correct usage patterns
+    # Check for correct usage patterns (SQLAlchemy 2.0 style)
     incorrect_patterns = [
-        "session.query(Product)",  # Should be ModelProduct
-        "session.query(Principal)",  # Should be ModelPrincipal
-        "session.query(HumanTask)",  # Should be ModelHumanTask
+        "select(Product)",  # Should be ModelProduct
+        "select(Principal)",  # Should be ModelPrincipal
+        "select(HumanTask)",  # Should be ModelHumanTask
     ]
 
     issues = []
@@ -105,7 +105,7 @@ def test_models_use_correct_imports():
         if pattern in content:
             issues.append(f"Found incorrect pattern: {pattern}")
 
-    assert len(issues) == 0, "Incorrect query patterns found:\n" + "\n".join(issues)
+    assert len(issues) == 0, "Incorrect select() patterns found:\n" + "\n".join(issues)
 
 
 def test_wildcard_imports_documented():

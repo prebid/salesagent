@@ -5,6 +5,8 @@ import os
 from contextvars import ContextVar
 from typing import Any
 
+from sqlalchemy import select
+
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 
@@ -45,12 +47,14 @@ def get_default_tenant() -> dict[str, Any] | None:
     try:
         with get_db_session() as db_session:
             # Get first active tenant or specific default
-            tenant = (
-                db_session.query(Tenant)
-                .filter_by(is_active=True)
-                .order_by(db_session.query(Tenant).filter_by(tenant_id="default").exists().desc(), Tenant.created_at)
-                .first()
-            )
+            # Try to get 'default' tenant first, fall back to first active tenant
+            stmt = select(Tenant).filter_by(tenant_id="default", is_active=True)
+            tenant = db_session.scalars(stmt).first()
+
+            if not tenant:
+                # Fall back to first active tenant by creation date
+                stmt = select(Tenant).filter_by(is_active=True).order_by(Tenant.created_at)
+                tenant = db_session.scalars(stmt).first()
 
             if tenant:
                 return {
@@ -150,7 +154,8 @@ def get_tenant_by_subdomain(subdomain: str) -> dict[str, Any] | None:
     """
     try:
         with get_db_session() as db_session:
-            tenant = db_session.query(Tenant).filter_by(subdomain=subdomain, is_active=True).first()
+            stmt = select(Tenant).filter_by(subdomain=subdomain, is_active=True)
+            tenant = db_session.scalars(stmt).first()
 
             if tenant:
                 return {
@@ -184,7 +189,8 @@ def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
     """Get tenant by virtual host."""
     try:
         with get_db_session() as db_session:
-            tenant = db_session.query(Tenant).filter_by(virtual_host=virtual_host, is_active=True).first()
+            stmt = select(Tenant).filter_by(virtual_host=virtual_host, is_active=True)
+            tenant = db_session.scalars(stmt).first()
 
             if tenant:
                 return {

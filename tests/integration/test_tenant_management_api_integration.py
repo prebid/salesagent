@@ -4,6 +4,7 @@
 
 import pytest
 from flask import Flask
+from sqlalchemy import delete
 
 from src.admin.tenant_management_api import tenant_management_api
 from src.core.database.models import Tenant
@@ -68,7 +69,7 @@ def test_tenant(integration_db):
 
     # Cleanup
     with get_db_session() as session:
-        session.query(Tenant).filter_by(tenant_id="test_tenant").delete()
+        session.execute(delete(Tenant).where(Tenant.tenant_id == "test_tenant"))
         session.commit()
 
 

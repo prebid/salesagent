@@ -141,13 +141,16 @@ class GAMWorkflowManager:
         step_id = f"c{uuid.uuid4().hex[:5]}"  # 6 chars total
 
         # Use naming template from adapter config, or fallback to default
+        from sqlalchemy import select
+
         from src.adapters.gam.utils.naming import apply_naming_template, build_order_name_context
         from src.core.database.database_session import get_db_session
         from src.core.database.models import AdapterConfig
 
         order_name_template = "{campaign_name|promoted_offering} - {date_range}"  # Default
         with get_db_session() as db_session:
-            adapter_config = db_session.query(AdapterConfig).filter_by(tenant_id=self.tenant_id).first()
+            stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
+            adapter_config = db_session.scalars(stmt).first()
             if adapter_config and adapter_config.gam_order_name_template:
                 order_name_template = adapter_config.gam_order_name_template
 

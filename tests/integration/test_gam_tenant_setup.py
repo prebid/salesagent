@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import select
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
@@ -65,13 +66,13 @@ class TestGAMTenantSetup:
         from src.core.database.database_session import get_db_session
 
         with get_db_session() as session:
-            tenant = session.query(Tenant).filter_by(tenant_id=args.tenant_id).first()
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=args.tenant_id)).first()
             assert tenant is not None
             assert tenant.name == "Test GAM Publisher"
             assert tenant.ad_server == "google_ad_manager"
 
             # Verify adapter config allows null network code initially
-            adapter_config = session.query(AdapterConfig).filter_by(tenant_id=args.tenant_id).first()
+            adapter_config = session.scalars(select(AdapterConfig).filter_by(tenant_id=args.tenant_id)).first()
             assert adapter_config is not None
             assert adapter_config.gam_network_code is None  # network_code should be null initially
             assert adapter_config.gam_refresh_token == "test_refresh_token_123"  # refresh_token should be stored
@@ -108,7 +109,7 @@ class TestGAMTenantSetup:
         from src.core.database.database_session import get_db_session
 
         with get_db_session() as session:
-            adapter_config = session.query(AdapterConfig).filter_by(tenant_id=args.tenant_id).first()
+            adapter_config = session.scalars(select(AdapterConfig).filter_by(tenant_id=args.tenant_id)).first()
             assert adapter_config is not None
             assert adapter_config.gam_network_code == "123456789"
 

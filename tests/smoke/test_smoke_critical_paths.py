@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 
 class TestServerStartup:
@@ -306,7 +307,7 @@ class TestCriticalBusinessLogic:
             session.commit()
 
             # Verify we can retrieve it
-            retrieved = session.query(ModelPrincipal).filter_by(principal_id="smoke_test_principal").first()
+            retrieved = session.scalars(select(ModelPrincipal).filter_by(principal_id="smoke_test_principal")).first()
 
             assert retrieved is not None
             assert retrieved.name == "Smoke Test Principal"
@@ -339,7 +340,7 @@ class TestCriticalBusinessLogic:
             session.commit()
 
             # Verify we can retrieve it
-            retrieved = session.query(MediaBuy).filter_by(media_buy_id=test_buy.media_buy_id).first()
+            retrieved = session.scalars(select(MediaBuy).filter_by(media_buy_id=test_buy.media_buy_id)).first()
 
             assert retrieved is not None
             assert retrieved.order_name == "Smoke Test Order"

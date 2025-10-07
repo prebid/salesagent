@@ -17,6 +17,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.adapters.gam.client import GAMClientManager
@@ -287,7 +288,8 @@ class GAMSyncManager:
         Returns:
             Sync job status information or None if not found
         """
-        sync_job = db_session.query(SyncJob).filter_by(sync_id=sync_id, tenant_id=self.tenant_id).first()
+        stmt = select(SyncJob).filter_by(sync_id=sync_id, tenant_id=self.tenant_id)
+        sync_job = db_session.scalars(stmt).first()
 
         if not sync_job:
             return None
@@ -331,16 +333,20 @@ class GAMSyncManager:
         Returns:
             Sync history with pagination info
         """
-        query = db_session.query(SyncJob).filter_by(tenant_id=self.tenant_id)
+        stmt = select(SyncJob).filter_by(tenant_id=self.tenant_id)
 
         if status_filter:
-            query = query.filter_by(status=status_filter)
+            stmt = stmt.filter_by(status=status_filter)
 
         # Get total count
-        total = query.count()
+        count_stmt = select(func.count()).select_from(SyncJob).where(SyncJob.tenant_id == self.tenant_id)
+        if status_filter:
+            count_stmt = count_stmt.where(SyncJob.status == status_filter)
+        total = db_session.scalar(count_stmt)
 
         # Get results
-        sync_jobs = query.order_by(SyncJob.started_at.desc()).limit(limit).offset(offset).all()
+        stmt = stmt.order_by(SyncJob.started_at.desc()).limit(limit).offset(offset)
+        sync_jobs = db_session.scalars(stmt).all()
 
         results = []
         for job in sync_jobs:
@@ -384,16 +390,13 @@ class GAMSyncManager:
         """
         cutoff_time = datetime.now(UTC) - timedelta(hours=max_age_hours)
 
-        recent_sync = (
-            db_session.query(SyncJob)
-            .filter(
-                SyncJob.tenant_id == self.tenant_id,
-                SyncJob.sync_type == sync_type,
-                SyncJob.status == "completed",
-                SyncJob.completed_at >= cutoff_time,
-            )
-            .first()
+        stmt = select(SyncJob).where(
+            SyncJob.tenant_id == self.tenant_id,
+            SyncJob.sync_type == sync_type,
+            SyncJob.status == "completed",
+            SyncJob.completed_at >= cutoff_time,
         )
+        recent_sync = db_session.scalars(stmt).first()
 
         return recent_sync is None
 
@@ -409,16 +412,13 @@ class GAMSyncManager:
         """
         today = datetime.now(UTC).replace(hour=0, minute=0, second=0)
 
-        recent_sync = (
-            db_session.query(SyncJob)
-            .filter(
-                SyncJob.tenant_id == self.tenant_id,
-                SyncJob.sync_type == sync_type,
-                SyncJob.status.in_(["running", "completed"]),
-                SyncJob.started_at >= today,
-            )
-            .first()
+        stmt = select(SyncJob).where(
+            SyncJob.tenant_id == self.tenant_id,
+            SyncJob.sync_type == sync_type,
+            SyncJob.status.in_(["running", "completed"]),
+            SyncJob.started_at >= today,
         )
+        recent_sync = db_session.scalars(stmt).first()
 
         if not recent_sync:
             return None
@@ -484,29 +484,30 @@ class GAMSyncManager:
         # Count by status
         status_counts = {}
         for status in ["pending", "running", "completed", "failed"]:
-            count = (
-                db_session.query(SyncJob)
-                .filter(
+            count_stmt = (
+                select(func.count())
+                .select_from(SyncJob)
+                .where(
                     SyncJob.tenant_id == self.tenant_id,
                     SyncJob.status == status,
                     SyncJob.started_at >= since,
                 )
-                .count()
             )
+            count = db_session.scalar(count_stmt)
             status_counts[status] = count
 
         # Get recent failures
-        recent_failures = (
-            db_session.query(SyncJob)
-            .filter(
+        stmt = (
+            select(SyncJob)
+            .where(
                 SyncJob.tenant_id == self.tenant_id,
                 SyncJob.status == "failed",
                 SyncJob.started_at >= since,
             )
             .order_by(SyncJob.started_at.desc())
             .limit(5)
-            .all()
         )
+        recent_failures = db_session.scalars(stmt).all()
 
         failures = []
         for job in recent_failures:

@@ -12,7 +12,7 @@ import logging
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import create_engine, or_
+from sqlalchemy import create_engine, or_, select
 from sqlalchemy.orm import Session, joinedload, scoped_session, sessionmaker
 
 from src.adapters.gam_orders_discovery import GAMOrdersDiscovery, LineItem, Order
@@ -76,7 +76,8 @@ class GAMOrdersService:
 
     def _upsert_order(self, tenant_id: str, order: Order, sync_time: datetime):
         """Insert or update an order."""
-        existing = self.db.query(GAMOrder).filter_by(tenant_id=tenant_id, order_id=order.order_id).first()
+        stmt = select(GAMOrder).filter_by(tenant_id=tenant_id, order_id=order.order_id)
+        existing = self.db.scalars(stmt).first()
 
         if existing:
             # Update existing order
@@ -140,9 +141,8 @@ class GAMOrdersService:
 
     def _upsert_line_item(self, tenant_id: str, line_item: LineItem, sync_time: datetime):
         """Insert or update a line item."""
-        existing = (
-            self.db.query(GAMLineItem).filter_by(tenant_id=tenant_id, line_item_id=line_item.line_item_id).first()
-        )
+        stmt = select(GAMLineItem).filter_by(tenant_id=tenant_id, line_item_id=line_item.line_item_id)
+        existing = self.db.scalars(stmt).first()
 
         if existing:
             # Update existing line item
@@ -262,16 +262,16 @@ class GAMOrdersService:
             List of orders as dictionaries
         """
         # Use eager loading to avoid N+1 queries
-        query = self.db.query(GAMOrder).options(joinedload(GAMOrder.line_items)).filter_by(tenant_id=tenant_id)
+        stmt = select(GAMOrder).options(joinedload(GAMOrder.line_items)).filter_by(tenant_id=tenant_id)
 
         if filters:
             if "status" in filters:
-                query = query.filter(GAMOrder.status == filters["status"])
+                stmt = stmt.where(GAMOrder.status == filters["status"])
             if "advertiser_id" in filters:
-                query = query.filter(GAMOrder.advertiser_id == filters["advertiser_id"])
+                stmt = stmt.where(GAMOrder.advertiser_id == filters["advertiser_id"])
             if "search" in filters:
                 search_term = f"%{filters['search']}%"
-                query = query.filter(
+                stmt = stmt.where(
                     or_(
                         GAMOrder.name.ilike(search_term),
                         GAMOrder.po_number.ilike(search_term),
@@ -280,11 +280,12 @@ class GAMOrdersService:
                     )
                 )
             if "start_date" in filters:
-                query = query.filter(GAMOrder.start_date >= filters["start_date"])
+                stmt = stmt.where(GAMOrder.start_date >= filters["start_date"])
             if "end_date" in filters:
-                query = query.filter(GAMOrder.end_date <= filters["end_date"])
+                stmt = stmt.where(GAMOrder.end_date <= filters["end_date"])
 
-        orders = query.order_by(GAMOrder.last_modified_date.desc()).all()
+        stmt = stmt.order_by(GAMOrder.last_modified_date.desc())
+        orders = self.db.scalars(stmt).all()
 
         # Apply has_line_items filter after fetching (requires checking line items)
         result = []
@@ -314,23 +315,24 @@ class GAMOrdersService:
         Returns:
             List of line items as dictionaries
         """
-        query = self.db.query(GAMLineItem).filter_by(tenant_id=tenant_id)
+        stmt = select(GAMLineItem).filter_by(tenant_id=tenant_id)
 
         if order_id:
-            query = query.filter_by(order_id=order_id)
+            stmt = stmt.filter_by(order_id=order_id)
 
         if filters:
             if "status" in filters:
-                query = query.filter(GAMLineItem.status == filters["status"])
+                stmt = stmt.where(GAMLineItem.status == filters["status"])
             if "line_item_type" in filters:
-                query = query.filter(GAMLineItem.line_item_type == filters["line_item_type"])
+                stmt = stmt.where(GAMLineItem.line_item_type == filters["line_item_type"])
             if "search" in filters:
                 search_term = f"%{filters['search']}%"
-                query = query.filter(GAMLineItem.name.ilike(search_term))
+                stmt = stmt.where(GAMLineItem.name.ilike(search_term))
             if "priority" in filters:
-                query = query.filter(GAMLineItem.priority == filters["priority"])
+                stmt = stmt.where(GAMLineItem.priority == filters["priority"])
 
-        line_items = query.order_by(GAMLineItem.last_modified_date.desc()).all()
+        stmt = stmt.order_by(GAMLineItem.last_modified_date.desc())
+        line_items = self.db.scalars(stmt).all()
 
         return [self._line_item_to_dict(li) for li in line_items]
 
@@ -345,13 +347,15 @@ class GAMOrdersService:
         Returns:
             Order details with associated line items
         """
-        order = self.db.query(GAMOrder).filter_by(tenant_id=tenant_id, order_id=order_id).first()
+        stmt = select(GAMOrder).filter_by(tenant_id=tenant_id, order_id=order_id)
+        order = self.db.scalars(stmt).first()
 
         if not order:
             return None
 
         # Get associated line items
-        line_items = self.db.query(GAMLineItem).filter_by(tenant_id=tenant_id, order_id=order_id).all()
+        stmt = select(GAMLineItem).filter_by(tenant_id=tenant_id, order_id=order_id)
+        line_items = self.db.scalars(stmt).all()
 
         result = self._order_to_dict(order)
         result["line_items"] = [self._line_item_to_dict(li) for li in line_items]
@@ -378,7 +382,8 @@ class GAMOrdersService:
             line_items = order.line_items
         else:
             # Fallback to query if not eager loaded
-            line_items = self.db.query(GAMLineItem).filter_by(tenant_id=order.tenant_id, order_id=order.order_id).all()
+            stmt = select(GAMLineItem).filter_by(tenant_id=order.tenant_id, order_id=order.order_id)
+            line_items = self.db.scalars(stmt).all()
 
         # Calculate delivery status and metrics
         delivery_status = self._calculate_delivery_status(line_items)
