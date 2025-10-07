@@ -2627,6 +2627,7 @@ def _create_media_buy_impl(
     pacing: str = "even",
     daily_budget: float = None,
     creatives: list = None,
+    reporting_webhook: dict = None,
     required_axe_signals: list = None,
     enable_creative_macro: bool = False,
     strategy_id: str = None,
@@ -2650,6 +2651,7 @@ def _create_media_buy_impl(
         pacing: Pacing strategy (even, asap, daily_budget)
         daily_budget: Daily budget limit
         creatives: Creative assets for the campaign
+        reporting_webhook: Webhook configuration for automated reporting delivery
         required_axe_signals: Required targeting signals
         enable_creative_macro: Enable AXE to provide creative_macro signal
         strategy_id: Optional strategy ID for linking operations

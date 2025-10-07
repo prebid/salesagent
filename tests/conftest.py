@@ -440,9 +440,6 @@ def benchmark(request):
 
 def pytest_collection_modifyitems(config, items):
     """Modify test collection to skip certain tests in CI."""
-    skip_server = pytest.mark.skip(reason="requires_server tests skipped in CI - no MCP server available")
-
-    for item in items:
-        # Skip requires_server tests in CI (when GITHUB_ACTIONS is set)
-        if "requires_server" in item.keywords and os.environ.get("GITHUB_ACTIONS"):
-            item.add_marker(skip_server)
+    # Note: requires_server tests are now supported via proper mcp_server fixture
+    # No longer skipping these tests in CI
+    pass

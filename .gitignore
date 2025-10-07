@@ -84,3 +84,6 @@ conductor_ports.lock
 
 # Test response files
 line_item_*_response.json
+
+# Test database files (PostgreSQL test databases)
+test_*

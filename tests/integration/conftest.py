@@ -20,20 +20,63 @@ from tests.fixtures import TenantFactory
 
 @pytest.fixture(scope="function")  # Changed to function scope for better isolation
 def integration_db():
-    """Provide an isolated database for each integration test."""
+    """Provide an isolated database for each integration test.
+
+    Uses PostgreSQL when ADCP_TEST_DB_URL is set (CI mode), otherwise falls back to SQLite.
+    PostgreSQL is preferred for integration tests because:
+    - Matches production environment
+    - Better multi-process support (fixes mcp_server tests)
+    - Consistent JSONB behavior
+    """
     import tempfile
+    import uuid
 
     # Save original DATABASE_URL
     original_url = os.environ.get("DATABASE_URL")
     original_db_type = os.environ.get("DB_TYPE")
 
-    # Create a temporary database file for this test
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
+    # Check if we should use PostgreSQL (CI mode)
+    postgres_url = os.environ.get("ADCP_TEST_DB_URL")
 
-    # Use temporary file for testing to ensure isolation
-    os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
-    os.environ["DB_TYPE"] = "sqlite"  # Explicitly set DB type
+    if postgres_url:
+        # PostgreSQL mode - create unique database per test
+        unique_db_name = f"test_{uuid.uuid4().hex[:8]}"
+        db_url = f"{postgres_url.rsplit('/', 1)[0]}/{unique_db_name}"
+
+        # Create the test database
+        import psycopg2
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+        # Connect to default database to create our test database
+        base_url = postgres_url.rsplit("/", 1)[0]
+        conn_params = {
+            "host": "localhost",
+            "port": 5433,  # Default from run_all_tests.sh
+            "user": "adcp_user",
+            "password": "test_password",
+            "database": "postgres",  # Connect to default db first
+        }
+
+        conn = psycopg2.connect(**conn_params)
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+
+        try:
+            cur.execute(f'CREATE DATABASE "{unique_db_name}"')
+        finally:
+            cur.close()
+            conn.close()
+
+        os.environ["DATABASE_URL"] = f"postgresql://adcp_user:test_password@localhost:5433/{unique_db_name}"
+        os.environ["DB_TYPE"] = "postgresql"
+        db_path = unique_db_name  # For cleanup reference
+    else:
+        # SQLite mode (fallback for quick local testing)
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+
+        os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
+        os.environ["DB_TYPE"] = "sqlite"
 
     # Create the database without running migrations
     # (migrations are for production, tests create tables directly)
@@ -154,11 +197,33 @@ def integration_db():
     elif "DB_TYPE" in os.environ:
         del os.environ["DB_TYPE"]
 
-    # Remove temporary file
-    try:
-        os.unlink(db_path)
-    except Exception:
-        pass  # Ignore cleanup errors
+    # Remove temporary database
+    if postgres_url:
+        # Drop PostgreSQL test database
+        try:
+            conn = psycopg2.connect(**conn_params)
+            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = conn.cursor()
+            # Terminate connections to the test database
+            cur.execute(
+                f"""
+                SELECT pg_terminate_backend(pg_stat_activity.pid)
+                FROM pg_stat_activity
+                WHERE pg_stat_activity.datname = '{db_path}'
+                AND pid <> pg_backend_pid()
+                """
+            )
+            cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
+            cur.close()
+            conn.close()
+        except Exception:
+            pass  # Ignore cleanup errors
+    else:
+        # Remove SQLite file
+        try:
+            os.unlink(db_path)
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 @pytest.fixture
@@ -387,10 +452,13 @@ def mock_external_apis():
                 yield {"requests": mock_post, "gemini": mock_instance}
 
 
-@pytest.fixture(scope="session")
-def mcp_server():
-    """Mock MCP server for integration testing (doesn't actually start a server)."""
+@pytest.fixture(scope="function")
+def mcp_server(integration_db):
+    """Start a real MCP server for integration testing using the test database."""
     import socket
+    import subprocess
+    import sys
+    import time
 
     # Find an available port
     def get_free_port():
@@ -402,17 +470,99 @@ def mcp_server():
 
     port = get_free_port()
 
-    # Start the server in a subprocess
+    # Use the integration_db path (already created by the integration_db fixture)
+    db_path = integration_db
+
+    # IMPORTANT: Close any existing connections to ensure the database is fully committed
+    # This is necessary because the server subprocess will create a new connection
+    from src.core.database import database_session
+
+    if database_session.db_session:
+        database_session.db_session.remove()
+
+    # Set up environment for the server
     env = os.environ.copy()
     env["ADCP_SALES_PORT"] = str(port)
-    env["DATABASE_URL"] = "sqlite:///:memory:"
+    env["DATABASE_URL"] = f"sqlite:///{db_path}"
+    env["DB_TYPE"] = "sqlite"
+    env["ADCP_TESTING"] = "true"
+    env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for better debugging
 
-    # Use a mock server process for testing
-    class MockServer:
-        def __init__(self):
-            self.port = 8080  # Default MCP port
+    # Start the server process using mcp.run() instead of uvicorn directly
+    server_script = f"""
+import sys
+sys.path.insert(0, '.')
+from src.core.main import mcp
+mcp.run(transport='http', host='0.0.0.0', port={port})
+"""
 
-    yield MockServer()
+    process = subprocess.Popen(
+        [sys.executable, "-c", server_script],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=1,  # Line buffered
+    )
+
+    # Wait for server to be ready
+    max_wait = 20  # seconds (increased for server initialization)
+    start_time = time.time()
+    server_ready = False
+
+    while time.time() - start_time < max_wait:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                s.connect(("localhost", port))
+                server_ready = True
+                break
+        except (ConnectionRefusedError, OSError):
+            # Check if process has died
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise RuntimeError(
+                    f"MCP server process died unexpectedly.\n"
+                    f"STDOUT: {stdout.decode() if stdout else 'N/A'}\n"
+                    f"STDERR: {stderr.decode() if stderr else 'N/A'}"
+                )
+            time.sleep(0.3)
+
+    if not server_ready:
+        # Capture output for debugging
+        try:
+            stdout, stderr = process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+
+        process.terminate()
+        process.wait(timeout=5)
+        raise RuntimeError(
+            f"MCP server failed to start on port {port} within {max_wait}s.\n"
+            f"STDOUT: {stdout.decode() if stdout else 'N/A'}\n"
+            f"STDERR: {stderr.decode() if stderr else 'N/A'}"
+        )
+
+    # Return server info
+    class ServerInfo:
+        def __init__(self, port, process, db_path):
+            self.port = port
+            self.process = process
+            self.db_path = db_path
+
+    server = ServerInfo(port, process, db_path)
+
+    yield server
+
+    # Cleanup
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+    # Don't remove db_path - it's managed by integration_db fixture
 
 
 @pytest.fixture

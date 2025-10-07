@@ -31,8 +31,11 @@ class TestMCPEndpointsComprehensive:
 
     @pytest.fixture(autouse=True)
     def setup_test_data(self, integration_db):
-        """Create test data for MCP tests."""
+        """Create test data for MCP tests.
 
+        This runs BEFORE mcp_server starts (due to autouse=True and fixture ordering).
+        """
+        # Write test data to the database
         with get_db_session() as session:
             # Create test tenant
             tenant = create_tenant_with_timestamps(
@@ -110,14 +113,26 @@ class TestMCPEndpointsComprehensive:
 
             session.commit()
 
-            # Store data for tests
-            self.test_token = "test_mcp_token_12345"
-            self.tenant_id = "test_mcp"
-            self.principal_id = "test_principal"
+            # Explicitly close connections to ensure data is flushed to disk
+            session.close()
+
+        # Close the global session factory to ensure all connections are closed
+        from src.core.database import database_session
+
+        if database_session.db_session:
+            database_session.db_session.remove()
+
+        # Store data for tests
+        self.test_token = "test_mcp_token_12345"
+        self.tenant_id = "test_mcp"
+        self.principal_id = "test_principal"
 
     @pytest.fixture
     async def mcp_client(self, mcp_server):
-        """Create MCP client with test authentication."""
+        """Create MCP client with test authentication.
+
+        Note: setup_test_data runs before this (autouse=True) to populate the database.
+        """
         headers = {"x-adcp-auth": self.test_token}
         transport = StreamableHttpTransport(url=f"http://localhost:{mcp_server.port}/mcp/", headers=headers)
         client = Client(transport=transport)
@@ -130,10 +145,8 @@ class TestMCPEndpointsComprehensive:
             result = await client.call_tool(
                 "get_products",
                 {
-                    "req": {
-                        "brief": "display ads for news content",
-                        "promoted_offering": "Tech startup promoting AI analytics platform",
-                    }
+                    "brief": "display ads for news content",
+                    "promoted_offering": "Tech startup promoting AI analytics platform",
                 },
             )
 
@@ -166,10 +179,8 @@ class TestMCPEndpointsComprehensive:
             result = await client.call_tool(
                 "get_products",
                 {
-                    "req": {
-                        "brief": "display advertising on news websites",
-                        "promoted_offering": "B2B software company",
-                    }
+                    "brief": "display advertising on news websites",
+                    "promoted_offering": "B2B software company",
                 },
             )
 
@@ -187,7 +198,7 @@ class TestMCPEndpointsComprehensive:
             with pytest.raises(Exception) as exc_info:
                 await client.call_tool(
                     "get_products",
-                    {"req": {"brief": "display ads"}},  # Missing promoted_offering
+                    {"brief": "display ads"},  # Missing promoted_offering
                 )
 
             # Should fail with validation error
@@ -274,10 +285,8 @@ class TestMCPEndpointsComprehensive:
                 await client.call_tool(
                     "get_products",
                     {
-                        "req": {
-                            "brief": "test",
-                            "promoted_offering": "test",
-                        }
+                        "brief": "test",
+                        "promoted_offering": "test",
                     },
                 )
 
@@ -294,8 +303,12 @@ class TestMCPEndpointsComprehensive:
                     "get_signals",
                     {
                         "req": {
-                            "query": "sports",
-                            "type": "contextual",
+                            "signal_spec": "Audiences interested in sports and athletic products",
+                            "deliver_to": {
+                                "platforms": "all",
+                                "countries": ["US"],
+                            },
+                            "max_results": 10,
                         }
                     },
                 )
@@ -316,10 +329,8 @@ class TestMCPEndpointsComprehensive:
             products_result = await client.call_tool(
                 "get_products",
                 {
-                    "req": {
-                        "brief": "Looking for premium display advertising",
-                        "promoted_offering": "Enterprise SaaS platform for data analytics",
-                    }
+                    "brief": "Looking for premium display advertising",
+                    "promoted_offering": "Enterprise SaaS platform for data analytics",
                 },
             )
 
@@ -334,12 +345,12 @@ class TestMCPEndpointsComprehensive:
             buy_result = await client.call_tool(
                 "create_media_buy",
                 {
-                    "req": {
-                        "product_ids": [product["product_id"]],
-                        "total_budget": 10000.0,
-                        "start_date": start_date,
-                        "end_date": end_date,
-                    }
+                    "promoted_offering": "Enterprise SaaS platform for data analytics",
+                    "po_number": "PO-TEST-12345",  # Required per AdCP spec
+                    "product_ids": [product["product_id"]],
+                    "total_budget": 10000.0,
+                    "start_date": start_date,
+                    "end_date": end_date,
                 },
             )
 
@@ -347,16 +358,20 @@ class TestMCPEndpointsComprehensive:
             assert "media_buy_id" in buy_content
             media_buy_id = buy_content["media_buy_id"]
 
-            # 3. Get media buy status
+            # 3. Get media buy delivery status
             status_result = await client.call_tool(
-                "get_media_buy_status",
-                {"req": {"media_buy_id": media_buy_id}},
+                "get_media_buy_delivery",
+                {"media_buy_ids": [media_buy_id]},
             )
 
             status_content = safe_get_content(status_result)
-            assert status_content["media_buy_id"] == media_buy_id
-            assert "status" in status_content
-            assert "packages" in status_content
+            # Response contains deliveries array per AdCP spec
+            assert "deliveries" in status_content
+            # Newly created media buy might not have delivery data yet
+            assert isinstance(status_content["deliveries"], list)
+            # But should have aggregated totals
+            assert "aggregated_totals" in status_content
+            assert "currency" in status_content
 
 
 if __name__ == "__main__":

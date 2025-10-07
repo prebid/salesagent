@@ -221,6 +221,7 @@ def create_media_buy_raw(
     pacing: str = "even",
     daily_budget: float = None,
     creatives: list = None,
+    reporting_webhook: dict = None,
     required_axe_signals: list = None,
     enable_creative_macro: bool = False,
     strategy_id: str = None,
@@ -247,6 +248,7 @@ def create_media_buy_raw(
         pacing: Pacing strategy
         daily_budget: Daily budget limit
         creatives: Creative assets
+        reporting_webhook: Webhook configuration for automated reporting delivery
         required_axe_signals: Required signals
         enable_creative_macro: Enable creative macro
         strategy_id: Strategy ID
@@ -276,6 +278,7 @@ def create_media_buy_raw(
         pacing=pacing,
         daily_budget=daily_budget,
         creatives=creatives,
+        reporting_webhook=reporting_webhook,
         required_axe_signals=required_axe_signals,
         enable_creative_macro=enable_creative_macro,
         strategy_id=strategy_id,

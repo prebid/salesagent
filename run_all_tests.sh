@@ -69,8 +69,9 @@ setup_postgres_container() {
         sleep 1
     done
 
-    # Export database URL
+    # Export database URL for integration tests
     export DATABASE_URL="postgresql://adcp_user:test_password@localhost:5433/adcp_test"
+    export ADCP_TEST_DB_URL="postgresql://adcp_user:test_password@localhost:5433/adcp_test"
     export ADCP_TESTING=true
 
     # Run migrations (like CI does)
