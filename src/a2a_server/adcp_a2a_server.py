@@ -1847,10 +1847,10 @@ def create_agent_card() -> AgentCard:
         name="AdCP Sales Agent",
         description="AI agent for programmatic advertising campaigns via AdCP protocol",
         version="1.0.0",
-        protocolVersion="1.0",
+        protocol_version="1.0",
         capabilities=AgentCapabilities(),
-        defaultInputModes=["message"],
-        defaultOutputModes=["message"],
+        default_input_modes=["message"],
+        default_output_modes=["message"],
         skills=[
             # Core AdCP Media Buy Skills
             AgentSkill(

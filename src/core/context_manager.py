@@ -54,8 +54,7 @@ class ContextManager(DatabaseManager):
             console.print(f"[green]Created context {context_id} for principal {principal_id}[/green]")
             # Refresh to get any database-generated values
             self.session.refresh(context)
-            # Create a detached copy with all attributes loaded
-            context_id = context.context_id
+            # Detach from session
             self.session.expunge(context)
             return context
         except Exception as e:

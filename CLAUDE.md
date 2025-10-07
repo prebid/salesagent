@@ -421,6 +421,49 @@ uv run alembic revision -m "description"
 - **🚨 NO hardcoded external system IDs** - use config/database
 - **🛡️ NO testing against production systems**
 
+### Type Checking with mypy
+**🚨 MANDATORY**: When touching files, fix mypy errors in the code you modify.
+
+**Run mypy manually:**
+```bash
+# Check specific file
+uv run mypy src/core/your_file.py --config-file=mypy.ini
+
+# Check entire directory
+uv run mypy src/core/ --config-file=mypy.ini
+
+# Check all source files
+uv run mypy src/ --config-file=mypy.ini
+```
+
+**When modifying code:**
+1. **Run mypy on files you change** - Fix errors introduced by your changes
+2. **Fix nearby errors if easy** - Opportunistically improve type safety
+3. **Use SQLAlchemy 2.0 Mapped[] annotations** for new ORM models:
+   ```python
+   from sqlalchemy.orm import Mapped, mapped_column
+
+   class MyModel(Base):
+       # ✅ CORRECT - New SQLAlchemy 2.0 style
+       id: Mapped[int] = mapped_column(primary_key=True)
+       name: Mapped[str] = mapped_column(String(100))
+       optional_field: Mapped[str | None] = mapped_column(nullable=True)
+   ```
+
+**Common Fixes:**
+- Add type hints to function signatures
+- Use `| None` instead of `Optional[]` (Python 3.10+)
+- Fix `Sequence[Model]` vs `list[Model]` return types
+- Add missing imports
+
+**Current Status:**
+- ✅ mypy installed with SQLAlchemy plugin
+- ✅ Configuration in `mypy.ini` (lenient for incremental adoption)
+- ⚠️ ~1313 errors remaining (down from 2644)
+- 🎯 Goal: Fix errors as we touch files, gradually improve type safety
+
+**Note**: Pre-commit hook disabled until error count is manageable. Run manually during development.
+
 ### Schema Design
 **Field Requirement Analysis:**
 - Can this have a sensible default?

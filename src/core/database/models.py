@@ -1,5 +1,7 @@
 """SQLAlchemy models for database schema."""
 
+from decimal import Decimal
+
 from sqlalchemy import (
     DECIMAL,
     BigInteger,
@@ -17,7 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.core.database.json_type import JSONType
@@ -129,8 +131,8 @@ class Product(Base, JSONValidatorMixin):
     targeting_template = Column(JSONType, nullable=False)  # JSONB in PostgreSQL
     delivery_type = Column(String(50), nullable=False)
     is_fixed_price = Column(Boolean, nullable=False)
-    cpm = Column(DECIMAL(10, 2))
-    min_spend = Column(DECIMAL(10, 2), nullable=True)  # AdCP spec field
+    cpm: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2))
+    min_spend: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)  # AdCP spec field
     measurement = Column(JSONType, nullable=True)  # JSONB in PostgreSQL - AdCP measurement object
     creative_policy = Column(JSONType, nullable=True)  # JSONB in PostgreSQL - AdCP creative policy object
     price_guidance = Column(JSONType)  # JSONB in PostgreSQL - Legacy field
@@ -269,7 +271,7 @@ class MediaBuy(Base):
     advertiser_name = Column(String(255), nullable=False)
     campaign_objective = Column(String(100))
     kpi_goal = Column(String(255))
-    budget = Column(DECIMAL(15, 2))
+    budget: Mapped[Decimal | None] = mapped_column(DECIMAL(15, 2))
     currency = Column(String(3), nullable=True, default="USD")  # ISO 4217 currency code
     start_date = Column(Date, nullable=False)  # Legacy field, keep for compatibility
     end_date = Column(Date, nullable=False)  # Legacy field, keep for compatibility
@@ -484,10 +486,10 @@ class FormatPerformanceMetrics(Base):
     total_revenue_micros = Column(BigInteger, nullable=False, default=0)
 
     # Calculated pricing metrics (in USD)
-    average_cpm = Column(DECIMAL(10, 2), nullable=True)
-    median_cpm = Column(DECIMAL(10, 2), nullable=True)
-    p75_cpm = Column(DECIMAL(10, 2), nullable=True)  # 75th percentile
-    p90_cpm = Column(DECIMAL(10, 2), nullable=True)  # 90th percentile
+    average_cpm: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)
+    median_cpm: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)
+    p75_cpm: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)  # 75th percentile
+    p90_cpm: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)  # 90th percentile
 
     # Metadata
     line_item_count = Column(Integer, nullable=False, default=0)  # Number of line items in aggregate
