@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
-def test_health_routes_in_refactored_app():
+def test_health_routes_in_refactored_app(integration_db):
     """Test that both health routes work in the refactored app."""
     from src.admin.app import create_app
 
@@ -29,7 +29,7 @@ def test_health_routes_in_refactored_app():
     print("✅ Both health routes work in refactored app!")
 
 
-def test_health_routes_in_original_app():
+def test_health_routes_in_original_app(integration_db):
     """Test that health routes still work in original app for comparison."""
     from src.admin.app import create_app
 

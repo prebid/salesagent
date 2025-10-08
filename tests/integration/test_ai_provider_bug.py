@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 from product_catalog_providers.ai import AIProductCatalog
 
 
-async def test_ai_provider_bug():
+async def test_ai_provider_bug(integration_db):
     """Test if the AI provider has Product validation issues."""
 
     print("🔍 Testing AI provider for Product validation bug...")

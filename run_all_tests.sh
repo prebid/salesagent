@@ -20,13 +20,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Determine test mode
-MODE=${1:-full}  # Default to full if no argument
-USE_DOCKER=${USE_DOCKER:-false}  # Set USE_DOCKER=true to run with PostgreSQL
+MODE=${1:-ci}  # Default to ci if no argument
 
 echo "🧪 Running tests in '$MODE' mode..."
-if [ "$USE_DOCKER" = "true" ]; then
-    echo -e "${BLUE}🐳 Docker mode enabled - using PostgreSQL container${NC}"
-fi
 echo ""
 
 # Docker setup function (like CI does)
@@ -197,70 +193,25 @@ if [ "$MODE" == "ci" ]; then
     exit 0
 fi
 
-# Full mode: all tests
-if [ "$MODE" == "full" ]; then
-    echo "📦 Step 1/4: Validating imports..."
-
-    # Check all critical imports
-    if ! uv run python -c "from src.core.tools import get_products_raw, create_media_buy_raw, get_media_buy_delivery_raw, sync_creatives_raw, list_creatives_raw, list_creative_formats_raw, list_authorized_properties_raw" 2>/dev/null; then
-        echo -e "${RED}❌ Import validation failed!${NC}"
-        exit 1
-    fi
-
-    if ! uv run python -c "from src.core.main import _get_products_impl, _create_media_buy_impl, _get_media_buy_delivery_impl, _sync_creatives_impl, _list_creatives_impl, _list_creative_formats_impl, _list_authorized_properties_impl" 2>/dev/null; then
-        echo -e "${RED}❌ Import validation failed!${NC}"
-        exit 1
-    fi
-
-    echo -e "${GREEN}✅ Imports validated${NC}"
-    echo ""
-
-    echo "🧪 Step 2/4: Running unit tests..."
-    if ! uv run pytest tests/unit/ -x --tb=short; then
-        echo -e "${RED}❌ Unit tests failed!${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}✅ Unit tests passed${NC}"
-    echo ""
-
-    echo "🔗 Step 3/4: Running integration tests..."
-    if ! uv run pytest tests/integration/ -x --tb=short; then
-        echo -e "${RED}❌ Integration tests failed!${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}✅ Integration tests passed${NC}"
-    echo ""
-
-    echo "🌍 Step 4/4: Running e2e tests..."
-    if ! uv run pytest tests/e2e/ -x --tb=short; then
-        echo -e "${RED}❌ E2E tests failed!${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}✅ E2E tests passed${NC}"
-    echo ""
-
-    echo -e "${GREEN}✅ All tests passed!${NC}"
-    exit 0
-fi
-
 # Unknown mode
 echo -e "${RED}❌ Unknown test mode: $MODE${NC}"
 echo ""
-echo "Usage: ./run_all_tests.sh [quick|ci|full]"
+echo "Usage: ./run_all_tests.sh [quick|ci]"
 echo ""
 echo "Modes:"
 echo "  quick  - Unit tests + integration tests (no database)"
-echo "           Fast validation for pre-push hook (~1 min)"
+echo "           Fast validation for rapid iteration (~1 min)"
+echo "           Skips database-dependent tests"
 echo ""
-echo "  ci     - Like GitHub Actions: PostgreSQL container + all tests"
+echo "  ci     - Full test suite with PostgreSQL (DEFAULT)"
 echo "           Runs unit + integration + e2e with real database (~3-5 min)"
 echo "           Automatically starts/stops PostgreSQL container"
-echo ""
-echo "  full   - All tests with SQLite (no container needed)"
-echo "           Unit + integration + e2e tests (~3-5 min)"
+echo "           Matches production environment and GitHub Actions"
 echo ""
 echo "Examples:"
-echo "  ./run_all_tests.sh quick      # Fast pre-push validation"
-echo "  ./run_all_tests.sh ci         # Test like CI does (with PostgreSQL)"
-echo "  ./run_all_tests.sh full       # Full test suite (SQLite)"
+echo "  ./run_all_tests.sh            # Run CI mode (default, recommended)"
+echo "  ./run_all_tests.sh quick      # Fast iteration during development"
+echo "  ./run_all_tests.sh ci         # Explicit CI mode (same as default)"
+echo ""
+echo "💡 Tip: Use 'quick' for rapid development, 'ci' before pushing to catch all bugs"
 exit 1

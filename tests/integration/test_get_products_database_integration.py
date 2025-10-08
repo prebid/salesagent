@@ -679,8 +679,9 @@ class TestParallelTestExecution:
     """Tests for parallel test execution with isolated databases."""
 
     @pytest.mark.asyncio
+    @pytest.mark.requires_db
     @pytest.mark.parametrize("test_id", [f"parallel_{i:02d}" for i in range(5)])
-    async def test_parallel_database_isolation(self, test_id):
+    async def test_parallel_database_isolation(self, integration_db, test_id):
         """Test that parallel tests can run with isolated database state."""
         tenant_id = f"parallel_test_{test_id}"
 
@@ -750,8 +751,9 @@ class TestParallelTestExecution:
                 session.commit()
 
     @pytest.mark.integration
+    @pytest.mark.requires_db
     @pytest.mark.slow
-    def test_database_connection_pooling_efficiency(self):
+    def test_database_connection_pooling_efficiency(self, integration_db):
         """Test that connection pooling works efficiently under load."""
         results = []
         start_time = time.time()

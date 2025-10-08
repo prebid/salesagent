@@ -219,8 +219,13 @@ class TestDatabaseConnectivity:
     """Test database connectivity and basic operations."""
 
     @pytest.mark.smoke
+    @pytest.mark.skip_ci
     def test_database_connection(self):
-        """Test that we can connect to the database."""
+        """Test that we can connect to the database.
+
+        NOTE: Skipped in CI as it requires DATABASE_URL to be set.
+        This is a manual smoke test for production deployments.
+        """
         from src.core.database.database_session import get_db_session
 
         with get_db_session() as session:

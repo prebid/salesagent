@@ -390,7 +390,7 @@ class TestEnvironmentFirstAuthentication:
             assert is_super_admin("env-admin@example.com") is True
             assert is_super_admin("not-admin@example.com") is False
 
-    def test_database_fallback_super_admin_check(self, setup_super_admin_config):
+    def test_database_fallback_super_admin_check(self, integration_db, setup_super_admin_config):
         """Test that database is used as fallback when environment variables are not set."""
         from src.admin.utils import is_super_admin
 

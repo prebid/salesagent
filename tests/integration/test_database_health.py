@@ -26,7 +26,7 @@ class TestDatabaseHealthIntegration:
         assert health["status"] in ["healthy", "unhealthy", "warning", "error"]
 
     @pytest.mark.requires_db
-    def test_real_table_existence_checks(self):
+    def test_real_table_existence_checks(self, integration_db):
         """Test table existence checks against real database."""
         # These tables should always exist in test database
         assert check_table_exists("tenants") is True
@@ -36,7 +36,7 @@ class TestDatabaseHealthIntegration:
         assert check_table_exists("definitely_nonexistent_table_12345") is False
 
     @pytest.mark.requires_db
-    def test_real_table_info_audit_logs(self):
+    def test_real_table_info_audit_logs(self, integration_db):
         """Test getting real table info for audit_logs."""
         info = get_table_info("audit_logs")
 

@@ -135,7 +135,9 @@ class TestMCPToolRoundtripValidation:
 
         return created_products
 
-    def test_get_products_real_object_roundtrip_conversion_isolated(self, test_tenant_id, real_products_in_db):
+    def test_get_products_real_object_roundtrip_conversion_isolated(
+        self, integration_db, test_tenant_id, real_products_in_db
+    ):
         """
         Test Product roundtrip conversion with REAL objects to catch conversion issues.
 
@@ -204,7 +206,9 @@ class TestMCPToolRoundtripValidation:
         assert display_product.format_ids == ["display_300x250", "display_728x90"]
         assert video_product.format_ids == ["video_15s", "video_30s"]
 
-    def test_get_products_with_testing_hooks_roundtrip_isolated(self, test_tenant_id, real_products_in_db):
+    def test_get_products_with_testing_hooks_roundtrip_isolated(
+        self, integration_db, test_tenant_id, real_products_in_db
+    ):
         """
         Test Product roundtrip conversion with testing hooks to catch the EXACT conversion issue.
 

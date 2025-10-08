@@ -140,7 +140,7 @@ class TestDashboardReliability:
             assert "success" in activity["metadata"]
 
     @pytest.mark.requires_db
-    def test_dashboard_service_caching_works(self, test_tenant):
+    def test_dashboard_service_caching_works(self, integration_db, test_tenant):
         """Test that dashboard service correctly caches tenant lookups."""
         service = DashboardService(test_tenant.tenant_id)
 
@@ -236,7 +236,7 @@ class TestLegacyCompatibility:
     """Test that changes maintain compatibility with existing functionality."""
 
     @pytest.mark.requires_db
-    def test_audit_log_format_compatibility(self, test_audit_log):
+    def test_audit_log_format_compatibility(self, integration_db, test_audit_log):
         """Test that audit log format is compatible with activity stream."""
         from src.admin.blueprints.activity_stream import format_activity_from_audit_log
 
@@ -250,7 +250,7 @@ class TestLegacyCompatibility:
         assert "type" in activity
 
     @pytest.mark.requires_db
-    def test_media_buy_relationships_still_work(self, test_media_buy, test_principal):
+    def test_media_buy_relationships_still_work(self, integration_db, test_media_buy, test_principal):
         """Test that media buy relationships work after model cleanup."""
         # Should be able to access principal
         assert test_media_buy.principal is not None

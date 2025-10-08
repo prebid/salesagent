@@ -1,6 +1,20 @@
-"""Test that list_creative_formats accepts and uses filter parameters."""
+"""Integration tests for list_creative_formats filtering parameters.
 
-from src.core.schemas import ListCreativeFormatsRequest
+These are integration tests because they:
+1. Use real database queries (FORMAT_REGISTRY + CreativeFormat table)
+2. Exercise the full implementation stack (tools.py → main.py → database)
+3. Test tenant resolution and audit logging
+4. Validate actual filtering logic with real data
+
+Per architecture guidelines: "Integration over Mocking - Use real DB, mock only external services"
+"""
+
+from datetime import UTC, datetime
+from unittest.mock import patch
+
+from src.core.schemas import Format, ListCreativeFormatsRequest
+from src.core.tool_context import ToolContext
+from src.core.tools import list_creative_formats_raw
 
 
 def test_list_creative_formats_request_minimal():
@@ -29,19 +43,12 @@ def test_list_creative_formats_request_with_all_params():
     assert req.format_ids == ["video_16x9", "video_4x3"]
 
 
-def test_filtering_by_type():
+def test_filtering_by_type(integration_db, sample_tenant):
     """Test that type filter works correctly."""
-    from datetime import UTC, datetime
-    from unittest.mock import patch
-
-    from src.core.schemas import Format
-    from src.core.tool_context import ToolContext
-    from src.core.tools import list_creative_formats_raw
-
     # Create real ToolContext
     context = ToolContext(
         context_id="test",
-        tenant_id="test_tenant",
+        tenant_id=sample_tenant["tenant_id"],
         principal_id="test_principal",
         tool_name="list_creative_formats",
         request_timestamp=datetime.now(UTC),
@@ -49,8 +56,8 @@ def test_filtering_by_type():
         testing_context={},
     )
 
-    # Mock get_current_tenant to return a test tenant
-    with patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}):
+    # Mock tenant resolution to return our test tenant
+    with patch("src.core.main.get_current_tenant", return_value=sample_tenant):
         # Test filtering by type
         req = ListCreativeFormatsRequest(type="video")
         response = list_creative_formats_raw(req, context)
@@ -69,19 +76,12 @@ def test_filtering_by_type():
         assert len(formats) > 0, "Should have at least some video formats"
 
 
-def test_filtering_by_standard_only():
+def test_filtering_by_standard_only(integration_db, sample_tenant):
     """Test that standard_only filter works correctly."""
-    from datetime import UTC, datetime
-    from unittest.mock import patch
-
-    from src.core.schemas import Format
-    from src.core.tool_context import ToolContext
-    from src.core.tools import list_creative_formats_raw
-
     # Create real ToolContext
     context = ToolContext(
         context_id="test",
-        tenant_id="test_tenant",
+        tenant_id=sample_tenant["tenant_id"],
         principal_id="test_principal",
         tool_name="list_creative_formats",
         request_timestamp=datetime.now(UTC),
@@ -89,8 +89,8 @@ def test_filtering_by_standard_only():
         testing_context={},
     )
 
-    # Mock get_current_tenant to return a test tenant
-    with patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}):
+    # Mock tenant resolution to return our test tenant
+    with patch("src.core.main.get_current_tenant", return_value=sample_tenant):
         # Test filtering by standard_only
         req = ListCreativeFormatsRequest(standard_only=True)
         response = list_creative_formats_raw(req, context)
@@ -108,19 +108,12 @@ def test_filtering_by_standard_only():
         assert len(formats) > 0, "Should have at least some standard formats"
 
 
-def test_filtering_by_format_ids():
+def test_filtering_by_format_ids(integration_db, sample_tenant):
     """Test that format_ids filter works correctly."""
-    from datetime import UTC, datetime
-    from unittest.mock import patch
-
-    from src.core.schemas import Format
-    from src.core.tool_context import ToolContext
-    from src.core.tools import list_creative_formats_raw
-
     # Create real ToolContext
     context = ToolContext(
         context_id="test",
-        tenant_id="test_tenant",
+        tenant_id=sample_tenant["tenant_id"],
         principal_id="test_principal",
         tool_name="list_creative_formats",
         request_timestamp=datetime.now(UTC),
@@ -128,8 +121,8 @@ def test_filtering_by_format_ids():
         testing_context={},
     )
 
-    # Mock get_current_tenant to return a test tenant
-    with patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}):
+    # Mock tenant resolution to return our test tenant
+    with patch("src.core.main.get_current_tenant", return_value=sample_tenant):
         # Test filtering by specific format IDs
         target_ids = ["display_300x250", "display_728x90"]
         req = ListCreativeFormatsRequest(format_ids=target_ids)
@@ -150,19 +143,12 @@ def test_filtering_by_format_ids():
         assert len(formats) > 0, "Should return at least one format if they exist"
 
 
-def test_filtering_combined():
+def test_filtering_combined(integration_db, sample_tenant):
     """Test that multiple filters work together."""
-    from datetime import UTC, datetime
-    from unittest.mock import patch
-
-    from src.core.schemas import Format
-    from src.core.tool_context import ToolContext
-    from src.core.tools import list_creative_formats_raw
-
     # Create real ToolContext
     context = ToolContext(
         context_id="test",
-        tenant_id="test_tenant",
+        tenant_id=sample_tenant["tenant_id"],
         principal_id="test_principal",
         tool_name="list_creative_formats",
         request_timestamp=datetime.now(UTC),
@@ -170,8 +156,8 @@ def test_filtering_combined():
         testing_context={},
     )
 
-    # Mock get_current_tenant to return a test tenant
-    with patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}):
+    # Mock tenant resolution to return our test tenant
+    with patch("src.core.main.get_current_tenant", return_value=sample_tenant):
         # Test combining type and standard_only filters
         req = ListCreativeFormatsRequest(type="display", standard_only=True)
         response = list_creative_formats_raw(req, context)
@@ -186,3 +172,4 @@ def test_filtering_combined():
 
         # All returned formats should match both filters
         assert all(f.type == "display" and f.is_standard for f in formats), "All formats should be display AND standard"
+        assert len(formats) > 0, "Should have at least some display standard formats"

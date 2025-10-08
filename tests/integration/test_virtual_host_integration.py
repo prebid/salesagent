@@ -50,7 +50,7 @@ class TestVirtualHostIntegration:
             assert header_value is not None
             assert header_value in ["test1.com", "test2.com", "test3.com"]
 
-    def test_virtual_host_function_integration(self):
+    def test_virtual_host_function_integration(self, integration_db):
         """Test that virtual host lookup function handles non-existent domains gracefully."""
         # This is a real integration test - calls the actual function
         # with a domain that shouldn't exist

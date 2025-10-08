@@ -20,63 +20,53 @@ from tests.fixtures import TenantFactory
 
 @pytest.fixture(scope="function")  # Changed to function scope for better isolation
 def integration_db():
-    """Provide an isolated database for each integration test.
+    """Provide an isolated PostgreSQL database for each integration test.
 
-    Uses PostgreSQL when ADCP_TEST_DB_URL is set (CI mode), otherwise falls back to SQLite.
-    PostgreSQL is preferred for integration tests because:
-    - Matches production environment
+    REQUIRES: PostgreSQL container running (via run_all_tests.sh ci)
+    - ADCP_TEST_DB_URL must be set (e.g., postgresql://adcp_user:test_password@localhost:5433/adcp_test)
+    - Matches production environment exactly
     - Better multi-process support (fixes mcp_server tests)
     - Consistent JSONB behavior
     """
-    import tempfile
     import uuid
 
     # Save original DATABASE_URL
     original_url = os.environ.get("DATABASE_URL")
     original_db_type = os.environ.get("DB_TYPE")
 
-    # Check if we should use PostgreSQL (CI mode)
+    # Require PostgreSQL - no SQLite fallback
     postgres_url = os.environ.get("ADCP_TEST_DB_URL")
+    if not postgres_url:
+        pytest.skip("Integration tests require PostgreSQL. Run: ./run_all_tests.sh ci")
 
-    if postgres_url:
-        # PostgreSQL mode - create unique database per test
-        unique_db_name = f"test_{uuid.uuid4().hex[:8]}"
-        db_url = f"{postgres_url.rsplit('/', 1)[0]}/{unique_db_name}"
+    # PostgreSQL mode - create unique database per test
+    unique_db_name = f"test_{uuid.uuid4().hex[:8]}"
 
-        # Create the test database
-        import psycopg2
-        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+    # Create the test database
+    import psycopg2
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
-        # Connect to default database to create our test database
-        base_url = postgres_url.rsplit("/", 1)[0]
-        conn_params = {
-            "host": "localhost",
-            "port": 5433,  # Default from run_all_tests.sh
-            "user": "adcp_user",
-            "password": "test_password",
-            "database": "postgres",  # Connect to default db first
-        }
+    conn_params = {
+        "host": "localhost",
+        "port": 5433,  # Default from run_all_tests.sh
+        "user": "adcp_user",
+        "password": "test_password",
+        "database": "postgres",  # Connect to default db first
+    }
 
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
+    conn = psycopg2.connect(**conn_params)
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cur = conn.cursor()
 
-        try:
-            cur.execute(f'CREATE DATABASE "{unique_db_name}"')
-        finally:
-            cur.close()
-            conn.close()
+    try:
+        cur.execute(f'CREATE DATABASE "{unique_db_name}"')
+    finally:
+        cur.close()
+        conn.close()
 
-        os.environ["DATABASE_URL"] = f"postgresql://adcp_user:test_password@localhost:5433/{unique_db_name}"
-        os.environ["DB_TYPE"] = "postgresql"
-        db_path = unique_db_name  # For cleanup reference
-    else:
-        # SQLite mode (fallback for quick local testing)
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
-
-        os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
-        os.environ["DB_TYPE"] = "sqlite"
+    os.environ["DATABASE_URL"] = f"postgresql://adcp_user:test_password@localhost:5433/{unique_db_name}"
+    os.environ["DB_TYPE"] = "postgresql"
+    db_path = unique_db_name  # For cleanup reference
 
     # Create the database without running migrations
     # (migrations are for production, tests create tables directly)
@@ -92,7 +82,7 @@ def integration_db():
     # (in case the module import doesn't trigger class definition)
     _ = (Context, WorkflowStep, ObjectWorkflowMapping)
 
-    engine = create_engine(f"sqlite:///{db_path}", echo=False)
+    engine = create_engine(f"postgresql://adcp_user:test_password@localhost:5433/{unique_db_name}", echo=False)
 
     # Ensure all model classes are imported and registered with Base.metadata
     # Import order matters - some models may not be registered if imported too early
@@ -153,19 +143,17 @@ def integration_db():
     # Create all tables directly (no migrations)
     Base.metadata.create_all(bind=engine, checkfirst=True)
 
-    # Update the global database session to point to the test database
-    # This is necessary because many parts of the code use the global db_session
-    from src.core.database import database_session
+    # Reset engine and update globals to point to the test database
+    from src.core.database.database_session import reset_engine
 
-    # Save the original values
-    original_engine = database_session.engine
-    original_session_local = database_session.SessionLocal
-    original_db_session = database_session.db_session
+    reset_engine()
 
-    # Replace with test database
-    database_session.engine = engine
-    database_session.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    database_session.db_session = scoped_session(database_session.SessionLocal)
+    # Now update the globals to use our test engine
+    import src.core.database.database_session as db_session_module
+
+    db_session_module._engine = engine
+    db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
 
     # Reset context manager singleton so it uses the new database session
     # This is critical because ContextManager caches a session reference
@@ -175,10 +163,8 @@ def integration_db():
 
     yield db_path
 
-    # Restore original database session
-    database_session.engine = original_engine
-    database_session.SessionLocal = original_session_local
-    database_session.db_session = original_db_session
+    # Reset engine to clean up test database connections
+    reset_engine()
 
     # Reset context manager singleton again to avoid stale references
     src.core.context_manager._context_manager_instance = None
@@ -197,33 +183,25 @@ def integration_db():
     elif "DB_TYPE" in os.environ:
         del os.environ["DB_TYPE"]
 
-    # Remove temporary database
-    if postgres_url:
-        # Drop PostgreSQL test database
-        try:
-            conn = psycopg2.connect(**conn_params)
-            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-            cur = conn.cursor()
-            # Terminate connections to the test database
-            cur.execute(
-                f"""
-                SELECT pg_terminate_backend(pg_stat_activity.pid)
-                FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = '{db_path}'
-                AND pid <> pg_backend_pid()
-                """
-            )
-            cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
-            cur.close()
-            conn.close()
-        except Exception:
-            pass  # Ignore cleanup errors
-    else:
-        # Remove SQLite file
-        try:
-            os.unlink(db_path)
-        except Exception:
-            pass  # Ignore cleanup errors
+    # Drop PostgreSQL test database
+    try:
+        conn = psycopg2.connect(**conn_params)
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+        # Terminate connections to the test database
+        cur.execute(
+            f"""
+            SELECT pg_terminate_backend(pg_stat_activity.pid)
+            FROM pg_stat_activity
+            WHERE pg_stat_activity.datname = '{db_path}'
+            AND pid <> pg_backend_pid()
+            """
+        )
+        cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
+        cur.close()
+        conn.close()
+    except Exception:
+        pass  # Ignore cleanup errors
 
 
 @pytest.fixture

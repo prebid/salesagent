@@ -76,7 +76,7 @@ class TestMCPToolsAudit:
             session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
             session.commit()
 
-    def test_get_media_buy_delivery_roundtrip_safety(self, test_tenant_id):
+    def test_get_media_buy_delivery_roundtrip_safety(self, integration_db, test_tenant_id):
         """
         Audit get_media_buy_delivery for roundtrip conversion safety.
 

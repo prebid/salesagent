@@ -71,7 +71,7 @@ class TestSchemaFieldMapping:
             assert field in schema_fields, f"Critical field '{field}' missing from Product schema"
             assert field in db_columns, f"Critical field '{field}' missing from ProductModel database"
 
-    def test_database_field_access_validation(self):
+    def test_database_field_access_validation(self, integration_db):
         """Test that all database fields can be accessed without AttributeError."""
         # Create a test tenant and product
         tenant_id = "test_field_access"
@@ -138,7 +138,7 @@ class TestSchemaFieldMapping:
 
         assert not missing_db_fields, f"Principal schema fields missing from database: {missing_db_fields}"
 
-    def test_schema_to_database_conversion_safety(self):
+    def test_schema_to_database_conversion_safety(self, integration_db):
         """Test that schema-to-database conversion only uses existing fields."""
         # This simulates the conversion logic in DatabaseProductCatalog
         tenant_id = "test_conversion_safety"
@@ -259,7 +259,7 @@ class TestSchemaFieldMapping:
         with pytest.raises(AttributeError):
             _ = product.non_existent_field
 
-    def test_database_json_field_handling(self):
+    def test_database_json_field_handling(self, integration_db):
         """Test that JSON fields in database are handled correctly in schema conversion."""
         tenant_id = "test_json_handling"
 
@@ -311,7 +311,7 @@ class TestSchemaFieldMapping:
             session.delete(tenant)
             session.commit()
 
-    def test_schema_validation_with_database_data(self):
+    def test_schema_validation_with_database_data(self, integration_db):
         """Test that data from database can be validated against Pydantic schemas."""
         tenant_id = "test_schema_validation"
 

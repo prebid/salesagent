@@ -2,16 +2,30 @@
 
 ## 🚨 CRITICAL ARCHITECTURE PATTERNS
 
-### Database JSON Fields Pattern (SQLAlchemy 2.0)
-**🚨 MANDATORY**: All JSON columns MUST use `JSONType` for cross-database compatibility.
+### PostgreSQL-Only Architecture
+**🚨 DECISION**: This codebase uses PostgreSQL exclusively. No SQLite support.
 
-**The Problem:**
-- SQLite stores JSON as text strings → requires manual `json.loads()`
-- PostgreSQL uses native JSONB → returns Python dicts/lists automatically
-- This inconsistency causes bugs (e.g., iterating over strings character-by-character)
+**Why:**
+- Production uses PostgreSQL exclusively
+- SQLite hides bugs (different JSONB behavior, no connection pooling, single-threaded)
+- "No fallbacks - if it's in our control, make it work" (core principle)
+- One database. One source of truth. No hidden bugs.
+
+**What this means:**
+- All tests require PostgreSQL container (run via `./run_all_tests.sh ci`)
+- `db_config.py` only supports PostgreSQL connections
+- Unit tests should mock database access, not use real connections
+- Integration tests require `ADCP_TEST_DB_URL` or will skip
+
+**Migration note:** We removed SQLite support to eliminate cross-database bugs. If you see SQLite references in old docs/code, they're outdated.
+
+---
+
+### Database JSON Fields Pattern (SQLAlchemy 2.0)
+**🚨 MANDATORY**: All JSON columns MUST use `JSONType` for PostgreSQL JSONB handling.
 
 **The Solution: JSONType**
-We have a custom `JSONType` TypeDecorator that handles this automatically:
+We have a custom `JSONType` TypeDecorator for PostgreSQL JSONB:
 
 ```python
 # ✅ CORRECT - Use JSONType for ALL JSON columns
@@ -165,7 +179,7 @@ def create_media_buy_raw(promoted_offering: str, ...) -> CreateMediaBuyResponse:
 **Your Deployment**: You can host this anywhere that supports:
 - Docker containers (recommended)
 - Python 3.11+
-- PostgreSQL (production) or SQLite (dev/testing)
+- PostgreSQL (production and testing)
 - We'll support your deployment approach as best we can
 
 ### Git Workflow - MANDATORY (Reference Implementation)
@@ -386,13 +400,16 @@ docker-compose down
 
 ### Testing
 ```bash
-# Run all tests
-uv run pytest
+# Recommended: Full test suite with PostgreSQL (matches CI/production)
+./run_all_tests.sh ci
 
-# By category
-uv run pytest tests/unit/
-uv run pytest tests/integration/
-uv run pytest tests/e2e/
+# Fast iteration during development (skips database tests)
+./run_all_tests.sh quick
+
+# Manual pytest commands
+uv run pytest tests/unit/           # Unit tests only
+uv run pytest tests/integration/    # Integration tests (needs database)
+uv run pytest tests/e2e/            # E2E tests (needs database)
 
 # With coverage
 uv run pytest --cov=. --cov-report=html
@@ -593,30 +610,32 @@ If the hook isn't installed or you want to update it:
 
 **Test Modes:**
 
-**CI Mode (runs automatically on push):**
+**CI Mode (DEFAULT - runs automatically on push):**
 - Starts PostgreSQL container automatically (postgres:15)
 - Runs ALL tests including database-dependent tests
-- Exactly matches GitHub Actions environment
+- Exactly matches GitHub Actions and production environment
 - Catches database issues before CI does
 - Automatically cleans up container
+- ~3-5 minutes
 
 **Quick Mode (for fast development iteration):**
 - Fast validation: unit tests + integration tests (no database)
-- Skips database-dependent tests
+- Skips database-dependent tests (marked with `@pytest.mark.requires_db`)
 - Good for rapid testing during development
-- Run manually: `./run_all_tests.sh quick`
-
-**Full Mode (comprehensive, no Docker):**
-- All tests with SQLite instead of PostgreSQL
-- Good for development without Docker
-- Run manually: `./run_all_tests.sh full`
+- ~1 minute
 
 **Command Reference:**
 ```bash
-./run_all_tests.sh ci      # Like CI (PostgreSQL container) - USE THIS!
-./run_all_tests.sh quick   # Fast pre-push validation (automatic)
-./run_all_tests.sh full    # Full suite (SQLite, no Docker)
+./run_all_tests.sh         # CI mode (default) - PostgreSQL container
+./run_all_tests.sh ci      # CI mode (explicit) - USE THIS before pushing!
+./run_all_tests.sh quick   # Quick mode - fast iteration
 ```
+
+**Why PostgreSQL-only?**
+- Production uses PostgreSQL exclusively
+- SQLite hides bugs (different JSONB behavior, no connection pooling, single-threaded)
+- "No fallbacks - if it's in our control, make it work" (core principle)
+- One database. One source of truth. No hidden bugs.
 
 See `docs/testing/` for detailed patterns and case studies.
 

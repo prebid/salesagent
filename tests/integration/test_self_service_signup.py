@@ -23,7 +23,7 @@ from src.core.database.models import AdapterConfig, Tenant, User
 class TestSelfServiceSignupFlow:
     """Test self-service tenant signup flow."""
 
-    def test_landing_page_accessible_without_auth(self, client):
+    def test_landing_page_accessible_without_auth(self, integration_db, client):
         """Test that landing page is accessible without authentication."""
         response = client.get("/signup")
         assert response.status_code == 200
@@ -66,7 +66,7 @@ class TestSelfServiceSignupFlow:
         assert b"Publisher Information" in response.data
         assert b"Ad Server Integration" in response.data  # Changed from "Select Your Ad Server" for GAM-only signup
 
-    def test_provision_tenant_mock_adapter(self, client):
+    def test_provision_tenant_mock_adapter(self, integration_db, client):
         """Test tenant provisioning with mock adapter."""
         with client.session_transaction() as sess:
             sess["signup_flow"] = True
@@ -112,7 +112,7 @@ class TestSelfServiceSignupFlow:
             db_session.delete(tenant)
             db_session.commit()
 
-    def test_provision_tenant_kevel_adapter_with_credentials(self, client):
+    def test_provision_tenant_kevel_adapter_with_credentials(self, integration_db, client):
         """Test tenant provisioning with Kevel adapter and credentials."""
         with client.session_transaction() as sess:
             sess["signup_flow"] = True
@@ -153,7 +153,7 @@ class TestSelfServiceSignupFlow:
             db_session.delete(tenant)
             db_session.commit()
 
-    def test_provision_tenant_gam_adapter_without_oauth(self, client):
+    def test_provision_tenant_gam_adapter_without_oauth(self, integration_db, client):
         """Test tenant provisioning with GAM adapter (to be configured later)."""
         with client.session_transaction() as sess:
             sess["signup_flow"] = True
@@ -192,7 +192,7 @@ class TestSelfServiceSignupFlow:
             db_session.delete(tenant)
             db_session.commit()
 
-    def test_subdomain_uniqueness_validation(self, client):
+    def test_subdomain_uniqueness_validation(self, integration_db, client):
         """Test that duplicate subdomains are rejected."""
         # Create an existing tenant
         with get_db_session() as db_session:
@@ -257,7 +257,7 @@ class TestSelfServiceSignupFlow:
             assert response.status_code == 200
             assert b"reserved" in response.data.lower()
 
-    def test_signup_completion_page_renders(self, client):
+    def test_signup_completion_page_renders(self, integration_db, client):
         """Test that signup completion page renders with tenant information."""
         # Create a test tenant
         with get_db_session() as db_session:
@@ -318,7 +318,7 @@ class TestSelfServiceSignupFlow:
             assert response.status_code == 302
             assert "/signup/onboarding" in response.headers["Location"]
 
-    def test_session_cleanup_after_provisioning(self, client):
+    def test_session_cleanup_after_provisioning(self, integration_db, client):
         """Test that signup session flags are cleared after provisioning."""
         with client.session_transaction() as sess:
             sess["signup_flow"] = True

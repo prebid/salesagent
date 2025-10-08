@@ -1,143 +1,102 @@
-"""Database configuration with support for multiple backends."""
+"""Database configuration - PostgreSQL only.
+
+Production exclusively uses PostgreSQL. No SQLite support.
+This aligns with our principle: "No fallbacks - if it's in our control, make it work."
+"""
 
 import os
-import sqlite3
 from typing import Any
 from urllib.parse import urlparse
 
 
 class DatabaseConfig:
-    """Flexible database configuration supporting SQLite and PostgreSQL."""
+    """PostgreSQL database configuration."""
 
     @staticmethod
     def get_db_config() -> dict[str, Any]:
-        """Get database configuration from environment or defaults."""
+        """Get PostgreSQL configuration from environment."""
 
-        # Support DATABASE_URL for easy deployment (Heroku, Railway, etc.)
+        # Support DATABASE_URL for easy deployment (Heroku, Railway, Fly.io, etc.)
         database_url = os.environ.get("DATABASE_URL")
         if database_url:
             return DatabaseConfig._parse_database_url(database_url)
 
-        # Individual environment variables
-        db_type = os.environ.get("DB_TYPE", "sqlite").lower()
-
-        if db_type == "sqlite":
-            # Use persistent directory for SQLite
-            data_dir = os.environ.get("DATA_DIR", os.path.expanduser("~/.adcp"))
-            os.makedirs(data_dir, exist_ok=True)
-
-            return {
-                "type": "sqlite",
-                "path": os.path.join(data_dir, "adcp.db"),
-                "check_same_thread": False,  # Allow multi-threaded access
-            }
-
-        elif db_type == "postgresql":
-            return {
-                "type": "postgresql",
-                "host": os.environ.get("DB_HOST", "localhost"),
-                "port": int(os.environ.get("DB_PORT", "5432")),
-                "database": os.environ.get("DB_NAME", "adcp"),
-                "user": os.environ.get("DB_USER", "adcp"),
-                "password": os.environ.get("DB_PASSWORD", ""),
-                "sslmode": os.environ.get("DB_SSLMODE", "prefer"),
-            }
-
-        else:
-            raise ValueError(f"Unsupported database type: {db_type}. Use 'sqlite' or 'postgresql'")
+        # Individual environment variables (fallback)
+        return {
+            "type": "postgresql",
+            "host": os.environ.get("DB_HOST", "localhost"),
+            "port": int(os.environ.get("DB_PORT", "5432")),
+            "database": os.environ.get("DB_NAME", "adcp"),
+            "user": os.environ.get("DB_USER", "adcp"),
+            "password": os.environ.get("DB_PASSWORD", ""),
+            "sslmode": os.environ.get("DB_SSLMODE", "prefer"),
+        }
 
     @staticmethod
     def _parse_database_url(url: str) -> dict[str, Any]:
         """Parse DATABASE_URL into configuration dict."""
         parsed = urlparse(url)
 
-        if parsed.scheme == "sqlite":
-            path = parsed.path.lstrip("/")
-            # Ensure directory exists for SQLite database file
-            if path:
-                db_dir = os.path.dirname(path)
-                if db_dir:
-                    os.makedirs(db_dir, exist_ok=True)
-            return {"type": "sqlite", "path": path, "check_same_thread": False}
+        if parsed.scheme not in ["postgres", "postgresql"]:
+            raise ValueError(
+                f"Unsupported database scheme: {parsed.scheme}. "
+                f"Only PostgreSQL is supported. Use 'postgresql://' URLs."
+            )
 
-        elif parsed.scheme in ["postgres", "postgresql"]:
-            return {
-                "type": "postgresql",
-                "host": parsed.hostname,
-                "port": parsed.port or 5432,
-                "database": parsed.path.lstrip("/"),
-                "user": parsed.username,
-                "password": parsed.password or "",
-                "sslmode": "require" if "sslmode=require" in url else "prefer",
-            }
-
-        else:
-            raise ValueError(f"Unsupported database scheme: {parsed.scheme}. Use 'sqlite' or 'postgresql'")
+        return {
+            "type": "postgresql",
+            "host": parsed.hostname,
+            "port": parsed.port or 5432,
+            "database": parsed.path.lstrip("/"),
+            "user": parsed.username,
+            "password": parsed.password or "",
+            "sslmode": "require" if "sslmode=require" in url else "prefer",
+        }
 
     @staticmethod
     def get_connection_string() -> str:
         """Get connection string for SQLAlchemy."""
         config = DatabaseConfig.get_db_config()
 
-        if config["type"] == "sqlite":
-            return f"sqlite:///{config['path']}"
-
-        elif config["type"] == "postgresql":
-            password = config["password"]
-            if password:
-                auth = f"{config['user']}:{password}"
-            else:
-                auth = config["user"]
-
-            return (
-                f"postgresql://{auth}@{config['host']}:{config['port']}"
-                f"/{config['database']}?sslmode={config['sslmode']}"
-            )
-
+        password = config["password"]
+        if password:
+            auth = f"{config['user']}:{password}"
         else:
-            raise ValueError(f"Unsupported database type: {config['type']}")
+            auth = config["user"]
+
+        return (
+            f"postgresql://{auth}@{config['host']}:{config['port']}"
+            f"/{config['database']}?sslmode={config['sslmode']}"
+        )
 
 
 class DatabaseConnection:
-    """Database connection wrapper supporting multiple backends."""
+    """PostgreSQL database connection wrapper."""
 
     def __init__(self):
         self.config = DatabaseConfig.get_db_config()
         self.connection = None
 
     def connect(self):
-        """Connect to database based on configuration."""
-        if self.config["type"] == "sqlite":
-            self.connection = sqlite3.connect(self.config["path"], check_same_thread=self.config["check_same_thread"])
-            # Enable Row objects instead of tuples
-            self.connection.row_factory = sqlite3.Row
-            # Enable foreign keys for SQLite
-            self.connection.execute("PRAGMA foreign_keys = ON")
+        """Connect to PostgreSQL database."""
+        import psycopg2
+        import psycopg2.extras
 
-        elif self.config["type"] == "postgresql":
-            import psycopg2
-            import psycopg2.extras
-
-            self.connection = psycopg2.connect(
-                host=self.config["host"],
-                port=self.config["port"],
-                database=self.config["database"],
-                user=self.config["user"],
-                password=self.config["password"],
-                sslmode=self.config["sslmode"],
-                cursor_factory=psycopg2.extras.DictCursor,
-            )
+        self.connection = psycopg2.connect(
+            host=self.config["host"],
+            port=self.config["port"],
+            database=self.config["database"],
+            user=self.config["user"],
+            password=self.config["password"],
+            sslmode=self.config["sslmode"],
+            cursor_factory=psycopg2.extras.DictCursor,
+        )
 
         return self.connection
 
     def execute(self, query: str, params: tuple | None = None):
-        """Execute a query with proper parameter substitution."""
+        """Execute a query with parameter substitution."""
         cursor = self.connection.cursor()
-
-        # Convert parameter placeholders based on database type
-        if self.config["type"] == "postgresql" and "?" in query:
-            # Convert SQLite-style ? to %s for PostgreSQL
-            query = query.replace("?", "%s")
 
         if params:
             cursor.execute(query, params)
@@ -171,7 +130,7 @@ class DatabaseConnection:
 
 
 def get_db_connection() -> DatabaseConnection:
-    """Get a database connection using current configuration."""
+    """Get a PostgreSQL database connection using current configuration."""
     conn = DatabaseConnection()
     conn.connect()
     return conn

@@ -177,17 +177,3 @@ class TestDashboardService:
 
         assert health["status"] == "unhealthy"
         assert "Database connection failed" in health["error"]
-
-
-class TestDashboardServiceIntegration:
-    """Integration tests for DashboardService with real database."""
-
-    # Note: Integration tests moved to integration test suite for better database coverage
-
-    @pytest.mark.requires_db
-    def test_error_handling_invalid_tenant(self):
-        """Test error handling for invalid tenant."""
-        service = DashboardService("nonexistent_tenant")
-
-        with pytest.raises(ValueError, match="not found"):
-            service.get_dashboard_metrics()

@@ -13,9 +13,13 @@ import pytest
 @pytest.fixture(autouse=True)
 def mock_all_external_dependencies():
     """Automatically mock all external dependencies for unit tests."""
-    # Mock database connections
+    # Mock database connections - create a proper context manager mock
+    mock_session = MagicMock()
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=None)
+
     with patch("src.core.database.database_session.get_db_session") as mock_db:
-        mock_db.return_value = MagicMock()
+        mock_db.return_value = mock_session
 
         # Mock external services
         with patch("google.generativeai.configure"):

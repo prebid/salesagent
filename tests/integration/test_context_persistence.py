@@ -3,43 +3,28 @@
 
 import os
 import sys
-import tempfile
 from datetime import UTC, datetime
 
 from rich.console import Console
-from sqlalchemy import create_engine
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.core.context_manager import ContextManager
-from src.core.database.models import Base
 
 console = Console()
 
 
-def test_simplified_context():
+def test_simplified_context(integration_db):
     """Test the simplified context system."""
 
     console.print("[bold blue]Testing Simplified Context Persistence[/bold blue]")
     console.print("=" * 50)
 
-    # Create a temporary database for testing
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
-        test_db_path = tf.name
+    # Initialize context manager (will use the integration_db fixture)
+    ctx_manager = ContextManager()
 
     try:
-        # Create engine and tables
-        engine = create_engine(f"sqlite:///{test_db_path}")
-        Base.metadata.create_all(engine)
-
-        # Update the global db_session to use our test database
-        from src.core.database.database_session import db_session
-
-        db_session.configure(bind=engine)
-
-        # Initialize context manager (will use the configured db_session)
-        ctx_manager = ContextManager()
 
         # Test 1: Create a simple context for async operation
         console.print("\n[yellow]Test 1: Creating context for async operation[/yellow]")
@@ -156,14 +141,9 @@ def test_simplified_context():
         raise
 
     finally:
-        # Clean up database session
-        ctx_manager.close()
-        db_session.remove()
-
-        # Clean up temporary database
-        if os.path.exists(test_db_path):
-            os.unlink(test_db_path)
-            console.print(f"\n[dim]Cleaned up test database: {test_db_path}[/dim]")
+        # Clean up context manager
+        if "ctx_manager" in locals():
+            ctx_manager.close()
 
 
 if __name__ == "__main__":

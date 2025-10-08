@@ -86,4 +86,7 @@ conductor_ports.lock
 line_item_*_response.json
 
 # Test database files (PostgreSQL test databases)
-test_*
+# Only ignore database files/dirs, not test_*.py files
+test_*.db
+test_*.db-*
+test_*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/

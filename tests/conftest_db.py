@@ -13,10 +13,20 @@ os.environ["PYTEST_CURRENT_TEST"] = "true"
 
 @pytest.fixture(scope="session")
 def test_database_url():
-    """Create a test database URL."""
-    # Use TEST_DATABASE_URL if set (for local testing), otherwise DATABASE_URL (for CI),
-    # otherwise default to in-memory SQLite
-    return os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL", "sqlite:///:memory:")
+    """Get PostgreSQL test database URL.
+
+    REQUIRES: PostgreSQL container running (via run_all_tests.sh ci)
+    """
+    # Use TEST_DATABASE_URL if set, otherwise DATABASE_URL (for CI)
+    url = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+
+    if not url:
+        pytest.skip("Tests require PostgreSQL. Run: ./run_all_tests.sh ci")
+
+    if "postgresql" not in url:
+        pytest.skip(f"Tests require PostgreSQL, got: {url.split('://')[0]}. Run: ./run_all_tests.sh ci")
+
+    return url
 
 
 @pytest.fixture(scope="session")
@@ -24,9 +34,9 @@ def test_database(test_database_url):
     """Create and initialize test database once per session."""
     # Set the database URL for the application
     os.environ["DATABASE_URL"] = test_database_url
-    os.environ["DB_TYPE"] = "sqlite" if "sqlite" in test_database_url else "postgresql"
+    os.environ["DB_TYPE"] = "postgresql"
 
-    # Import all models FIRST (needed for both in-memory and PostgreSQL)
+    # Import all models FIRST
     from sqlalchemy import create_engine
     from sqlalchemy.orm import scoped_session, sessionmaker
 
@@ -63,26 +73,26 @@ def test_database(test_database_url):
     # This ensures we use the correct DATABASE_URL set above
     engine = create_engine(test_database_url, echo=False)
 
-    # Run migrations if not in-memory
-    if ":memory:" not in test_database_url:
-        import subprocess
+    # Run migrations for PostgreSQL
+    import subprocess
 
-        result = subprocess.run(
-            ["python3", "scripts/ops/migrate.py"], capture_output=True, text=True, cwd=Path(__file__).parent.parent
-        )
-        if result.returncode != 0:
-            pytest.skip(f"Migration failed: {result.stderr}")
-    else:
-        # For in-memory database, create tables directly (migrations don't work with :memory:)
-        Base.metadata.create_all(engine)
+    result = subprocess.run(
+        ["python3", "scripts/ops/migrate.py"], capture_output=True, text=True, cwd=Path(__file__).parent.parent
+    )
+    if result.returncode != 0:
+        pytest.skip(f"Migration failed: {result.stderr}")
 
-    # Update the global database session to use this engine (for BOTH in-memory and PostgreSQL)
-    # This ensures all tests use the correct test database, not the stale module-level engine
+    # Reset any existing engine and force initialization with test database
+    from src.core.database.database_session import reset_engine
+
+    reset_engine()
+
+    # Now update the globals to use our test engine
     import src.core.database.database_session as db_session_module
 
-    db_session_module.engine = engine
-    db_session_module.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db_session_module.db_session = scoped_session(db_session_module.SessionLocal)
+    db_session_module._engine = engine
+    db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
 
     # Initialize with test data
     from scripts.setup.init_database import init_db

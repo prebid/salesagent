@@ -1,16 +1,13 @@
 """Test standardized session management and JSON validation."""
 
-import os
-import tempfile
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
 
 # Import our new utilities
 from src.core.database.database_session import DatabaseManager, get_db_session, get_or_404, get_or_create
-from src.core.database.models import Base, Context, Principal, Product, Tenant, WorkflowStep
+from src.core.database.models import Context, Principal, Product, Tenant, WorkflowStep
 from src.core.json_validators import (
     CommentModel,
     CreativeFormatModel,
@@ -23,27 +20,12 @@ from tests.utils.database_helpers import create_tenant_with_timestamps
 
 # Test fixtures
 @pytest.fixture
-def test_db():
-    """Create a temporary test database."""
-    # Create a temporary database
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
+def test_db(integration_db):
+    """Use PostgreSQL test database for session management tests."""
+    # integration_db fixture provides the database, just return the engine
+    from src.core.database.database_session import get_engine
 
-    # Create engine and tables
-    engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(engine)
-
-    # Update SessionLocal for tests
-    from src.core.database.database_session import db_session
-
-    _ = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db_session.configure(bind=engine)
-
-    yield engine
-
-    # Cleanup
-    db_session.remove()
-    os.unlink(db_path)
+    yield get_engine()
 
 
 class TestSessionManagement:

@@ -25,7 +25,7 @@ class TestDatabaseHealthIntegration:
     # Note: Using conftest_db fixtures instead of custom temp_database
     # This ensures proper test isolation and database setup
 
-    def test_health_check_with_complete_database(self, test_tenant):
+    def test_health_check_with_complete_database(self, integration_db, test_tenant):
         """Test health check against a complete, properly migrated database."""
         # test_tenant fixture provides a functional database with test data
 
@@ -51,7 +51,7 @@ class TestDatabaseHealthIntegration:
         assert isinstance(health["schema_issues"], list)
         assert isinstance(health["recommendations"], list)
 
-    def test_health_check_with_missing_tables(self):
+    def test_health_check_with_missing_tables(self, integration_db):
         """Test health check detects missing tables correctly."""
         # Use a mock to simulate missing tables without actually dropping them
         from unittest.mock import patch
@@ -81,7 +81,7 @@ class TestDatabaseHealthIntegration:
                 assert health["status"] == "unhealthy", "Should report unhealthy status"
                 assert len(health["schema_issues"]) > 0, "Should report schema issues"
 
-    def test_health_check_with_extra_tables(self, clean_db):
+    def test_health_check_with_extra_tables(self, integration_db, clean_db):
         """Test health check detects extra/deprecated tables."""
         # Add an extra table that shouldn't exist
         from src.core.database.database_session import engine
@@ -98,7 +98,7 @@ class TestDatabaseHealthIntegration:
         # Should detect extra table
         assert "deprecated_old_table" in health["extra_tables"], "Should detect extra table"
 
-    def test_health_check_database_access_errors(self):
+    def test_health_check_database_access_errors(self, integration_db):
         """Test health check handles database access errors gracefully."""
         # Mock the database session to raise a connection error
         from unittest.mock import MagicMock, patch
@@ -124,7 +124,7 @@ class TestDatabaseHealthIntegration:
             error_found = any("health check failed" in issue.lower() for issue in health["schema_issues"])
             assert error_found, f"Should include database connection error in issues: {health['schema_issues']}"
 
-    def test_health_check_migration_status_detection(self, clean_db):
+    def test_health_check_migration_status_detection(self, integration_db, clean_db):
         """Test that health check correctly detects migration status."""
         # The health check should detect current migration version
         health = check_database_health()
@@ -137,7 +137,7 @@ class TestDatabaseHealthIntegration:
         if health["migration_status"]:
             assert len(health["migration_status"]) > 0, "Migration status should not be empty string"
 
-    def test_print_health_report_integration(self, clean_db, capsys):
+    def test_print_health_report_integration(self, integration_db, clean_db, capsys):
         """Test health report printing with real health check data."""
         # Run real health check
         health = check_database_health()
@@ -156,7 +156,7 @@ class TestDatabaseHealthIntegration:
         # Should be properly formatted
         assert "Database Health Status:" in captured.out, "Should have header"
 
-    def test_health_check_with_real_schema_validation(self, test_tenant, test_product):
+    def test_health_check_with_real_schema_validation(self, integration_db, test_tenant, test_product):
         """Test health check validates actual database schema against expected schema."""
         # test_tenant and test_product fixtures provide test data
 
@@ -176,7 +176,7 @@ class TestDatabaseHealthIntegration:
             assert product_count >= 1, "Should have at least one product"
 
     @pytest.mark.requires_db
-    def test_health_check_performance_with_real_database(self, clean_db):
+    def test_health_check_performance_with_real_database(self, integration_db, clean_db):
         """Test that health check completes in reasonable time with real database."""
         import time
 
@@ -208,7 +208,7 @@ class TestDatabaseHealthIntegration:
         # Should still return valid results
         assert "status" in health, "Should return valid health report even with larger dataset"
 
-    def test_health_check_table_existence_validation(self, test_tenant):
+    def test_health_check_table_existence_validation(self, integration_db, test_tenant):
         """Test that health check validates existence of all required tables."""
         # Get list of tables that should exist
 

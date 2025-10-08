@@ -6,15 +6,15 @@ Tests the actual behavior change: discovery endpoints work without auth.
 
 from unittest.mock import Mock, patch
 
-# Test the helper function that changed
-from src.core.main import get_principal_from_context
-
 
 class TestAuthRemovalChanges:
     """Simple tests for the core changes made."""
 
     def test_get_principal_from_context_returns_none_without_auth(self):
         """Test that get_principal_from_context returns None when no auth provided."""
+        # Lazy import to avoid triggering load_config() at module import time
+        from src.core.main import get_principal_from_context
+
         context = Mock(spec=["meta"])  # Limit to only meta attribute
         context.meta = {}  # Empty meta, no headers
 
@@ -24,6 +24,9 @@ class TestAuthRemovalChanges:
 
     def test_get_principal_from_context_works_with_auth(self):
         """Test that get_principal_from_context still works with auth."""
+        # Lazy import to avoid triggering load_config() at module import time
+        from src.core.main import get_principal_from_context
+
         context = Mock(spec=["meta"])  # Limit to only meta attribute
         context.meta = {"headers": {"x-adcp-auth": "test-token"}}
 
