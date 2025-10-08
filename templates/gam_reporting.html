@@ -288,7 +288,7 @@ async function updateReports() {
     });
 
     try {
-        const response = await fetch(`/api/tenant/{{ tenant.tenant_id }}/gam/reporting?date_range=${dateRange}&timezone=${timezone}`, {
+        const response = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting?date_range=${dateRange}&timezone=${timezone}`, {
             credentials: 'same-origin'
         });
 
@@ -611,7 +611,7 @@ async function updateCountryHeatmap() {
         if (adUnitId) params += `&ad_unit_id=${adUnitId}`;
 
         // Fetch country breakdown data
-        const response = await fetch(`/api/tenant/{{ tenant.tenant_id }}/gam/reporting/countries?${params}`, {
+        const response = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting/countries?${params}`, {
             credentials: 'same-origin'
         });
 
@@ -901,7 +901,7 @@ async function updateAdUnitAnalysis() {
         if (advertiserId) params += `&advertiser_id=${advertiserId}`;
 
         // Fetch ad unit breakdown data
-        const response = await fetch(`/api/tenant/{{ tenant.tenant_id }}/gam/reporting/ad-units?${params}`, {
+        const response = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting/ad-units?${params}`, {
             credentials: 'same-origin'
         });
 
@@ -1181,7 +1181,7 @@ async function populateAllFilters() {
 
     try {
         // Fetch base report to get advertisers
-        const baseResponse = await fetch(`/api/tenant/{{ tenant.tenant_id }}/gam/reporting?date_range=${dateRange}&timezone=${timezone}`, {
+        const baseResponse = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting?date_range=${dateRange}&timezone=${timezone}`, {
             credentials: 'same-origin'
         });
 
@@ -1216,7 +1216,7 @@ async function populateAllFilters() {
         }
 
         // Fetch country data to populate country filter
-        const countryResponse = await fetch(`/api/tenant/{{ tenant.tenant_id }}/gam/reporting/countries?date_range=${dateRange}&timezone=${timezone}`, {
+        const countryResponse = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting/countries?date_range=${dateRange}&timezone=${timezone}`, {
             credentials: 'same-origin'
         });
 
@@ -1239,7 +1239,7 @@ async function populateAllFilters() {
         }
 
         // Fetch ad unit data to populate ad unit filter
-        const adUnitResponse = await fetch(`/api/tenant/{{ tenant.tenant_id }}/gam/reporting/ad-units?date_range=${dateRange}&timezone=${timezone}`, {
+        const adUnitResponse = await fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/gam/reporting/ad-units?date_range=${dateRange}&timezone=${timezone}`, {
             credentials: 'same-origin'
         });
 

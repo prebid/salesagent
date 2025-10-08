@@ -187,8 +187,9 @@ def tenant_settings(tenant_id, section=None):
             stmt = select(Product).filter_by(tenant_id=tenant_id)
             products = db_session.scalars(stmt).all()
             product_count = len(products)
-            active_products = len([p for p in products if p.status == "active"])
-            draft_products = len([p for p in products if p.status == "draft"])
+            # Note: Product model doesn't have status field
+            active_products = product_count  # All products are considered active
+            draft_products = 0  # No draft status tracking
 
             # Get creative formats
             from src.core.database.models import CreativeFormat

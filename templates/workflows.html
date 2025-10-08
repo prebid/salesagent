@@ -95,11 +95,11 @@
                                 Review & Approve
                             </a>
                             {% elif buy.status == 'active' %}
-                            <a href="/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}/details" class="btn btn-sm btn-link" title="View Details">
+                            <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}" class="btn btn-sm btn-link" title="View Details">
                                 View Details
                             </a>
                             {% else %}
-                            <a href="/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}/details" class="btn btn-sm btn-link" title="View Details">
+                            <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}" class="btn btn-sm btn-link" title="View Details">
                                 View Details
                             </a>
                             {% endif %}

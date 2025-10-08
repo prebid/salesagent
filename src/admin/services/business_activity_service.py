@@ -56,7 +56,7 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
                 .order_by(AuditLog.timestamp.desc())
                 .limit(limit * 2)  # Get more than we need in case we filter some out
             )
-            recent_logs = db_session.scalars(stmt).all()
+            recent_logs = db.scalars(stmt).all()
 
             for log in recent_logs:
                 # Parse details if available

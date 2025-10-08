@@ -56,18 +56,28 @@ def validate_timezone(tz_str: str) -> bool:
 
 
 def require_auth(f):
-    """Decorator to require authentication"""
+    """Decorator to require authentication for API endpoints.
+
+    This is a specialized version for API endpoints that returns JSON 401 responses
+    instead of redirects. It uses the same session checking as the main admin UI.
+    """
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        from flask import request
+
         # Check if user is authenticated (align with admin_ui style)
         # Admin UI sets session["user"] on successful authentication
         has_user = "user" in session
-        logger.info(f"Auth check - session keys: {list(session.keys())}, has_user: {has_user}")
+        logger.debug(
+            f"GAM API auth check - path: {request.path}, session keys: {list(session.keys())}, has_user: {has_user}"
+        )
 
         if not has_user:
-            logger.warning(f"Authentication failed - no user in session. Session keys: {list(session.keys())}")
-            return jsonify({"error": "Authentication required"}), 401
+            logger.warning(
+                f"GAM API authentication failed - no user in session. Path: {request.path}, Session keys: {list(session.keys())}"
+            )
+            return jsonify({"error": "Authentication required. Please log in to the admin UI."}), 401
 
         return f(*args, **kwargs)
 
