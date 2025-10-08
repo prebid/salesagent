@@ -383,6 +383,19 @@ def edit_product(tenant_id, product_id):
 
                         attributes.flag_modified(product, "implementation_config")
 
+                # Update minimum spend override
+                from decimal import Decimal, InvalidOperation
+
+                min_spend_str = form_data.get("min_spend", "").strip()
+                if min_spend_str:
+                    try:
+                        product.min_spend = Decimal(min_spend_str)
+                    except (ValueError, InvalidOperation):
+                        flash("Invalid minimum spend value", "error")
+                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+                else:
+                    product.min_spend = None
+
                 db_session.commit()
 
                 flash(f"Product '{product.name}' updated successfully", "success")
@@ -396,6 +409,7 @@ def edit_product(tenant_id, product_id):
                 "delivery_type": product.delivery_type,
                 "is_fixed_price": product.is_fixed_price,
                 "cpm": product.cpm,
+                "min_spend": product.min_spend,
                 "price_guidance": product.price_guidance,
                 "formats": (
                     product.formats
@@ -435,6 +449,7 @@ def edit_product(tenant_id, product_id):
                     "edit_product.html",
                     tenant_id=tenant_id,
                     product=product_dict,
+                    tenant_adapter=adapter_type,
                 )
 
     except Exception as e:

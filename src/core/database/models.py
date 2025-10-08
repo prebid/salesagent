@@ -47,7 +47,7 @@ class Tenant(Base, JSONValidatorMixin):
 
     # New columns from migration
     ad_server = Column(String(50))
-    max_daily_budget = Column(Integer, nullable=False, default=10000)
+    # NOTE: currency_code, max_daily_budget, min_product_spend moved to currency_limits table
     enable_axe_signals = Column(Boolean, nullable=False, default=True)
     authorized_emails = Column(JSONType)  # JSON array
     authorized_domains = Column(JSONType)  # JSON array
@@ -74,6 +74,7 @@ class Tenant(Base, JSONValidatorMixin):
     # tasks table removed - replaced by workflow_steps
     audit_logs = relationship("AuditLog", back_populates="tenant", cascade="all, delete-orphan")
     strategies = relationship("Strategy", back_populates="tenant", cascade="all, delete-orphan", overlaps="strategies")
+    currency_limits = relationship("CurrencyLimit", back_populates="tenant", cascade="all, delete-orphan")
     adapter_config = relationship(
         "AdapterConfig",
         back_populates="tenant",
@@ -153,6 +154,44 @@ class Product(Base, JSONValidatorMixin):
     tenant = relationship("Tenant", back_populates="products")
 
     __table_args__ = (Index("idx_products_tenant", "tenant_id"),)
+
+
+class CurrencyLimit(Base):
+    """Currency-specific budget limits per tenant.
+
+    Each tenant can support multiple currencies with different min/max limits.
+    This avoids FX conversion and provides currency-specific controls.
+
+    **IMPORTANT**: All limits are per-package (not per media buy) to prevent
+    buyers from splitting large budgets across many packages/line items.
+    """
+
+    __tablename__ = "currency_limits"
+
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    currency_code = Column(String(3), primary_key=True)  # ISO 4217: USD, EUR, GBP, etc.
+
+    # Minimum total budget per package/line item in this currency
+    min_package_budget: Mapped[Decimal | None] = mapped_column(DECIMAL(15, 2), nullable=True)
+
+    # Maximum daily spend per package/line item in this currency
+    # Prevents buyers from creating many small line items to bypass limits
+    max_daily_package_spend: Mapped[Decimal | None] = mapped_column(DECIMAL(15, 2), nullable=True)
+
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    tenant = relationship("Tenant", back_populates="currency_limits")
+
+    __table_args__ = (
+        Index("idx_currency_limits_tenant", "tenant_id"),
+        UniqueConstraint("tenant_id", "currency_code", name="uq_currency_limit"),
+    )
 
 
 class Principal(Base, JSONValidatorMixin):

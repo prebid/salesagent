@@ -44,7 +44,6 @@ class TestMCPEndpointsComprehensive:
                 subdomain="test-mcp",
                 is_active=True,
                 ad_server="mock",
-                max_daily_budget=10000,
                 enable_axe_signals=True,
                 authorized_emails=[],
                 authorized_domains=[],

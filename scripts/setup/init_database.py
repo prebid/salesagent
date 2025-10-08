@@ -83,7 +83,6 @@ def init_db(exit_on_error=False):
                 is_active=True,
                 billing_plan="standard",
                 ad_server="mock",
-                max_daily_budget=10000,
                 enable_axe_signals=True,
                 admin_token=admin_token,
                 human_review_required=True,
@@ -92,6 +91,17 @@ def init_db(exit_on_error=False):
                 updated_at=now,
             )
             session.add(default_tenant)
+
+            # Add default currency limit for USD
+            from src.core.database.models import CurrencyLimit
+
+            default_currency_limit = CurrencyLimit(
+                tenant_id="default",
+                currency_code="USD",
+                min_package_budget=1000.0,
+                max_daily_package_spend=10000.0,
+            )
+            session.add(default_currency_limit)
 
             # Create adapter config for mock adapter
             adapter_config = AdapterConfig(tenant_id="default", adapter_type="mock", mock_dry_run=False)

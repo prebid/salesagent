@@ -57,6 +57,21 @@
                 </div>
                 <small style="color: #666;">Suggested CPM range for non-guaranteed inventory</small>
             </div>
+
+            <div class="form-group">
+                <label for="min_spend">Minimum Spend Override</label>
+                <input type="number" id="min_spend" name="min_spend"
+                       value="{{ product.min_spend if product.min_spend else '' }}"
+                       placeholder="Use tenant default{% if tenant_min_spend %} ({{ tenant_min_spend }} {{ tenant_currency or 'USD' }}){% endif %}"
+                       step="0.01" min="0">
+                <small style="color: #666;">
+                    {% if tenant_min_spend %}
+                    Override the tenant's global minimum spend ({{ tenant_min_spend }} {{ tenant_currency or 'USD' }}). Leave empty to use global setting.
+                    {% else %}
+                    Set a minimum spend requirement for this product (no global minimum is set).
+                    {% endif %}
+                </small>
+            </div>
         </div>
 
         <div class="alert" style="background: #e3f2fd; border-color: #90caf9; color: #1565c0;">

@@ -205,7 +205,6 @@ class TestSelfServiceSignupFlow:
                 billing_plan="standard",
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
-                max_daily_budget=10000,
                 enable_axe_signals=True,
                 human_review_required=True,
             )
@@ -270,7 +269,6 @@ class TestSelfServiceSignupFlow:
                 billing_plan="standard",
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
-                max_daily_budget=10000,
                 enable_axe_signals=True,
                 human_review_required=True,
             )

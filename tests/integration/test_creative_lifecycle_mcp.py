@@ -54,7 +54,6 @@ class TestCreativeLifecycleMCP:
                 subdomain="creative-test",
                 is_active=True,
                 ad_server="mock",
-                max_daily_budget=10000,
                 enable_axe_signals=True,
                 authorized_emails=[],
                 authorized_domains=[],
@@ -62,6 +61,17 @@ class TestCreativeLifecycleMCP:
                 human_review_required=False,
             )
             session.add(tenant)
+
+            # Add currency limit for USD
+            from src.core.database.models import CurrencyLimit
+
+            currency_limit = CurrencyLimit(
+                tenant_id="creative_test",
+                currency_code="USD",
+                min_package_budget=1000.0,
+                max_daily_package_spend=10000.0,
+            )
+            session.add(currency_limit)
 
             # Create test principal
             principal = Principal(

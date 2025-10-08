@@ -181,7 +181,6 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
                             "name": tenant.name,
                             "subdomain": tenant.subdomain,
                             "ad_server": tenant.ad_server,
-                            "max_daily_budget": tenant.max_daily_budget,
                             "enable_axe_signals": tenant.enable_axe_signals,
                             "authorized_emails": tenant.authorized_emails or [],
                             "authorized_domains": tenant.authorized_domains or [],
@@ -230,7 +229,6 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
                     "name": tenant.name,
                     "subdomain": tenant.subdomain,
                     "ad_server": tenant.ad_server,
-                    "max_daily_budget": tenant.max_daily_budget,
                     "enable_axe_signals": tenant.enable_axe_signals,
                     "authorized_emails": tenant.authorized_emails or [],
                     "authorized_domains": tenant.authorized_domains or [],
@@ -2770,6 +2768,137 @@ def _create_media_buy_impl(
                     error_msg = f"Package {package.buyer_ref} must contain at least one product."
                     raise ValueError(error_msg)
 
+        # 4. Currency-specific budget validation
+        from decimal import Decimal
+
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import CurrencyLimit
+        from src.core.database.models import Product as ProductModel
+
+        # Get currency from budget (AdCP v2.4) or default to USD
+        request_currency = None
+        if req.budget:
+            request_currency = req.budget.currency
+        elif req.packages and req.packages[0].budget:
+            request_currency = req.packages[0].budget.currency
+        else:
+            request_currency = "USD"  # Default
+
+        # Get currency limits for this tenant and currency
+        with get_db_session() as session:
+            stmt = select(CurrencyLimit).where(
+                CurrencyLimit.tenant_id == tenant["tenant_id"], CurrencyLimit.currency_code == request_currency
+            )
+            currency_limit = session.scalars(stmt).first()
+
+            # Check if tenant supports this currency
+            if not currency_limit:
+                error_msg = (
+                    f"Currency {request_currency} is not supported by this publisher. "
+                    f"Contact the publisher to add support for this currency."
+                )
+                raise ValueError(error_msg)
+
+            # Validate minimum product spend
+            if currency_limit.min_package_budget:
+                # Get products from database to check per-product minimums
+                stmt = select(ProductModel).where(
+                    ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids)
+                )
+                products = session.scalars(stmt).all()
+
+                # Build map of product_id -> minimum spend
+                product_min_spends = {}
+                for product in products:
+                    # Use product-specific override if set, otherwise use currency limit minimum
+                    min_spend = (
+                        product.min_spend if product.min_spend is not None else currency_limit.min_package_budget
+                    )
+                    if min_spend is not None:
+                        product_min_spends[product.product_id] = Decimal(str(min_spend))
+
+                # Validate budget against minimum spend requirements
+                if product_min_spends:
+                    # Check if we're in legacy mode (packages without budgets)
+                    is_legacy_mode = req.packages and all(not pkg.budget for pkg in req.packages)
+
+                    # For packages with budgets, validate each package's budget
+                    if req.packages and not is_legacy_mode:
+                        for package in req.packages:
+                            # Skip packages without budgets (shouldn't happen in v2.4 format)
+                            if not package.budget:
+                                continue
+
+                            # Get the minimum spend requirement for products in this package
+                            package_product_ids = package.products if package.products else []
+                            applicable_min_spends = [
+                                product_min_spends[pid] for pid in package_product_ids if pid in product_min_spends
+                            ]
+
+                            if applicable_min_spends:
+                                # Use the highest minimum spend among all products in package
+                                required_min_spend = max(applicable_min_spends)
+                                package_budget = Decimal(str(package.budget.total))
+
+                                if package_budget < required_min_spend:
+                                    error_msg = (
+                                        f"Package budget ({package_budget} {request_currency}) does not meet minimum spend requirement "
+                                        f"({required_min_spend} {request_currency}) for products in this package"
+                                    )
+                                    raise ValueError(error_msg)
+                    else:
+                        # Legacy mode: single total_budget for all products
+                        applicable_min_spends = list(product_min_spends.values())
+                        if applicable_min_spends:
+                            required_min_spend = max(applicable_min_spends)
+                            budget_decimal = Decimal(str(total_budget))
+
+                            if budget_decimal < required_min_spend:
+                                error_msg = (
+                                    f"Total budget ({total_budget} {request_currency}) does not meet minimum spend requirement "
+                                    f"({required_min_spend} {request_currency}) for the selected products"
+                                )
+                                raise ValueError(error_msg)
+
+            # Validate maximum daily spend per package (if set)
+            # This is per-package to prevent buyers from splitting large budgets across many packages
+            if currency_limit.max_daily_package_spend:
+                flight_days = (req.end_time - req.start_time).days
+                if flight_days <= 0:
+                    flight_days = 1
+
+                # Check if we're in legacy mode (packages without budgets)
+                is_legacy_mode = req.packages and all(not pkg.budget for pkg in req.packages)
+
+                # For packages with budgets, validate each package's daily budget
+                if req.packages and not is_legacy_mode:
+                    for package in req.packages:
+                        if not package.budget:
+                            continue
+                        package_budget = Decimal(str(package.budget.total))
+                        package_daily_budget = package_budget / Decimal(str(flight_days))
+
+                        if package_daily_budget > currency_limit.max_daily_package_spend:
+                            error_msg = (
+                                f"Package daily budget ({package_daily_budget} {request_currency}) exceeds "
+                                f"maximum daily spend per package ({currency_limit.max_daily_package_spend} {request_currency}). "
+                                f"This protects against accidental large budgets and prevents GAM line item proliferation."
+                            )
+                            raise ValueError(error_msg)
+                else:
+                    # Legacy mode: validate total budget
+                    daily_budget = Decimal(str(total_budget)) / Decimal(str(flight_days))
+
+                    if daily_budget > currency_limit.max_daily_package_spend:
+                        error_msg = (
+                            f"Daily budget ({daily_budget} {request_currency}) exceeds maximum daily spend "
+                            f"({currency_limit.max_daily_package_spend} {request_currency}). "
+                            f"This protects against accidental large budgets."
+                        )
+                        raise ValueError(error_msg)
+
         # Validate targeting doesn't use managed-only dimensions
         if req.targeting_overlay:
             from src.services.targeting_capabilities import validate_overlay_targeting
@@ -3539,6 +3668,69 @@ def update_media_buy(
             status="pending_manual",
             detail=f"Manual approval required. Workflow Step ID: {step.step_id}",
         )
+
+    # Validate currency limits if flight dates or budget changes
+    # This prevents workarounds where buyers extend flight to bypass daily max
+    if req.start_time or req.end_time or req.budget or (req.packages and any(pkg.budget for pkg in req.packages)):
+        from decimal import Decimal
+
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import CurrencyLimit
+        from src.core.database.models import MediaBuy as MediaBuyModel
+
+        # Get media buy from database to check currency and current dates
+        with get_db_session() as session:
+            stmt = select(MediaBuyModel).where(MediaBuyModel.media_buy_id == req.media_buy_id)
+            media_buy = session.scalars(stmt).first()
+
+            if media_buy:
+                # Determine currency (use updated or existing)
+                request_currency = req.currency or media_buy.currency or "USD"
+
+                # Get currency limit
+                stmt = select(CurrencyLimit).where(
+                    CurrencyLimit.tenant_id == tenant["tenant_id"], CurrencyLimit.currency_code == request_currency
+                )
+                currency_limit = session.scalars(stmt).first()
+
+                if not currency_limit:
+                    error_msg = f"Currency {request_currency} is not supported by this publisher."
+                    ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
+                    return UpdateMediaBuyResponse(status="failed", detail=error_msg)
+
+                # Calculate new flight duration
+                start = req.start_time if req.start_time else media_buy.start_time
+                end = req.end_time if req.end_time else media_buy.end_time
+
+                # Parse datetime strings if needed
+                from datetime import datetime as dt
+
+                if isinstance(start, str):
+                    start = dt.fromisoformat(start.replace("Z", "+00:00"))
+                if isinstance(end, str):
+                    end = dt.fromisoformat(end.replace("Z", "+00:00"))
+
+                flight_days = (end - start).days
+                if flight_days <= 0:
+                    flight_days = 1
+
+                # Validate max daily spend for packages
+                if currency_limit.max_daily_package_spend and req.packages:
+                    for pkg_update in req.packages:
+                        if pkg_update.budget:
+                            package_budget = Decimal(str(pkg_update.budget))
+                            package_daily = package_budget / Decimal(str(flight_days))
+
+                            if package_daily > currency_limit.max_daily_package_spend:
+                                error_msg = (
+                                    f"Updated package daily budget ({package_daily} {request_currency}) "
+                                    f"exceeds maximum ({currency_limit.max_daily_package_spend} {request_currency}). "
+                                    f"Flight date changes that reduce daily budget are not allowed to bypass limits."
+                                )
+                                ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
+                                return UpdateMediaBuyResponse(status="failed", detail=error_msg)
 
     # Handle campaign-level updates
     if req.active is not None:

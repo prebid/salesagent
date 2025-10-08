@@ -55,7 +55,6 @@ def test_tenant(integration_db):
             name="Test Tenant",
             subdomain="test",
             ad_server="mock",
-            max_daily_budget=10000,
             enable_axe_signals=True,
             auto_approve_formats=[],
             human_review_required=False,

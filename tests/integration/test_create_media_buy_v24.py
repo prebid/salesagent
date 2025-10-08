@@ -35,6 +35,7 @@ class TestCreateMediaBuyV24Format:
         from datetime import datetime
 
         from src.core.config_loader import set_current_tenant
+        from src.core.database.models import CurrencyLimit
         from src.core.database.models import Principal as ModelPrincipal
         from src.core.database.models import Product as ModelProduct
         from src.core.database.models import Tenant as ModelTenant
@@ -79,6 +80,23 @@ class TestCreateMediaBuyV24Format:
             )
             session.add(product)
 
+            # Add currency limits for USD and EUR
+            currency_limit_usd = CurrencyLimit(
+                tenant_id="test_tenant_v24",
+                currency_code="USD",
+                min_package_budget=1000.0,
+                max_daily_package_spend=10000.0,
+            )
+            session.add(currency_limit_usd)
+
+            currency_limit_eur = CurrencyLimit(
+                tenant_id="test_tenant_v24",
+                currency_code="EUR",
+                min_package_budget=1000.0,
+                max_daily_package_spend=10000.0,
+            )
+            session.add(currency_limit_eur)
+
             session.commit()
 
             # Set tenant context
@@ -100,6 +118,7 @@ class TestCreateMediaBuyV24Format:
             # Cleanup
             session.execute(delete(ModelProduct).where(ModelProduct.tenant_id == "test_tenant_v24"))
             session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == "test_tenant_v24"))
+            session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_tenant_v24"))
             session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == "test_tenant_v24"))
             session.commit()
 

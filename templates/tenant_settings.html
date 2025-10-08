@@ -740,6 +740,65 @@
                     </div>
                 </div>
 
+                <!-- Currency Limits -->
+                <div class="form-section">
+                    <h3>Currency Limits</h3>
+                    <p style="color: #6b7280; margin-bottom: 1.5rem;">
+                        Configure budget limits for each currency you accept. This prevents errors and typos while avoiding foreign exchange complications.
+                    </p>
+
+                    <div id="currency-limits-container">
+                        {% if currency_limits %}
+                            {% for limit in currency_limits %}
+                            <div class="currency-limit-row" data-currency="{{ limit.currency_code }}">
+                                <div class="form-grid" style="grid-template-columns: 120px 1fr 1fr 60px; align-items: start; gap: 1rem; padding: 1rem; background: #f9fafb; border-radius: 8px; margin-bottom: 1rem;">
+                                    <div>
+                                        <strong style="font-size: 1.125rem; color: #111827;">{{ limit.currency_code }}</strong>
+                                        <br><small style="color: #6b7280;">Currency</small>
+                                    </div>
+                                    <div class="form-group" style="margin: 0;">
+                                        <label for="min_spend_{{ limit.currency_code }}">Minimum Per Package</label>
+                                        <input type="number" id="min_spend_{{ limit.currency_code }}"
+                                               name="currency_limits[{{ limit.currency_code }}][min_package_budget]"
+                                               value="{{ limit.min_package_budget if limit.min_package_budget else '' }}"
+                                               min="0" step="0.01" placeholder="No minimum">
+                                        <small style="color: #6b7280;">
+                                            Total budget per package/line item<br>
+                                            <em>Example: Set to 1,000 → rejects packages under $1k</em>
+                                        </small>
+                                    </div>
+                                    <div class="form-group" style="margin: 0;">
+                                        <label for="max_daily_{{ limit.currency_code }}">Maximum Daily Per Package</label>
+                                        <input type="number" id="max_daily_{{ limit.currency_code }}"
+                                               name="currency_limits[{{ limit.currency_code }}][max_daily_package_spend]"
+                                               value="{{ limit.max_daily_package_spend if limit.max_daily_package_spend else '' }}"
+                                               min="0" step="0.01" placeholder="No maximum">
+                                        <small style="color: #6b7280;">
+                                            Max daily spend per package (prevents line item proliferation)<br>
+                                            <em>Example: Set to 10,000 → rejects $100k package over 5 days ($20k/day)</em>
+                                        </small>
+                                    </div>
+                                    <div style="padding-top: 1.5rem;">
+                                        <button type="button" class="btn-danger" onclick="removeCurrencyLimit('{{ limit.currency_code }}')">
+                                            Remove
+                                        </button>
+                                        <input type="hidden" name="currency_limits[{{ limit.currency_code }}][_delete]" value="false">
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% endif %}
+                    </div>
+
+                    <div style="margin-top: 1rem;">
+                        <label for="new_currency_code">Add New Currency</label>
+                        <div style="display: flex; gap: 0.5rem; align-items: flex-end;">
+                            <input type="text" id="new_currency_code" placeholder="USD, EUR, GBP..." maxlength="3" style="width: 100px; text-transform: uppercase;">
+                            <button type="button" class="btn btn-secondary" onclick="addCurrencyLimit()">Add Currency</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Naming Conventions -->
                 <div class="form-section">
                     <h3>Naming Conventions</h3>
@@ -2637,6 +2696,83 @@ function confirmDeactivation() {
         'This will immediately deactivate your sales agent and stop all active campaigns.\n\n' +
         'Are you absolutely sure you want to proceed?'
     );
+}
+
+// Currency Limits Management
+function addCurrencyLimit() {
+    const input = document.getElementById('new_currency_code');
+    const currencyCode = input.value.trim().toUpperCase();
+
+    if (!currencyCode || currencyCode.length !== 3) {
+        alert('Please enter a valid 3-letter currency code (e.g., USD, EUR, GBP)');
+        return;
+    }
+
+    // Check if currency already exists
+    const existing = document.querySelector(`.currency-limit-row[data-currency="${currencyCode}"]`);
+    if (existing) {
+        alert(`Currency ${currencyCode} already exists`);
+        return;
+    }
+
+    // Create new currency limit row
+    const container = document.getElementById('currency-limits-container');
+    const newRow = document.createElement('div');
+    newRow.className = 'currency-limit-row';
+    newRow.setAttribute('data-currency', currencyCode);
+    newRow.innerHTML = `
+        <div class="form-grid" style="grid-template-columns: 120px 1fr 1fr 60px; align-items: start; gap: 1rem; padding: 1rem; background: #f9fafb; border-radius: 8px; margin-bottom: 1rem;">
+            <div>
+                <strong style="font-size: 1.125rem; color: #111827;">${currencyCode}</strong>
+                <br><small style="color: #6b7280;">Currency</small>
+            </div>
+            <div class="form-group" style="margin: 0;">
+                <label for="min_spend_${currencyCode}">Minimum Per Package</label>
+                <input type="number" id="min_spend_${currencyCode}"
+                       name="currency_limits[${currencyCode}][min_package_budget]"
+                       min="0" step="0.01" placeholder="No minimum">
+                <small style="color: #6b7280;">
+                    Total budget per package/line item<br>
+                    <em>Example: Set to 1,000 → rejects packages under $1k</em>
+                </small>
+            </div>
+            <div class="form-group" style="margin: 0;">
+                <label for="max_daily_${currencyCode}">Maximum Daily Per Package</label>
+                <input type="number" id="max_daily_${currencyCode}"
+                       name="currency_limits[${currencyCode}][max_daily_package_spend]"
+                       min="0" step="0.01" placeholder="No maximum">
+                <small style="color: #6b7280;">
+                    Max daily spend per package (prevents line item proliferation)<br>
+                    <em>Example: Set to 10,000 → rejects $100k package over 5 days ($20k/day)</em>
+                </small>
+            </div>
+            <div style="padding-top: 1.5rem;">
+                <button type="button" class="btn-danger" onclick="removeCurrencyLimit('${currencyCode}')">
+                    Remove
+                </button>
+                <input type="hidden" name="currency_limits[${currencyCode}][_delete]" value="false">
+            </div>
+        </div>
+    `;
+
+    container.appendChild(newRow);
+    input.value = '';
+}
+
+function removeCurrencyLimit(currencyCode) {
+    if (!confirm(`Remove ${currencyCode} currency limits?`)) {
+        return;
+    }
+
+    const row = document.querySelector(`.currency-limit-row[data-currency="${currencyCode}"]`);
+    if (row) {
+        // Mark for deletion
+        const deleteInput = row.querySelector(`input[name="currency_limits[${currencyCode}][_delete]"]`);
+        if (deleteInput) {
+            deleteInput.value = 'true';
+        }
+        row.style.display = 'none';
+    }
 }
 </script>
 

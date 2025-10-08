@@ -137,12 +137,67 @@ def update_general(tenant_id):
 
                 tenant.virtual_host = virtual_host or None
 
-            # Update other fields if they exist
-            if "max_daily_budget" in request.form:
+            # Update currency limits
+            from decimal import Decimal, InvalidOperation
+
+            from src.core.database.models import CurrencyLimit
+
+            # Get all existing currency limits
+            stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id)
+            existing_limits = {limit.currency_code: limit for limit in db_session.scalars(stmt).all()}
+
+            # Process currency_limits form data
+            # Format: currency_limits[USD][min_package_budget], currency_limits[USD][max_daily_package_spend]
+            processed_currencies = set()
+
+            for key in request.form.keys():
+                if key.startswith("currency_limits["):
+                    # Extract currency code from key like "currency_limits[USD][min_package_budget]"
+                    parts = key.split("[")
+                    if len(parts) >= 2:
+                        currency_code = parts[1].rstrip("]")
+                        processed_currencies.add(currency_code)
+
+            # Update or create currency limits
+            for currency_code in processed_currencies:
+                # Check if marked for deletion
+                delete_key = f"currency_limits[{currency_code}][_delete]"
+                if delete_key in request.form and request.form.get(delete_key) == "true":
+                    # Delete this currency limit
+                    if currency_code in existing_limits:
+                        db_session.delete(existing_limits[currency_code])
+                    continue
+
+                # Get min and max values
+                min_key = f"currency_limits[{currency_code}][min_package_budget]"
+                max_key = f"currency_limits[{currency_code}][max_daily_package_spend]"
+
+                min_value_str = request.form.get(min_key, "").strip()
+                max_value_str = request.form.get(max_key, "").strip()
+
                 try:
-                    tenant.max_daily_budget = int(request.form.get("max_daily_budget", 10000))
-                except ValueError:
-                    tenant.max_daily_budget = 10000
+                    min_value = Decimal(min_value_str) if min_value_str else None
+                    max_value = Decimal(max_value_str) if max_value_str else None
+                except (ValueError, InvalidOperation):
+                    flash(f"Invalid currency limit values for {currency_code}", "error")
+                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+
+                # Update or create
+                if currency_code in existing_limits:
+                    # Update existing
+                    limit = existing_limits[currency_code]
+                    limit.min_package_budget = min_value
+                    limit.max_daily_package_spend = max_value
+                    limit.updated_at = datetime.now(UTC)
+                else:
+                    # Create new
+                    limit = CurrencyLimit(
+                        tenant_id=tenant_id,
+                        currency_code=currency_code,
+                        min_package_budget=min_value,
+                        max_daily_package_spend=max_value,
+                    )
+                    db_session.add(limit)
 
             if "enable_axe_signals" in request.form:
                 tenant.enable_axe_signals = request.form.get("enable_axe_signals") == "on"
@@ -600,6 +655,73 @@ def update_business_rules(tenant_id):
                         return jsonify({"success": False, "error": "Invalid max_daily_budget value"}), 400
                     flash("Invalid maximum daily budget value", "error")
                     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
+
+            # Update currency limits
+            from decimal import Decimal, InvalidOperation
+
+            from src.core.database.models import CurrencyLimit
+
+            # Get all existing currency limits
+            stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id)
+            existing_limits = {limit.currency_code: limit for limit in db_session.scalars(stmt).all()}
+
+            # Process currency_limits form data
+            # Format: currency_limits[USD][min_package_budget], currency_limits[USD][max_daily_package_spend]
+            processed_currencies = set()
+
+            for key in data.keys():
+                if key.startswith("currency_limits["):
+                    # Extract currency code from key like "currency_limits[USD][min_package_budget]"
+                    parts = key.split("[")
+                    if len(parts) >= 2:
+                        currency_code = parts[1].rstrip("]")
+                        processed_currencies.add(currency_code)
+
+            # Update or create currency limits
+            for currency_code in processed_currencies:
+                # Check if marked for deletion
+                delete_key = f"currency_limits[{currency_code}][_delete]"
+                if delete_key in data and data.get(delete_key) in ["true", True]:
+                    # Delete this currency limit
+                    if currency_code in existing_limits:
+                        db_session.delete(existing_limits[currency_code])
+                    continue
+
+                # Get min and max values
+                min_key = f"currency_limits[{currency_code}][min_package_budget]"
+                max_key = f"currency_limits[{currency_code}][max_daily_package_spend]"
+
+                min_value_str = data.get(min_key, "").strip() if data.get(min_key) else ""
+                max_value_str = data.get(max_key, "").strip() if data.get(max_key) else ""
+
+                try:
+                    min_value = Decimal(min_value_str) if min_value_str else None
+                    max_value = Decimal(max_value_str) if max_value_str else None
+                except (ValueError, InvalidOperation):
+                    if request.is_json:
+                        return (
+                            jsonify({"success": False, "error": f"Invalid currency limit values for {currency_code}"}),
+                            400,
+                        )
+                    flash(f"Invalid currency limit values for {currency_code}", "error")
+                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
+
+                # Update or create
+                if currency_code in existing_limits:
+                    # Update existing
+                    limit = existing_limits[currency_code]
+                    limit.min_package_budget = min_value
+                    limit.max_daily_package_spend = max_value
+                    limit.updated_at = datetime.now(UTC)
+                else:
+                    # Create new
+                    limit = CurrencyLimit(
+                        tenant_id=tenant_id,
+                        currency_code=currency_code,
+                        min_package_budget=min_value,
+                        max_daily_package_spend=max_value,
+                    )
+                    db_session.add(limit)
 
             # Update naming templates with validation
             if "order_name_template" in data:

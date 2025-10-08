@@ -91,7 +91,7 @@ class TestSchemaFieldValidation:
 
         assert not used_deprecated, (
             f"Code is using deprecated Tenant fields: {used_deprecated}. "
-            f"Use individual columns instead: max_daily_budget, enable_axe_signals, etc."
+            f"Use individual columns instead: enable_axe_signals, etc."
         )
 
         # Filter out method calls and valid references
@@ -175,7 +175,6 @@ class TestSchemaFieldValidation:
             "name",
             "subdomain",
             "is_active",
-            "max_daily_budget",
             "enable_axe_signals",
             "human_review_required",
             "auto_approve_formats",
@@ -210,7 +209,7 @@ class TestSchemaFieldValidation:
             return  # Skip if templates directory not found
 
         problematic_patterns = [
-            (r"tenant\.features_config", "Use tenant.max_daily_budget, tenant.enable_axe_signals instead"),
+            (r"tenant\.features_config", "Use tenant.enable_axe_signals instead"),
             (
                 r"tenant\.creative_engine_config",
                 "Use tenant.auto_approve_formats, tenant.human_review_required instead",
