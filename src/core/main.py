@@ -2373,8 +2373,47 @@ def _list_creatives_impl(
     if total_count > len(creatives):
         message += f" (page {req.page} of {total_count} total)"
 
+    # Build filters_applied list
+    filters_applied = []
+    if req.media_buy_id:
+        filters_applied.append(f"media_buy_id={req.media_buy_id}")
+    if req.buyer_ref:
+        filters_applied.append(f"buyer_ref={req.buyer_ref}")
+    if req.status:
+        filters_applied.append(f"status={req.status}")
+    if req.format:
+        filters_applied.append(f"format={req.format}")
+    if req.tags:
+        filters_applied.append(f"tags={','.join(req.tags)}")
+    if req.created_after:
+        filters_applied.append(f"created_after={req.created_after.isoformat()}")
+    if req.created_before:
+        filters_applied.append(f"created_before={req.created_before.isoformat()}")
+    if req.search:
+        filters_applied.append(f"search={req.search}")
+
+    # Build sort_applied dict
+    sort_applied = {"field": req.sort_by, "direction": req.sort_order} if req.sort_by else None
+
+    # Calculate offset and total_pages
+    offset = (req.page - 1) * req.limit
+    total_pages = (total_count + req.limit - 1) // req.limit if req.limit > 0 else 0
+
+    # Import required schema classes
+    from src.core.schemas import Pagination, QuerySummary
+
     return ListCreativesResponse(
-        creatives=creatives, total_count=total_count, page=req.page, limit=req.limit, has_more=has_more, message=message
+        message=message,
+        query_summary=QuerySummary(
+            total_matching=total_count,
+            returned=len(creatives),
+            filters_applied=filters_applied,
+            sort_applied=sort_applied,
+        ),
+        pagination=Pagination(
+            limit=req.limit, offset=offset, has_more=has_more, total_pages=total_pages, current_page=req.page
+        ),
+        creatives=creatives,
     )
 
 

@@ -66,6 +66,7 @@ def init_db(exit_on_error=False):
 
         # Check if default tenant already exists (idempotent for CI/testing)
         from sqlalchemy import select
+        from sqlalchemy.exc import IntegrityError
 
         stmt = select(Tenant).filter_by(tenant_id="default")
         existing_tenant = session.scalars(stmt).first()
@@ -94,6 +95,14 @@ def init_db(exit_on_error=False):
                 updated_at=now,
             )
             session.add(default_tenant)
+
+            try:
+                session.flush()  # Try to write tenant first to catch duplicates
+            except IntegrityError:
+                # Tenant was created by another process/thread - rollback and continue
+                session.rollback()
+                print("ℹ️  Default tenant already exists (created by concurrent process)")
+                return  # Exit early since tenant exists
 
             # Add default currency limit for USD
             from src.core.database.models import CurrencyLimit

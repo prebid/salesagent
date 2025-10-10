@@ -410,8 +410,9 @@ class TestCreativeLifecycleMCP:
             # Verify response structure
             assert isinstance(response, ListCreativesResponse)
             assert len(response.creatives) == 5
-            assert response.total_count == 5
-            assert response.has_more is False
+            assert response.query_summary.total_matching == 5
+            assert response.query_summary.returned == 5
+            assert response.pagination.has_more is False
 
             # Verify creatives are sorted by created_date desc by default
             creative_names = [c.name for c in response.creatives]
@@ -631,18 +632,24 @@ class TestCreativeLifecycleMCP:
             # Test first page
             response = core_list_creatives_tool(page=1, limit=10, context=mock_context)
             assert len(response.creatives) == 10
-            assert response.total_count == 25
-            assert response.has_more is True
+            assert response.query_summary.total_matching == 25
+            assert response.query_summary.returned == 10
+            assert response.pagination.has_more is True
+            assert response.pagination.current_page == 1
 
             # Test second page
             response = core_list_creatives_tool(page=2, limit=10, context=mock_context)
             assert len(response.creatives) == 10
-            assert response.has_more is True
+            assert response.query_summary.returned == 10
+            assert response.pagination.has_more is True
+            assert response.pagination.current_page == 2
 
             # Test last page
             response = core_list_creatives_tool(page=3, limit=10, context=mock_context)
             assert len(response.creatives) == 5
-            assert response.has_more is False
+            assert response.query_summary.returned == 5
+            assert response.pagination.has_more is False
+            assert response.pagination.current_page == 3
 
             # Test name sorting ascending
             response = core_list_creatives_tool(sort_by="name", sort_order="asc", limit=5, context=mock_context)
@@ -755,8 +762,9 @@ class TestCreativeLifecycleMCP:
             response = core_list_creatives_tool(status="rejected", context=mock_context)  # No rejected creatives exist
 
             assert len(response.creatives) == 0
-            assert response.total_count == 0
-            assert response.has_more is False
+            assert response.query_summary.total_matching == 0
+            assert response.query_summary.returned == 0
+            assert response.pagination.has_more is False
 
     def test_create_media_buy_with_creative_ids(self, mock_context, sample_creatives):
         """Test create_media_buy accepts creative_ids in packages."""

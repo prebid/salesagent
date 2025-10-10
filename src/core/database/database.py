@@ -25,6 +25,8 @@ def init_db(exit_on_error=False):
 
     # Check if we need to create a default tenant
     with get_db_session() as db_session:
+        from sqlalchemy.exc import IntegrityError
+
         # Check if 'default' tenant already exists (safer than counting)
         stmt = select(Tenant).where(Tenant.tenant_id == "default")
         existing_tenant = db_session.scalars(stmt).first()
@@ -56,6 +58,14 @@ def init_db(exit_on_error=False):
                 admin_token=admin_token,
             )
             db_session.add(new_tenant)
+
+            try:
+                db_session.flush()  # Try to write tenant first to catch duplicates
+            except IntegrityError:
+                # Tenant was created by another process/thread - rollback and continue
+                db_session.rollback()
+                print("ℹ️  Default tenant already exists (created by concurrent process)")
+                return  # Exit early since tenant exists
 
             # Create adapter_config for mock adapter
             new_adapter = AdapterConfig(tenant_id="default", adapter_type="mock", mock_dry_run=False)
