@@ -2059,7 +2059,9 @@ class CreateMediaBuyRequest(BaseModel):
 
     # New AdCP v2.4 fields
     packages: list[Package] | None = Field(None, description="Array of packages with products and budgets")
-    start_time: datetime | None = Field(None, description="Campaign start time (ISO 8601)")
+    start_time: datetime | Literal["asap"] | None = Field(
+        None, description="Campaign start time: ISO 8601 datetime or 'asap' for immediate start"
+    )
     end_time: datetime | None = Field(None, description="Campaign end time (ISO 8601)")
     budget: Budget | None = Field(None, description="Overall campaign budget")
 
@@ -2169,9 +2171,10 @@ class CreateMediaBuyRequest(BaseModel):
 
         AdCP spec requires ISO 8601 datetime strings with timezone information.
         This validator ensures all datetime fields have timezone info.
+        The literal string 'asap' is also valid per AdCP v1.7.0.
         """
-        if self.start_time and self.start_time.tzinfo is None:
-            raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone)")
+        if self.start_time and self.start_time != "asap" and self.start_time.tzinfo is None:
+            raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
         return self
@@ -2420,7 +2423,7 @@ class GetMediaBuyDeliveryResponse(BaseModel):
         if count == 0:
             return "No delivery data found for the specified period."
         elif count == 1:
-            return f"Retrieved delivery data for 1 media buy."
+            return "Retrieved delivery data for 1 media buy."
         return f"Retrieved delivery data for {count} media buys."
 
 
@@ -2579,7 +2582,7 @@ class UpdateMediaBuyRequest(BaseModel):
 
     # Campaign-level updates (all optional per AdCP spec)
     active: bool | None = None
-    start_time: datetime | None = None  # AdCP uses datetime, not date
+    start_time: datetime | Literal["asap"] | None = None  # AdCP uses datetime or 'asap', not date
     end_time: datetime | None = None  # AdCP uses datetime, not date
     budget: Budget | None = None  # Budget object contains currency/pacing
     packages: list[AdCPPackageUpdate] | None = None
@@ -2604,9 +2607,10 @@ class UpdateMediaBuyRequest(BaseModel):
 
         AdCP spec requires ISO 8601 datetime strings with timezone information.
         This validator ensures all datetime fields have timezone info.
+        The literal string 'asap' is also valid per AdCP v1.7.0.
         """
-        if self.start_time and self.start_time.tzinfo is None:
-            raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone)")
+        if self.start_time and self.start_time != "asap" and self.start_time.tzinfo is None:
+            raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
         return self

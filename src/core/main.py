@@ -3001,14 +3001,18 @@ def _create_media_buy_impl(
             error_msg = "start_time is required"
             raise ValueError(error_msg)
 
-        # Ensure start_time is timezone-aware for comparison
-        start_time = req.start_time
-        if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=UTC)
+        # Handle 'asap' start_time (AdCP v1.7.0)
+        if req.start_time == "asap":
+            start_time = now
+        else:
+            # Ensure start_time is timezone-aware for comparison
+            start_time = req.start_time
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=UTC)
 
-        if start_time < now:
-            error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
-            raise ValueError(error_msg)
+            if start_time < now:
+                error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
+                raise ValueError(error_msg)
 
         # Validate end_time
         if req.end_time is None:
@@ -3133,7 +3137,7 @@ def _create_media_buy_impl(
             # Validate maximum daily spend per package (if set)
             # This is per-package to prevent buyers from splitting large budgets across many packages
             if currency_limit.max_daily_package_spend:
-                flight_days = (req.end_time - req.start_time).days
+                flight_days = (end_time - start_time).days
                 if flight_days <= 0:
                     flight_days = 1
 
@@ -3248,8 +3252,8 @@ def _create_media_buy_impl(
                 notification_details = {
                     "total_budget": total_budget,
                     "po_number": req.po_number,
-                    "start_time": req.start_time.isoformat() if req.start_time else None,
-                    "end_time": req.end_time.isoformat() if req.end_time else None,
+                    "start_time": start_time.isoformat(),  # Resolved from 'asap' if needed
+                    "end_time": end_time.isoformat(),
                     "product_ids": req.get_product_ids(),
                     "workflow_step_id": step.step_id,
                     "context_id": persistent_ctx.context_id,
@@ -3369,8 +3373,8 @@ def _create_media_buy_impl(
                 notification_details = {
                     "total_budget": total_budget,
                     "po_number": req.po_number,
-                    "start_time": req.start_time.isoformat() if req.start_time else None,
-                    "end_time": req.end_time.isoformat() if req.end_time else None,
+                    "start_time": start_time.isoformat(),  # Resolved from 'asap' if needed
+                    "end_time": end_time.isoformat(),
                     "product_ids": req.get_product_ids(),
                     "approval_reason": reason,
                     "workflow_step_id": step.step_id,
@@ -3438,8 +3442,9 @@ def _create_media_buy_impl(
             )
 
         # Call adapter with detailed error logging
+        # Note: start_time variable already resolved from 'asap' to actual datetime if needed
         try:
-            response = adapter.create_media_buy(req, packages, req.start_time, req.end_time)
+            response = adapter.create_media_buy(req, packages, start_time, end_time)
         except Exception as adapter_error:
             import traceback
 
@@ -3452,9 +3457,9 @@ def _create_media_buy_impl(
 
         # Determine initial status based on flight dates
         now = datetime.now(UTC)
-        if now < req.start_time:
+        if now < start_time:
             media_buy_status = "pending"
-        elif now > req.end_time:
+        elif now > end_time:
             media_buy_status = "completed"
         else:
             media_buy_status = "active"
@@ -3473,10 +3478,10 @@ def _create_media_buy_impl(
                 kpi_goal=getattr(req, "kpi_goal", ""),  # Optional field
                 budget=total_budget,  # Extract total budget
                 currency=req.budget.currency if req.budget else "USD",  # AdCP v2.4 currency field
-                start_date=req.start_time.date(),  # Legacy field for compatibility
-                end_date=req.end_time.date(),  # Legacy field for compatibility
-                start_time=req.start_time,  # AdCP v2.4 datetime scheduling
-                end_time=req.end_time,  # AdCP v2.4 datetime scheduling
+                start_date=start_time.date(),  # Legacy field for compatibility
+                end_date=end_time.date(),  # Legacy field for compatibility
+                start_time=start_time,  # AdCP v2.4 datetime scheduling (resolved from 'asap' if needed)
+                end_time=end_time,  # AdCP v2.4 datetime scheduling
                 status=media_buy_status,
                 raw_request=req.model_dump(mode="json"),
             )
@@ -3647,8 +3652,8 @@ def _create_media_buy_impl(
                 if principal_db:
                     principal_name = principal_db.name
 
-            # Calculate duration using new datetime fields
-            duration_days = (req.end_time - req.start_time).days + 1
+            # Calculate duration using new datetime fields (resolved from 'asap' if needed)
+            duration_days = (end_time - start_time).days + 1
 
             activity_feed.log_media_buy(
                 tenant_id=tenant["tenant_id"],
@@ -3661,8 +3666,8 @@ def _create_media_buy_impl(
         except:
             pass
 
-        # Apply testing hooks to response with campaign information
-        campaign_info = {"start_date": req.start_time, "end_date": req.end_time, "total_budget": total_budget}
+        # Apply testing hooks to response with campaign information (resolved from 'asap' if needed)
+        campaign_info = {"start_date": start_time, "end_date": end_time, "total_budget": total_budget}
 
         response_data = (
             adcp_response.model_dump_internal()
@@ -3700,10 +3705,10 @@ def _create_media_buy_impl(
             success_details = {
                 "total_budget": total_budget,
                 "po_number": req.po_number,
-                "start_time": req.start_time.isoformat() if req.start_time else None,
-                "end_time": req.end_time.isoformat() if req.end_time else None,
+                "start_time": start_time.isoformat(),  # Resolved from 'asap' if needed
+                "end_time": end_time.isoformat(),
                 "product_ids": req.get_product_ids(),
-                "duration_days": (req.end_time - req.start_time).days + 1,
+                "duration_days": (end_time - start_time).days + 1,
                 "packages_count": len(response_packages) if response_packages else 0,
                 "creatives_count": len(req.creatives) if req.creatives else 0,
                 "workflow_step_id": step.step_id,
@@ -3734,7 +3739,7 @@ def _create_media_buy_impl(
                 "media_buy_id": response.media_buy_id,
                 "total_budget": total_budget,
                 "po_number": req.po_number,
-                "duration_days": (req.end_time - req.start_time).days + 1 if req.end_time and req.start_time else 0,
+                "duration_days": (end_time - start_time).days + 1,  # Resolved from 'asap' if needed
                 "product_count": len(req.get_product_ids()),
                 "packages_count": len(response_packages) if response_packages else 0,
             },
@@ -3767,8 +3772,10 @@ def _create_media_buy_impl(
             failure_details = {
                 "total_budget": total_budget if "total_budget" in locals() else 0,
                 "po_number": req.po_number,
-                "start_time": req.start_time.isoformat() if req.start_time else None,
-                "end_time": req.end_time.isoformat() if req.end_time else None,
+                "start_time": (
+                    start_time.isoformat() if "start_time" in locals() else None
+                ),  # Resolved from 'asap' if needed
+                "end_time": end_time.isoformat() if "end_time" in locals() else None,
                 "product_ids": req.get_product_ids(),
                 "error_message": str(e),
                 "workflow_step_id": step.step_id if step else "unknown",
@@ -4043,11 +4050,14 @@ def update_media_buy(
                 start = req.start_time if req.start_time else media_buy.start_time
                 end = req.end_time if req.end_time else media_buy.end_time
 
-                # Parse datetime strings if needed
+                # Parse datetime strings if needed, handle 'asap' (AdCP v1.7.0)
                 from datetime import datetime as dt
 
                 if isinstance(start, str):
-                    start = dt.fromisoformat(start.replace("Z", "+00:00"))
+                    if start == "asap":
+                        start = dt.now(UTC)
+                    else:
+                        start = dt.fromisoformat(start.replace("Z", "+00:00"))
                 if isinstance(end, str):
                     end = dt.fromisoformat(end.replace("Z", "+00:00"))
 

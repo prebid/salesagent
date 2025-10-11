@@ -2085,6 +2085,76 @@ class TestAdCPContract:
         assert "media_buy_id" in internal_dump, "media_buy_id SHOULD be in internal dump"
         assert internal_dump["media_buy_id"] == "mb_test_456"
 
+    def test_create_media_buy_asap_start_time(self):
+        """Test that CreateMediaBuyRequest accepts 'asap' as start_time per AdCP v1.7.0."""
+        end_date = datetime.now(UTC) + timedelta(days=30)
+
+        # Test with 'asap' start_time
+        request = CreateMediaBuyRequest(
+            promoted_offering="Flash Sale Campaign",
+            buyer_ref="flash_sale_2025_q1",
+            start_time="asap",  # AdCP v1.7.0 supports literal "asap"
+            end_time=end_date,
+            packages=[
+                {
+                    "package_id": "pkg_flash_001",
+                    "products": ["product_1"],
+                    "status": "draft",
+                }
+            ],
+            budget={"total": 25000, "currency": "USD", "pacing": "asap"},
+        )
+
+        # Verify asap is accepted
+        assert request.start_time == "asap"
+        assert request.end_time == end_date
+
+        # Verify it serializes correctly
+        data = request.model_dump()
+        assert data["start_time"] == "asap"
+
+    def test_update_media_buy_asap_start_time(self):
+        """Test that UpdateMediaBuyRequest accepts 'asap' as start_time per AdCP v1.7.0."""
+        from src.core.schemas import UpdateMediaBuyRequest
+
+        # Test with 'asap' start_time
+        request = UpdateMediaBuyRequest(
+            media_buy_id="mb_test_123",
+            start_time="asap",  # AdCP v1.7.0 supports literal "asap"
+        )
+
+        # Verify asap is accepted
+        assert request.start_time == "asap"
+
+        # Verify it serializes correctly
+        data = request.model_dump()
+        assert data["start_time"] == "asap"
+
+    def test_create_media_buy_datetime_start_time_still_works(self):
+        """Test that CreateMediaBuyRequest still accepts datetime for start_time."""
+        start_date = datetime.now(UTC) + timedelta(days=1)
+        end_date = datetime.now(UTC) + timedelta(days=30)
+
+        # Test with datetime start_time (should still work)
+        request = CreateMediaBuyRequest(
+            promoted_offering="Scheduled Campaign",
+            buyer_ref="scheduled_2025_q1",
+            start_time=start_date,
+            end_time=end_date,
+            packages=[
+                {
+                    "package_id": "pkg_scheduled_001",
+                    "products": ["product_1"],
+                    "status": "draft",
+                }
+            ],
+            budget={"total": 10000, "currency": "USD", "pacing": "even"},
+        )
+
+        # Verify datetime is still accepted
+        assert isinstance(request.start_time, datetime)
+        assert request.start_time == start_date
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
