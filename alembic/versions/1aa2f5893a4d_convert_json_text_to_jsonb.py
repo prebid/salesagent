@@ -23,17 +23,18 @@ Safety:
     - Will fail if any column contains invalid JSON
     - Atomic operation (all-or-nothing)
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '1aa2f5893a4d'
-down_revision: Union[str, Sequence[str], None] = 'eef85c5fe627'  # After XOR constraint, before GIN index
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "1aa2f5893a4d"
+down_revision: str | Sequence[str] | None = "eef85c5fe627"  # After XOR constraint, before GIN index
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 # Complete mapping of all tables and their JSON columns
@@ -45,6 +46,7 @@ JSON_COLUMNS = {
         "auto_approve_formats",
         "policy_settings",
         "signals_agent_config",
+        "ai_policy",  # Added - AI review policy configuration
     ],
     "creative_formats": [
         "specs",
@@ -70,15 +72,13 @@ JSON_COLUMNS = {
         "platform_mappings",
     ],
     "media_buys": [
-        "config",
-        "packages",
+        "raw_request",  # Changed from "config", "packages" (renamed in September)
     ],
     "creatives": [
-        "asset_properties",
+        "data",  # Changed from "asset_properties" (renamed in September)
     ],
     "contexts": [
-        "data",
-        "metadata",
+        "conversation_history",  # Changed from "data", "metadata" (renamed in September)
     ],
     "workflow_steps": [
         "request_data",
@@ -101,7 +101,7 @@ JSON_COLUMNS = {
         "response_body",
     ],
     "creative_reviews": [
-        "review_result",
+        "recommendations",  # Changed from "review_result" (field was renamed)
     ],
     "gam_ad_units": [
         "sizes",
@@ -133,14 +133,16 @@ def upgrade() -> None:
         for column_name in columns:
             try:
                 # Check if table and column exist before converting
-                result = connection.execute(sa.text(
-                    f"""
+                result = connection.execute(
+                    sa.text(
+                        f"""
                     SELECT column_name, data_type
                     FROM information_schema.columns
                     WHERE table_name = '{table_name}'
                       AND column_name = '{column_name}'
                     """
-                ))
+                    )
+                )
                 row = result.fetchone()
 
                 if row is None:
@@ -150,19 +152,21 @@ def upgrade() -> None:
                 current_type = row[1]
 
                 # Skip if already JSONB
-                if current_type == 'jsonb':
+                if current_type == "jsonb":
                     print(f"✓ {table_name}.{column_name} already JSONB")
                     continue
 
                 # Convert TEXT to JSONB using CAST
                 # USING clause validates JSON and converts
-                connection.execute(sa.text(
-                    f"""
+                connection.execute(
+                    sa.text(
+                        f"""
                     ALTER TABLE {table_name}
                     ALTER COLUMN {column_name}
                     TYPE jsonb USING {column_name}::jsonb
                     """
-                ))
+                    )
+                )
 
                 converted_count += 1
                 print(f"✅ Converted {table_name}.{column_name} from {current_type} to JSONB")
@@ -186,27 +190,31 @@ def downgrade() -> None:
         for column_name in columns:
             try:
                 # Check if column exists and is JSONB
-                result = connection.execute(sa.text(
-                    f"""
+                result = connection.execute(
+                    sa.text(
+                        f"""
                     SELECT data_type
                     FROM information_schema.columns
                     WHERE table_name = '{table_name}'
                       AND column_name = '{column_name}'
                     """
-                ))
+                    )
+                )
                 row = result.fetchone()
 
-                if row is None or row[0] != 'jsonb':
+                if row is None or row[0] != "jsonb":
                     continue
 
                 # Convert JSONB back to TEXT
-                connection.execute(sa.text(
-                    f"""
+                connection.execute(
+                    sa.text(
+                        f"""
                     ALTER TABLE {table_name}
                     ALTER COLUMN {column_name}
                     TYPE text USING {column_name}::text
                     """
-                ))
+                    )
+                )
 
                 print(f"⚠️  Downgraded {table_name}.{column_name} from JSONB to TEXT")
 
