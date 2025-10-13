@@ -979,8 +979,8 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
     if policy_result.status == PolicyStatus.BLOCKED:
         # Always block if policy says blocked
         logger.warning(f"Brief blocked by policy: {policy_result.reason}")
-        # Return empty products list per AdCP spec (errors handled at transport layer)
-        return GetProductsResponse(products=[])
+        # Raise ToolError to properly signal failure to client
+        raise ToolError("POLICY_VIOLATION", policy_result.reason)
 
     # If restricted and manual review is required, create a task
     if policy_result.status == PolicyStatus.RESTRICTED and policy_settings.get("require_manual_review", False):
