@@ -345,13 +345,23 @@ class MockAdServer(AdServerAdapter):
                 scenario = orchestrator.interpret_message(test_message, "create_media_buy")
                 self.log(f"🤖 AI Test Scenario: {scenario}")
             except Exception as e:
+                # If AI orchestrator fails, log and continue with normal processing
+                # Don't block legitimate media buy creation just because AI is unavailable
                 self.log(f"⚠️ AI orchestrator unavailable: {e}")
+                scenario = None
 
         # Execute AI scenario if present
         if scenario:
-            # Handle error simulation
+            # Handle error simulation - ONLY if explicitly requested
             if scenario.error_message:
-                raise Exception(scenario.error_message)
+                # Double-check this looks like an intentional test directive
+                # If the promoted_offering is just a normal business name, ignore error_message
+                if any(keyword in test_message.lower() for keyword in ["error", "fail", "reject", "throw", "raise"]):
+                    raise Exception(scenario.error_message)
+                else:
+                    # This is likely a false positive from AI - log and ignore
+                    self.log(f"⚠️ Ignoring AI error_message for non-test promoted_offering: {test_message}")
+                    scenario.error_message = None
 
             # Handle rejection
             if scenario.should_reject:

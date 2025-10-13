@@ -96,6 +96,10 @@ A buyer has sent test instructions for the operation: {operation}
 
 Their message: "{message}"
 
+IMPORTANT: Only interpret this message as test instructions if it contains explicit test directives.
+If the message is just a normal business description (like "Test Product", "Summer Campaign 2024", "Q1 Brand Awareness"),
+return a default success scenario: {{"should_accept": true}}
+
 Your job is to interpret their test instructions and return a JSON object describing what the mock server should do.
 
 Available test behaviors:
@@ -129,6 +133,8 @@ Available test behaviors:
 
 **Error Simulation:**
 - error_message: String (raise exception with this message)
+  - ONLY use this if the message explicitly asks for an error to be raised
+  - DO NOT use this for normal business descriptions
 
 Return ONLY valid JSON matching this structure. No markdown, no explanations.
 
@@ -140,6 +146,9 @@ Example for creative named "reject this for missing URL":
 
 Example for creative named "ask for click tracker":
 {{"creative_actions": [{{"action": "ask_for_field", "reason": "Need click tracking URL"}}]}}
+
+Example for normal campaign name "Test Product":
+{{"should_accept": true}}
 
 Now interpret the buyer's message and return JSON:"""
 

@@ -3702,9 +3702,12 @@ def _create_media_buy_impl(
             response_packages.append(response_package)
 
         # Create AdCP v2.4 compliant response
+        # Use adapter's status if provided, otherwise calculate based on flight dates
+        api_status = response.status if response.status else media_buy_status
+
         adcp_response = CreateMediaBuyResponse(
             adcp_version="2.3.0",
-            status="working",  # Media buy creation in progress (async operation)
+            status=api_status,  # Use adapter status or time-based status (not hardcoded "working")
             buyer_ref=req.buyer_ref,
             media_buy_id=response.media_buy_id,
             packages=response_packages,
