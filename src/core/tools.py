@@ -296,6 +296,7 @@ def sync_creatives_raw(
     delete_missing: bool = False,
     dry_run: bool = False,
     validation_mode: str = "strict",
+    push_notification_config: dict = None,
     context: Context = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to the centralized creative library (AdCP v2.4 spec compliant endpoint).
@@ -309,6 +310,7 @@ def sync_creatives_raw(
         delete_missing: Delete creatives not in sync payload (use with caution)
         dry_run: Preview changes without applying them
         validation_mode: Validation strictness (strict or lenient)
+        push_notification_config: Push notification config for status updates
         context: FastMCP context (automatically provided)
 
     Returns:
@@ -324,6 +326,7 @@ def sync_creatives_raw(
         delete_missing=delete_missing,
         dry_run=dry_run,
         validation_mode=validation_mode,
+        push_notification_config=push_notification_config,
         context=context,
     )
 
@@ -431,6 +434,7 @@ def update_media_buy_raw(
     daily_budget: float = None,
     packages: list = None,
     creatives: list = None,
+    push_notification_config: dict = None,
     context: Context = None,
 ):
     """Update an existing media buy (raw function for A2A server use).
@@ -452,6 +456,7 @@ def update_media_buy_raw(
         daily_budget: Daily budget cap
         packages: Package updates
         creatives: Creative updates
+        push_notification_config: Push notification config for status updates
         context: Context for authentication
 
     Returns:
@@ -475,6 +480,7 @@ def update_media_buy_raw(
         daily_budget=daily_budget,
         packages=packages,
         creatives=creatives,
+        push_notification_config=push_notification_config,
         context=context,
     )
 

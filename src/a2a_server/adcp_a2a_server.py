@@ -1144,6 +1144,7 @@ class AdCPRequestHandler(RequestHandler):
                 end_time=parameters["end_time"],
                 budget=parameters["budget"],
                 targeting_overlay=parameters.get("custom_targeting", {}),
+                push_notification_config=parameters.get("push_notification_config"),
                 context=tool_context,
             )
 
@@ -1187,6 +1188,7 @@ class AdCPRequestHandler(RequestHandler):
                 delete_missing=parameters.get("delete_missing", False),
                 dry_run=parameters.get("dry_run", False),
                 validation_mode=parameters.get("validation_mode", "strict"),
+                push_notification_config=parameters.get("push_notification_config"),
                 context=tool_context,
             )
 
@@ -1662,6 +1664,7 @@ class AdCPRequestHandler(RequestHandler):
             response = core_update_media_buy_tool(
                 media_buy_id=parameters["media_buy_id"],
                 updates=parameters["updates"],
+                push_notification_config=parameters.get("push_notification_config"),
                 context=tool_context,
             )
 

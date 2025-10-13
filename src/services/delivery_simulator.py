@@ -53,10 +53,11 @@ class DeliverySimulator:
 
             with get_db_session() as session:
                 # Find active media buys with webhook configs
+                # Include pending status because simulators start immediately on creation
                 stmt = (
                     select(MediaBuy, PushNotificationConfig)
                     .join(PushNotificationConfig, MediaBuy.media_buy_id == PushNotificationConfig.media_buy_id)
-                    .where(MediaBuy.status.in_(["active", "working"]))
+                    .where(MediaBuy.status.in_(["pending", "active", "working"]))
                     .where(PushNotificationConfig.enabled == True)  # noqa: E712
                 )
 

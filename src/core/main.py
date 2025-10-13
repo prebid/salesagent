@@ -1405,7 +1405,7 @@ def _sync_creatives_impl(
     delete_missing: bool = False,
     dry_run: bool = False,
     validation_mode: str = "strict",
-    webhook_url: str | None = None,
+    push_notification_config: dict | None = None,
     context: Context = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.4 spec compliant endpoint).
@@ -1423,6 +1423,7 @@ def _sync_creatives_impl(
         delete_missing: Delete creatives not in sync payload (use with caution)
         dry_run: Preview changes without applying them
         validation_mode: Validation strictness (strict or lenient)
+        push_notification_config: Push notification config for status updates (AdCP spec, optional)
         context: FastMCP context (automatically provided)
 
     Returns:
@@ -2930,6 +2931,12 @@ def _create_media_buy_impl(
     """
     request_start_time = time.time()
 
+    # DEBUG: Log incoming push_notification_config
+    logger.info(f"🐛 create_media_buy called with push_notification_config={push_notification_config}")
+    logger.info(f"🐛 push_notification_config type: {type(push_notification_config)}")
+    if push_notification_config:
+        logger.info(f"🐛 push_notification_config contents: {push_notification_config}")
+
     # Create request object from individual parameters (MCP-compliant)
     req = CreateMediaBuyRequest(
         promoted_offering=promoted_offering,
@@ -4004,7 +4011,7 @@ def _update_media_buy_impl(
     daily_budget: float = None,
     packages: list = None,
     creatives: list = None,
-    webhook_url: str | None = None,
+    push_notification_config: dict | None = None,
     context: Context = None,
 ) -> UpdateMediaBuyResponse:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
@@ -4026,7 +4033,7 @@ def _update_media_buy_impl(
         daily_budget: Daily spend cap across all packages
         packages: Package-specific updates
         creatives: Add new creatives
-        webhook_url: URL for async task completion notifications (AdCP spec, optional)
+        push_notification_config: Push notification config for status updates (AdCP spec, optional)
         context: FastMCP context (automatically provided)
 
     Returns:
