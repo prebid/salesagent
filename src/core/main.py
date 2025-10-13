@@ -45,7 +45,14 @@ from src.core.config_loader import (
 from src.core.context_manager import get_context_manager
 from src.core.database.database import init_db
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, AuthorizedProperty, MediaBuy, PropertyTag, Tenant
+from src.core.database.models import (
+    AdapterConfig,
+    AuthorizedProperty,
+    MediaBuy,
+    PropertyTag,
+    Tenant,
+    WorkflowStep,
+)
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 
@@ -53,12 +60,14 @@ from src.core.database.models import Product as ModelProduct
 from src.core.schemas import (
     ActivateSignalResponse,
     AggregatedTotals,
+    CreateHumanTaskResponse,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
     Creative,
     CreativeAssignment,
     CreativeGroup,
     CreativeStatus,
+    DeliveryTotals,
     Error,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
@@ -66,6 +75,7 @@ from src.core.schemas import (
     GetProductsResponse,
     GetSignalsRequest,
     GetSignalsResponse,
+    HumanTask,
     ListAuthorizedPropertiesRequest,
     ListAuthorizedPropertiesResponse,
     ListCreativeFormatsRequest,
@@ -73,6 +83,7 @@ from src.core.schemas import (
     ListCreativesResponse,
     MediaBuyDeliveryData,
     MediaPackage,
+    PackageDelivery,
     PackagePerformance,
     Principal,
     Product,
@@ -89,6 +100,8 @@ from src.core.schemas import (
     UpdateMediaBuyResponse,
     UpdatePerformanceIndexRequest,
     UpdatePerformanceIndexResponse,
+    VerifyTaskRequest,
+    VerifyTaskResponse,
 )
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 from src.services.slack_notifier import get_slack_notifier
@@ -3712,10 +3725,16 @@ def _create_media_buy_impl(
         # Use adapter's status if provided, otherwise calculate based on flight dates
         api_status = response.status if response.status else media_buy_status
 
+        # Ensure buyer_ref is set (defensive check)
+        buyer_ref_value = req.buyer_ref if req.buyer_ref else buyer_ref
+        if not buyer_ref_value:
+            logger.error(f"🚨 buyer_ref is missing! req.buyer_ref={req.buyer_ref}, buyer_ref={buyer_ref}")
+            buyer_ref_value = f"missing-{response.media_buy_id}"
+
         adcp_response = CreateMediaBuyResponse(
             adcp_version="2.3.0",
             status=api_status,  # Use adapter status or time-based status (not hardcoded "working")
-            buyer_ref=req.buyer_ref,
+            buyer_ref=buyer_ref_value,
             media_buy_id=response.media_buy_id,
             packages=response_packages,
             creative_deadline=response.creative_deadline,
@@ -3755,7 +3774,20 @@ def _create_media_buy_impl(
             if hasattr(adcp_response, "model_dump_internal")
             else adcp_response.model_dump()
         )
+
+        # Debug: Check if buyer_ref is in response_data before testing hooks
+        if "buyer_ref" not in response_data:
+            logger.error(f"🚨 buyer_ref MISSING after model_dump_internal! Keys: {list(response_data.keys())}")
+        else:
+            logger.info(f"✅ buyer_ref present after model_dump_internal: {response_data['buyer_ref']}")
+
         response_data = apply_testing_hooks(response_data, testing_ctx, "create_media_buy", campaign_info)
+
+        # Debug: Check if buyer_ref is in response_data after testing hooks
+        if "buyer_ref" not in response_data:
+            logger.error(f"🚨 buyer_ref MISSING after apply_testing_hooks! Keys: {list(response_data.keys())}")
+        else:
+            logger.info(f"✅ buyer_ref present after apply_testing_hooks: {response_data['buyer_ref']}")
 
         # Reconstruct response from modified data
         # Filter out testing hook fields that aren't part of CreateMediaBuyResponse schema
@@ -3771,6 +3803,16 @@ def _create_media_buy_impl(
             "workflow_step_id",
         }
         filtered_data = {k: v for k, v in response_data.items() if k in valid_fields}
+
+        # Debug: Check if buyer_ref is in filtered_data
+        if "buyer_ref" not in filtered_data:
+            logger.error(f"🚨 buyer_ref MISSING after filtering! filtered_data keys: {list(filtered_data.keys())}")
+            logger.error(f"🚨 response_data keys: {list(response_data.keys())}")
+            # Add buyer_ref back if it's somehow missing
+            filtered_data["buyer_ref"] = buyer_ref_value
+        else:
+            logger.info(f"✅ buyer_ref present in filtered_data: {filtered_data['buyer_ref']}")
+
         modified_response = CreateMediaBuyResponse(**filtered_data)
 
         # Mark workflow step as completed on success
