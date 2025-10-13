@@ -78,6 +78,23 @@ def list_workflows(tenant_id, **kwargs):
         stmt = select(AuditLog).filter(AuditLog.tenant_id == tenant_id).order_by(AuditLog.timestamp.desc()).limit(100)
         audit_logs = db.scalars(stmt).all()
 
+        # Debug logging to understand why audit logs might be empty
+        logger.info(f"[workflows] Querying audit logs for tenant_id={tenant_id}")
+        logger.info(f"[workflows] Found {len(audit_logs)} audit logs")
+        if audit_logs:
+            logger.info(
+                f"[workflows] Latest audit log: operation={audit_logs[0].operation}, success={audit_logs[0].success}, timestamp={audit_logs[0].timestamp}"
+            )
+        else:
+            # Check if there are ANY audit logs in the database
+            all_logs_stmt = select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(5)
+            all_logs = db.scalars(all_logs_stmt).all()
+            logger.warning(
+                f"[workflows] No audit logs for tenant {tenant_id}, but found {len(all_logs)} logs total in database"
+            )
+            if all_logs:
+                logger.warning(f"[workflows] Sample log tenant_ids: {[log.tenant_id for log in all_logs]}")
+
         return render_template(
             "workflows.html",
             tenant=tenant,

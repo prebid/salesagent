@@ -2086,12 +2086,26 @@ def _sync_creatives_impl(
 
     # Audit logging
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+
+    # Build error message from failed creatives
+    error_message = None
+    if failed_creatives:
+        error_lines = []
+        for fc in failed_creatives[:5]:  # Limit to first 5 errors to avoid huge messages
+            creative_id = fc.get("creative_id", "unknown")
+            error_text = fc.get("error", "Unknown error")
+            error_lines.append(f"{creative_id}: {error_text}")
+        error_message = "; ".join(error_lines)
+        if len(failed_creatives) > 5:
+            error_message += f" (and {len(failed_creatives) - 5} more)"
+
     audit_logger.log_operation(
         operation="sync_creatives",
         principal_name=principal_id,
         principal_id=principal_id,
         adapter_id="N/A",
         success=len(failed_creatives) == 0,
+        error=error_message,
         details={
             "synced_count": len(synced_creatives),
             "failed_count": len(failed_creatives),
