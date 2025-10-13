@@ -60,6 +60,103 @@ class TaskStatus(str, Enum):
 
 
 # --- Core Models ---
+
+
+# --- Pricing Models (AdCP PR #88) ---
+class PricingModel(str, Enum):
+    """Supported pricing models per AdCP spec."""
+
+    CPM = "cpm"  # Cost per 1,000 impressions
+    CPC = "cpc"  # Cost per click
+    CPCV = "cpcv"  # Cost per completed view (100% completion)
+    CPV = "cpv"  # Cost per view at threshold
+    CPP = "cpp"  # Cost per point (GRP-based)
+    FLAT_RATE = "flat_rate"  # Fixed cost regardless of delivery
+
+
+class PriceGuidance(BaseModel):
+    """Pricing guidance for auction-based pricing per AdCP spec."""
+
+    floor: float = Field(..., ge=0, description="Minimum bid price - publisher will reject bids under this value")
+    p25: float | None = Field(None, ge=0, description="25th percentile winning price")
+    p50: float | None = Field(None, ge=0, description="Median winning price")
+    p75: float | None = Field(None, ge=0, description="75th percentile winning price")
+    p90: float | None = Field(None, ge=0, description="90th percentile winning price")
+
+
+class PricingParameters(BaseModel):
+    """Additional parameters specific to pricing models per AdCP spec."""
+
+    # CPP parameters
+    demographic: str | None = Field(None, description="Target demographic for CPP pricing (e.g., 'A18-49', 'W25-54')")
+    min_points: float | None = Field(None, ge=0, description="Minimum GRPs/TRPs required for CPP pricing")
+
+    # CPV parameters
+    view_threshold: float | None = Field(
+        None, ge=0, le=1, description="Percentage of video/audio that must be viewed for CPV pricing (0.0 to 1.0)"
+    )
+
+    # CPA/CPL parameters (reserved for future use)
+    action_type: str | None = Field(
+        None, description="Type of action for CPA pricing (e.g., 'purchase', 'sign_up', 'download')"
+    )
+    attribution_window_days: int | None = Field(
+        None, ge=1, description="Attribution window in days for CPA/CPL pricing"
+    )
+
+    # DOOH parameters
+    duration_hours: float | None = Field(None, ge=0, description="Duration in hours for time-based flat rate pricing")
+    sov_percentage: float | None = Field(
+        None, ge=0, le=100, description="Guaranteed share of voice as percentage (0-100)"
+    )
+    loop_duration_seconds: int | None = Field(None, ge=1, description="Duration of ad loop rotation in seconds")
+    min_plays_per_hour: int | None = Field(
+        None, ge=0, description="Minimum number of times ad plays per hour (frequency guarantee)"
+    )
+    venue_package: str | None = Field(
+        None, description="Named venue package identifier (e.g., 'times_square_network', 'airport_terminals')"
+    )
+    estimated_impressions: int | None = Field(
+        None, ge=0, description="Estimated impressions for this pricing option (informational)"
+    )
+    daypart: str | None = Field(
+        None, description="Specific daypart for time-based pricing (e.g., 'morning_commute', 'evening_prime')"
+    )
+
+
+class PricingOption(BaseModel):
+    """A pricing model option offered by a publisher for a product per AdCP spec."""
+
+    pricing_model: PricingModel = Field(..., description="The pricing model for this option")
+    rate: float | None = Field(None, ge=0, description="The rate for this pricing model (required if is_fixed=true)")
+    currency: str = Field(..., pattern="^[A-Z]{3}$", description="ISO 4217 currency code (e.g., USD, EUR, GBP)")
+    is_fixed: bool = Field(..., description="Whether this is a fixed rate (true) or auction-based (false)")
+    price_guidance: PriceGuidance | None = Field(
+        None, description="Pricing guidance for auction-based pricing (required if is_fixed=false)"
+    )
+    parameters: PricingParameters | None = Field(None, description="Additional pricing model-specific parameters")
+    min_spend_per_package: float | None = Field(
+        None, ge=0, description="Minimum spend requirement per package using this pricing option"
+    )
+
+    # Adapter capability annotations (populated dynamically, not stored in database)
+    supported: bool | None = Field(
+        None, description="Whether this pricing model is supported by the current adapter (populated at discovery time)"
+    )
+    unsupported_reason: str | None = Field(
+        None, description="Reason why this pricing model is not supported (if supported=false)"
+    )
+
+    @model_validator(mode="after")
+    def validate_pricing_option(self) -> "PricingOption":
+        """Validate pricing option per AdCP spec constraints."""
+        if self.is_fixed and self.rate is None:
+            raise ValueError("rate is required when is_fixed=true")
+        if not self.is_fixed and self.price_guidance is None:
+            raise ValueError("price_guidance is required when is_fixed=false")
+        return self
+
+
 class AssetRequirement(BaseModel):
     """Asset requirement specification per AdCP spec."""
 
@@ -973,9 +1070,35 @@ class Product(BaseModel):
     description: str
     formats: list[str]  # Internal field name for backward compatibility
     delivery_type: Literal["guaranteed", "non_guaranteed"]
-    is_fixed_price: bool
-    cpm: float | None = None
-    min_spend: float | None = Field(None, description="Minimum budget requirement in USD", gt=-1)
+
+    # NEW: Pricing options (AdCP PR #88)
+    # Note: This is populated from database relationship, not a column
+    pricing_options: list[PricingOption] | None = Field(
+        None, description="Available pricing models for this product (AdCP PR #88)"
+    )
+
+    # DEPRECATED: Old pricing fields (maintained for backward compatibility)
+    # Use pricing_options instead in new implementations
+    is_fixed_price: bool | None = Field(
+        None, description="DEPRECATED: Use pricing_options instead. Whether this product has fixed pricing"
+    )
+    cpm: float | None = Field(
+        None, description="DEPRECATED: Use pricing_options instead. Cost per thousand impressions"
+    )
+    min_spend: float | None = Field(
+        None, description="DEPRECATED: Use pricing_options[].min_spend_per_package instead", gt=-1
+    )
+    currency: str | None = Field(
+        None, description="DEPRECATED: Use pricing_options[].currency instead. ISO 4217 currency code"
+    )
+    floor_cpm: float | None = Field(
+        None, description="DEPRECATED: Use pricing_options with price_guidance instead", gt=0
+    )
+    recommended_cpm: float | None = Field(
+        None, description="DEPRECATED: Use pricing_options with price_guidance instead", gt=0
+    )
+
+    # Other fields
     measurement: Measurement | None = Field(None, description="Measurement capabilities included with this product")
     creative_policy: CreativePolicy | None = Field(None, description="Creative requirements and restrictions")
     is_custom: bool = Field(default=False)
@@ -989,17 +1112,68 @@ class Product(BaseModel):
     )
     # AdCP PR #79 fields - populated dynamically from historical reporting data
     # These are NOT stored in database, calculated on-demand from product_performance_metrics
-    currency: str = Field(default="USD", description="ISO 4217 currency code for pricing")
     estimated_exposures: int | None = Field(None, description="Estimated impressions (calculated dynamically)", gt=0)
-    floor_cpm: float | None = Field(None, description="Minimum acceptable CPM (calculated dynamically)", gt=0)
-    recommended_cpm: float | None = Field(
-        None, description="Suggested CPM to meet exposure goals (calculated dynamically)", gt=0
-    )
+
+    @model_validator(mode="after")
+    def validate_pricing_fields(self) -> "Product":
+        """Validate that either pricing_options OR legacy pricing fields are present per AdCP spec.
+
+        Per AdCP PR #88: Products should use pricing_options (new format).
+        Legacy fields (is_fixed_price, cpm, etc.) are maintained for backward compatibility.
+        At least one pricing method must be specified.
+        """
+        has_pricing_options = self.pricing_options is not None and len(self.pricing_options) > 0
+        has_legacy_pricing = self.is_fixed_price is not None
+
+        if not has_pricing_options and not has_legacy_pricing:
+            raise ValueError(
+                "Product must have either pricing_options (recommended) or legacy pricing fields (is_fixed_price). "
+                "See AdCP PR #88 for new pricing options format."
+            )
+
+        return self
 
     @property
     def format_ids(self) -> list[str]:
         """AdCP spec compliant property name for formats."""
         return self.formats
+
+    @property
+    def pricing_summary(self) -> str | None:
+        """Generate human-readable pricing summary for display to buyers (AdCP PR #88).
+
+        Returns string like: "CPM: $8-$15 (auction), CPCV: $0.35 (fixed)"
+        Returns None if no pricing information available.
+        """
+        if not self.pricing_options or len(self.pricing_options) == 0:
+            # Fallback to legacy pricing
+            if self.is_fixed_price is not None:
+                if self.cpm:
+                    return f"CPM: ${self.cpm:.2f} ({self.currency or 'USD'}, fixed)"
+                return "Fixed pricing (contact for rates)"
+            return None
+
+        summary_parts = []
+        for option in self.pricing_options:
+            model = option.pricing_model.value if hasattr(option.pricing_model, "value") else option.pricing_model
+            model_upper = model.upper()
+
+            if option.is_fixed and option.rate:
+                # Fixed pricing: show rate
+                summary_parts.append(f"{model_upper}: ${option.rate:.2f} ({option.currency}, fixed)")
+            elif not option.is_fixed and option.price_guidance:
+                # Auction pricing: show floor-p90 range
+                floor = option.price_guidance.floor
+                p90 = option.price_guidance.p90 if option.price_guidance.p90 else option.price_guidance.p50
+                if p90 and p90 != floor:
+                    summary_parts.append(f"{model_upper}: ${floor:.2f}-${p90:.2f} ({option.currency}, auction)")
+                else:
+                    summary_parts.append(f"{model_upper}: ${floor:.2f}+ ({option.currency}, auction)")
+            else:
+                # Incomplete pricing info
+                summary_parts.append(f"{model_upper} ({option.currency})")
+
+        return ", ".join(summary_parts) if summary_parts else None
 
     def model_dump(self, **kwargs):
         """Return AdCP-compliant model dump with proper field names, excluding internal fields and null values."""
@@ -1013,6 +1187,10 @@ class Product(BaseModel):
         # Convert formats to format_ids per AdCP spec
         if "formats" in data:
             data["format_ids"] = data.pop("formats")
+
+        # Add computed pricing_summary for buyer convenience (AdCP PR #88)
+        if self.pricing_summary:
+            data["pricing_summary"] = self.pricing_summary
 
         # Remove null fields per AdCP spec
         # Only truly required fields should always be present
@@ -2001,13 +2179,22 @@ class Package(BaseModel):
     buyer_ref: str | None = Field(None, description="Buyer's reference identifier for this package")
     product_id: str | None = Field(None, description="ID of the product this package is based on (single product)")
     products: list[str] | None = Field(None, description="Array of product IDs to include in this package")
-    budget: Budget | None = Field(None, description="Package-specific budget")
+    budget: Budget | float | None = Field(None, description="Package-specific budget (Budget object or number)")
     impressions: float | None = Field(None, description="Impression goal for this package", gt=-1)
     targeting_overlay: Targeting | None = Field(None, description="Package-specific targeting")
     creative_ids: list[str] | None = Field(None, description="Creative IDs to assign to this package")
     creative_assignments: list[dict[str, Any]] | None = Field(
         None, description="Creative assets assigned to this package"
     )
+
+    # NEW: Pricing model selection (AdCP PR #88)
+    pricing_model: PricingModel | None = Field(
+        None, description="Selected pricing model for this package (from product's pricing_options)"
+    )
+    bid_price: float | None = Field(
+        None, ge=0, description="Bid price for auction-based pricing (required if pricing option is auction-based)"
+    )
+    pacing: Literal["even", "asap", "front_loaded"] | None = Field(None, description="Pacing strategy for this package")
 
     # Internal fields (not in AdCP spec)
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy")
@@ -2063,7 +2250,14 @@ class CreateMediaBuyRequest(BaseModel):
         None, description="Campaign start time: ISO 8601 datetime or 'asap' for immediate start"
     )
     end_time: datetime | None = Field(None, description="Campaign end time (ISO 8601)")
-    budget: Budget | None = Field(None, description="Overall campaign budget")
+    budget: Budget | float | None = Field(
+        None, description="Overall campaign budget (Budget object or number - if number, currency must be provided)"
+    )
+    currency: str | None = Field(
+        None,
+        pattern="^[A-Z]{3}$",
+        description="ISO 4217 currency code for campaign (applies to budget and all packages) - AdCP PR #88",
+    )
 
     # Legacy fields (for backward compatibility)
     product_ids: list[str] | None = Field(None, description="Legacy: Product IDs (converted to packages)")

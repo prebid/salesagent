@@ -172,9 +172,14 @@ class Product(Base, JSONValidatorMixin):
     formats = Column(JSONType, nullable=False)  # JSONB in PostgreSQL
     targeting_template = Column(JSONType, nullable=False)  # JSONB in PostgreSQL
     delivery_type = Column(String(50), nullable=False)
-    is_fixed_price = Column(Boolean, nullable=False)
+
+    # DEPRECATED: Old pricing fields (maintained for backward compatibility)
+    is_fixed_price = Column(Boolean, nullable=True)  # Made nullable in migration
     cpm: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2))
-    min_spend: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)  # AdCP spec field
+    min_spend: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)  # Added in migration
+
+    # Other fields
     measurement = Column(JSONType, nullable=True)  # JSONB in PostgreSQL - AdCP measurement object
     creative_policy = Column(JSONType, nullable=True)  # JSONB in PostgreSQL - AdCP creative policy object
     price_guidance = Column(JSONType)  # JSONB in PostgreSQL - Legacy field
@@ -182,13 +187,47 @@ class Product(Base, JSONValidatorMixin):
     expires_at = Column(DateTime)
     countries = Column(JSONType)  # JSONB in PostgreSQL
     implementation_config = Column(JSONType)  # JSONB in PostgreSQL
-    # Note: PR #79 fields (currency, estimated_exposures, floor_cpm, recommended_cpm) are NOT stored in database
+    # Note: PR #79 fields (estimated_exposures, floor_cpm, recommended_cpm) are NOT stored in database
     # They are calculated dynamically from product_performance_metrics table
 
     # Relationships
     tenant = relationship("Tenant", back_populates="products")
+    pricing_options = relationship("PricingOption", back_populates="product", cascade="all, delete-orphan")
 
     __table_args__ = (Index("idx_products_tenant", "tenant_id"),)
+
+
+class PricingOption(Base):
+    """Pricing option for a product (AdCP PR #88).
+
+    Each product can have multiple pricing options with different pricing models,
+    currencies, and rate structures (fixed or auction-based).
+    """
+
+    __tablename__ = "pricing_options"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False)
+    product_id = Column(String(100), nullable=False)
+    pricing_model = Column(String(20), nullable=False)  # cpm, cpcv, cpp, cpc, cpv, flat_rate
+    rate: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)  # ISO 4217 code
+    is_fixed = Column(Boolean, nullable=False)
+    price_guidance = Column(JSONType, nullable=True)  # JSONB: {floor, p25, p50, p75, p90}
+    parameters = Column(JSONType, nullable=True)  # JSONB: model-specific parameters
+    min_spend_per_package: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)
+
+    # Relationships
+    product = relationship("Product", back_populates="pricing_options")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "product_id"],
+            ["products.tenant_id", "products.product_id"],
+            ondelete="CASCADE",
+        ),
+        Index("idx_pricing_options_product", "tenant_id", "product_id"),
+    )
 
 
 class CurrencyLimit(Base):

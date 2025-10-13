@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from src.admin.utils import require_tenant_access
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Product, Tenant
+from src.core.database.models import PricingOption, Product, Tenant
 from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -56,6 +56,122 @@ def get_creative_formats():
     formats_list.sort(key=lambda x: (x["type"], x["name"]))
 
     return formats_list
+
+
+def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
+    """Parse pricing options from form data (AdCP PR #88).
+
+    Form data uses indexed fields: pricing_model_0, pricing_model_1, etc.
+
+    Returns list of pricing option dicts ready for database insertion.
+    """
+    pricing_options = []
+    index = 0
+
+    # Find all pricing options by looking for pricing_model_{i} fields
+    while f"pricing_model_{index}" in form_data:
+        pricing_model_raw = form_data.get(f"pricing_model_{index}")
+        if not pricing_model_raw:
+            index += 1
+            continue
+
+        # Parse pricing model and is_fixed from combined value (AdCP PR #88 UI update)
+        # Values are: cpm_fixed, cpm_auction, cpcv, cpp, cpc, cpv, flat_rate
+        if pricing_model_raw == "cpm_fixed":
+            pricing_model = "cpm"
+            is_fixed = True
+        elif pricing_model_raw == "cpm_auction":
+            pricing_model = "cpm"
+            is_fixed = False
+        else:
+            # All other models are fixed-rate only (cpcv, cpp, cpc, cpv, flat_rate)
+            pricing_model = pricing_model_raw
+            is_fixed = True
+
+        # Parse basic fields
+        currency = form_data.get(f"currency_{index}", "USD")
+
+        # Parse rate (for fixed pricing)
+        rate = None
+        rate_str = form_data.get(f"rate_{index}", "").strip()
+        if rate_str:
+            try:
+                rate = float(rate_str)
+            except ValueError:
+                pass
+
+        # Parse price_guidance (for auction pricing)
+        price_guidance = None
+        if not is_fixed:
+            # Floor price is required for auction
+            floor_str = form_data.get(f"floor_{index}", "").strip()
+            if floor_str:
+                try:
+                    floor = float(floor_str)
+                    price_guidance = {"floor": floor}
+
+                    # Optional percentiles
+                    for percentile in ["p25", "p50", "p75", "p90"]:
+                        value_str = form_data.get(f"{percentile}_{index}", "").strip()
+                        if value_str:
+                            try:
+                                price_guidance[percentile] = float(value_str)
+                            except ValueError:
+                                pass
+                except ValueError:
+                    pass
+
+        # Parse min_spend_per_package
+        min_spend = None
+        min_spend_str = form_data.get(f"min_spend_{index}", "").strip()
+        if min_spend_str:
+            try:
+                min_spend = float(min_spend_str)
+            except ValueError:
+                pass
+
+        # Parse model-specific parameters
+        parameters = None
+        if pricing_model == "cpp":
+            # CPP parameters
+            demographic = form_data.get(f"demographic_{index}", "").strip()
+            min_points_str = form_data.get(f"min_points_{index}", "").strip()
+            if demographic or min_points_str:
+                parameters = {}
+                if demographic:
+                    parameters["demographic"] = demographic
+                if min_points_str:
+                    try:
+                        parameters["min_points"] = float(min_points_str)
+                    except ValueError:
+                        pass
+
+        elif pricing_model == "cpv":
+            # CPV parameters
+            view_threshold_str = form_data.get(f"view_threshold_{index}", "").strip()
+            if view_threshold_str:
+                try:
+                    view_threshold = float(view_threshold_str)
+                    if 0 <= view_threshold <= 1:
+                        parameters = {"view_threshold": view_threshold}
+                except ValueError:
+                    pass
+
+        # Build pricing option dict
+        pricing_option = {
+            "pricing_model": pricing_model,
+            "currency": currency,
+            "is_fixed": is_fixed,
+            "rate": rate,
+            "price_guidance": price_guidance,
+            "parameters": parameters,
+            "min_spend_per_package": min_spend,
+        }
+
+        pricing_options.append(pricing_option)
+        index += 1
+
+    return pricing_options
 
 
 @products_bp.route("/")
@@ -118,7 +234,7 @@ def list_products(tenant_id):
 @require_tenant_access()
 def add_product(tenant_id):
     """Add a new product - adapter-specific form."""
-    # Get tenant's adapter type
+    # Get tenant's adapter type and currencies
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
@@ -126,6 +242,15 @@ def add_product(tenant_id):
             return redirect(url_for("products.list_products", tenant_id=tenant_id))
 
         adapter_type = tenant.ad_server or "mock"
+
+        # Get tenant's supported currencies from currency_limits
+        from src.core.database.models import CurrencyLimit
+
+        currency_limits = db_session.scalars(select(CurrencyLimit).filter_by(tenant_id=tenant_id)).all()
+        currencies = [limit.currency_code for limit in currency_limits]
+        # Default to USD if no currencies configured
+        if not currencies:
+            currencies = ["USD"]
 
     if request.method == "POST":
         try:
@@ -148,47 +273,26 @@ def add_product(tenant_id):
                 # Only set countries if some were selected; None means all countries
                 countries = countries_list if countries_list and "ALL" not in countries_list else None
 
-                # Get pricing based on line item type (GAM form) or delivery type (other adapters)
-                line_item_type = form_data.get("line_item_type")
+                # Parse and create pricing options (AdCP PR #88)
+                pricing_options_data = parse_pricing_options_from_form(form_data)
+
+                # Derive legacy fields (delivery_type, cpm, price_guidance) from first pricing option for backwards compatibility
+                # These legacy fields are used by implementation_config but will eventually be deprecated
+                delivery_type = "guaranteed"  # Default
                 cpm = None
                 price_guidance = None
 
-                # Determine delivery_type and pricing based on line_item_type
-                if line_item_type:
-                    # GAM form: map line item type to delivery type and pricing
-                    if line_item_type in ["STANDARD", "SPONSORSHIP"]:
-                        # Fixed price line items
+                if pricing_options_data and len(pricing_options_data) > 0:
+                    first_option = pricing_options_data[0]
+                    # Determine delivery_type based on is_fixed
+                    if first_option.get("is_fixed", True):
                         delivery_type = "guaranteed"
-                        cpm = float(form_data.get("cpm", 0)) if form_data.get("cpm") else None
-                    elif line_item_type == "PRICE_PRIORITY":
-                        # Floor price line item
-                        delivery_type = "non-guaranteed"
-                        floor_cpm = float(form_data.get("floor_cpm", 0)) if form_data.get("floor_cpm") else None
-                        if floor_cpm:
-                            price_guidance = {"min": floor_cpm, "max": floor_cpm}
-                    elif line_item_type == "HOUSE":
-                        # No price
-                        delivery_type = "non-guaranteed"
-                        # No CPM, no price guidance
-                else:
-                    # Non-GAM form: use legacy delivery_type field
-                    delivery_type = form_data.get("delivery_type", "guaranteed")
-                    if delivery_type == "guaranteed":
-                        cpm = float(form_data.get("cpm", 0)) if form_data.get("cpm") else None
+                        cpm = first_option.get("rate")
                     else:
-                        # Non-guaranteed - use price guidance
-                        price_min = (
-                            float(form_data.get("price_guidance_min", 0))
-                            if form_data.get("price_guidance_min")
-                            else None
-                        )
-                        price_max = (
-                            float(form_data.get("price_guidance_max", 0))
-                            if form_data.get("price_guidance_max")
-                            else None
-                        )
-                        if price_min and price_max:
-                            price_guidance = {"min": price_min, "max": price_max}
+                        delivery_type = "non-guaranteed"
+                        pg = first_option.get("price_guidance")
+                        if pg and "floor" in pg:
+                            price_guidance = {"min": pg["floor"], "max": pg.get("p90", pg["floor"])}
 
                 # Build implementation config based on adapter type
                 implementation_config = {}
@@ -212,17 +316,11 @@ def add_product(tenant_id):
 
                     base_config["include_descendants"] = form_data.get("include_descendants") == "on"
 
-                    # Add advanced GAM settings if provided
+                    # Add GAM-specific settings
                     if form_data.get("line_item_type"):
                         base_config["line_item_type"] = form_data["line_item_type"]
                     if form_data.get("priority"):
                         base_config["priority"] = int(form_data["priority"])
-                    if form_data.get("cost_type"):
-                        base_config["cost_type"] = form_data["cost_type"]
-                    if form_data.get("creative_rotation_type"):
-                        base_config["creative_rotation_type"] = form_data["creative_rotation_type"]
-                    if form_data.get("delivery_rate_type"):
-                        base_config["delivery_rate_type"] = form_data["delivery_rate_type"]
 
                     implementation_config = base_config
                 else:
@@ -252,6 +350,33 @@ def add_product(tenant_id):
                 # Create product with correct fields matching the Product model
                 product = Product(**product_kwargs)
                 db_session.add(product)
+                db_session.flush()  # Flush to get product ID before creating pricing options
+
+                # Create pricing options (already parsed above)
+                if pricing_options_data:
+                    logger.info(
+                        f"Creating {len(pricing_options_data)} pricing options for product {product.product_id}"
+                    )
+                    for option_data in pricing_options_data:
+                        from decimal import Decimal
+
+                        pricing_option = PricingOption(
+                            tenant_id=tenant_id,
+                            product_id=product.product_id,
+                            pricing_model=option_data["pricing_model"],
+                            rate=Decimal(str(option_data["rate"])) if option_data["rate"] is not None else None,
+                            currency=option_data["currency"],
+                            is_fixed=option_data["is_fixed"],
+                            price_guidance=option_data["price_guidance"],
+                            parameters=option_data["parameters"],
+                            min_spend_per_package=(
+                                Decimal(str(option_data["min_spend_per_package"]))
+                                if option_data["min_spend_per_package"] is not None
+                                else None
+                            ),
+                        )
+                        db_session.add(pricing_option)
+
                 db_session.commit()
 
                 flash(f"Product '{product.name}' created successfully!", "success")
@@ -280,18 +405,19 @@ def add_product(tenant_id):
             tenant_id=tenant_id,
             inventory_synced=inventory_synced,
             formats=get_creative_formats(),
+            currencies=currencies,
         )
     else:
         # For Mock and other adapters: simple form
         formats = get_creative_formats()
-        return render_template("add_product.html", tenant_id=tenant_id, formats=formats)
+        return render_template("add_product.html", tenant_id=tenant_id, formats=formats, currencies=currencies)
 
 
 @products_bp.route("/<product_id>/edit", methods=["GET", "POST"])
 @require_tenant_access()
 def edit_product(tenant_id, product_id):
     """Edit an existing product."""
-    # Get tenant's adapter type
+    # Get tenant's adapter type and currencies
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
@@ -299,6 +425,15 @@ def edit_product(tenant_id, product_id):
             return redirect(url_for("products.list_products", tenant_id=tenant_id))
 
         adapter_type = tenant.ad_server or "mock"
+
+        # Get tenant's supported currencies from currency_limits
+        from src.core.database.models import CurrencyLimit
+
+        currency_limits = db_session.scalars(select(CurrencyLimit).filter_by(tenant_id=tenant_id)).all()
+        currencies = [limit.currency_code for limit in currency_limits]
+        # Default to USD if no currencies configured
+        if not currencies:
+            currencies = ["USD"]
 
     try:
         with get_db_session() as db_session:
@@ -396,6 +531,33 @@ def edit_product(tenant_id, product_id):
                 else:
                     product.min_spend = None
 
+                # Update pricing options (AdCP PR #88)
+                # Delete existing pricing options and recreate from form
+                db_session.query(PricingOption).filter_by(tenant_id=tenant_id, product_id=product_id).delete()
+
+                pricing_options_data = parse_pricing_options_from_form(form_data)
+                if pricing_options_data:
+                    logger.info(
+                        f"Updating {len(pricing_options_data)} pricing options for product {product.product_id}"
+                    )
+                    for option_data in pricing_options_data:
+                        pricing_option = PricingOption(
+                            tenant_id=tenant_id,
+                            product_id=product.product_id,
+                            pricing_model=option_data["pricing_model"],
+                            rate=Decimal(str(option_data["rate"])) if option_data["rate"] is not None else None,
+                            currency=option_data["currency"],
+                            is_fixed=option_data["is_fixed"],
+                            price_guidance=option_data["price_guidance"],
+                            parameters=option_data["parameters"],
+                            min_spend_per_package=(
+                                Decimal(str(option_data["min_spend_per_package"]))
+                                if option_data["min_spend_per_package"] is not None
+                                else None
+                            ),
+                        )
+                        db_session.add(pricing_option)
+
                 db_session.commit()
 
                 flash(f"Product '{product.name}' updated successfully", "success")
@@ -428,6 +590,27 @@ def edit_product(tenant_id, product_id):
                 ),
             }
 
+            # Load existing pricing options (AdCP PR #88)
+            pricing_options = db_session.scalars(
+                select(PricingOption).filter_by(tenant_id=tenant_id, product_id=product_id)
+            ).all()
+
+            pricing_options_list = []
+            for po in pricing_options:
+                pricing_options_list.append(
+                    {
+                        "pricing_model": po.pricing_model,
+                        "rate": float(po.rate) if po.rate else None,
+                        "currency": po.currency,
+                        "is_fixed": po.is_fixed,
+                        "price_guidance": po.price_guidance,
+                        "parameters": po.parameters,
+                        "min_spend_per_package": float(po.min_spend_per_package) if po.min_spend_per_package else None,
+                    }
+                )
+
+            product_dict["pricing_options"] = pricing_options_list
+
             # Show adapter-specific form
             if adapter_type == "google_ad_manager":
                 from src.core.database.models import GAMInventory
@@ -443,6 +626,7 @@ def edit_product(tenant_id, product_id):
                     product=product_dict,
                     inventory_synced=inventory_synced,
                     formats=get_creative_formats(),
+                    currencies=currencies,
                 )
             else:
                 return render_template(
@@ -450,6 +634,7 @@ def edit_product(tenant_id, product_id):
                     tenant_id=tenant_id,
                     product=product_dict,
                     tenant_adapter=adapter_type,
+                    currencies=currencies,
                 )
 
     except Exception as e:

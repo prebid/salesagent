@@ -102,6 +102,7 @@ def validate_product_alignment() -> tuple[bool, list[str]]:
         "estimated_exposures",  # AdCP PR #79: Calculated from historical data
         "floor_cpm",  # AdCP PR #79: Calculated dynamically
         "recommended_cpm",  # AdCP PR #79: Calculated to meet exposure goals
+        "pricing_options",  # AdCP PR #88: Populated from database relationship, not a column
     }
 
     return validate_field_alignment(ProductModel, Product, internal_fields, computed_fields)

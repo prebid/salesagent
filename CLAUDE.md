@@ -859,6 +859,27 @@ pre-commit run adcp-contract-tests --all-files
 
 **When hooks fail**: Fix the issue, don't bypass with `--no-verify`.
 
+## Adapter Pricing Model Support
+
+### GAM Adapter
+**Supported**: CPM only (both fixed and auction)
+- Fixed CPM → GAM guaranteed orders
+- Auction CPM → GAM non-guaranteed orders
+
+**Not supported**: CPCV, CPP, CPC, CPV, flat_rate
+- GAM supports these internally but adapter doesn't implement them yet
+- Products with non-CPM pricing_options will work (validation passes) but adapter uses CPM
+
+### Mock Adapter
+**Supported**: All pricing models (CPM, CPCV, CPP, CPC, CPV, flat_rate)
+- Both fixed and auction pricing
+- All currencies
+- Simulates appropriate metrics per pricing model
+
+**Note**: Adapter UIs should allow creating pricing_options for products. Currently only legacy pricing fields are shown.
+
+---
+
 ## Deployment
 
 ### Hosting Options

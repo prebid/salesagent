@@ -87,6 +87,10 @@ class MockAdServer(AdServerAdapter):
         """Set the current simulation time."""
         self._current_simulation_time = simulation_time
 
+    def get_supported_pricing_models(self) -> set[str]:
+        """Mock adapter supports all pricing models (AdCP PR #88)."""
+        return {"cpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
+
     def _initialize_hitl_config(self):
         """Initialize Human-in-the-Loop configuration from principal platform_mappings."""
         # Extract HITL config from principal's mock platform mapping
@@ -331,9 +335,30 @@ class MockAdServer(AdServerAdapter):
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
     ) -> CreateMediaBuyResponse:
-        """Simulates the creation of a media buy using GAM-like templates."""
+        """Simulates the creation of a media buy using GAM-like templates.
+
+        Args:
+            request: Full create media buy request
+            packages: Simplified package models
+            start_time: Campaign start time
+            end_time: Campaign end time
+            package_pricing_info: Optional validated pricing info (AdCP PR #88)
+                Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+
+        Returns:
+            CreateMediaBuyResponse with simulated media buy
+        """
         from src.adapters.ai_test_orchestrator import AITestOrchestrator
+
+        # Log pricing model info if provided (AdCP PR #88)
+        if package_pricing_info:
+            for pkg_id, pricing in package_pricing_info.items():
+                self.log(
+                    f"📊 Package {pkg_id} pricing: {pricing['pricing_model']} "
+                    f"({pricing['currency']}, {'fixed' if pricing['is_fixed'] else 'auction'})"
+                )
 
         # AI-powered test orchestration (check promoted_offering/brief for test instructions)
         # For mock adapter, buyers put test directives in the brief (promoted_offering field)

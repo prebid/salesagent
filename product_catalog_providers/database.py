@@ -5,13 +5,37 @@ import logging
 from typing import Any
 
 from src.core.database.database_session import get_db_session
+from src.core.database.models import PricingOption as PricingOptionModel
 from src.core.database.models import Product as ProductModel
-from src.core.schemas import Product
+from src.core.schemas import PriceGuidance, PricingModel, PricingOption, PricingParameters, Product
 
 from .base import ProductCatalogProvider
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+
+def _convert_pricing_option(po: PricingOptionModel) -> PricingOption:
+    """Convert database PricingOption to Pydantic PricingOption."""
+    return PricingOption(
+        pricing_model=PricingModel(po.pricing_model),
+        rate=float(po.rate) if po.rate is not None else None,
+        currency=po.currency,
+        is_fixed=po.is_fixed,
+        price_guidance=(
+            PriceGuidance(
+                floor=po.price_guidance.get("floor", 0.0),
+                p25=po.price_guidance.get("p25"),
+                p50=po.price_guidance.get("p50"),
+                p75=po.price_guidance.get("p75"),
+                p90=po.price_guidance.get("p90"),
+            )
+            if po.price_guidance
+            else None
+        ),
+        parameters=PricingParameters(**po.parameters) if po.parameters else None,
+        min_spend_per_package=float(po.min_spend_per_package) if po.min_spend_per_package is not None else None,
+    )
 
 
 class DatabaseProductCatalog(ProductCatalogProvider):
@@ -43,6 +67,16 @@ class DatabaseProductCatalog(ProductCatalogProvider):
 
             loaded_products = []
             for product_obj in products:
+                # Load pricing options if available (AdCP PR #88)
+                pricing_options = None
+                if product_obj.pricing_options:
+                    try:
+                        pricing_options = [_convert_pricing_option(po) for po in product_obj.pricing_options]
+                    except Exception as e:
+                        logger.warning(f"Failed to load pricing options for product {product_obj.product_id}: {e}")
+                        # Fall back to legacy pricing fields
+                        pricing_options = None
+
                 # Convert ORM object to dictionary
                 product_data = {
                     "product_id": product_obj.product_id,
@@ -50,9 +84,13 @@ class DatabaseProductCatalog(ProductCatalogProvider):
                     "description": product_obj.description,
                     "formats": product_obj.formats,
                     "delivery_type": product_obj.delivery_type,
+                    # NEW: Pricing options (AdCP PR #88)
+                    "pricing_options": pricing_options,
+                    # DEPRECATED: Legacy pricing fields (still supported for backward compatibility)
                     "is_fixed_price": product_obj.is_fixed_price,
                     "cpm": product_obj.cpm,
                     "min_spend": product_obj.min_spend,
+                    "currency": product_obj.currency,
                     "price_guidance": product_obj.price_guidance,
                     "is_custom": product_obj.is_custom,
                     "countries": product_obj.countries,

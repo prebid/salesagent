@@ -247,10 +247,52 @@ class GoogleAdManager(AdServerAdapter):
         return self.targeting_manager.SUPPORTED_MEDIA_TYPES
 
     def create_media_buy(
-        self, request: CreateMediaBuyRequest, packages: list[MediaPackage], start_time: datetime, end_time: datetime
+        self,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
     ) -> CreateMediaBuyResponse:
-        """Create a new media buy (order) in GAM - main orchestration method."""
+        """Create a new media buy (order) in GAM - main orchestration method.
+
+        Args:
+            request: Full create media buy request
+            packages: Simplified package models
+            start_time: Campaign start time
+            end_time: Campaign end time
+            package_pricing_info: Optional validated pricing info (AdCP PR #88)
+                Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+
+        Returns:
+            CreateMediaBuyResponse with GAM order details
+        """
         self.log("[bold]GoogleAdManager.create_media_buy[/bold] - Creating GAM order")
+
+        # Validate pricing models - GAM only supports CPM (AdCP PR #88)
+        if package_pricing_info:
+            for pkg_id, pricing in package_pricing_info.items():
+                pricing_model = pricing["pricing_model"]
+                self.log(
+                    f"📊 Package {pkg_id} pricing: {pricing_model} "
+                    f"({pricing['currency']}, {'fixed' if pricing['is_fixed'] else 'auction'})"
+                )
+
+                # Enforce GAM limitation: only CPM pricing supported
+                if pricing_model != "cpm":
+                    error_msg = (
+                        f"Google Ad Manager adapter only supports CPM pricing. "
+                        f"Package '{pkg_id}' requested '{pricing_model}' pricing model. "
+                        f"Please choose a product with CPM pricing or contact the publisher "
+                        f"about CPM pricing options for this inventory."
+                    )
+                    self.log(f"[red]Error: {error_msg}[/red]")
+                    return CreateMediaBuyResponse(
+                        media_buy_id="",
+                        status="failed",
+                        message=error_msg,
+                        errors=[Error(code="unsupported_pricing_model", message=error_msg)],
+                    )
 
         # Validate that advertiser_id and trafficker_id are configured
         if not self.advertiser_id or not self.trafficker_id:

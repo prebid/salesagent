@@ -69,11 +69,38 @@ class AdServerAdapter(ABC):
         else:
             self.console.print(message)
 
+    def get_supported_pricing_models(self) -> set[str]:
+        """Return set of pricing models this adapter supports (AdCP PR #88).
+
+        Default implementation supports only CPM. Override in subclasses.
+
+        Returns:
+            Set of pricing model strings: {"cpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
+        """
+        return {"cpm"}
+
     @abstractmethod
     def create_media_buy(
-        self, request: CreateMediaBuyRequest, packages: list[MediaPackage], start_time: datetime, end_time: datetime
+        self,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
     ) -> CreateMediaBuyResponse:
-        """Creates a new media buy on the ad server from selected packages."""
+        """Creates a new media buy on the ad server from selected packages.
+
+        Args:
+            request: Full create media buy request
+            packages: Simplified package models for adapter
+            start_time: Campaign start time
+            end_time: Campaign end time
+            package_pricing_info: Optional validated pricing information per package (AdCP PR #88)
+                Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+
+        Returns:
+            CreateMediaBuyResponse with media buy details
+        """
         pass
 
     @abstractmethod

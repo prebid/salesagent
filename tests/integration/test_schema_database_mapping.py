@@ -44,6 +44,8 @@ class TestSchemaFieldMapping:
             "estimated_exposures",  # Calculated from historical performance data
             "floor_cpm",  # Minimum CPM calculated from market data
             "recommended_cpm",  # Suggested CPM based on goals and historical data
+            # PR#88 field - populated from database relationship, not a column
+            "pricing_options",  # List of PricingOption objects from pricing_options table
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)

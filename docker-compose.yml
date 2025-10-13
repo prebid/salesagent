@@ -82,7 +82,7 @@ services:
     command: python -m src.admin.server
     environment:
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
-      ADMIN_UI_PORT: ${ADMIN_UI_PORT:-8001}
+      ADMIN_UI_PORT: 8001
       FLASK_ENV: production
       FLASK_DEBUG: ${FLASK_DEBUG:-0}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-dev-secret-key-change-in-production}
@@ -116,7 +116,7 @@ services:
         condition: service_healthy
 
     ports:
-      - "${ADMIN_UI_PORT:-8001}:8001"
+      - "${ADMIN_UI_PORT:-8002}:8001"
 
     volumes:
       # Mount OAuth credentials file

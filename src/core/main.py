@@ -83,6 +83,7 @@ from src.core.schemas import (
     ListCreativesResponse,
     MediaBuyDeliveryData,
     MediaPackage,
+    Package,
     PackageDelivery,
     PackagePerformance,
     Principal,
@@ -1168,6 +1169,32 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
 
     # Reconstruct products from modified data
     modified_products = [Product(**p) for p in response_data["products"]]
+
+    # Annotate pricing options with adapter support (AdCP PR #88)
+    if principal and modified_products:
+        try:
+            from src.adapters import get_adapter
+
+            adapter = get_adapter(principal, dry_run=True)
+            supported_models = adapter.get_supported_pricing_models()
+
+            for product in modified_products:
+                if product.pricing_options:
+                    # Annotate each pricing option with "supported" flag
+                    for option in product.pricing_options:
+                        pricing_model = (
+                            option.pricing_model.value
+                            if hasattr(option.pricing_model, "value")
+                            else option.pricing_model
+                        )
+                        # Add supported annotation (will be included in response)
+                        option.supported = pricing_model in supported_models
+                        if not option.supported:
+                            option.unsupported_reason = (
+                                f"Current adapter does not support {pricing_model.upper()} pricing"
+                            )
+        except Exception as e:
+            logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
 
     # Filter pricing data for anonymous users
     pricing_message = None
@@ -2891,6 +2918,132 @@ def list_authorized_properties(
     return _list_authorized_properties_impl(req, context)
 
 
+def _validate_pricing_model_selection(
+    package: Package,
+    product: Any,  # ProductModel from database
+    campaign_currency: str | None,
+) -> dict[str, Any]:
+    """Validate pricing model selection for a package against product's pricing options.
+
+    Args:
+        package: Package with optional pricing_model and bid_price
+        product: Product database model with pricing_options relationship
+        campaign_currency: Optional campaign-level currency
+
+    Returns:
+        Dict with validated pricing information:
+        {
+            "pricing_model": str,
+            "rate": float | None,
+            "currency": str,
+            "is_fixed": bool,
+            "bid_price": float | None,
+        }
+
+    Raises:
+        ToolError: If pricing_model validation fails
+    """
+    from decimal import Decimal
+
+    # If package doesn't specify pricing_model, use legacy product pricing
+    if not package.pricing_model:
+        # Use legacy pricing from product
+        if product.is_fixed_price is not None:
+            return {
+                "pricing_model": "cpm",  # Legacy products are CPM
+                "rate": float(product.cpm) if product.cpm else None,
+                "currency": product.currency or campaign_currency or "USD",
+                "is_fixed": product.is_fixed_price,
+                "bid_price": None,
+            }
+        # No pricing information available
+        raise ToolError(
+            "PRICING_ERROR",
+            f"Product {product.product_id} has no pricing information (neither pricing_options nor legacy fields)",
+        )
+
+    # Package specifies pricing_model - validate against product's pricing_options
+    if not product.pricing_options or len(product.pricing_options) == 0:
+        raise ToolError(
+            "PRICING_ERROR",
+            f"Product {product.product_id} does not offer new pricing models. "
+            f"It uses legacy pricing (CPM: {product.cpm}, fixed: {product.is_fixed_price}). "
+            f"Remove pricing_model from package to use legacy pricing.",
+        )
+
+    # Find matching pricing option
+    selected_option = None
+    for option in product.pricing_options:
+        if option.pricing_model == package.pricing_model.value:
+            # If campaign currency specified, must match
+            if campaign_currency and option.currency != campaign_currency:
+                continue
+            selected_option = option
+            break
+
+    if not selected_option:
+        available_options = [f"{opt.pricing_model} ({opt.currency})" for opt in product.pricing_options]
+        error_msg = f"Product {product.product_id} does not offer pricing model '{package.pricing_model}'"
+        if campaign_currency:
+            error_msg += f" in currency {campaign_currency}"
+        error_msg += f". Available options: {', '.join(available_options)}"
+        raise ToolError("PRICING_ERROR", error_msg)
+
+    # Validate auction pricing
+    if not selected_option.is_fixed:
+        if not package.bid_price:
+            raise ToolError(
+                "PRICING_ERROR",
+                f"Package requires bid_price for auction-based {package.pricing_model} pricing. "
+                f"Floor price: {selected_option.price_guidance.get('floor') if selected_option.price_guidance else 'N/A'}",
+            )
+
+        floor_price = (
+            Decimal(str(selected_option.price_guidance.get("floor", 0)))
+            if selected_option.price_guidance
+            else Decimal("0")
+        )
+        bid_decimal = Decimal(str(package.bid_price))
+
+        if bid_decimal < floor_price:
+            raise ToolError(
+                "PRICING_ERROR",
+                f"Bid price {package.bid_price} is below floor price {floor_price} "
+                f"for {package.pricing_model} pricing",
+            )
+
+    # Validate fixed pricing has rate
+    if selected_option.is_fixed and not selected_option.rate:
+        raise ToolError(
+            "PRICING_ERROR",
+            f"Product {product.product_id} pricing option has is_fixed=true but no rate specified",
+        )
+
+    # Validate minimum spend per package
+    if selected_option.min_spend_per_package:
+        package_budget = None
+        if isinstance(package.budget, dict):
+            package_budget = Decimal(str(package.budget.get("total", 0)))
+        elif isinstance(package.budget, int | float):
+            package_budget = Decimal(str(package.budget))
+
+        if package_budget and package_budget < Decimal(str(selected_option.min_spend_per_package)):
+            raise ToolError(
+                "PRICING_ERROR",
+                f"Package budget {package_budget} {selected_option.currency} is below minimum spend "
+                f"{selected_option.min_spend_per_package} {selected_option.currency} for {package.pricing_model}",
+            )
+
+    # Return validated pricing information
+    return {
+        "pricing_model": selected_option.pricing_model,
+        "rate": float(selected_option.rate) if selected_option.rate else None,
+        "currency": selected_option.currency,
+        "is_fixed": selected_option.is_fixed,
+        "bid_price": float(package.bid_price) if package.bid_price else None,
+    }
+
+
 def _create_media_buy_impl(
     promoted_offering: str,
     po_number: str = None,
@@ -3129,9 +3282,12 @@ def _create_media_buy_impl(
         from src.core.database.models import CurrencyLimit
         from src.core.database.models import Product as ProductModel
 
-        # Get currency from budget (AdCP v2.4) or default to USD
+        # Get currency from campaign level (AdCP PR #88), budget, or default to USD
         request_currency = None
-        if req.budget:
+        if req.currency:
+            # NEW: Campaign-level currency (AdCP PR #88)
+            request_currency = req.currency
+        elif req.budget:
             request_currency = req.budget.currency
         elif req.packages and req.packages[0].budget:
             request_currency = req.packages[0].budget.currency
@@ -3153,14 +3309,46 @@ def _create_media_buy_impl(
                 )
                 raise ValueError(error_msg)
 
-            # Validate minimum product spend
-            if currency_limit.min_package_budget:
-                # Get products from database to check per-product minimums
-                stmt = select(ProductModel).where(
-                    ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids)
-                )
-                products = session.scalars(stmt).all()
+            # Get products from database to check pricing and minimums
+            stmt = select(ProductModel).where(
+                ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids)
+            )
+            products = session.scalars(stmt).all()
 
+            # Build product lookup map for pricing validation
+            product_map = {p.product_id: p for p in products}
+
+            # NEW: Validate pricing_model selections (AdCP PR #88)
+            # Store validated pricing info for later use in adapter
+            package_pricing_info = {}
+            if req.packages:
+                for package in req.packages:
+                    # Get product IDs for this package
+                    package_product_ids = []
+                    if package.products:
+                        package_product_ids = package.products
+                    elif package.product_id:
+                        package_product_ids = [package.product_id]
+
+                    # Validate pricing for first product (packages typically have one product)
+                    if package_product_ids:
+                        product_id = package_product_ids[0]
+                        if product_id in product_map:
+                            try:
+                                pricing_info = _validate_pricing_model_selection(
+                                    package=package,
+                                    product=product_map[product_id],
+                                    campaign_currency=request_currency,
+                                )
+                                # Store for adapter use
+                                if package.package_id:
+                                    package_pricing_info[package.package_id] = pricing_info
+                            except ToolError as e:
+                                # Re-raise pricing validation errors
+                                raise ValueError(str(e))
+
+            # Validate minimum product spend (legacy + new pricing_options)
+            if currency_limit.min_package_budget:
                 # Build map of product_id -> minimum spend
                 product_min_spends = {}
                 for product in products:
@@ -3534,8 +3722,9 @@ def _create_media_buy_impl(
 
         # Call adapter with detailed error logging
         # Note: start_time variable already resolved from 'asap' to actual datetime if needed
+        # Pass package_pricing_info for pricing model support (AdCP PR #88)
         try:
-            response = adapter.create_media_buy(req, packages, start_time, end_time)
+            response = adapter.create_media_buy(req, packages, start_time, end_time, package_pricing_info)
         except Exception as adapter_error:
             import traceback
 

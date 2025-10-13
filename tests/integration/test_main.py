@@ -97,6 +97,7 @@ class TestAdcpServerV2_3(unittest.TestCase):
                     delivery_type VARCHAR(50) NOT NULL,
                     is_fixed_price BOOLEAN DEFAULT 0,
                     cpm REAL,
+                    currency VARCHAR(3),
                     price_guidance TEXT,
                     price_guidance_min REAL,
                     price_guidance_max REAL,
