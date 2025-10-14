@@ -132,7 +132,6 @@ class TestResponseStrMethods:
     def test_activate_signal_response_deployed(self):
         """ActivateSignalResponse with deployed status shows platform ID."""
         resp = ActivateSignalResponse(
-            adcp_version="2.3.0",
             task_id="task_123",
             status="deployed",
             decisioning_platform_segment_id="seg_456",
@@ -142,7 +141,6 @@ class TestResponseStrMethods:
     def test_activate_signal_response_processing(self):
         """ActivateSignalResponse with processing status shows ETA."""
         resp = ActivateSignalResponse(
-            adcp_version="2.3.0",
             task_id="task_123",
             status="processing",
             estimated_activation_duration_minutes=5.0,
@@ -151,12 +149,12 @@ class TestResponseStrMethods:
 
     def test_activate_signal_response_pending(self):
         """ActivateSignalResponse with pending status shows task ID."""
-        resp = ActivateSignalResponse(adcp_version="2.3.0", task_id="task_123", status="pending")
+        resp = ActivateSignalResponse(task_id="task_123", status="pending")
         assert str(resp) == "Signal activation pending (task ID: task_123)."
 
     def test_activate_signal_response_failed(self):
         """ActivateSignalResponse with failed status shows task ID."""
-        resp = ActivateSignalResponse(adcp_version="2.3.0", task_id="task_123", status="failed")
+        resp = ActivateSignalResponse(task_id="task_123", status="failed")
         assert str(resp) == "Signal activation failed (task ID: task_123)."
 
     def test_simulation_control_response_with_message(self):
@@ -204,7 +202,7 @@ class TestResponseStrMethods:
         """Verify no response __str__ contains JSON-like content."""
         # Test a few responses to ensure they don't leak JSON
         responses = [
-            GetProductsResponse(products=[], message="Test"),
+            GetProductsResponse(products=[]),
             ListCreativeFormatsResponse(formats=[]),
             SyncCreativesResponse(message="Test", status="completed"),
             CreateMediaBuyResponse(status="completed", buyer_ref="ref", packages=[]),

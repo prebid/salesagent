@@ -4,6 +4,8 @@ Provides Pydantic-based configuration classes for type-safe, validated configura
 management using environment variables.
 """
 
+import os
+
 from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
 
@@ -93,6 +95,7 @@ class AppConfig(BaseSettings):
     gemini_api_key: str = Field(..., description="Gemini API key for AI features")
     flask_secret_key: str = Field(default="dev-secret-key-change-in-production", description="Flask secret key")
     debug: bool = Field(default=False, description="Enable debug mode")
+    environment: str = Field(default="development", description="Environment: production, staging, or development")
 
     # Configuration objects
     gam_oauth: GAMOAuthConfig = Field(default_factory=GAMOAuthConfig)
@@ -158,3 +161,24 @@ def validate_configuration() -> None:
 def get_gam_oauth_config() -> GAMOAuthConfig:
     """Get GAM OAuth configuration."""
     return get_config().gam_oauth
+
+
+def is_production() -> bool:
+    """Check if running in production environment.
+
+    Returns:
+        bool: True if ENVIRONMENT=production, False otherwise
+    """
+    return os.getenv("ENVIRONMENT", "development").lower() == "production"
+
+
+def get_pydantic_extra_mode() -> str:
+    """Get Pydantic extra field handling mode based on environment.
+
+    Production: "ignore" - Accept extra fields for forward compatibility
+    Non-production: "forbid" - Reject extra fields to catch bugs early
+
+    Returns:
+        str: "ignore" or "forbid"
+    """
+    return "ignore" if is_production() else "forbid"

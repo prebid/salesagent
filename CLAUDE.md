@@ -67,6 +67,75 @@ pytest tests/unit/test_adcp_contract.py -v
 
 ---
 
+### Schema Validation Modes (Environment-Based)
+**🚨 CRITICAL**: Schema validation strictness changes based on `ENVIRONMENT` variable.
+
+**The Problem:**
+Strict schema validation (`extra="forbid"`) makes production fragile:
+- Clients using newer schema versions get rejected
+- Rolling updates require perfect coordination
+- Forward compatibility breaks
+- Production failures from harmless extra fields
+
+**The Solution: Environment-Based Validation**
+```bash
+# .env
+ENVIRONMENT=production  # Lenient: extra="ignore" (forward compatible)
+ENVIRONMENT=development  # Strict: extra="forbid" (catches bugs early)
+ENVIRONMENT=staging     # Strict: extra="forbid" (catches bugs early)
+```
+
+**Behavior:**
+- **Production** (`ENVIRONMENT=production`):
+  - `extra="ignore"` - Unknown fields are silently dropped
+  - Clients can send future schema fields (forward compatible)
+  - Graceful degradation, no production failures
+  - Example: Client sends `adcp_version="1.8.0"` from v1.8 schema → accepted
+
+- **Development/Staging** (default):
+  - `extra="forbid"` - Unknown fields raise validation errors
+  - Catches typos and bugs during development
+  - Enforces schema compliance in tests
+  - Example: Client sends `unknown_field="test"` → validation error
+
+**Implementation:**
+All AdCP request/response models inherit from `AdCPBaseModel`:
+
+```python
+from src.core.schemas import AdCPBaseModel
+
+class CreateMediaBuyRequest(AdCPBaseModel):  # Uses environment-aware validation
+    buyer_ref: str
+    packages: list[Package]
+    # ... fields
+```
+
+**Testing:**
+```bash
+# Test validation modes
+uv run pytest tests/unit/test_schema_validation_modes.py -v
+
+# Production mode accepts extra fields
+ENVIRONMENT=production pytest tests/unit/test_create_media_buy.py
+
+# Development mode rejects extra fields (default)
+pytest tests/unit/test_create_media_buy.py
+```
+
+**When to Use Each Mode:**
+- ✅ **Production**: Always use `ENVIRONMENT=production` (forward compatible)
+- ✅ **Staging**: Use `ENVIRONMENT=staging` (catch issues before prod)
+- ✅ **Development**: Default (no env var) (strict validation)
+- ✅ **CI**: Default (strict validation catches bugs)
+
+**Why This Matters:**
+1. **Forward Compatibility**: Clients using newer schemas don't break production
+2. **Rolling Updates**: Can deploy server/client independently
+3. **Development Safety**: Strict validation catches bugs in tests
+4. **Production Stability**: No failures from harmless extra fields
+
+---
+
 ### Database JSON Fields Pattern (SQLAlchemy 2.0)
 **🚨 MANDATORY**: All JSON columns MUST use `JSONType` for PostgreSQL JSONB handling.
 

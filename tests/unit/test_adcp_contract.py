@@ -1081,8 +1081,8 @@ class TestAdCPContract:
 
         # Build AdCP-compliant response with new structure
         response = SyncCreativesResponse(
+            message="Successfully synced 3 creatives",
             adcp_version="2.3.0",
-            message="Synced 2 creatives (1 created, 1 updated), 1 failed",
             status="completed",
             summary=SyncSummary(
                 total_processed=3,
@@ -1324,7 +1324,7 @@ class TestAdCPContract:
             status="input-required",
             packages=[],
             creative_deadline=None,
-            errors=[Error(code="budget_insufficient", message="Minimum budget of $1000 required")],
+            errors=[Error(code="budget_insufficient", message="Insufficient budget")],
         )
 
         error_adcp_response = error_response.model_dump()
@@ -1510,13 +1510,13 @@ class TestAdCPContract:
             media_buy_id="buy_123",
             buyer_ref="ref_123",
             implementation_date=None,
-            errors=[Error(code="INVALID_BUDGET", message="Budget must be positive")],
+            errors=[Error(code="INVALID_BUDGET", message="Invalid budget")],
         )
 
         error_adcp_response = error_response.model_dump()
         assert error_adcp_response["status"] == "input-required"
         assert len(error_adcp_response["errors"]) == 1
-        assert error_adcp_response["errors"][0]["message"] == "Budget must be positive"
+        assert error_adcp_response["errors"][0]["message"] == "Invalid budget"
 
         # Verify field count (adcp_version, status, media_buy_id, buyer_ref, task_id, implementation_date, affected_packages, errors)
         assert (
@@ -2125,14 +2125,14 @@ class TestAdCPContract:
         assert status == TaskStatus.UNKNOWN
 
         # Test response schemas with status field
-        response = GetProductsResponse(products=[], message="Test with status", status=TaskStatus.COMPLETED)
+        response = GetProductsResponse(products=[], status=TaskStatus.COMPLETED)
 
         data = response.model_dump()
         assert "status" in data
         assert data["status"] == TaskStatus.COMPLETED
 
         # Test backward compatibility (no status field)
-        response_no_status = GetProductsResponse(products=[], message="Test without status")
+        response_no_status = GetProductsResponse(products=[])
 
         data_no_status = response_no_status.model_dump()
         assert "status" not in data_no_status  # Should be excluded when None
@@ -2375,7 +2375,7 @@ class TestAdCPContract:
         from src.core.schema_adapters import GetSignalsResponse
 
         # Minimal required fields (adcp_version removed from AdCP spec)
-        response = GetSignalsResponse(message="Found 2 signals", context_id="ctx_123", signals=[])
+        response = GetSignalsResponse(message="Found 0 signals", context_id="ctx_123", signals=[])
 
         # Convert to AdCP format (excludes internal fields)
         adcp_response = response.model_dump(exclude_none=True)
@@ -2402,7 +2402,6 @@ class TestAdCPContract:
             "pricing": {"cpm": 2.50, "currency": "USD"},
         }
         full_response = GetSignalsResponse(
-            adcp_version="2.3.0",
             message="Found 1 signal",
             context_id="ctx_456",
             signals=[signal_data],

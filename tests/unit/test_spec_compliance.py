@@ -72,7 +72,7 @@ class TestResponseSchemas:
             media_buy_id="",
             buyer_ref="ref_123",
             status="input-required",
-            errors=[Error(code="validation_error", message="Invalid budget", details={"budget": -100})],
+            errors=[Error(code="validation_error", message="Validation error", details={"budget": -100})],
         )
 
         assert response.status == "input-required"
@@ -167,7 +167,7 @@ class TestProtocolCompliance:
             media_buy_id="",
             buyer_ref="ref_123",
             status="input-required",
-            errors=[Error(code="invalid_budget", message="Budget must be positive")],
+            errors=[Error(code="invalid_budget", message="Invalid budget")],
         )
 
         assert response.status == "input-required"
@@ -180,7 +180,6 @@ class TestProtocolCompliance:
             buyer_ref="ref_789",
             status="completed",
             packages=[{"package_id": "pkg_1"}],
-            message="Media buy created successfully",
         )
 
         assert response.status == "completed"

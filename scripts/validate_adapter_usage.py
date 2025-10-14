@@ -76,10 +76,10 @@ def extract_adapter_schemas(adapter_file: Path) -> dict[str, AdapterSchema]:
 
 
 def _inherits_from_basemodel(node: ast.ClassDef) -> bool:
-    """Check if a class inherits from BaseModel."""
+    """Check if a class inherits from BaseModel or AdCPBaseModel."""
     for base in node.bases:
         if isinstance(base, ast.Name):
-            if base.id == "BaseModel":
+            if base.id in ("BaseModel", "AdCPBaseModel"):
                 return True
     return False
 

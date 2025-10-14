@@ -228,23 +228,22 @@ class TestParameterToSchemaMapping:
 
         # Simulate what the tool does when constructing the request
         # Note: Tool should convert float to Budget object before passing
+        # Updated: Only use valid AdCP fields (start_time/end_time, not flight_start_date/flight_end_date)
         tool_params = {
             "media_buy_id": "test_buy_123",
             "active": False,
-            "flight_start_date": "2025-02-01",  # Deprecated field - ignored by Pydantic
-            "flight_end_date": "2025-02-28",  # Deprecated field - ignored by Pydantic
         }
 
-        # This is what happens in the tool - Pydantic silently ignores invalid fields
+        # Create request with valid fields only
         req = UpdateMediaBuyRequest(**tool_params)
 
         # Valid fields should be set
         assert req.media_buy_id == "test_buy_123"
         assert req.active is False
 
-        # Invalid/deprecated fields should be ignored (not set)
-        assert not hasattr(req, "flight_start_date") or req.flight_start_date is None
-        assert not hasattr(req, "flight_end_date") or req.flight_end_date is None
+        # start_time/end_time should be None since not provided
+        assert req.start_time is None
+        assert req.end_time is None
 
         # budget field should be None since not provided
         assert req.budget is None

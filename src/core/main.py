@@ -4660,6 +4660,12 @@ def _update_media_buy_impl(
         UpdateMediaBuyResponse with updated media buy details
     """
     # Create request object from individual parameters (MCP-compliant)
+    # Handle deprecated field names (backward compatibility)
+    if flight_start_date and not start_time:
+        start_time = flight_start_date
+    if flight_end_date and not end_time:
+        end_time = flight_end_date
+
     # Convert flat budget/currency/pacing to Budget object if budget provided
     budget_obj = None
     if budget is not None:
@@ -4672,19 +4678,23 @@ def _update_media_buy_impl(
             daily_cap=daily_budget,  # Map daily_budget to daily_cap
         )
 
-    req = UpdateMediaBuyRequest(
-        media_buy_id=media_buy_id,
-        buyer_ref=buyer_ref,
-        active=active,
-        flight_start_date=flight_start_date,
-        flight_end_date=flight_end_date,
-        budget=budget_obj,
-        targeting_overlay=targeting_overlay,
-        start_time=start_time,
-        end_time=end_time,
-        packages=packages,
-        creatives=creatives,
-    )
+    # Build request with only valid AdCP fields
+    # Note: flight_start_date, flight_end_date are mapped to start_time/end_time above
+    # creatives and targeting_overlay are deprecated - use packages for updates
+    # Filter out None values to avoid passing them to the request (strict validation in dev mode)
+    request_params = {
+        "media_buy_id": media_buy_id,
+        "buyer_ref": buyer_ref,
+        "active": active,
+        "start_time": start_time,
+        "end_time": end_time,
+        "budget": budget_obj,
+        "packages": packages,
+        "push_notification_config": push_notification_config,
+    }
+    # Remove None values to avoid validation errors in strict mode
+    request_params = {k: v for k, v in request_params.items() if v is not None}
+    req = UpdateMediaBuyRequest(**request_params)  # type: ignore[arg-type]
 
     if context is None:
         raise ValueError("Context is required for update_media_buy")

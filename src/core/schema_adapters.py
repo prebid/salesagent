@@ -21,6 +21,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from src.core.schemas import AdCPBaseModel
 from src.core.schemas_generated._schemas_v1_media_buy_get_products_request_json import (
     GetProductsRequest as _GeneratedGetProductsRequest,
 )
@@ -150,7 +151,7 @@ class GetProductsRequest(BaseModel):
 # ============================================================================
 
 
-class GetProductsResponse(BaseModel):
+class GetProductsResponse(AdCPBaseModel):
     """Adapter for GetProductsResponse - adds __str__() for protocol abstraction.
 
     The generated schema is spec-compliant but lacks human-readable message generation.
@@ -361,7 +362,7 @@ from src.core.schemas_generated._schemas_v1_media_buy_list_creative_formats_resp
 )
 
 
-class ListCreativeFormatsResponse(BaseModel):
+class ListCreativeFormatsResponse(AdCPBaseModel):
     """Adapter for ListCreativeFormatsResponse - adds __str__() for protocol abstraction.
 
     The generated schema is spec-compliant but lacks human-readable message generation.
@@ -416,7 +417,7 @@ from src.core.schemas_generated._schemas_v1_media_buy_list_authorized_properties
 )
 
 
-class ListAuthorizedPropertiesResponse(BaseModel):
+class ListAuthorizedPropertiesResponse(AdCPBaseModel):
     """Adapter for ListAuthorizedPropertiesResponse - adds __str__() for protocol abstraction.
 
     The generated schema is spec-compliant but lacks human-readable message generation.
@@ -506,7 +507,7 @@ class ListAuthorizedPropertiesRequest(BaseModel):
 # ============================================================================
 
 
-class CreateMediaBuyResponse(BaseModel):
+class CreateMediaBuyResponse(AdCPBaseModel):
     """Adapter for CreateMediaBuyResponse - adds __str__() and internal field handling.
 
     Example:
@@ -568,7 +569,7 @@ class CreateMediaBuyResponse(BaseModel):
 # ============================================================================
 
 
-class UpdateMediaBuyResponse(BaseModel):
+class UpdateMediaBuyResponse(AdCPBaseModel):
     """Adapter for UpdateMediaBuyResponse - adds __str__() for protocol abstraction."""
 
     model_config = {"arbitrary_types_allowed": True}
@@ -594,7 +595,7 @@ class UpdateMediaBuyResponse(BaseModel):
 # ============================================================================
 
 
-class SyncCreativesResponse(BaseModel):
+class SyncCreativesResponse(AdCPBaseModel):
     """Adapter for SyncCreativesResponse - keeps message field (it's in spec!)."""
 
     model_config = {"arbitrary_types_allowed": True}
@@ -619,7 +620,7 @@ class SyncCreativesResponse(BaseModel):
 # ============================================================================
 
 
-class GetMediaBuyDeliveryResponse(BaseModel):
+class GetMediaBuyDeliveryResponse(AdCPBaseModel):
     """Adapter for GetMediaBuyDeliveryResponse - adds __str__()."""
 
     model_config = {"arbitrary_types_allowed": True}
@@ -652,7 +653,7 @@ class GetMediaBuyDeliveryResponse(BaseModel):
 # ============================================================================
 
 
-class GetSignalsResponse(BaseModel):
+class GetSignalsResponse(AdCPBaseModel):
     """Adapter for GetSignalsResponse - adds __str__()."""
 
     model_config = {"arbitrary_types_allowed": True}
@@ -672,7 +673,7 @@ class GetSignalsResponse(BaseModel):
 # ============================================================================
 
 
-class ActivateSignalResponse(BaseModel):
+class ActivateSignalResponse(AdCPBaseModel):
     """Adapter for ActivateSignalResponse - adds __str__()."""
 
     model_config = {"arbitrary_types_allowed": True}
@@ -707,7 +708,7 @@ class ActivateSignalResponse(BaseModel):
 # ============================================================================
 
 
-class ListCreativesResponse(BaseModel):
+class ListCreativesResponse(AdCPBaseModel):
     """Adapter for ListCreativesResponse - adds __str__()."""
 
     model_config = {"arbitrary_types_allowed": True}
