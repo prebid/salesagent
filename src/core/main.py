@@ -1649,18 +1649,12 @@ def _sync_creatives_impl(
                         "status": "pending",
                     }
 
-                    # Handle snippet vs media content properly (mutually exclusive)
-                    if creative.get("snippet"):
-                        # Snippet-based creative
-                        schema_data.update(
-                            {
-                                "snippet": creative.get("snippet"),
-                                "snippet_type": creative.get("snippet_type"),
-                                "content_uri": "<script>/* Snippet-based creative */</script>",  # HTML-looking placeholder
-                            }
-                        )
+                    # Handle assets vs media content
+                    if creative.get("assets"):
+                        # Asset-based creative (new AdCP format)
+                        schema_data["content_uri"] = creative.get("url") or f"asset://{creative.get('creative_id')}"
                     else:
-                        # Media-based creative
+                        # Media-based creative (legacy)
                         schema_data["content_uri"] = (
                             creative.get("url") or "https://placeholder.example.com/missing.jpg"
                         )
@@ -1822,10 +1816,9 @@ def _sync_creatives_impl(
                             ):
                                 data["duration"] = creative.get("duration")
                                 changes.append("duration")
-                            if creative.get("snippet") is not None:
-                                data["snippet"] = creative.get("snippet")
-                                data["snippet_type"] = creative.get("snippet_type")
-                                changes.append("snippet")
+                            if creative.get("assets") is not None:
+                                data["assets"] = creative.get("assets")
+                                changes.append("assets")
                             if creative.get("template_variables") is not None:
                                 data["template_variables"] = creative.get("template_variables")
                                 changes.append("template_variables")
@@ -1838,14 +1831,13 @@ def _sync_creatives_impl(
                                 "height": creative.get("height"),
                                 "duration": creative.get("duration"),
                             }
-                            if creative.get("snippet"):
-                                data["snippet"] = creative.get("snippet")
-                                data["snippet_type"] = creative.get("snippet_type")
+                            if creative.get("assets"):
+                                data["assets"] = creative.get("assets")
                             if creative.get("template_variables"):
                                 data["template_variables"] = creative.get("template_variables")
 
-                            # If no preview data provided in update, try to get it from creative agent
-                            if not data.get("url") and not data.get("snippet") and creative_format:
+                            # ALWAYS validate updates with creative agent
+                            if creative_format:
                                 try:
                                     # Get format to find creative agent URL
                                     import asyncio
@@ -1872,15 +1864,18 @@ def _sync_creatives_impl(
                                             "format_id": creative_format,
                                         }
 
-                                        # Add any provided asset data
+                                        # Add any provided asset data for validation
                                         if creative.get("assets"):
                                             creative_manifest["assets"] = creative.get("assets")
+                                        if data.get("url"):
+                                            creative_manifest["url"] = data.get("url")
 
-                                        # Call creative agent's preview_creative
+                                        # Call creative agent's preview_creative for validation + preview
                                         logger.info(
-                                            f"[sync_creatives] Calling preview_creative for existing creative "
+                                            f"[sync_creatives] Calling preview_creative for validation (update): "
                                             f"{existing_creative.creative_id} format {creative_format} "
-                                            f"from agent {format_obj.agent_url}"
+                                            f"from agent {format_obj.agent_url}, has_assets={bool(creative.get('assets'))}, "
+                                            f"has_url={bool(data.get('url'))}"
                                         )
 
                                         preview_result = asyncio.run(
@@ -1922,12 +1917,16 @@ def _sync_creatives_impl(
                                             f"height={data.get('height')}"
                                         )
 
-                                except Exception as preview_error:
-                                    # Log error but continue - preview is optional
+                                except Exception as validation_error:
+                                    # Creative agent validation failed for update - log warning but continue
+                                    # This allows updates even if creative agent is down
+                                    error_msg = f"Creative agent validation failed: {str(validation_error)}"
                                     logger.warning(
-                                        f"[sync_creatives] Failed to get preview from creative agent for update: {preview_error}",
+                                        f"[sync_creatives] {error_msg} for update of {existing_creative.creative_id} - continuing with update",
                                         exc_info=True,
                                     )
+                                    # Note: We continue instead of failing to allow graceful degradation
+                                    # when creative agent is unavailable
 
                             # In full upsert, consider all fields as changed
                             changes.extend(["url", "click_url", "width", "height", "duration"])
@@ -1993,9 +1992,9 @@ def _sync_creatives_impl(
                         if creative.get("template_variables"):
                             data["template_variables"] = creative.get("template_variables")
 
-                        # If no preview data provided, try to get it from creative agent
+                        # ALWAYS validate creatives with the creative agent (validation + preview generation)
                         creative_format = creative.get("format_id") or creative.get("format")
-                        if not data.get("url") and not data.get("snippet") and creative_format:
+                        if creative_format:
                             try:
                                 # Get format to find creative agent URL
                                 import asyncio
@@ -2022,14 +2021,17 @@ def _sync_creatives_impl(
                                         "format_id": creative_format,
                                     }
 
-                                    # Add any provided asset data
+                                    # Add any provided asset data for validation
                                     if creative.get("assets"):
                                         creative_manifest["assets"] = creative.get("assets")
+                                    if data.get("url"):
+                                        creative_manifest["url"] = data.get("url")
 
-                                    # Call creative agent's preview_creative
+                                    # Call creative agent's preview_creative for validation + preview
                                     logger.info(
-                                        f"[sync_creatives] Calling preview_creative for {creative_format} "
-                                        f"from agent {format_obj.agent_url}"
+                                        f"[sync_creatives] Calling preview_creative for validation: {creative_format} "
+                                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.get('assets'))}, "
+                                        f"has_url={bool(data.get('url'))}"
                                     )
 
                                     preview_result = asyncio.run(
@@ -2067,12 +2069,16 @@ def _sync_creatives_impl(
                                         f"height={data.get('height')}"
                                     )
 
-                            except Exception as preview_error:
-                                # Log error but continue - preview is optional
+                            except Exception as validation_error:
+                                # Creative agent validation failed - log warning but continue
+                                # This allows creatives to be stored even if creative agent is down
+                                error_msg = f"Creative agent validation failed: {str(validation_error)}"
                                 logger.warning(
-                                    f"[sync_creatives] Failed to get preview from creative agent: {preview_error}",
+                                    f"[sync_creatives] {error_msg} - continuing with creative storage",
                                     exc_info=True,
                                 )
+                                # Note: We continue instead of failing to allow graceful degradation
+                                # when creative agent is unavailable
 
                         # Determine creative status based on approval mode
 
