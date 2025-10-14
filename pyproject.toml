@@ -59,6 +59,12 @@ dev = [
     "pytest-cov>=6.2.1",
     "pytest-mock>=3.14.1",
     "ruff>=0.8.0",
+    "datamodel-code-generator>=0.26.0",
+    "jsonref>=1.1.0",
+    "types-psycopg2>=2.9.21.20251012",
+    "types-requests>=2.32.4.20250913",
+    "types-pytz>=2025.2.0.20250809",
+    "types-waitress>=3.0.1.20250801",
 ]
 
 [tool.black]

@@ -357,13 +357,19 @@ class SchemaSyncChecker:
                     cached_schema = self._load_cached_schema(schema_ref)
 
                     if cached_schema is None:
-                        self.log_warning(f"Missing cached schema: {schema_ref}")
+                        # In CI mode, missing schemas are errors (block commits)
+                        # In dev mode, they're warnings (allow local experimentation)
+                        log_func = self.log_error if self.ci_mode else self.log_warning
+                        log_func(f"Missing cached schema: {schema_ref}")
                         if self.auto_update:
                             self._save_cached_schema(schema_ref, live_schema)
                             self.log_update(f"Downloaded missing schema: {schema_ref}")
                         all_synced = False
                     elif not self._schemas_are_equal(live_schema, cached_schema):
-                        self.log_warning(f"Schema differs: {schema_ref}")
+                        # In CI mode, schema drift is an error (block commits)
+                        # In dev mode, it's a warning (allow local experimentation)
+                        log_func = self.log_error if self.ci_mode else self.log_warning
+                        log_func(f"Schema differs: {schema_ref}")
                         if self.auto_update:
                             self._save_cached_schema(schema_ref, live_schema)
                             self.log_update(f"Updated schema: {schema_ref}")

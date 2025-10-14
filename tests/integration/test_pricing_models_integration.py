@@ -10,7 +10,8 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Product, Tenant
 from src.core.main import _create_media_buy_impl, _get_products_impl
-from src.core.schemas import CreateMediaBuyRequest, GetProductsRequest, Package, PricingModel
+from src.core.schema_adapters import GetProductsRequest
+from src.core.schemas import CreateMediaBuyRequest, Package, PricingModel
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = pytest.mark.requires_db

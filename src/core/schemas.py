@@ -908,22 +908,9 @@ class GetProductsRequest(BaseModel):
         None,
         description="Structured filters for product discovery",
     )
-    strategy_id: str | None = Field(
-        None,
-        description="Optional strategy ID for linking operations and enabling simulation/testing modes",
-    )
-    min_exposures: int | None = Field(
-        None,
-        description="Minimum number of impressions needed for measurement validity (AdCP PR #79)",
-        gt=0,
-    )
     brand_manifest: dict[str, Any] | None = Field(
         None,
         description="Brand information manifest providing brand context, assets, and product catalog",
-    )
-    webhook_url: str | None = Field(
-        None,
-        description="URL for async task completion notifications (AdCP spec, optional)",
     )
 
     @model_validator(mode="before")
@@ -960,7 +947,8 @@ class Error(BaseModel):
 class GetProductsResponse(BaseModel):
     """Response for get_products tool (AdCP spec compliant).
 
-    Context management is handled automatically by the MCP wrapper at the protocol layer.
+    Human-readable messages are provided via __str__() for protocol layer use
+    (MCP display, A2A task messages), not as schema fields.
     """
 
     # Required AdCP fields
@@ -968,7 +956,6 @@ class GetProductsResponse(BaseModel):
     products: list[Product] = Field(...)
 
     # Optional AdCP fields
-    message: str | None = None
     status: Literal["completed", "working", "submitted"] | None = Field(None, description="Task status")
     errors: list[Error] | None = None
 
@@ -987,8 +974,6 @@ class GetProductsResponse(BaseModel):
             data["products"] = []
 
         # Add other fields, excluding None values for AdCP compliance
-        if self.message is not None:
-            data["message"] = self.message
         if self.errors is not None:
             data["errors"] = self.errors
         if self.status is not None:
@@ -1010,30 +995,34 @@ class GetProductsResponse(BaseModel):
             data["products"] = []
 
         # Add other fields
-        if self.message is not None:
-            data["message"] = self.message
         if self.errors is not None:
             data["errors"] = self.errors
+        if self.status is not None:
+            data["status"] = self.status
 
         return data
 
     def __str__(self) -> str:
-        """Return human-readable text for MCP content field.
+        """Return human-readable message for protocol layer.
 
-        FastMCP uses str() to generate the 'content' field for tool responses.
-        This should be a natural language summary, not JSON.
+        Used by both MCP (for display) and A2A (for task messages).
+        Provides conversational text without adding non-spec fields to the schema.
         """
-        if self.message:
-            return self.message
-
-        # Fallback: generate message from product count
         count = len(self.products)
+
+        # Base message
         if count == 0:
-            return "No products matched your requirements."
+            base_msg = "No products matched your requirements."
         elif count == 1:
-            return "Found 1 product that matches your requirements."
+            base_msg = "Found 1 product that matches your requirements."
         else:
-            return f"Found {count} products that match your requirements."
+            base_msg = f"Found {count} products that match your requirements."
+
+        # Check if this looks like an anonymous response (all pricing is None)
+        if count > 0 and all(p.cpm is None and p.min_spend is None for p in self.products):
+            return f"{base_msg} Please connect through an authorized buying agent for pricing data."
+
+        return base_msg
 
 
 class ListCreativeFormatsRequest(BaseModel):
@@ -1068,24 +1057,33 @@ class ListCreativeFormatsRequest(BaseModel):
 
 
 class ListCreativeFormatsResponse(BaseModel):
-    """Response for list_creative_formats tool.
+    """Response for list_creative_formats tool (AdCP spec compliant).
 
-    Returns comprehensive Format objects per AdCP specification.
-    Context management is handled automatically by the MCP wrapper at the protocol layer.
+    Human-readable messages are provided via __str__() for protocol layer use
+    (MCP display, A2A task messages), not as schema fields.
     """
 
-    formats: list[Format]  # Full Format objects per AdCP spec
-    message: str | None = None  # Optional human-readable message
-    errors: list[Error] | None = None  # Optional error reporting
-    specification_version: str | None = Field(None, description="AdCP format specification version")
+    adcp_version: str = Field("2.3.0", pattern=r"^\d+\.\d+\.\d+$")
+    formats: list[Format] = Field(..., description="Full format definitions per AdCP spec")
     status: str | None = Field(None, description="Optional task status per AdCP MCP Status specification")
+    creative_agents: list[dict[str, Any]] | None = Field(
+        None, description="Creative agents providing additional formats"
+    )
+    errors: list[Error] | None = Field(None, description="Task-specific errors and warnings")
 
     def __str__(self) -> str:
-        """Return human-readable text for MCP content field."""
-        if self.message:
-            return self.message
+        """Return human-readable message for protocol layer.
+
+        Used by both MCP (for display) and A2A (for task messages).
+        Provides conversational text without adding non-spec fields to the schema.
+        """
         count = len(self.formats)
-        return f"Found {count} creative format{'s' if count != 1 else ''}."
+        if count == 0:
+            return "No creative formats are currently supported."
+        elif count == 1:
+            return "Found 1 creative format."
+        else:
+            return f"Found {count} creative formats."
 
 
 # --- Creative Lifecycle ---
@@ -1861,9 +1859,10 @@ class BrandManifest(BaseModel):
     """Standardized brand information manifest for creative generation and media buying.
 
     Per AdCP spec, either url OR name is required (at least one must be present).
+    This is a legacy model - prefer using generated schemas from schemas_generated/.
     """
 
-    # At least one required (enforced by model_validator)
+    # At least one required (enforced by anyOf in AdCP spec)
     url: str | None = Field(None, description="Brand website URL")
     name: str | None = Field(None, description="Brand/business name")
 
@@ -1881,12 +1880,8 @@ class BrandManifest(BaseModel):
     contact_info: dict[str, Any] | None = Field(None, description="Contact information")
     metadata: dict[str, Any] | None = Field(None, description="Creation/update metadata")
 
-    @model_validator(mode="after")
-    def validate_required_fields(self) -> "BrandManifest":
-        """Ensure at least one of url or name is present."""
-        if not self.url and not self.name:
-            raise ValueError("BrandManifest requires at least one of: url, name")
-        return self
+    # NOTE: Legacy model kept for backward compatibility with tests
+    # For new code, use generated schemas which properly handle anyOf constraints
 
 
 class BrandManifestRef(BaseModel):
@@ -2004,7 +1999,8 @@ class CreateMediaBuyRequest(BaseModel):
     )
     end_time: datetime | None = Field(None, description="Campaign end time (ISO 8601)")
     budget: Budget | float | None = Field(
-        None, description="Overall campaign budget (Budget object or number). Currency determined by package pricing options."
+        None,
+        description="Overall campaign budget (Budget object or number). Currency determined by package pricing options.",
     )
 
     # Deprecated fields (for backward compatibility)
@@ -2404,12 +2400,12 @@ class GetMediaBuyDeliveryResponse(BaseModel):
     reporting_period: ReportingPeriod = Field(description="Date range for the report")
     currency: str = Field(description="ISO 4217 currency code", pattern=r"^[A-Z]{3}$")
     aggregated_totals: AggregatedTotals = Field(description="Combined metrics across all returned media buys")
-    deliveries: list[MediaBuyDeliveryData] = Field(description="Array of delivery data for each media buy")
+    media_buy_deliveries: list[MediaBuyDeliveryData] = Field(description="Array of delivery data for each media buy")
     errors: list[dict] | None = Field(None, description="Task-specific errors and warnings")
 
     def __str__(self) -> str:
         """Return human-readable text for MCP content field."""
-        count = len(self.deliveries)
+        count = len(self.media_buy_deliveries)
         if count == 0:
             return "No delivery data found for the specified period."
         elif count == 1:
@@ -2547,12 +2543,8 @@ class AdCPPackageUpdate(BaseModel):
     targeting_overlay: Targeting | None = None
     creative_ids: list[str] | None = None
 
-    @model_validator(mode="after")
-    def validate_oneOf_constraint(self):
-        """Validate that either package_id OR buyer_ref is provided (AdCP oneOf constraint)."""
-        if not self.package_id and not self.buyer_ref:
-            raise ValueError("Either package_id or buyer_ref must be provided")
-        return self
+    # NOTE: No Python validator needed - AdCP schema has oneOf constraint for package_id/buyer_ref
+    # Schema validation at /schemas/v1/media-buy/update-media-buy-request.json enforces this
 
 
 class UpdateMediaBuyRequest(BaseModel):
@@ -2582,14 +2574,8 @@ class UpdateMediaBuyRequest(BaseModel):
     )
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
-    @model_validator(mode="after")
-    def validate_oneOf_constraint(self):
-        """Validate AdCP oneOf constraint: either media_buy_id OR buyer_ref."""
-        if not self.media_buy_id and not self.buyer_ref:
-            raise ValueError("Either media_buy_id or buyer_ref must be provided")
-        if self.media_buy_id and self.buyer_ref:
-            raise ValueError("Cannot provide both media_buy_id and buyer_ref (AdCP oneOf constraint)")
-        return self
+    # NOTE: No Python validator needed for oneOf constraint - AdCP schema enforces media_buy_id/buyer_ref oneOf
+    # Schema validation at /schemas/v1/media-buy/update-media-buy-request.json enforces this
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):
@@ -3145,16 +3131,39 @@ class ListAuthorizedPropertiesRequest(BaseModel):
 
 
 class ListAuthorizedPropertiesResponse(BaseModel):
-    """Response payload for list_authorized_properties task (AdCP spec)."""
+    """Response payload for list_authorized_properties task (AdCP spec compliant)."""
 
     adcp_version: str = Field(..., pattern=r"^\d+\.\d+\.\d+$", description="AdCP schema version used for this response")
     properties: list[Property] = Field(..., description="Array of all properties this agent is authorized to represent")
     tags: dict[str, PropertyTagMetadata] = Field(
         default_factory=dict, description="Metadata for each tag referenced by properties"
     )
+    primary_channels: list[str] | None = Field(
+        None, description="Primary advertising channels in this portfolio (helps buyers filter relevance)"
+    )
+    primary_countries: list[str] | None = Field(
+        None, description="Primary countries (ISO 3166-1 alpha-2 codes) where properties are concentrated"
+    )
+    portfolio_description: str | None = Field(
+        None, description="Markdown-formatted description of the property portfolio", max_length=5000
+    )
     errors: list[dict[str, Any]] | None = Field(
         None, description="Task-specific errors and warnings (e.g., property availability issues)"
     )
+
+    def __str__(self) -> str:
+        """Return human-readable message for protocol layer.
+
+        Used by both MCP (for display) and A2A (for task messages).
+        Provides conversational text without adding non-spec fields to the schema.
+        """
+        count = len(self.properties)
+        if count == 0:
+            return "No authorized properties found."
+        elif count == 1:
+            return "Found 1 authorized property."
+        else:
+            return f"Found {count} authorized properties."
 
     def model_dump(self, **kwargs) -> dict[str, Any]:
         """Return AdCP-compliant response."""

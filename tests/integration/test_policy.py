@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.core.schemas import GetProductsRequest
+from src.core.schema_adapters import GetProductsRequest
 from src.services.policy_check_service import PolicyCheckResult, PolicyCheckService, PolicyStatus
 
 pytestmark = pytest.mark.integration

@@ -2,15 +2,17 @@
 
 from datetime import UTC, datetime
 
-from src.core.schemas import (
+from src.core.schema_adapters import (
     ActivateSignalResponse,
+    GetProductsResponse,
+    ListCreativeFormatsResponse,
+    ListCreativesResponse,
+)
+from src.core.schemas import (
     CreateHumanTaskResponse,
     CreateMediaBuyResponse,
     Creative,
     Format,
-    GetProductsResponse,
-    ListCreativeFormatsResponse,
-    ListCreativesResponse,
     Pagination,
     Product,
     QuerySummary,
@@ -24,8 +26,8 @@ from src.core.schemas import (
 class TestResponseStrMethods:
     """Test __str__() methods return human-readable content for MCP."""
 
-    def test_get_products_response_with_message(self):
-        """GetProductsResponse with message returns the message."""
+    def test_get_products_response_with_pricing(self):
+        """GetProductsResponse with pricing returns standard message."""
         product = Product(
             product_id="test",
             name="Test",
@@ -36,12 +38,14 @@ class TestResponseStrMethods:
             is_custom=False,
             currency="USD",
             property_tags=["all_inventory"],  # Required per AdCP spec
+            cpm=10.0,  # Has pricing
+            min_spend=100.0,
         )
-        resp = GetProductsResponse(products=[product], message="Found 1 product for your campaign")
-        assert str(resp) == "Found 1 product for your campaign"
+        resp = GetProductsResponse(products=[product])
+        assert str(resp) == "Found 1 product that matches your requirements."
 
-    def test_get_products_response_without_message(self):
-        """GetProductsResponse without message generates count-based message."""
+    def test_get_products_response_with_multiple_products(self):
+        """GetProductsResponse with multiple products generates count-based message."""
         products = [
             Product(
                 product_id=f"p{i}",
@@ -53,23 +57,53 @@ class TestResponseStrMethods:
                 is_fixed_price=True,
                 is_custom=False,
                 currency="USD",
+                cpm=10.0,  # Has pricing
+                min_spend=100.0,
             )
             for i in range(3)
         ]
         resp = GetProductsResponse(products=products)
         assert str(resp) == "Found 3 products that match your requirements."
 
-    def test_list_creative_formats_response_with_message(self):
-        """ListCreativeFormatsResponse with message returns the message."""
-        fmt = Format(format_id="display_300x250", name="Banner", type="display")
-        resp = ListCreativeFormatsResponse(formats=[fmt], message="Custom message")
-        assert str(resp) == "Custom message"
+    def test_get_products_response_anonymous_user(self):
+        """GetProductsResponse without pricing (anonymous user) adds auth message."""
+        products = [
+            Product(
+                product_id=f"p{i}",
+                name=f"Product {i}",
+                description="Test",
+                formats=["banner"],
+                property_tags=["all_inventory"],
+                delivery_type="guaranteed",
+                is_fixed_price=True,
+                is_custom=False,
+                currency="USD",
+                # No cpm or min_spend - anonymous user
+            )
+            for i in range(2)
+        ]
+        resp = GetProductsResponse(products=products)
+        assert (
+            str(resp)
+            == "Found 2 products that match your requirements. Please connect through an authorized buying agent for pricing data."
+        )
 
-    def test_list_creative_formats_response_without_message(self):
-        """ListCreativeFormatsResponse without message generates count."""
+    def test_list_creative_formats_response_single_format(self):
+        """ListCreativeFormatsResponse with single format generates appropriate message."""
+        fmt = Format(format_id="banner_300x250", name="Banner", type="display")
+        resp = ListCreativeFormatsResponse(formats=[fmt])
+        assert str(resp) == "Found 1 creative format."
+
+    def test_list_creative_formats_response_multiple_formats(self):
+        """ListCreativeFormatsResponse with multiple formats generates count."""
         formats = [Format(format_id=f"fmt{i}", name=f"Format {i}", type="display") for i in range(5)]
         resp = ListCreativeFormatsResponse(formats=formats)
         assert str(resp) == "Found 5 creative formats."
+
+    def test_list_creative_formats_response_empty(self):
+        """ListCreativeFormatsResponse with no formats generates appropriate message."""
+        resp = ListCreativeFormatsResponse(formats=[])
+        assert str(resp) == "No creative formats are currently supported."
 
     def test_sync_creatives_response(self):
         """SyncCreativesResponse returns the message field."""
@@ -95,15 +129,35 @@ class TestResponseStrMethods:
         )
         assert str(resp) == "Found 1 creative"
 
-    def test_activate_signal_response_with_message(self):
-        """ActivateSignalResponse with message returns the message."""
-        resp = ActivateSignalResponse(signal_id="sig_123", status="completed", message="Signal activated")
-        assert str(resp) == "Signal activated"
+    def test_activate_signal_response_deployed(self):
+        """ActivateSignalResponse with deployed status shows platform ID."""
+        resp = ActivateSignalResponse(
+            adcp_version="2.3.0",
+            task_id="task_123",
+            status="deployed",
+            decisioning_platform_segment_id="seg_456",
+        )
+        assert str(resp) == "Signal activated successfully (platform ID: seg_456)."
 
-    def test_activate_signal_response_without_message(self):
-        """ActivateSignalResponse without message generates default."""
-        resp = ActivateSignalResponse(signal_id="sig_123", status="completed")
-        assert str(resp) == "Signal sig_123 activated successfully."
+    def test_activate_signal_response_processing(self):
+        """ActivateSignalResponse with processing status shows ETA."""
+        resp = ActivateSignalResponse(
+            adcp_version="2.3.0",
+            task_id="task_123",
+            status="processing",
+            estimated_activation_duration_minutes=5.0,
+        )
+        assert str(resp) == "Signal activation in progress (ETA: 5.0 min)."
+
+    def test_activate_signal_response_pending(self):
+        """ActivateSignalResponse with pending status shows task ID."""
+        resp = ActivateSignalResponse(adcp_version="2.3.0", task_id="task_123", status="pending")
+        assert str(resp) == "Signal activation pending (task ID: task_123)."
+
+    def test_activate_signal_response_failed(self):
+        """ActivateSignalResponse with failed status shows task ID."""
+        resp = ActivateSignalResponse(adcp_version="2.3.0", task_id="task_123", status="failed")
+        assert str(resp) == "Signal activation failed (task ID: task_123)."
 
     def test_simulation_control_response_with_message(self):
         """SimulationControlResponse with message returns the message."""

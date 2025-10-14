@@ -472,10 +472,10 @@ class TestGetProductsResponseContract:
             ),
         ]
 
-        test_data = {"products": products, "message": "Found 2 matching products for your campaign"}
+        test_data = {"products": products}
 
-        # AdCP spec required fields for get_products response
-        adcp_spec_fields = {"products", "message"}
+        # AdCP spec required fields for get_products response (message is NOT in spec - provided via __str__())
+        adcp_spec_fields = {"products"}
 
         validator.validate_schema_contract(GetProductsResponse, test_data, adcp_spec_fields)
 

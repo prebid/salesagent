@@ -12,7 +12,8 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant
 from src.core.main import get_products
-from src.core.schemas import GetProductsRequest, Signal
+from src.core.schema_adapters import GetProductsRequest
+from src.core.schemas import Signal
 from tests.fixtures.builders import create_test_tenant_with_principal
 
 

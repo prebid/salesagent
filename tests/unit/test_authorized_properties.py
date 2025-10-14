@@ -234,12 +234,12 @@ class TestListAuthorizedPropertiesResponse:
             assert adcp_response[field] is not None
 
         # Verify optional AdCP fields present (can be null)
-        optional_fields = ["tags", "errors"]
+        optional_fields = ["tags", "errors", "primary_channels", "primary_countries", "portfolio_description"]
         for field in optional_fields:
             assert field in adcp_response
 
         # Verify field count expectations
-        assert len(adcp_response) == 4  # 2 required + 2 optional
+        assert len(adcp_response) == 7  # 2 required + 5 optional
 
 
 class TestPropertyTagMetadata:

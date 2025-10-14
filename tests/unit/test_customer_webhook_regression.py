@@ -61,21 +61,19 @@ def test_other_response_types():
     """Test that str() pattern works for all response types.
 
     Verifies that using str(response) is safe for:
-    - Responses WITH .message field (GetProductsResponse)
-    - Responses WITHOUT .message field (SyncCreativesResponse)
+    - Responses with __str__() generating messages (GetProductsResponse)
+    - Responses with explicit message fields (SyncCreativesResponse)
     """
-    # Test GetProductsResponse (HAS .message field)
-    response1 = GetProductsResponse(products=[], message="Found 0 products")
+    # Test GetProductsResponse (generates message via __str__())
+    response1 = GetProductsResponse(products=[])
     msg1 = str(response1)
-    assert msg1 == "Found 0 products"
+    assert msg1 == "No products matched your requirements."
 
     # Test SyncCreativesResponse (HAS .message field)
     response2 = SyncCreativesResponse(
         status="completed",
         message="Synced 1 creative",
-        results=[
-            SyncCreativeResult(buyer_ref="test-001", creative_id="cr-001", status="approved", action="created")
-        ],
+        results=[SyncCreativeResult(buyer_ref="test-001", creative_id="cr-001", status="approved", action="created")],
     )
     msg2 = str(response2)
     assert "Synced 1 creative" in msg2

@@ -5,11 +5,6 @@
   "description": "Response payload for activate_signal task",
   "type": "object",
   "properties": {
-    "adcp_version": {
-      "type": "string",
-      "description": "AdCP schema version used for this response",
-      "pattern": "^\\d+\\.\\d+\\.\\d+$"
-    },
     "task_id": {
       "type": "string",
       "description": "Unique identifier for tracking the activation"
@@ -47,7 +42,6 @@
     }
   },
   "required": [
-    "adcp_version",
     "task_id",
     "status"
   ],

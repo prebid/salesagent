@@ -211,20 +211,17 @@ class TestA2AResponseDictConstruction:
 
     def test_get_products_response_to_dict(self):
         """Test GetProductsResponse can be converted to A2A dict."""
-        from src.core.schemas import GetProductsResponse
+        from src.core.schema_adapters import GetProductsResponse
 
-        response = GetProductsResponse(
-            products=[],
-            message="Found 0 products matching criteria",
-        )
+        response = GetProductsResponse(products=[])
 
-        # ✅ Works for responses WITH .message field too
+        # ✅ Uses __str__ method to generate message
         a2a_dict = {
-            "products": [p.model_dump() for p in response.products],
-            "message": str(response),  # Uses __str__ or falls back to message field
+            "products": [p.model_dump() if hasattr(p, "model_dump") else p for p in response.products],
+            "message": str(response),  # Uses __str__ method
         }
 
-        assert a2a_dict["message"] == "Found 0 products matching criteria"
+        assert a2a_dict["message"] == "No products matched your requirements."
 
     def test_all_response_types_have_str_or_message(self):
         """Test that all response types used in A2A have either __str__ or .message.

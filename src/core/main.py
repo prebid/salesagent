@@ -57,12 +57,25 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 
 # Schema models (explicit imports to avoid collisions)
-from src.core.schemas import (
+# Schema adapters (wrapping generated schemas)
+from src.core.schema_adapters import (
     ActivateSignalResponse,
-    AggregatedTotals,
+    CreateMediaBuyResponse,
+    GetMediaBuyDeliveryResponse,
+    GetProductsResponse,
+    GetSignalsResponse,
+    ListAuthorizedPropertiesRequest,
+    ListAuthorizedPropertiesResponse,
+    ListCreativeFormatsRequest,
+    ListCreativeFormatsResponse,
+    ListCreativesResponse,
+    SyncCreativesResponse,
+    UpdateMediaBuyResponse,
+)
+from src.core.schema_helpers import create_get_products_request
+from src.core.schemas import (
     CreateHumanTaskResponse,
     CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
     Creative,
     CreativeAssignment,
     CreativeGroup,
@@ -70,17 +83,8 @@ from src.core.schemas import (
     DeliveryTotals,
     Error,
     GetMediaBuyDeliveryRequest,
-    GetMediaBuyDeliveryResponse,
-    GetProductsRequest,
-    GetProductsResponse,
     GetSignalsRequest,
-    GetSignalsResponse,
     HumanTask,
-    ListAuthorizedPropertiesRequest,
-    ListAuthorizedPropertiesResponse,
-    ListCreativeFormatsRequest,
-    ListCreativeFormatsResponse,
-    ListCreativesResponse,
     MediaBuyDeliveryData,
     MediaPackage,
     Package,
@@ -95,14 +99,16 @@ from src.core.schemas import (
     Signal,
     SignalDeployment,
     SignalPricing,
-    SyncCreativesResponse,
     TaskStatus,
     UpdateMediaBuyRequest,
-    UpdateMediaBuyResponse,
     UpdatePerformanceIndexRequest,
     UpdatePerformanceIndexResponse,
     VerifyTaskRequest,
     VerifyTaskResponse,
+)
+from src.core.schemas_generated._schemas_v1_media_buy_get_products_request_json import (
+    GetProductsRequest1,
+    GetProductsRequest2,
 )
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
@@ -904,14 +910,14 @@ def log_tool_activity(context: Context, tool_name: str, start_time: float = None
 # --- MCP Tools (Full Implementation) ---
 
 
-async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetProductsResponse:
+async def _get_products_impl(req: GetProductsRequest1 | GetProductsRequest2, context: Context) -> GetProductsResponse:
     """Shared implementation for get_products.
 
     Contains all business logic for product discovery including policy checks,
     product catalog providers, dynamic pricing, and filtering.
 
     Args:
-        req: GetProductsRequest with all query parameters
+        req: GetProductsRequest variant (GetProductsRequest1 or GetProductsRequest2)
         context: FastMCP Context for tenant/principal resolution
 
     Returns:
@@ -1174,7 +1180,7 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
                 products,
                 tenant_id=tenant["tenant_id"],
                 country_code=country_code,
-                min_exposures=req.min_exposures,
+                min_exposures=getattr(req, "min_exposures", None),
             )
     except Exception as e:
         logger.warning(f"Failed to enrich products with dynamic pricing: {e}. Using defaults.")
@@ -1260,17 +1266,18 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
             logger.info(f"Product {product.product_id} excluded: {reason}")
 
     # Apply min_exposures filtering (AdCP PR #79)
-    if req.min_exposures is not None:
+    min_exposures = getattr(req, "min_exposures", None)
+    if min_exposures is not None:
         filtered_products = []
         for product in eligible_products:
             # For guaranteed products, check estimated_exposures
             if product.delivery_type == "guaranteed":
-                if product.estimated_exposures is not None and product.estimated_exposures >= req.min_exposures:
+                if product.estimated_exposures is not None and product.estimated_exposures >= min_exposures:
                     filtered_products.append(product)
                 else:
                     logger.info(
                         f"Product {product.product_id} excluded: estimated_exposures "
-                        f"({product.estimated_exposures}) < min_exposures ({req.min_exposures})"
+                        f"({product.estimated_exposures}) < min_exposures ({min_exposures})"
                     )
             else:
                 # For non-guaranteed, include if recommended_cpm is set (indicates it can meet min_exposures)
@@ -1316,27 +1323,22 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
             logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
 
     # Filter pricing data for anonymous users
-    pricing_message = None
     if principal_id is None:  # Anonymous user
         # Remove pricing data from products for anonymous users
         for product in modified_products:
             product.cpm = None
             product.min_spend = None
-        pricing_message = "Please connect through an authorized buying agent for pricing data"
 
     # Log activity
     log_tool_activity(context, "get_products", start_time)
-
-    # Create response with pricing message if anonymous
-    base_message = f"Found {len(modified_products)} matching products"
-    final_message = f"{base_message}. {pricing_message}" if pricing_message else base_message
 
     # Set status based on operation result
     status = TaskStatus.from_operation_state(
         operation_type="discovery", has_errors=False, requires_approval=False, requires_auth=principal_id is None
     )
 
-    return GetProductsResponse(products=modified_products, message=final_message, status=status)
+    # Response __str__() will generate appropriate message based on content
+    return GetProductsResponse(products=modified_products, status=status)
 
 
 @mcp.tool
@@ -1344,11 +1346,7 @@ async def get_products(
     promoted_offering: str | None = None,
     brand_manifest: Any | None = None,  # BrandManifest | str | None - validated by Pydantic
     brief: str = "",
-    adcp_version: str = "1.0.0",
-    min_exposures: int | None = None,
     filters: dict | None = None,
-    strategy_id: str | None = None,
-    webhook_url: str | None = None,
     context: Context = None,
 ) -> GetProductsResponse:
     """Get available products matching the brief.
@@ -1359,12 +1357,7 @@ async def get_products(
         promoted_offering: DEPRECATED: Use brand_manifest instead (still supported for backward compatibility)
         brand_manifest: Brand information manifest (inline object or URL string)
         brief: Brief description of the advertising campaign or requirements (optional)
-        adcp_version: AdCP schema version for this request (default: 1.0.0)
-        min_exposures: Minimum impressions needed for measurement validity (AdCP PR #79, optional)
-        brand_manifest: Brand information manifest providing brand context (optional)
         filters: Structured filters for product discovery (optional)
-        strategy_id: Optional strategy ID for linking operations (optional)
-        webhook_url: URL for async task completion notifications (AdCP spec, optional)
         context: FastMCP context (automatically provided)
 
     Returns:
@@ -1380,19 +1373,16 @@ async def get_products(
     )
     print("=" * 80, file=sys.stderr, flush=True)
 
-    # Build request object for shared implementation
-    req = GetProductsRequest(
+    # Build request object for shared implementation using helper
+    req = create_get_products_request(
         promoted_offering=promoted_offering,
         brief=brief,
-        adcp_version=adcp_version,
-        min_exposures=min_exposures,
         brand_manifest=brand_manifest,
         filters=filters,
-        strategy_id=strategy_id,
-        webhook_url=webhook_url,
     )
-    # Call shared implementation
-    return await _get_products_impl(req, context)
+    # Call shared implementation with unwrapped variant
+    # GetProductsRequest is a RootModel, so we pass req.root (the actual variant)
+    return await _get_products_impl(req.root, context)  # type: ignore[arg-type]
 
 
 def _list_creative_formats_impl(
@@ -1485,17 +1475,13 @@ def _list_creative_formats_impl(
     # Log activity
     log_tool_activity(context, "list_creative_formats", start_time)
 
-    message = f"Found {len(formats)} creative formats across {len({f.type for f in formats})} format types"
-
     # Set status based on operation result
     status = TaskStatus.from_operation_state(
         operation_type="discovery", has_errors=False, requires_approval=False, requires_auth=principal_id is None
     )
 
-    # Create response with schema validation metadata
-    response = ListCreativeFormatsResponse(
-        formats=formats, message=message, specification_version="AdCP v2.4", status=status
-    )
+    # Create response (no message/specification_version - not in adapter schema)
+    response = ListCreativeFormatsResponse(formats=formats, status=status)
 
     # Add schema validation metadata for client validation
     from src.core.schema_validation import INCLUDE_SCHEMAS_IN_RESPONSES, enhance_mcp_response_with_schema
@@ -1516,7 +1502,6 @@ def _list_creative_formats_impl(
 
 @mcp.tool()
 def list_creative_formats(
-    adcp_version: str = "1.0.0",
     type: str | None = None,
     standard_only: bool | None = None,
     category: str | None = None,
@@ -1529,7 +1514,6 @@ def list_creative_formats(
     MCP tool wrapper that delegates to the shared implementation.
 
     Args:
-        adcp_version: AdCP schema version for this request (default: "1.0.0")
         type: Filter by format type (audio, video, display)
         standard_only: Only return IAB standard formats
         category: Filter by format category (standard, custom)
@@ -1541,7 +1525,6 @@ def list_creative_formats(
         ListCreativeFormatsResponse with all available formats
     """
     req = ListCreativeFormatsRequest(
-        adcp_version=adcp_version,
         type=type,
         standard_only=standard_only,
         category=category,
@@ -2427,7 +2410,6 @@ def _sync_creatives_impl(
     total_processed = created_count + updated_count + unchanged_count + failed_count
 
     return SyncCreativesResponse(
-        adcp_version="2.3.0",
         message=message,
         status="completed",
         summary=SyncSummary(
@@ -2985,12 +2967,19 @@ async def get_signals(req: GetSignalsRequest, context: Context = None) -> GetSig
     if req.max_results:
         signals = signals[: req.max_results]
 
-    # Set status based on operation result
-    status = TaskStatus.from_operation_state(
-        operation_type="discovery", has_errors=False, requires_approval=False, requires_auth=False
-    )
+    # Generate message (required field in adapter schema)
+    count = len(signals)
+    if count == 0:
+        message = "No signals matched your query."
+    elif count == 1:
+        message = "Found 1 signal matching your query."
+    else:
+        message = f"Found {count} signals matching your query."
 
-    return GetSignalsResponse(signals=signals, status=status)
+    # Generate context_id (required field)
+    context_id = f"signals_{uuid.uuid4().hex[:12]}"
+
+    return GetSignalsResponse(signals=signals, message=message, context_id=context_id)
 
 
 @mcp.tool()
@@ -3040,41 +3029,53 @@ async def activate_signal(
         activation_success = True
         requires_approval = signal_id.startswith("premium_")  # Mock rule: premium signals need approval
 
+        task_id = f"task_{uuid.uuid4().hex[:12]}"
+
         if requires_approval:
             # Create a human task for approval
-            status = TaskStatus.INPUT_REQUIRED
-            message = f"Signal {signal_id} requires manual approval before activation"
-            activation_details = {
-                "approval_required": True,
-                "estimated_approval_time_hours": 24,
-                "contact": "signals-approval@example.com",
-            }
+            status = "pending"
+            errors = [
+                {
+                    "code": "APPROVAL_REQUIRED",
+                    "message": f"Signal {signal_id} requires manual approval before activation",
+                }
+            ]
         elif activation_success:
-            status = TaskStatus.WORKING  # Activation in progress
-            message = f"Signal {signal_id} activation initiated successfully"
-            activation_details = {
-                "activation_started": datetime.now(UTC).isoformat(),
-                "estimated_completion_minutes": 15,
-                "platform_segment_id": f"seg_{signal_id}_{uuid.uuid4().hex[:8]}",
-            }
+            status = "processing"  # Activation in progress
+            estimated_activation_duration_minutes = 15.0
+            decisioning_platform_segment_id = f"seg_{signal_id}_{uuid.uuid4().hex[:8]}"
         else:
-            status = TaskStatus.FAILED
-            message = f"Failed to activate signal {signal_id}"
-            activation_details = {"error": "Signal provider unavailable"}
+            status = "failed"
+            errors = [{"code": "ACTIVATION_FAILED", "message": "Signal provider unavailable"}]
 
         # Log activity
         log_tool_activity(context, "activate_signal", start_time)
 
-        return ActivateSignalResponse(
-            signal_id=signal_id, status=status, message=message, activation_details=activation_details
-        )
+        # Build response with only adapter schema fields - use explicit fields for validator
+        if status == "processing":
+            return ActivateSignalResponse(
+                task_id=task_id,
+                status=status,
+                estimated_activation_duration_minutes=estimated_activation_duration_minutes,
+                decisioning_platform_segment_id=decisioning_platform_segment_id,
+            )
+        elif requires_approval or not activation_success:
+            return ActivateSignalResponse(
+                task_id=task_id,
+                status=status,
+                errors=errors,
+            )
+        else:
+            return ActivateSignalResponse(
+                task_id=task_id,
+                status=status,
+            )
 
     except Exception as e:
         logger.error(f"Error activating signal {signal_id}: {e}")
         return ActivateSignalResponse(
-            signal_id=signal_id,
-            status=TaskStatus.FAILED,
-            message=f"Failed to activate signal: {str(e)}",
+            task_id=f"task_{uuid.uuid4().hex[:12]}",
+            status="failed",
             errors=[{"code": "ACTIVATION_ERROR", "message": str(e)}],
         )
 
@@ -3178,9 +3179,7 @@ def _list_authorized_properties_impl(
                     tag_metadata[tag.tag_id] = PropertyTagMetadata(name=tag.name, description=tag.description)
 
             # Create response
-            response = ListAuthorizedPropertiesResponse(
-                adcp_version=req.adcp_version, properties=properties, tags=tag_metadata, errors=[]
-            )
+            response = ListAuthorizedPropertiesResponse(properties=properties, tags=tag_metadata, errors=[])
 
             # Log audit
             audit_logger = get_audit_logger("AdCP", tenant_id)
@@ -3638,7 +3637,9 @@ def _create_media_buy_impl(
             # First, try to get currency from first package's pricing option
             if req.packages and len(req.packages) > 0:
                 first_package = req.packages[0]
-                package_product_ids = first_package.products or ([first_package.product_id] if first_package.product_id else [])
+                package_product_ids = first_package.products or (
+                    [first_package.product_id] if first_package.product_id else []
+                )
 
                 if package_product_ids and package_product_ids[0] in product_map:
                     product = product_map[package_product_ids[0]]
@@ -3647,8 +3648,7 @@ def _create_media_buy_impl(
                     # Find the pricing option matching the package's pricing_model
                     if first_package.pricing_model and pricing_options:
                         matching_option = next(
-                            (po for po in pricing_options if po.pricing_model == first_package.pricing_model),
-                            None
+                            (po for po in pricing_options if po.pricing_model == first_package.pricing_model), None
                         )
                         if matching_option:
                             request_currency = matching_option.currency
@@ -3664,7 +3664,12 @@ def _create_media_buy_impl(
             elif not request_currency and req.budget and hasattr(req.budget, "currency"):
                 # Legacy: Extract currency from Budget object
                 request_currency = req.budget.currency
-            elif not request_currency and req.packages and req.packages[0].budget and hasattr(req.packages[0].budget, "currency"):
+            elif (
+                not request_currency
+                and req.packages
+                and req.packages[0].budget
+                and hasattr(req.packages[0].budget, "currency")
+            ):
                 # Legacy: Extract currency from package budget object
                 request_currency = req.packages[0].budget.currency
 
@@ -3837,7 +3842,6 @@ def _create_media_buy_impl(
 
         # Return proper error response per AdCP spec (status=failed for validation errors)
         return CreateMediaBuyResponse(
-            adcp_version="2.3.0",
             status="failed",  # AdCP spec: failed status for execution errors
             buyer_ref=buyer_ref or "unknown",
             errors=[Error(code="validation_error", message=str(e))],
@@ -3849,7 +3853,6 @@ def _create_media_buy_impl(
         error_msg = f"Principal {principal_id} not found"
         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
         return CreateMediaBuyResponse(
-            adcp_version="2.3.0",
             status="rejected",  # AdCP spec: rejected status for auth failures before execution
             buyer_ref=buyer_ref or "unknown",
             errors=[Error(code="authentication_error", message=error_msg)],
@@ -3927,9 +3930,8 @@ def _create_media_buy_impl(
                 buyer_ref=req.buyer_ref,
                 media_buy_id=pending_media_buy_id,
                 status=TaskStatus.INPUT_REQUIRED,
-                detail=response_msg,
                 creative_deadline=None,
-                message="Your media buy request requires manual approval from the publisher. The request has been queued and will be reviewed shortly.",
+                errors=[{"code": "APPROVAL_REQUIRED", "message": response_msg}],
             )
 
         # Get products for the media buy to check product-level auto-creation settings
@@ -3981,11 +3983,7 @@ def _create_media_buy_impl(
                 ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_detail)
                 return CreateMediaBuyResponse(
                     buyer_ref=req.buyer_ref,
-                    media_buy_id="",
                     status=TaskStatus.FAILED,
-                    detail=error_detail,
-                    creative_deadline=None,
-                    message="Media buy creation failed due to invalid product configuration. Please fix the configuration in Admin UI and try again.",
                     errors=[{"code": "invalid_configuration", "message": err} for err in config_errors],
                 )
 
@@ -4051,7 +4049,6 @@ def _create_media_buy_impl(
                 console.print(f"[yellow]⚠️ Failed to send configuration approval Slack notification: {e}[/yellow]")
 
             return CreateMediaBuyResponse(
-                adcp_version="2.3.0",
                 status="input-required",
                 buyer_ref=req.buyer_ref,
                 task_id=step.step_id,
@@ -4090,7 +4087,6 @@ def _create_media_buy_impl(
             error_msg = "start_time and end_time are required but were not properly set"
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
             return CreateMediaBuyResponse(
-                adcp_version="2.3.0",
                 status="failed",  # AdCP spec: failed status for validation errors
                 buyer_ref=req.buyer_ref,
                 errors=[Error(code="invalid_datetime", message=error_msg)],
@@ -4297,7 +4293,6 @@ def _create_media_buy_impl(
             buyer_ref_value = f"missing-{response.media_buy_id}"
 
         adcp_response = CreateMediaBuyResponse(
-            adcp_version="2.3.0",
             status=api_status,  # Use adapter status or time-based status (not hardcoded "working")
             buyer_ref=buyer_ref_value,
             media_buy_id=response.media_buy_id,
@@ -4358,7 +4353,6 @@ def _create_media_buy_impl(
         # Reconstruct response from modified data
         # Filter out testing hook fields that aren't part of CreateMediaBuyResponse schema
         valid_fields = {
-            "adcp_version",
             "status",
             "buyer_ref",
             "task_id",
@@ -4379,7 +4373,22 @@ def _create_media_buy_impl(
         else:
             logger.info(f"✅ buyer_ref present in filtered_data: {filtered_data['buyer_ref']}")
 
-        modified_response = CreateMediaBuyResponse(**filtered_data)
+        # Ensure required fields are present (validator compliance)
+        if "status" not in filtered_data:
+            filtered_data["status"] = "completed"
+        if "buyer_ref" not in filtered_data:
+            filtered_data["buyer_ref"] = buyer_ref_value
+
+        # Use explicit fields for validator (instead of **kwargs)
+        modified_response = CreateMediaBuyResponse(
+            status=filtered_data["status"],
+            buyer_ref=filtered_data["buyer_ref"],
+            task_id=filtered_data.get("task_id"),
+            media_buy_id=filtered_data.get("media_buy_id"),
+            creative_deadline=filtered_data.get("creative_deadline"),
+            packages=filtered_data.get("packages"),
+            errors=filtered_data.get("errors"),
+        )
 
         # Mark workflow step as completed on success
         ctx_manager.update_workflow_step(step.step_id, status="completed")
@@ -4961,7 +4970,6 @@ def _update_media_buy_impl(
         status="completed",
         media_buy_id=req.media_buy_id or "",
         buyer_ref=req.buyer_ref or "",
-        implementation_date=datetime.combine(today, datetime.min.time()),
     )
 
 
@@ -5047,11 +5055,9 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
     if not principal:
         # Return AdCP-compliant error response
         return GetMediaBuyDeliveryResponse(
-            adcp_version="1.5.0",
             reporting_period=ReportingPeriod(start=datetime.now().isoformat(), end=datetime.now().isoformat()),
             currency="USD",
-            aggregated_totals=AggregatedTotals(impressions=0, spend=0, media_buy_count=0),
-            deliveries=[],
+            media_buy_deliveries=[],
             errors=[{"code": "principal_not_found", "message": f"Principal {principal_id} not found"}],
         )
 
@@ -5219,13 +5225,9 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
 
     # Create AdCP-compliant response
     response = GetMediaBuyDeliveryResponse(
-        adcp_version="1.5.0",
         reporting_period=reporting_period,
         currency="USD",
-        aggregated_totals=AggregatedTotals(
-            impressions=total_impressions, spend=total_spend, media_buy_count=media_buy_count
-        ),
-        deliveries=deliveries,
+        media_buy_deliveries=deliveries,
     )
 
     # Apply testing hooks if needed
@@ -5244,8 +5246,40 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
         response_data = response.model_dump()
         response_data = apply_testing_hooks(response_data, testing_ctx, "get_media_buy_delivery", campaign_info)
 
-        # Reconstruct response from modified data
-        response = GetMediaBuyDeliveryResponse(**response_data)
+        # Reconstruct response from modified data - filter out testing hook fields
+        valid_fields = {
+            "reporting_period",
+            "currency",
+            "media_buy_deliveries",
+            "notification_type",
+            "partial_data",
+            "unavailable_count",
+            "sequence_number",
+            "next_expected_at",
+            "errors",
+        }
+        filtered_data = {k: v for k, v in response_data.items() if k in valid_fields}
+
+        # Ensure required fields are present (validator compliance)
+        if "reporting_period" not in filtered_data:
+            filtered_data["reporting_period"] = response_data.get("reporting_period", reporting_period)
+        if "currency" not in filtered_data:
+            filtered_data["currency"] = response_data.get("currency", "USD")
+        if "media_buy_deliveries" not in filtered_data:
+            filtered_data["media_buy_deliveries"] = response_data.get("media_buy_deliveries", [])
+
+        # Use explicit fields for validator (instead of **kwargs)
+        response = GetMediaBuyDeliveryResponse(
+            reporting_period=filtered_data["reporting_period"],
+            currency=filtered_data["currency"],
+            media_buy_deliveries=filtered_data["media_buy_deliveries"],
+            notification_type=filtered_data.get("notification_type"),
+            partial_data=filtered_data.get("partial_data"),
+            unavailable_count=filtered_data.get("unavailable_count"),
+            sequence_number=filtered_data.get("sequence_number"),
+            next_expected_at=filtered_data.get("next_expected_at"),
+            errors=filtered_data.get("errors"),
+        )
 
     return response
 

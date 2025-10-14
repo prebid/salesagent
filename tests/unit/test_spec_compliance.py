@@ -32,14 +32,17 @@ class TestResponseSchemas:
 
     def test_get_products_response_no_context_id(self):
         """Verify GetProductsResponse doesn't have context_id."""
-        response = GetProductsResponse(products=[], message="No products found")
+        response = GetProductsResponse(products=[])
 
         # Verify context_id is not in the schema
         assert not hasattr(response, "context_id")
 
-        # Verify protocol fields are present
-        assert response.message == "No products found"
+        # Verify AdCP-compliant fields are present
         assert response.products == []
+
+        # Verify message is provided via __str__() not as schema field
+        assert not hasattr(response, "message")
+        assert str(response) == "No products matched your requirements."
 
     def test_list_creative_formats_response_no_context_id(self):
         """Verify ListCreativeFormatsResponse doesn't have context_id."""
@@ -49,16 +52,19 @@ class TestResponseSchemas:
             Format(format_id="display_300x250", name="Medium Rectangle", type="display"),
             Format(format_id="video_16x9", name="16:9 Video", type="video"),
         ]
-        response = ListCreativeFormatsResponse(formats=test_formats, message="2 formats available")
+        response = ListCreativeFormatsResponse(formats=test_formats)
 
         # Verify context_id is not in the schema
         assert not hasattr(response, "context_id")
 
-        # Verify fields
+        # Verify AdCP-compliant fields
         assert len(response.formats) == 2
-        assert response.message == "2 formats available"
         assert response.formats[0].format_id == "display_300x250"
         assert response.formats[1].format_id == "video_16x9"
+
+        # Verify message is provided via __str__() not as schema field
+        assert not hasattr(response, "message")
+        assert str(response) == "Found 2 creative formats."
 
     def test_error_reporting_in_responses(self):
         """Verify error reporting is protocol-compliant."""

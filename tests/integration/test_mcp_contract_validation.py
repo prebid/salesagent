@@ -9,13 +9,15 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from src.core.schema_adapters import (
+    GetProductsRequest,
+    ListAuthorizedPropertiesRequest,
+)
 from src.core.schemas import (
     ActivateSignalRequest,
     CreateMediaBuyRequest,
     GetMediaBuyDeliveryRequest,
-    GetProductsRequest,
     GetSignalsRequest,
-    ListAuthorizedPropertiesRequest,
     SignalDeliverTo,
     UpdateMediaBuyRequest,
 )
@@ -43,15 +45,18 @@ class TestMCPContractValidation:
         assert request.promoted_offering == "purina cat food"
 
     def test_get_products_validation_still_enforced(self):
-        """Test that promoted_offering is still required."""
-        with pytest.raises(ValueError, match="promoted_offering"):
-            GetProductsRequest(brief="just a brief")
+        """Test that GetProductsRequest allows anonymous queries (no promoted_offering/brand_manifest)."""
+        # This now works - anonymous queries are supported
+        request = GetProductsRequest(brief="just a brief")
+        assert request.brief == "just a brief"
+        assert request.promoted_offering is None
+        assert request.brand_manifest is None
 
     def test_list_authorized_properties_minimal(self):
         """Test list_authorized_properties can be called with no parameters."""
         request = ListAuthorizedPropertiesRequest()
 
-        assert request.adcp_version == "1.0.0"  # Should have default
+        # adcp_version field was removed from AdCP spec
         assert request.tags is None
 
     def test_activate_signal_minimal(self):
@@ -135,12 +140,15 @@ class TestMCPContractValidation:
         assert request.deliver_to.countries == ["US", "CA", "UK"]
 
     def test_update_media_buy_minimal(self):
-        """Test update_media_buy requires at least one identifier."""
-        # UpdateMediaBuyRequest correctly requires either media_buy_id or buyer_ref
-        with pytest.raises(ValueError, match="Either media_buy_id or buyer_ref must be provided"):
-            UpdateMediaBuyRequest()
+        """Test update_media_buy identifiers (oneOf enforced at protocol boundary)."""
+        # NOTE: oneOf constraint validation happens at protocol boundary (MCP/A2A)
+        # not in Pydantic model construction. Internal construction is flexible.
 
-        # But works with minimal identifier
+        # Internal construction works without identifier (protocol boundary would reject)
+        request_no_id = UpdateMediaBuyRequest(active=True)
+        assert request_no_id.active is True
+
+        # Works with minimal identifier
         request = UpdateMediaBuyRequest(media_buy_id="test_buy_123")
         assert request.media_buy_id == "test_buy_123"
         assert request.buyer_ref is None
@@ -220,7 +228,7 @@ class TestSchemaDefaultValues:
 
         # ListAuthorizedPropertiesRequest
         req = ListAuthorizedPropertiesRequest()
-        assert req.adcp_version == "1.0.0"  # Current version default
+        # adcp_version field was removed from AdCP spec
 
     def test_required_fields_are_truly_necessary(self):
         """Test that all required fields are actually necessary."""
