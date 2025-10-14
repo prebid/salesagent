@@ -5,12 +5,13 @@ import logging
 import secrets
 import string
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
 from sqlalchemy import or_, select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Principal, Tenant, User
+from src.core.database.models import AdapterConfig, CurrencyLimit, Principal, Tenant, User
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,6 @@ def provision_tenant():
                 created_at=now,
                 updated_at=now,
                 # Configuration
-                max_daily_budget=10000,
                 enable_axe_signals=True,
                 human_review_required=True,
                 admin_token=admin_token,
@@ -238,6 +238,15 @@ def provision_tenant():
                 adapter_config.mock_dry_run = False
 
             db_session.add(adapter_config)
+
+            # Create default currency limit (USD with $10,000 daily budget)
+            currency_limit = CurrencyLimit(
+                tenant_id=tenant_id,
+                currency_code="USD",
+                max_daily_package_spend=Decimal("10000.00"),
+                min_package_budget=Decimal("100.00"),
+            )
+            db_session.add(currency_limit)
 
             # Create or update admin user
             import uuid

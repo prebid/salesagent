@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Tenant, User
+from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
 
 
 class TestSelfServiceSignupFlow:
@@ -98,6 +98,14 @@ class TestSelfServiceSignupFlow:
             assert adapter_config is not None
             assert adapter_config.adapter_type == "mock"
 
+            # Verify currency limit was created
+            currency_limit = db_session.scalars(
+                select(CurrencyLimit).filter_by(tenant_id=tenant.tenant_id, currency_code="USD")
+            ).first()
+            assert currency_limit is not None
+            assert currency_limit.max_daily_package_spend == 10000
+            assert currency_limit.min_package_budget == 100
+
             # Verify admin user was created
             user = db_session.scalars(
                 select(User).filter_by(tenant_id=tenant.tenant_id, email="admin@testpublisher.com")
@@ -106,7 +114,7 @@ class TestSelfServiceSignupFlow:
             assert user.role == "admin"
             assert user.is_active is True
 
-            # Cleanup
+            # Cleanup (currency_limit will cascade delete with tenant)
             db_session.delete(user)
             db_session.delete(adapter_config)
             db_session.delete(tenant)
