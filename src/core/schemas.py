@@ -127,6 +127,9 @@ class PricingParameters(BaseModel):
 class PricingOption(BaseModel):
     """A pricing model option offered by a publisher for a product per AdCP spec."""
 
+    pricing_option_id: str = Field(
+        ..., description="Unique identifier for this pricing option within the product (e.g., 'cpm_usd_guaranteed')"
+    )
     pricing_model: PricingModel = Field(..., description="The pricing model for this option")
     rate: float | None = Field(None, ge=0, description="The rate for this pricing model (required if is_fixed=true)")
     currency: str = Field(..., pattern="^[A-Z]{3}$", description="ISO 4217 currency code (e.g., USD, EUR, GBP)")
@@ -155,6 +158,25 @@ class PricingOption(BaseModel):
         if not self.is_fixed and self.price_guidance is None:
             raise ValueError("price_guidance is required when is_fixed=false")
         return self
+
+    def model_dump(self, **kwargs):
+        """Override to exclude is_fixed for AdCP compliance.
+
+        AdCP uses separate schemas (cpm-fixed-option, cpm-auction-option, etc.)
+        instead of a single schema with is_fixed flag. We exclude is_fixed and
+        internal fields (supported, unsupported_reason) from external responses.
+        """
+        exclude = kwargs.get("exclude", set())
+        if isinstance(exclude, set):
+            # Exclude internal fields that aren't in AdCP spec
+            exclude.update({"is_fixed", "supported", "unsupported_reason"})
+            kwargs["exclude"] = exclude
+        return super().model_dump(**kwargs)
+
+    def model_dump_internal(self, **kwargs):
+        """Dump including all fields for database storage and internal processing."""
+        kwargs.pop("exclude", None)  # Remove any exclude parameter
+        return super().model_dump(**kwargs)
 
 
 class AssetRequirement(BaseModel):

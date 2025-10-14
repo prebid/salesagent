@@ -8,6 +8,7 @@ import google.generativeai as genai
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ProductModel
+from src.core.database.product_pricing import get_product_pricing_options
 from src.core.schemas import Product
 
 from .base import ProductCatalogProvider
@@ -89,15 +90,19 @@ class AIProductCatalog(ProductCatalogProvider):
 
             products = []
             for product_model in product_models:
+                # Get pricing from pricing_options (preferred) or legacy fields (fallback)
+                pricing_options = get_product_pricing_options(product_model)
+                first_pricing = pricing_options[0] if pricing_options else {}
+
                 # Convert model to Product schema (only include AdCP-compliant fields)
                 product_data = {
                     "product_id": product_model.product_id,
                     "name": product_model.name,
                     "description": product_model.description or f"Advertising product: {product_model.name}",
                     "formats": product_model.formats,
-                    "delivery_type": product_model.delivery_type,
-                    "is_fixed_price": product_model.is_fixed_price,
-                    "cpm": float(product_model.cpm) if product_model.cpm else None,
+                    "delivery_type": "guaranteed" if first_pricing.get("is_fixed") else "non_guaranteed",
+                    "is_fixed_price": first_pricing.get("is_fixed", False),
+                    "cpm": first_pricing.get("rate"),
                     "min_spend": float(product_model.min_spend) if product_model.min_spend else None,
                     "is_custom": product_model.is_custom if product_model.is_custom is not None else False,
                 }
@@ -139,6 +144,7 @@ class AIProductCatalog(ProductCatalogProvider):
         # Prepare products data for AI analysis
         products_data = []
         for product in products:
+            # Product schema objects already have pricing fields populated from pricing_options
             product_info = {
                 "product_id": product.product_id,
                 "name": product.name,

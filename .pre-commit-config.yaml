@@ -17,6 +17,14 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # Enforce SQLAlchemy 2.0 patterns (no legacy session.query)
+      - id: enforce-sqlalchemy-2-0
+        name: Enforce SQLAlchemy 2.0 patterns (no session.query)
+        entry: uv run python .pre-commit-hooks/check_sqlalchemy_2_0.py
+        language: system
+        files: '^(src/|product_catalog_providers/).*\.py$'
+        pass_filenames: true
+
       # Prevent skipping tests (but allow skip_ci for CI-specific issues)
       - id: no-skip-tests
         name: No @pytest.mark.skip decorators allowed

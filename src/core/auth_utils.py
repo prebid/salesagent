@@ -1,14 +1,15 @@
 """Authentication utilities for MCP server."""
 
+import logging
+
 from fastmcp.server import Context
-from rich.console import Console
 from sqlalchemy import select
 
 from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import execute_with_retry
 from src.core.database.models import Principal, Tenant
 
-console = Console()
+logger = logging.getLogger(__name__)
 
 
 def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | None:
@@ -47,23 +48,39 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
             # No tenant specified - search globally
             stmt = select(Principal).filter_by(access_token=token)
             principal = session.scalars(stmt).first()
+            logger.debug(f"[AUTH] Looking up principal with token: {token[:20]}...")
             if principal:
+                logger.info(f"[AUTH] Principal found: {principal.principal_id}, tenant_id={principal.tenant_id}")
                 # Found principal - set tenant context
                 stmt = select(Tenant).filter_by(tenant_id=principal.tenant_id, is_active=True)
                 tenant = session.scalars(stmt).first()
                 if tenant:
+                    logger.info(f"[AUTH] Tenant found: {tenant.tenant_id}, is_active={tenant.is_active}")
                     from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
                     tenant_dict = serialize_tenant_to_dict(tenant)
                     set_current_tenant(tenant_dict)
                     return principal.principal_id
+                else:
+                    logger.error(
+                        f"[AUTH] ERROR: Tenant NOT FOUND for tenant_id={principal.tenant_id} with is_active=True"
+                    )
+                    # Try without is_active filter to see if tenant exists but is_active is wrong
+                    stmt_debug = select(Tenant).filter_by(tenant_id=principal.tenant_id)
+                    tenant_debug = session.scalars(stmt_debug).first()
+                    if tenant_debug:
+                        logger.warning(f"[AUTH] DEBUG: Tenant EXISTS but is_active={tenant_debug.is_active}")
+                    else:
+                        logger.warning("[AUTH] DEBUG: Tenant does not exist at all")
+            else:
+                logger.error(f"[AUTH] ERROR: Principal NOT FOUND for token {token[:20]}...")
 
         return None
 
     try:
         return execute_with_retry(_lookup_principal)
     except Exception as e:
-        console.print(f"[red]Database error during principal lookup: {e}[/red]")
+        logger.error(f"[AUTH] Database error during principal lookup: {e}", exc_info=True)
         return None
 
 
@@ -86,12 +103,12 @@ def get_principal_from_context(context: Context | None) -> str | None:
 
         if hasattr(context, "meta") and isinstance(context.meta, dict):
             headers_found = context.meta.get("headers", {})
-            console.print(f"[blue]Headers from context.meta: {list(headers_found.keys())}[/blue]")
+            logger.debug(f"[AUTH] Headers from context.meta: {list(headers_found.keys())}")
         elif hasattr(context, "headers"):
             headers_found = context.headers
-            console.print(f"[blue]Headers from context.headers: {list(headers_found.keys())}[/blue]")
+            logger.debug(f"[AUTH] Headers from context.headers: {list(headers_found.keys())}")
         else:
-            console.print("[red]No headers found in context![/red]")
+            logger.warning("[AUTH] No headers found in context!")
             return None
 
         # Case-insensitive header lookup (HTTP headers are case-insensitive)
@@ -102,16 +119,16 @@ def get_principal_from_context(context: Context | None) -> str | None:
                 break
 
         if not token:
-            console.print(f"[red]No x-adcp-auth token found. Available headers: {list(headers_found.keys())}[/red]")
+            logger.debug(f"[AUTH] No x-adcp-auth token found. Available headers: {list(headers_found.keys())}")
             return None
 
-        console.print(f"[green]Found token: {token[:20]}...[/green]")
+        logger.debug(f"[AUTH] Found token: {token[:20]}...")
 
         # Validate token and get principal ID
         return get_principal_from_token(token)
 
     except Exception as e:
-        console.print(f"[red]Error extracting principal from context: {e}[/red]")
+        logger.error(f"[AUTH] Error extracting principal from context: {e}", exc_info=True)
         return None
 
 
@@ -147,5 +164,5 @@ def get_principal_object(principal_id: str) -> Principal | None:
     try:
         return execute_with_retry(_get_principal_object)
     except Exception as e:
-        console.print(f"[red]Database error during principal object lookup: {e}[/red]")
+        logger.error(f"[AUTH] Database error during principal object lookup: {e}", exc_info=True)
         return None

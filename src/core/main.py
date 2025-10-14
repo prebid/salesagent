@@ -872,6 +872,16 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
     Returns:
         GetProductsResponse containing matching products
     """
+    import sys
+
+    print("=" * 80, file=sys.stderr, flush=True)
+    print(
+        f"🔧 _get_products_impl CALLED: req={req.promoted_offering}, brief={req.brief[:50] if req.brief else 'N/A'}",
+        file=sys.stderr,
+        flush=True,
+    )
+    print("=" * 80, file=sys.stderr, flush=True)
+
     from src.core.tool_context import ToolContext
 
     start_time = time.time()
@@ -893,9 +903,17 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
         # Legacy path - extract from FastMCP Context
         testing_ctx = get_testing_context(context)
         # For discovery endpoints, authentication is optional
+        logger.info("[GET_PRODUCTS] About to call get_principal_from_context")
+        print("🔍 [GET_PRODUCTS DEBUG] About to call get_principal_from_context", flush=True)
         principal_id = get_principal_from_context(context)  # Returns None if no auth
+        logger.info(f"[GET_PRODUCTS] principal_id returned: {principal_id}")
+        print(f"🔍 [GET_PRODUCTS DEBUG] principal_id returned: {principal_id}", flush=True)
         tenant = get_current_tenant()
+        logger.info(f"[GET_PRODUCTS] tenant returned: {tenant}")
+        print(f"🔍 [GET_PRODUCTS DEBUG] tenant returned: {tenant}", flush=True)
         if not tenant:
+            logger.error("[GET_PRODUCTS] No tenant context available - raising ToolError")
+            print("❌ [GET_PRODUCTS DEBUG] No tenant context - raising ToolError", flush=True)
             raise ToolError("No tenant context available")
 
     # Get the Principal object with ad server mappings
@@ -1084,6 +1102,8 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
         "principal_id": principal_id,
     }
 
+    logger.info(f"[GET_PRODUCTS] Calling provider.get_products for tenant_id={tenant['tenant_id']}")
+    print(f"🔍 [GET_PRODUCTS DEBUG] Calling provider.get_products for tenant_id={tenant['tenant_id']}", flush=True)
     products = await provider.get_products(
         brief=req.brief,
         tenant_id=tenant["tenant_id"],
@@ -1091,6 +1111,8 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
         principal_data=principal_data,
         context=context_data,
     )
+    logger.info(f"[GET_PRODUCTS] Got {len(products)} products from provider")
+    print(f"🔍 [GET_PRODUCTS DEBUG] Got {len(products)} products from provider", flush=True)
 
     # Enrich products with dynamic pricing (AdCP PR #79)
     # Calculate floor_cpm, recommended_cpm, estimated_exposures from cached metrics
@@ -1303,6 +1325,16 @@ async def get_products(
     Returns:
         GetProductsResponse containing matching products
     """
+    import sys
+
+    print("=" * 80, file=sys.stderr, flush=True)
+    print(
+        f"🚀 MCP get_products CALLED: offered={promoted_offering}, brief={brief[:50] if brief else 'N/A'}",
+        file=sys.stderr,
+        flush=True,
+    )
+    print("=" * 80, file=sys.stderr, flush=True)
+
     # Build request object for shared implementation
     req = GetProductsRequest(
         promoted_offering=promoted_offering,
@@ -4209,8 +4241,9 @@ def _create_media_buy_impl(
                 duration_days=duration_days,
                 action="created",
             )
-        except:
-            pass
+        except Exception as e:
+            # Activity feed logging is non-critical, but we should log the failure
+            logger.warning(f"Failed to log media buy creation to activity feed: {e}")
 
         # Apply testing hooks to response with campaign information (resolved from 'asap' if needed)
         campaign_info = {"start_date": start_time, "end_date": end_time, "total_budget": total_budget}
@@ -4396,8 +4429,9 @@ def _create_media_buy_impl(
                     "total_budget": total_budget if "total_budget" in locals() else 0,
                 },
             )
-        except:
-            pass
+        except Exception as audit_error:
+            # Audit logging failure is non-critical, but we should log it
+            logger.warning(f"Failed to log failed media buy creation to audit: {audit_error}")
 
         raise ToolError("MEDIA_BUY_CREATION_ERROR", f"Failed to create media buy: {str(e)}")
 
@@ -5378,8 +5412,9 @@ def create_workflow_step_for_task(req, context):
                 },
                 timeout=5,
             )
-        except:
-            pass  # Don't fail task creation if webhook fails
+        except Exception as webhook_error:
+            # Webhook notification is non-critical, but we should log the failure
+            logger.warning(f"Failed to send webhook notification for task {task_id}: {webhook_error}")
 
     # Task is now handled entirely through WorkflowStep - no separate Task table needed
     console.print(f"[green]✅ Created workflow step {task_id}[/green]")
@@ -5882,6 +5917,119 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
 async def health(request: Request):
     """Health check endpoint."""
     return JSONResponse({"status": "healthy", "service": "mcp"})
+
+
+@mcp.custom_route("/admin/reset-db-pool", methods=["POST"])
+async def reset_db_pool(request: Request):
+    """Reset database connection pool after external data changes.
+
+    This is a testing-only endpoint that flushes the SQLAlchemy connection pool,
+    ensuring fresh connections see recently committed data. Only works when
+    ADCP_TESTING environment variable is set to 'true'.
+
+    Use case: E2E tests that initialize data via external script need to ensure
+    the running MCP server's connection pool picks up that fresh data.
+    """
+    # Security: Only allow in testing mode
+    if os.getenv("ADCP_TESTING") != "true":
+        logger.warning("Attempted to reset DB pool outside testing mode")
+        return JSONResponse({"error": "This endpoint is only available in testing mode"}, status_code=403)
+
+    try:
+        from src.core.database.database_session import reset_engine
+
+        logger.info("Resetting database connection pool, provider cache, and tenant context (testing mode)")
+
+        # Reset SQLAlchemy connection pool
+        reset_engine()
+        logger.info("  ✓ Database connection pool reset")
+
+        # CRITICAL: Also clear the product catalog provider cache
+        # The provider cache holds DatabaseProductCatalog instances that may have
+        # stale data from before init_database_ci.py ran
+        from product_catalog_providers.factory import _provider_cache
+
+        provider_count = len(_provider_cache)
+        _provider_cache.clear()
+        logger.info(f"  ✓ Cleared {provider_count} cached product catalog provider(s)")
+
+        # CRITICAL: Clear tenant context ContextVar
+        # After data initialization, the tenant context may contain stale tenant data
+        # that was loaded before products were created. Force fresh tenant lookup.
+        from src.core.config_loader import current_tenant
+
+        try:
+            current_tenant.set(None)
+            logger.info("  ✓ Cleared tenant context (will force fresh lookup on next request)")
+        except Exception as ctx_error:
+            logger.warning(f"  ⚠️ Could not clear tenant context: {ctx_error}")
+
+        return JSONResponse(
+            {
+                "status": "success",
+                "message": "Database connection pool, provider cache, and tenant context reset successfully",
+                "providers_cleared": provider_count,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to reset database state: {e}")
+        return JSONResponse({"error": f"Failed to reset: {str(e)}"}, status_code=500)
+
+
+@mcp.custom_route("/debug/db-state", methods=["GET"])
+async def debug_db_state(request: Request):
+    """Debug endpoint to show database state (testing only)."""
+    if os.getenv("ADCP_TESTING") != "true":
+        return JSONResponse({"error": "Only available in testing mode"}, status_code=403)
+
+    try:
+        from src.core.database.database_session import get_db_session
+
+        with get_db_session() as session:
+            # Count all products
+            product_stmt = select(ModelProduct)
+            all_products = session.scalars(product_stmt).all()
+
+            # Get ci-test-token principal
+            principal_stmt = select(ModelPrincipal).filter_by(access_token="ci-test-token")
+            principal = session.scalars(principal_stmt).first()
+
+            principal_info = None
+            tenant_info = None
+            tenant_products: list[ModelProduct] = []
+
+            if principal:
+                principal_info = {
+                    "principal_id": principal.principal_id,
+                    "tenant_id": principal.tenant_id,
+                }
+
+                # Get tenant
+                tenant_stmt = select(Tenant).filter_by(tenant_id=principal.tenant_id)
+                tenant = session.scalars(tenant_stmt).first()
+                if tenant:
+                    tenant_info = {
+                        "tenant_id": tenant.tenant_id,
+                        "name": tenant.name,
+                        "is_active": tenant.is_active,
+                    }
+
+                # Get products for that tenant
+                tenant_product_stmt = select(ModelProduct).filter_by(tenant_id=principal.tenant_id)
+                tenant_products = list(session.scalars(tenant_product_stmt).all())
+
+            return JSONResponse(
+                {
+                    "total_products": len(all_products),
+                    "principal": principal_info,
+                    "tenant": tenant_info,
+                    "tenant_products_count": len(tenant_products),
+                    "tenant_product_ids": [p.product_id for p in tenant_products],
+                }
+            )
+    except Exception as e:
+        logger.error(f"Debug endpoint error: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @mcp.custom_route("/debug/tenant", methods=["GET"])

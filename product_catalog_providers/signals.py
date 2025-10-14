@@ -9,6 +9,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
+from src.core.database.product_pricing import get_product_pricing_options
 from src.core.schemas import Product
 
 from .base import ProductCatalogProvider
@@ -277,14 +278,18 @@ class SignalsDiscoveryProvider(ProductCatalogProvider):
                 for db_product in db_products:
                     # Convert database model to AdCP-compliant Product schema
                     # (Similar to database.py approach - only include AdCP spec fields)
+                    # Get pricing from pricing_options (preferred) or legacy fields (fallback)
+                    pricing_options = get_product_pricing_options(db_product)
+                    first_pricing = pricing_options[0] if pricing_options else {}
+
                     product_data = {
                         "product_id": db_product.product_id,
                         "name": db_product.name,
                         "description": db_product.description or f"Advertising product: {db_product.name}",
                         "formats": db_product.formats or [],
-                        "delivery_type": getattr(db_product, "delivery_type", "non_guaranteed"),
-                        "is_fixed_price": getattr(db_product, "is_fixed_price", False),
-                        "cpm": db_product.cpm,
+                        "delivery_type": "guaranteed" if first_pricing.get("is_fixed") else "non_guaranteed",
+                        "is_fixed_price": first_pricing.get("is_fixed", False),
+                        "cpm": first_pricing.get("rate"),
                         "min_spend": float(db_product.min_spend) if db_product.min_spend else None,
                         "is_custom": getattr(db_product, "is_custom", False),
                         "property_tags": getattr(

@@ -216,11 +216,101 @@ def docker_services_e2e(request):
         text=True,
     )
     if init_result.returncode != 0:
-        print(f"❌ CI data initialization failed:")
+        print("❌ CI data initialization failed:")
         print(f"STDOUT: {init_result.stdout}")
         print(f"STDERR: {init_result.stderr}")
         pytest.fail("Failed to initialize CI test data")
+
+    # Always print output to help with debugging
+    if init_result.stdout:
+        print("CI initialization output:")
+        print(init_result.stdout)
+    if init_result.stderr:
+        print("CI initialization stderr:")
+        print(init_result.stderr)
     print("✓ CI test data initialized successfully")
+
+    # CRITICAL: Reset database connection pool to ensure MCP server sees fresh data
+    # The MCP server started with an empty database, created connection pool with stale transactions.
+    # After init_database_ci.py populates data, we need to flush those connections.
+    print("🔄 Resetting MCP server database connection pool...")
+    try:
+        reset_response = requests.post(f"http://localhost:{mcp_port}/admin/reset-db-pool", timeout=5)
+        if reset_response.status_code == 200:
+            print("✓ Database connection pool reset successfully")
+            print(f"  Response: {reset_response.json()}")
+        else:
+            print(f"⚠️  Warning: DB pool reset returned {reset_response.status_code}")
+            print(f"  Response: {reset_response.text}")
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to reset DB pool (non-fatal): {e}")
+        print("  This may cause E2E tests to fail if database was empty at server startup")
+
+    # Check MCP server's view of database via debug endpoint
+    print("🔍 Checking MCP server's database view...")
+    try:
+        db_state_response = requests.get(f"http://localhost:{mcp_port}/debug/db-state", timeout=5)
+        if db_state_response.status_code == 200:
+            db_state = db_state_response.json()
+            print(f"   MCP server sees: {db_state['total_products']} total products")
+            if db_state.get('principal'):
+                print(f"   Principal: {db_state['principal']}")
+            if db_state.get('tenant'):
+                print(f"   Tenant: {db_state['tenant']}")
+            print(f"   Tenant products: {db_state['tenant_products_count']} ({db_state.get('tenant_product_ids', [])})")
+        else:
+            print(f"   ⚠️  DB state endpoint returned {db_state_response.status_code}")
+    except Exception as e:
+        print(f"   ⚠️  Failed to check MCP server DB state: {e}")
+
+    # VERIFICATION: Query database directly to confirm data is visible post-reset
+    print("🔍 Verifying data visibility after connection pool reset...")
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(
+            host="localhost",
+            port=postgres_port,
+            database="adcp",
+            user="adcp_user",
+            password="secure_password_change_me",
+        )
+        cursor = conn.cursor()
+
+        # Count products
+        cursor.execute("SELECT COUNT(*) FROM products")
+        product_count = cursor.fetchone()[0]
+        print(f"   Products in database: {product_count}")
+
+        # Count principals
+        cursor.execute("SELECT COUNT(*) FROM principals WHERE access_token = 'ci-test-token'")
+        principal_count = cursor.fetchone()[0]
+        print(f"   Principals with ci-test-token: {principal_count}")
+
+        # Get principal's tenant_id
+        cursor.execute("SELECT tenant_id FROM principals WHERE access_token = 'ci-test-token'")
+        result = cursor.fetchone()
+        if result:
+            principal_tenant = result[0]
+            print(f"   Principal's tenant_id: {principal_tenant}")
+
+            # Count products for that tenant
+            cursor.execute("SELECT COUNT(*) FROM products WHERE tenant_id = %s", (principal_tenant,))
+            tenant_product_count = cursor.fetchone()[0]
+            print(f"   Products for principal's tenant: {tenant_product_count}")
+
+        cursor.close()
+        conn.close()
+
+        if product_count == 0:
+            print("   ⚠️  WARNING: No products found in database after init!")
+        elif tenant_product_count == 0:
+            print("   ⚠️  WARNING: Products exist but not for principal's tenant!")
+        else:
+            print("   ✅ Database verification passed")
+
+    except Exception as e:
+        print(f"   ⚠️  Warning: Database verification failed: {e}")
 
     # Yield port information for use by other fixtures
     yield {"mcp_port": mcp_port, "a2a_port": a2a_port, "admin_port": admin_port, "postgres_port": postgres_port}

@@ -92,38 +92,45 @@
                         {% else %}
                             <span class="badge">{{ line_item_type }}</span>
                         {% endif %}
-                    {% else %}
-                        {# Fallback to generic delivery type for non-GAM products #}
-                        {% if product.is_fixed_price %}
+                    {% elif product.pricing_options and product.pricing_options|length > 0 %}
+                        {# Fallback to generic delivery type from pricing_options #}
+                        {% if product.pricing_options[0].is_fixed %}
                         <span class="badge">Guaranteed</span>
                         {% else %}
                         <span class="badge badge-secondary">Non-guaranteed</span>
                         {% endif %}
+                    {% else %}
+                        {# No pricing information available #}
+                        <span class="badge badge-secondary">Unknown</span>
                     {% endif %}
                 </td>
                 <td>
-                    {% if product.is_fixed_price and product.cpm %}
-                    ${{ "%.2f"|format(product.cpm) }}
-                    {% elif product.is_fixed_price %}
-                    <span style="color: #999;">No price set</span>
-                    {% else %}
-                        {% if product.price_guidance %}
-                            {% if product.price_guidance.floor %}
-                                {# New format with floor/p50/p75 #}
-                                ${{ "%.2f"|format(product.price_guidance.floor) }} - ${{ "%.2f"|format(product.price_guidance.p75) }}
-                            {% elif product.price_guidance.min %}
-                                {# Old format with min/max - check if they're equal (floor price) #}
-                                {% if product.price_guidance.min == product.price_guidance.max %}
-                                    Floor: ${{ "%.2f"|format(product.price_guidance.min) }}
-                                {% else %}
-                                    ${{ "%.2f"|format(product.price_guidance.min) }} - ${{ "%.2f"|format(product.price_guidance.max) }}
+                    {% if product.pricing_options and product.pricing_options|length > 0 %}
+                        {# Display first pricing option (primary) #}
+                        {% set first_option = product.pricing_options[0] %}
+                        {% if first_option.is_fixed and first_option.rate %}
+                            {# Fixed price #}
+                            {{ first_option.currency }} ${{ "%.2f"|format(first_option.rate) }}
+                            {% if first_option.pricing_model != "cpm" %}
+                                <span style="color: #666; font-size: 0.85em;">({{ first_option.pricing_model|upper }})</span>
+                            {% endif %}
+                        {% elif not first_option.is_fixed and first_option.price_guidance %}
+                            {# Auction pricing with guidance #}
+                            {% if first_option.price_guidance.floor %}
+                                {{ first_option.currency }} ${{ "%.2f"|format(first_option.price_guidance.floor) }}
+                                {% if first_option.price_guidance.p75 %}
+                                    - ${{ "%.2f"|format(first_option.price_guidance.p75) }}
                                 {% endif %}
-                            {% else %}
-                                Guidance available
                             {% endif %}
                         {% else %}
-                        -
+                            <span style="color: #999;">No price set</span>
                         {% endif %}
+                        {# Show indicator if multiple pricing options #}
+                        {% if product.pricing_options|length > 1 %}
+                            <span class="badge badge-secondary">+{{ product.pricing_options|length - 1 }} more</span>
+                        {% endif %}
+                    {% else %}
+                        <span style="color: #999;">No pricing configured</span>
                     {% endif %}
                 </td>
                 <td>

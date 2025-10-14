@@ -56,6 +56,9 @@ services:
       # Testing mode (for E2E tests - relaxes validation)
       ADCP_TESTING: ${ADCP_TESTING:-false}
 
+      # Create sample data for E2E tests (products, etc.)
+      CREATE_SAMPLE_DATA: ${CREATE_SAMPLE_DATA:-true}
+
     depends_on:
       postgres:
         condition: service_healthy

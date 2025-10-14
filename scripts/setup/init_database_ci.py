@@ -20,7 +20,15 @@ def init_db_ci():
 
         from scripts.ops.migrate import run_migrations
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import CurrencyLimit, Principal, Product, PropertyTag, Tenant
+        from src.core.database.models import (
+            AuthorizedProperty,
+            CurrencyLimit,
+            PricingOption,
+            Principal,
+            Product,
+            PropertyTag,
+            Tenant,
+        )
 
         print("Applying database migrations for CI...")
         run_migrations()
@@ -54,12 +62,14 @@ def init_db_ci():
                     session.add(principal)
                     print(f"Created principal (ID: {principal_id}) for existing tenant")
                 elif existing_principal.tenant_id != tenant_id:
-                    # Principal exists but for different tenant - this is a problem
+                    # Principal exists but for different tenant - update it to point to new tenant
                     print(
                         f"⚠️  Warning: Principal with token 'ci-test-token' exists for different tenant ({existing_principal.tenant_id})"
                     )
-                    print(f"   Using existing principal's tenant instead of {tenant_id}")
-                    tenant_id = existing_principal.tenant_id
+                    print(f"   Updating principal to point to new tenant: {tenant_id}")
+                    existing_principal.tenant_id = tenant_id
+                    session.flush()
+                    print("   ✓ Principal updated to new tenant")
                 else:
                     print(f"Principal already exists (ID: {existing_principal.principal_id})")
 
@@ -111,6 +121,7 @@ def init_db_ci():
                     billing_plan="test",
                     ad_server="mock",
                     enable_axe_signals=True,
+                    is_active=True,  # Explicitly set for auth lookup
                     authorized_emails=None,  # SQL NULL (satisfies constraint)
                     authorized_domains=None,  # SQL NULL (satisfies constraint)
                     policy_settings=None,  # SQL NULL
@@ -126,6 +137,22 @@ def init_db_ci():
                 try:
                     session.commit()  # Commit tenant FIRST
                     print(f"Created tenant (ID: {tenant_id})")
+
+                    # Verify tenant was created with is_active=True
+                    stmt_verify = select(Tenant).filter_by(tenant_id=tenant_id)
+                    created_tenant = session.scalars(stmt_verify).first()
+                    if created_tenant:
+                        print(f"   ✓ Tenant verified: is_active={created_tenant.is_active}")
+
+                        # CRITICAL: Verify tenant is findable with EXACT auth query
+                        stmt_auth_test = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
+                        auth_findable_tenant = session.scalars(stmt_auth_test).first()
+                        if auth_findable_tenant:
+                            print("   ✓ Tenant findable with auth query (is_active=True filter)")
+                        else:
+                            print("   ❌ ERROR: Tenant NOT findable with auth query! This will cause auth to fail!")
+                    else:
+                        print("   ⚠️  Warning: Could not verify tenant creation")
                 except Exception as e:
                     # Handle race: another container created tenant already
                     session.rollback()
@@ -167,7 +194,17 @@ def init_db_ci():
                             print(f"   Using existing principal (ID: {principal_id})")
                 else:
                     principal_id = existing_principal.principal_id
-                    print(f"Principal already exists (ID: {principal_id})")
+                    if existing_principal.tenant_id != tenant_id:
+                        # Principal exists but for different tenant - update it
+                        print(
+                            f"⚠️  Warning: Principal with token 'ci-test-token' exists for different tenant ({existing_principal.tenant_id})"
+                        )
+                        print(f"   Updating principal to point to new tenant: {tenant_id}")
+                        existing_principal.tenant_id = tenant_id
+                        session.commit()
+                        print("   ✓ Principal updated to new tenant")
+                    else:
+                        print(f"Principal already exists (ID: {principal_id})")
 
                 # Create currency limit and property tag with race condition handling
                 stmt_currency = select(CurrencyLimit).filter_by(tenant_id=tenant_id, currency_code="USD")
@@ -235,7 +272,7 @@ def init_db_ci():
             print("All prerequisites validated successfully")
 
             # Create default products for testing
-            print("Creating default products for CI...")
+            print(f"Creating default products for CI on tenant: {tenant_id}...")
             products_data = [
                 {
                     "product_id": "prod_display_premium",
@@ -286,17 +323,58 @@ def init_db_ci():
                     )
                     session.add(product)
                     print(f"  ✓ Created product: {p['name']} (property_tags=['all_inventory'])")
+
+                    # Create corresponding pricing_option (required for pricing display)
+                    pricing_option = PricingOption(
+                        tenant_id=tenant_id,
+                        product_id=p["product_id"],
+                        pricing_model="cpm",
+                        rate=p.get("cpm"),
+                        currency="USD",
+                        is_fixed=p["is_fixed_price"],
+                        price_guidance=None,  # Not used for fixed price products
+                    )
+                    session.add(pricing_option)
+                    print(f"  ✓ Created pricing_option for: {p['name']}")
                 else:
                     print(f"  ℹ️  Product already exists: {p['name']}")
 
             session.commit()
+
+            # Create authorized property for setup checklist completion
+            print("\nCreating authorized property for setup checklist...")
+            stmt_check_property = select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id="example_com")
+            existing_property = session.scalars(stmt_check_property).first()
+
+            if not existing_property:
+                authorized_prop = AuthorizedProperty(
+                    tenant_id=tenant_id,
+                    property_id="example_com",
+                    property_type="website",
+                    name="Example Website",
+                    identifiers=[{"type": "domain", "value": "example.com"}],
+                    publisher_domain="example.com",
+                    verification_status="verified",
+                )
+                session.add(authorized_prop)
+                session.commit()
+                print("  ✓ Created authorized property: example.com")
+            else:
+                print("  ℹ️  Authorized property already exists: example.com")
 
             # Verify products were actually saved
             stmt_verify = select(Product).filter_by(tenant_id=tenant_id)
             saved_products = session.scalars(stmt_verify).all()
             print(f"\n✅ Verification: {len(saved_products)} products found in database for tenant {tenant_id}")
             for prod in saved_products:
-                print(f"   - {prod.product_id}: property_tags={prod.property_tags}, properties={prod.properties}")
+                print(f"   - {prod.product_id}: {prod.name}, property_tags={prod.property_tags}")
+
+            # Also verify pricing_options exist
+            from src.core.database.models import PricingOption as PricingOptionModel
+
+            stmt_pricing = select(PricingOptionModel).filter_by(tenant_id=tenant_id)
+            saved_pricing = session.scalars(stmt_pricing).all()
+            print(f"✅ Verification: {len(saved_pricing)} pricing_options found for tenant {tenant_id}")
 
             # CRITICAL: Fail if no products were created
             if len(saved_products) == 0:
