@@ -149,7 +149,7 @@ class SetupChecklistService:
             SetupTask(
                 key="authorized_properties",
                 name="Authorized Properties",
-                description="Configure properties with addagents.json for verification",
+                description="Configure properties with adagents.json for verification",
                 is_complete=property_count > 0,
                 action_url=f"/tenant/{self.tenant_id}/authorized-properties",
                 details=f"{property_count} properties configured" if property_count > 0 else "No properties configured",
