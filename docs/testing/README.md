@@ -53,6 +53,7 @@ Automatically enforced on every commit:
 
 ### Protocol Compliance
 - **[adcp-compliance.md](adcp-compliance.md)** - AdCP spec compliance testing (mandatory)
+- **[link-validation.md](link-validation.md)** - Automatic link validation in integration tests (NEW ✨)
 
 ### Postmortems
 - **[postmortems/2025-10-04-test-agent-auth-bug.md](postmortems/2025-10-04-test-agent-auth-bug.md)** - Authentication bug incident

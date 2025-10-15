@@ -4,11 +4,14 @@ This test suite validates that all 71+ GET routes in the Admin UI:
 - Return appropriate status codes (200, 404, 501, etc.)
 - Don't crash with template errors
 - Work correctly with the integration database
+- All links in HTML pages are valid (no 404s)
 
 Routes are organized by blueprint for maintainability.
 """
 
 import pytest
+
+from tests.integration.link_validator import LinkValidator, format_broken_links_report
 
 pytestmark = pytest.mark.integration
 
@@ -386,6 +389,60 @@ class TestSettingsRoutes:
         response = authenticated_admin_session.get("/settings", follow_redirects=True)
         # May redirect to tenant-specific settings
         assert response.status_code in [200, 302, 404]
+
+
+class TestAllLinksValid:
+    """Test that all links in major pages are valid.
+
+    This catches broken links like the creative review 404 (PR #421) before
+    they reach production. It validates every <a href>, <img src>, <link href>
+    on key pages to ensure blueprints are registered and routes exist.
+    """
+
+    def test_all_dashboard_links_valid(self, authenticated_admin_session, test_tenant_with_data):
+        """Test all links on tenant dashboard are valid."""
+        tenant_id = test_tenant_with_data["tenant_id"]
+        validator = LinkValidator(authenticated_admin_session)
+
+        response = authenticated_admin_session.get(f"/tenant/{tenant_id}", follow_redirects=True)
+        assert response.status_code == 200
+
+        broken_links = validator.validate_response(response, current_page=f"/tenant/{tenant_id}")
+        assert not broken_links, format_broken_links_report(broken_links, f"/tenant/{tenant_id}")
+
+    def test_all_settings_links_valid(self, authenticated_admin_session, test_tenant_with_data):
+        """Test all links on settings pages are valid."""
+        tenant_id = test_tenant_with_data["tenant_id"]
+        validator = LinkValidator(authenticated_admin_session)
+
+        response = authenticated_admin_session.get(
+            f"/tenant/{tenant_id}/settings", follow_redirects=True
+        )
+        assert response.status_code == 200
+
+        broken_links = validator.validate_response(
+            response, current_page=f"/tenant/{tenant_id}/settings"
+        )
+        assert not broken_links, format_broken_links_report(
+            broken_links, f"/tenant/{tenant_id}/settings"
+        )
+
+    def test_all_products_page_links_valid(self, authenticated_admin_session, test_tenant_with_data):
+        """Test all links on products page are valid."""
+        tenant_id = test_tenant_with_data["tenant_id"]
+        validator = LinkValidator(authenticated_admin_session)
+
+        response = authenticated_admin_session.get(
+            f"/tenant/{tenant_id}/products/", follow_redirects=True
+        )
+        assert response.status_code == 200
+
+        broken_links = validator.validate_response(
+            response, current_page=f"/tenant/{tenant_id}/products/"
+        )
+        assert not broken_links, format_broken_links_report(
+            broken_links, f"/tenant/{tenant_id}/products/"
+        )
 
 
 class TestNotFoundRoutes:
