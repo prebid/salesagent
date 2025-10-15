@@ -309,7 +309,7 @@ function filterCreatives(status) {
 function approveCreative(creativeId) {
     if (!confirm('Are you sure you want to approve this creative?')) return;
 
-    fetch(`${scriptName}/tenant/${tenantId}/creative-formats/review/${creativeId}/approve`, {
+    fetch(`${scriptName}/tenant/${tenantId}/creatives/review/${creativeId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -347,7 +347,7 @@ function rejectCreative(creativeId) {
         return;
     }
 
-    fetch(`${scriptName}/tenant/${tenantId}/creative-formats/review/${creativeId}/reject`, {
+    fetch(`${scriptName}/tenant/${tenantId}/creatives/review/${creativeId}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -384,7 +384,7 @@ function aiReviewCreative(creativeId) {
     button.disabled = true;
     button.textContent = '🤖 Reviewing...';
 
-    fetch(`${scriptName}/tenant/${tenantId}/creative-formats/review/${creativeId}/ai-review`, {
+    fetch(`${scriptName}/tenant/${tenantId}/creatives/review/${creativeId}/ai-review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',

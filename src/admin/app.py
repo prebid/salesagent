@@ -16,8 +16,7 @@ from src.admin.blueprints.auth import auth_bp, init_oauth
 from src.admin.blueprints.authorized_properties import authorized_properties_bp
 from src.admin.blueprints.core import core_bp
 from src.admin.blueprints.creative_agents import creative_agents_bp
-
-# creatives_bp removed - creative_formats table dropped in migration f2addf453200
+from src.admin.blueprints.creatives import creatives_bp
 from src.admin.blueprints.format_search import bp as format_search_bp
 from src.admin.blueprints.gam import gam_bp
 from src.admin.blueprints.inventory import inventory_bp
@@ -260,7 +259,7 @@ def create_app(config=None):
     app.register_blueprint(users_bp)  # Already has url_prefix in blueprint
     app.register_blueprint(gam_bp)
     app.register_blueprint(operations_bp, url_prefix="/tenant/<tenant_id>")
-    # creatives_bp removed - creative_formats table dropped, use AdCP list_creative_formats instead
+    app.register_blueprint(creatives_bp, url_prefix="/tenant/<tenant_id>/creatives")
     app.register_blueprint(policy_bp, url_prefix="/tenant/<tenant_id>/policy")
     app.register_blueprint(settings_bp, url_prefix="/tenant/<tenant_id>/settings")
     app.register_blueprint(adapters_bp, url_prefix="/tenant/<tenant_id>")

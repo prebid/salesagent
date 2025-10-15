@@ -164,7 +164,7 @@ class TestSlackNotificationUrls:
         actions_block = next((b for b in payload["blocks"] if b["type"] == "actions"), None)
         url = actions_block["elements"][0]["url"]
 
-        assert url == "https://sales-agent.scope3.com/tenant/tenant_abc/creative-formats/review#creative_123"
+        assert url == "https://sales-agent.scope3.com/tenant/tenant_abc/creatives/review#creative_123"
         assert "localhost" not in url
 
     def test_localhost_fallback_when_env_not_set(self, slack_notifier, mock_webhook_delivery):

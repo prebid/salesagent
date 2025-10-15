@@ -23,11 +23,12 @@ def discover_creative_formats_from_url(url):
 
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
+
 # CreativeFormat removed - table dropped in migration f2addf453200
 
 logger = logging.getLogger(__name__)
@@ -136,49 +137,8 @@ def _call_webhook_for_creative_status(
 @creatives_bp.route("/", methods=["GET"])
 @require_tenant_access()
 def index(tenant_id, **kwargs):
-    """List creative formats (both standard and custom)."""
-    with get_db_session() as db_session:
-        # Get tenant name
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not tenant:
-            return "Tenant not found", 404
-
-        tenant_name = tenant.name
-
-        # Get all formats (standard + custom for this tenant)
-        stmt = (
-            select(CreativeFormat)
-            .filter(or_(CreativeFormat.tenant_id.is_(None), CreativeFormat.tenant_id == tenant_id))
-            .order_by(CreativeFormat.is_standard.desc(), CreativeFormat.type, CreativeFormat.name)
-        )
-        creative_formats = db_session.scalars(stmt).all()
-
-        formats = []
-        for cf in creative_formats:
-            format_info = {
-                "format_id": cf.format_id,
-                "name": cf.name,
-                "type": cf.type,
-                "description": cf.description,
-                "is_standard": cf.is_standard,
-                "source_url": cf.source_url,
-                "created_at": cf.created_at,
-            }
-
-            # Add dimensions or duration
-            if cf.width and cf.height:  # width and height
-                format_info["dimensions"] = f"{cf.width}x{cf.height}"
-            elif cf.duration_seconds:  # duration
-                format_info["duration"] = f"{cf.duration_seconds}s"
-
-            formats.append(format_info)
-
-    return render_template(
-        "creative_formats.html",
-        tenant_id=tenant_id,
-        tenant_name=tenant_name,
-        formats=formats,
-    )
+    """Redirect to unified creative management page."""
+    return redirect(url_for("creatives.review_creatives", tenant_id=tenant_id))
 
 
 @creatives_bp.route("/review", methods=["GET"])
@@ -616,7 +576,8 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         approved_by = data.get("approved_by", "admin")
 
         with get_db_session() as db_session:
-            creative = db_session.query(Creative).filter_by(tenant_id=tenant_id, creative_id=creative_id).first()
+            stmt = select(Creative).filter_by(tenant_id=tenant_id, creative_id=creative_id)
+            creative = db_session.scalars(stmt).first()
 
             if not creative:
                 return jsonify({"error": "Creative not found"}), 404
@@ -688,7 +649,8 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 _call_webhook_for_creative_status(webhook_url, creative_id, "approved", creative_data, tenant_id)
 
             # Send Slack notification if configured
-            tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
+            tenant = db_session.scalars(stmt_tenant).first()
             if tenant and tenant.slack_webhook_url:
                 from src.services.slack_notifier import get_slack_notifier
 
@@ -698,11 +660,8 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 # Get principal name
                 from src.core.database.models import Principal
 
-                principal = (
-                    db_session.query(Principal)
-                    .filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
-                    .first()
-                )
+                stmt_principal = select(Principal).filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
+                principal = db_session.scalars(stmt_principal).first()
                 principal_name = principal.name if principal else creative.principal_id
 
                 notifier.send_message(
@@ -750,7 +709,8 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             return jsonify({"error": "Rejection reason is required"}), 400
 
         with get_db_session() as db_session:
-            creative = db_session.query(Creative).filter_by(tenant_id=tenant_id, creative_id=creative_id).first()
+            stmt = select(Creative).filter_by(tenant_id=tenant_id, creative_id=creative_id)
+            creative = db_session.scalars(stmt).first()
 
             if not creative:
                 return jsonify({"error": "Creative not found"}), 404
@@ -834,7 +794,8 @@ def reject_creative(tenant_id, creative_id, **kwargs):
                 _call_webhook_for_creative_status(webhook_url, creative_id, "rejected", creative_data, tenant_id)
 
             # Send Slack notification if configured
-            tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
+            tenant = db_session.scalars(stmt_tenant).first()
             if tenant and tenant.slack_webhook_url:
                 from src.services.slack_notifier import get_slack_notifier
 
@@ -844,11 +805,8 @@ def reject_creative(tenant_id, creative_id, **kwargs):
                 # Get principal name
                 from src.core.database.models import Principal
 
-                principal = (
-                    db_session.query(Principal)
-                    .filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
-                    .first()
-                )
+                stmt_principal = select(Principal).filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
+                principal = db_session.scalars(stmt_principal).first()
                 principal_name = principal.name if principal else creative.principal_id
 
                 notifier.send_message(

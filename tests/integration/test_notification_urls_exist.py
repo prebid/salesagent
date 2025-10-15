@@ -115,7 +115,7 @@ class TestNotificationUrlsExist:
         # Known notification URLs that should exist
         required_routes = [
             "/tenant/<tenant_id>/workflows",  # Fixed in this PR (was /operations)
-            # creative-formats/review removed - creative_formats table dropped in migration f2addf453200
+            "/tenant/<tenant_id>/creatives/review",  # Creative review page
         ]
 
         missing = []

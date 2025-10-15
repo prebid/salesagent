@@ -30,7 +30,8 @@ class TestBlueprintSQLAlchemyImports:
         """Validate creatives.py has required SQLAlchemy imports."""
         from src.admin.blueprints import creatives
 
-        assert hasattr(creatives, "or_"), "Missing required import: or_ from sqlalchemy"
+        # creatives.py no longer uses or_ after CreativeFormat table was dropped
+        assert hasattr(creatives, "select"), "Missing required import: select from sqlalchemy"
 
     def test_inventory_blueprint_imports(self):
         """Validate inventory.py has required SQLAlchemy imports."""
@@ -180,14 +181,10 @@ class TestImportRegressionPrevention:
 
     def test_other_blueprints_with_or_operator(self):
         """Ensure other blueprints using or_ have it properly imported."""
-        # creatives.py uses or_
-        from sqlalchemy import or_ as SQLAlchemyOr
-
-        from src.admin.blueprints.creatives import or_ as creatives_or
-
-        assert creatives_or is SQLAlchemyOr
+        # creatives.py no longer uses or_ after CreativeFormat table was dropped
 
         # public.py uses or_
+        from sqlalchemy import or_ as SQLAlchemyOr
         from src.admin.blueprints.public import or_ as public_or
 
         assert public_or is SQLAlchemyOr

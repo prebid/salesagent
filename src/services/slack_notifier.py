@@ -299,8 +299,8 @@ class SlackNotifier:
         script_name = "/admin" if os.environ.get("PRODUCTION") == "true" else ""
         if tenant_id:
             # Link directly to the specific creative using anchor
-            # Correct URL pattern: /tenant/{tenant_id}/creative-formats/review#{creative_id}
-            review_url = f"{admin_url}{script_name}/tenant/{tenant_id}/creative-formats/review#{creative_id}"
+            # Correct URL pattern: /tenant/{tenant_id}/creatives/review#{creative_id}
+            review_url = f"{admin_url}{script_name}/tenant/{tenant_id}/creatives/review#{creative_id}"
         else:
             # Fallback to workflows page if tenant_id not provided
             review_url = f"{admin_url}{script_name}/workflows"
