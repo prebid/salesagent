@@ -1913,34 +1913,154 @@ def _sync_creatives_impl(
                                             break
 
                                     if format_obj and format_obj.agent_url:
-                                        # Build creative manifest from available data
-                                        creative_manifest = {
-                                            "creative_id": existing_creative.creative_id,
-                                            "name": creative.get("name") or existing_creative.name,
-                                            "format_id": creative_format,
-                                        }
+                                        # Check if format is generative (has output_format_ids)
+                                        is_generative = bool(getattr(format_obj, "output_format_ids", None))
 
-                                        # Add any provided asset data for validation
-                                        if creative.get("assets"):
-                                            creative_manifest["assets"] = creative.get("assets")
-                                        if data.get("url"):
-                                            creative_manifest["url"] = data.get("url")
-
-                                        # Call creative agent's preview_creative for validation + preview
-                                        logger.info(
-                                            f"[sync_creatives] Calling preview_creative for validation (update): "
-                                            f"{existing_creative.creative_id} format {creative_format} "
-                                            f"from agent {format_obj.agent_url}, has_assets={bool(creative.get('assets'))}, "
-                                            f"has_url={bool(data.get('url'))}"
-                                        )
-
-                                        preview_result = asyncio.run(
-                                            registry.preview_creative(
-                                                agent_url=format_obj.agent_url,
-                                                format_id=creative_format,
-                                                creative_manifest=creative_manifest,
+                                        if is_generative:
+                                            # Generative creative update - rebuild using AI
+                                            logger.info(
+                                                f"[sync_creatives] Detected generative format update: {creative_format}, "
+                                                f"checking for Gemini API key"
                                             )
-                                        )
+
+                                            # Get Gemini API key from config
+                                            from src.core.config import get_config
+
+                                            config = get_config()
+                                            gemini_api_key = config.gemini_api_key
+
+                                            if not gemini_api_key:
+                                                error_msg = (
+                                                    f"Cannot update generative creative {creative_format}: "
+                                                    f"GEMINI_API_KEY not configured"
+                                                )
+                                                logger.error(f"[sync_creatives] {error_msg}")
+                                                raise ValueError(error_msg)
+
+                                            # Extract message/brief from assets or inputs
+                                            message = None
+                                            if creative.get("assets"):
+                                                assets = creative.get("assets", {})
+                                                for role, asset in assets.items():
+                                                    if role in ["message", "brief", "prompt"] and isinstance(asset, dict):
+                                                        message = asset.get("content") or asset.get("text")
+                                                        break
+
+                                            if not message and creative.get("inputs"):
+                                                inputs = creative.get("inputs", [])
+                                                if inputs and isinstance(inputs[0], dict):
+                                                    message = inputs[0].get("context_description")
+
+                                            # Extract promoted_offerings from assets if available
+                                            promoted_offerings = None
+                                            if creative.get("assets"):
+                                                assets = creative.get("assets", {})
+                                                for role, asset in assets.items():
+                                                    if role == "promoted_offerings" and isinstance(asset, dict):
+                                                        promoted_offerings = asset
+                                                        break
+
+                                            # Get existing context_id for refinement
+                                            existing_context_id = None
+                                            if existing_creative.data:
+                                                existing_context_id = existing_creative.data.get("generative_context_id")
+
+                                            # Use provided context_id or existing one
+                                            context_id = creative.get("context_id") or existing_context_id
+
+                                            # Only call build_creative if we have a message (refinement)
+                                            if message:
+                                                logger.info(
+                                                    f"[sync_creatives] Calling build_creative for update: "
+                                                    f"{existing_creative.creative_id} format {creative_format} "
+                                                    f"from agent {format_obj.agent_url}, "
+                                                    f"message_length={len(message) if message else 0}, "
+                                                    f"context_id={context_id}"
+                                                )
+
+                                                build_result = asyncio.run(
+                                                    registry.build_creative(
+                                                        agent_url=format_obj.agent_url,
+                                                        format_id=creative_format,
+                                                        message=message,
+                                                        gemini_api_key=gemini_api_key,
+                                                        promoted_offerings=promoted_offerings,
+                                                        context_id=context_id,
+                                                        finalize=creative.get("approved", False),
+                                                    )
+                                                )
+
+                                                # Store build result in data
+                                                if build_result:
+                                                    data["generative_build_result"] = build_result
+                                                    data["generative_status"] = build_result.get("status", "draft")
+                                                    data["generative_context_id"] = build_result.get("context_id")
+                                                    changes.append("generative_build_result")
+
+                                                    # Extract creative output if available
+                                                    if build_result.get("creative_output"):
+                                                        creative_output = build_result["creative_output"]
+
+                                                        if creative_output.get("assets"):
+                                                            data["assets"] = creative_output["assets"]
+                                                            changes.append("assets")
+
+                                                        if creative_output.get("output_format"):
+                                                            output_format = creative_output["output_format"]
+                                                            data["output_format"] = output_format
+                                                            changes.append("output_format")
+
+                                                            if isinstance(output_format, dict) and output_format.get("url"):
+                                                                data["url"] = output_format["url"]
+                                                                changes.append("url")
+                                                                logger.info(
+                                                                    f"[sync_creatives] Got URL from generative output (update): "
+                                                                    f"{data['url']}"
+                                                                )
+
+                                                    logger.info(
+                                                        f"[sync_creatives] Generative creative updated: "
+                                                        f"status={data.get('generative_status')}, "
+                                                        f"context_id={data.get('generative_context_id')}"
+                                                    )
+                                            else:
+                                                logger.info(
+                                                    f"[sync_creatives] No message for generative update, "
+                                                    f"keeping existing creative data"
+                                                )
+
+                                            # Skip preview_creative call since we already have the output
+                                            preview_result = None
+                                        else:
+                                            # Static creative - use preview_creative
+                                            # Build creative manifest from available data
+                                            creative_manifest = {
+                                                "creative_id": existing_creative.creative_id,
+                                                "name": creative.get("name") or existing_creative.name,
+                                                "format_id": creative_format,
+                                            }
+
+                                            # Add any provided asset data for validation
+                                            if creative.get("assets"):
+                                                creative_manifest["assets"] = creative.get("assets")
+                                            if data.get("url"):
+                                                creative_manifest["url"] = data.get("url")
+
+                                            # Call creative agent's preview_creative for validation + preview
+                                            logger.info(
+                                                f"[sync_creatives] Calling preview_creative for validation (update): "
+                                                f"{existing_creative.creative_id} format {creative_format} "
+                                                f"from agent {format_obj.agent_url}, has_assets={bool(creative.get('assets'))}, "
+                                                f"has_url={bool(data.get('url'))}"
+                                            )
+
+                                            preview_result = asyncio.run(
+                                                registry.preview_creative(
+                                                    agent_url=format_obj.agent_url,
+                                                    format_id=creative_format,
+                                                    creative_manifest=creative_manifest,
+                                                )
+                                            )
 
                                         # Extract preview data and store in data field
                                         if preview_result and preview_result.get("previews"):
@@ -2080,33 +2200,140 @@ def _sync_creatives_impl(
                                         break
 
                                 if format_obj and format_obj.agent_url:
-                                    # Build creative manifest from available data
-                                    creative_manifest = {
-                                        "creative_id": creative.get("creative_id") or str(uuid.uuid4()),
-                                        "name": creative.get("name"),
-                                        "format_id": creative_format,
-                                    }
+                                    # Check if format is generative (has output_format_ids)
+                                    is_generative = bool(getattr(format_obj, "output_format_ids", None))
 
-                                    # Add any provided asset data for validation
-                                    if creative.get("assets"):
-                                        creative_manifest["assets"] = creative.get("assets")
-                                    if data.get("url"):
-                                        creative_manifest["url"] = data.get("url")
-
-                                    # Call creative agent's preview_creative for validation + preview
-                                    logger.info(
-                                        f"[sync_creatives] Calling preview_creative for validation: {creative_format} "
-                                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.get('assets'))}, "
-                                        f"has_url={bool(data.get('url'))}"
-                                    )
-
-                                    preview_result = asyncio.run(
-                                        registry.preview_creative(
-                                            agent_url=format_obj.agent_url,
-                                            format_id=creative_format,
-                                            creative_manifest=creative_manifest,
+                                    if is_generative:
+                                        # Generative creative - call build_creative
+                                        logger.info(
+                                            f"[sync_creatives] Detected generative format: {creative_format}, "
+                                            f"checking for Gemini API key"
                                         )
-                                    )
+
+                                        # Get Gemini API key from config
+                                        from src.core.config import get_config
+
+                                        config = get_config()
+                                        gemini_api_key = config.gemini_api_key
+
+                                        if not gemini_api_key:
+                                            error_msg = (
+                                                f"Cannot build generative creative {creative_format}: "
+                                                f"GEMINI_API_KEY not configured"
+                                            )
+                                            logger.error(f"[sync_creatives] {error_msg}")
+                                            raise ValueError(error_msg)
+
+                                        # Extract message/brief from assets or inputs
+                                        message = None
+                                        if creative.get("assets"):
+                                            assets = creative.get("assets", {})
+                                            for role, asset in assets.items():
+                                                if role in ["message", "brief", "prompt"] and isinstance(asset, dict):
+                                                    message = asset.get("content") or asset.get("text")
+                                                    break
+
+                                        if not message and creative.get("inputs"):
+                                            inputs = creative.get("inputs", [])
+                                            if inputs and isinstance(inputs[0], dict):
+                                                message = inputs[0].get("context_description")
+
+                                        if not message:
+                                            message = f"Create a creative for: {creative.get('name')}"
+                                            logger.warning(
+                                                f"[sync_creatives] No message found in assets/inputs, "
+                                                f"using creative name as fallback"
+                                            )
+
+                                        # Extract promoted_offerings from assets if available
+                                        promoted_offerings = None
+                                        if creative.get("assets"):
+                                            assets = creative.get("assets", {})
+                                            for role, asset in assets.items():
+                                                if role == "promoted_offerings" and isinstance(asset, dict):
+                                                    promoted_offerings = asset
+                                                    break
+
+                                        # Call build_creative
+                                        logger.info(
+                                            f"[sync_creatives] Calling build_creative for generative format: "
+                                            f"{creative_format} from agent {format_obj.agent_url}, "
+                                            f"message_length={len(message) if message else 0}"
+                                        )
+
+                                        build_result = asyncio.run(
+                                            registry.build_creative(
+                                                agent_url=format_obj.agent_url,
+                                                format_id=creative_format,
+                                                message=message,
+                                                gemini_api_key=gemini_api_key,
+                                                promoted_offerings=promoted_offerings,
+                                                context_id=creative.get("context_id"),
+                                                finalize=creative.get("approved", False),
+                                            )
+                                        )
+
+                                        # Store build result
+                                        if build_result:
+                                            data["generative_build_result"] = build_result
+                                            data["generative_status"] = build_result.get("status", "draft")
+                                            data["generative_context_id"] = build_result.get("context_id")
+
+                                            # Extract creative output
+                                            if build_result.get("creative_output"):
+                                                creative_output = build_result["creative_output"]
+
+                                                if creative_output.get("assets"):
+                                                    data["assets"] = creative_output["assets"]
+
+                                                if creative_output.get("output_format"):
+                                                    output_format = creative_output["output_format"]
+                                                    data["output_format"] = output_format
+
+                                                    if isinstance(output_format, dict) and output_format.get("url"):
+                                                        data["url"] = output_format["url"]
+                                                        logger.info(
+                                                            f"[sync_creatives] Got URL from generative output: "
+                                                            f"{data['url']}"
+                                                        )
+
+                                            logger.info(
+                                                f"[sync_creatives] Generative creative built: "
+                                                f"status={data.get('generative_status')}, "
+                                                f"context_id={data.get('generative_context_id')}"
+                                            )
+
+                                        # Skip preview_creative call since we already have the output
+                                        preview_result = None
+                                    else:
+                                        # Static creative - use preview_creative
+                                        # Build creative manifest from available data
+                                        creative_manifest = {
+                                            "creative_id": creative.get("creative_id") or str(uuid.uuid4()),
+                                            "name": creative.get("name"),
+                                            "format_id": creative_format,
+                                        }
+
+                                        # Add any provided asset data for validation
+                                        if creative.get("assets"):
+                                            creative_manifest["assets"] = creative.get("assets")
+                                        if data.get("url"):
+                                            creative_manifest["url"] = data.get("url")
+
+                                        # Call creative agent's preview_creative for validation + preview
+                                        logger.info(
+                                            f"[sync_creatives] Calling preview_creative for validation: {creative_format} "
+                                            f"from agent {format_obj.agent_url}, has_assets={bool(creative.get('assets'))}, "
+                                            f"has_url={bool(data.get('url'))}"
+                                        )
+
+                                        preview_result = asyncio.run(
+                                            registry.preview_creative(
+                                                agent_url=format_obj.agent_url,
+                                                format_id=creative_format,
+                                                creative_manifest=creative_manifest,
+                                            )
+                                        )
 
                                     # Extract preview data and store in data field
                                     if preview_result and preview_result.get("previews"):
