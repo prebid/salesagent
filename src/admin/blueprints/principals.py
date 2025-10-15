@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
@@ -86,10 +86,10 @@ def list_principals(tenant_id):
                 tenant_id=tenant_id,
                 advertisers=principals_list,
                 # Template variables to match main dashboard
-                active_campaigns=metrics["active_buys"],
-                total_spend=metrics["total_revenue"],
-                principals_count=metrics["total_advertisers"],
-                products_count=metrics["products_count"],
+                active_campaigns=metrics.get("live_buys", 0),
+                total_spend=metrics.get("total_revenue", 0),
+                principals_count=metrics.get("total_advertisers", 0),
+                products_count=metrics.get("products_count", 0),
                 recent_buys=recent_media_buys,
                 recent_media_buys=recent_media_buys,
                 features=features,

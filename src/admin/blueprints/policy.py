@@ -77,7 +77,7 @@ def index(tenant_id):
             .order_by(AuditLog.timestamp.desc())
             .limit(20)
         )
-        audit_logs = session.scalars(stmt).all()
+        audit_logs = db_session.scalars(stmt).all()
 
         recent_checks = []
         for log in audit_logs:

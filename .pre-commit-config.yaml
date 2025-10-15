@@ -65,6 +65,14 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # Check Admin UI route test coverage
+      - id: admin-route-coverage
+        name: Verify 100% Admin UI GET route test coverage
+        entry: uv run python scripts/check_admin_route_coverage.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
       # Detect testing anti-patterns (over-mocking, missing coverage)
       - id: detect-test-antipatterns
         name: Detect testing anti-patterns
