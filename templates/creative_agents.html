@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block title %}Creative Agents - {{ tenant_name }} - Sales Agent Admin{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>Creative Agents - {{ tenant_name }}</h2>
+        <div style="display: flex; gap: 0.5rem;">
+            <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant_id) }}#integrations" class="btn btn-secondary">← Back to Settings</a>
+            <a href="{{ url_for('creative_agents.add_creative_agent', tenant_id=tenant_id) }}" class="btn btn-primary">Add Creative Agent</a>
+        </div>
+    </div>
+
+    <!-- Default Creative Agent (Always Available) -->
+    <div style="margin-bottom: 2rem;">
+        <h3 style="margin-bottom: 1rem;">Default Creative Agent</h3>
+        <div style="border: 2px solid #34d399; border-radius: 8px; padding: 1rem; background: #d1fae5;">
+            <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div>
+                    <h4 style="margin: 0 0 0.5rem 0; color: #065f46;">AdCP Standard Creative Agent</h4>
+                    <p style="margin: 0 0 0.5rem 0; color: #047857; font-family: monospace; font-size: 0.9rem;">
+                        https://creative.adcontextprotocol.org
+                    </p>
+                    <p style="margin: 0; color: #065f46; font-size: 0.9rem;">
+                        ✅ Always enabled • Priority: 1 • Provides standard IAB and custom formats
+                    </p>
+                </div>
+                <span class="badge" style="background: #34d399; color: #065f46; font-weight: 600;">DEFAULT</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Tenant Creative Agents -->
+    {% if custom_agents|length == 0 %}
+    <div class="empty-state">
+        <h3>No Custom Creative Agents</h3>
+        <div class="empty-state-icon">🎨</div>
+        <p class="empty-state-message">
+            You haven't added any custom creative agents yet. The default AdCP creative agent provides standard formats, but you can add custom agents for proprietary formats or specialized creative services.
+        </p>
+        <div class="empty-state-actions">
+            <a href="{{ url_for('creative_agents.add_creative_agent', tenant_id=tenant_id) }}" class="btn btn-primary btn-large">
+                Add Your First Creative Agent
+            </a>
+        </div>
+        <div style="margin-top: 2rem; padding: 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; max-width: 600px; margin-left: auto; margin-right: auto; text-align: left;">
+            <p style="margin: 0 0 0.5rem 0; font-weight: 600; color: #374151;">💡 Use Cases for Custom Creative Agents:</p>
+            <ul style="margin: 0; padding-left: 1.5rem; color: #6b7280;">
+                <li>Support proprietary ad formats unique to your platform</li>
+                <li>Integrate with specialized creative rendering services</li>
+                <li>Provide custom video or audio format specifications</li>
+                <li>Add support for emerging format standards</li>
+            </ul>
+        </div>
+    </div>
+    {% else %}
+    <h3 style="margin-bottom: 1rem;">Custom Creative Agents</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Agent URL</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Authentication</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for agent in custom_agents %}
+            <tr>
+                <td>
+                    <strong>{{ agent.name }}</strong>
+                </td>
+                <td>
+                    <code style="font-size: 0.85rem;">{{ agent.agent_url }}</code>
+                </td>
+                <td>
+                    <span class="badge badge-secondary">{{ agent.priority }}</span>
+                    <small style="color: #6b7280; display: block; margin-top: 0.25rem;">Lower = Higher Priority</small>
+                </td>
+                <td>
+                    {% if agent.enabled %}
+                    <span class="badge" style="background: #34d399; color: #065f46;">✓ Enabled</span>
+                    {% else %}
+                    <span class="badge badge-secondary">Disabled</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if agent.has_auth %}
+                    <span class="badge" style="background: #fbbf24; color: #78350f;">🔒 {{ agent.auth_type|upper }}</span>
+                    {% else %}
+                    <span class="badge badge-secondary">None</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button onclick="testAgent({{ agent.id }}, '{{ agent.name }}')" class="btn btn-secondary btn-sm">Test</button>
+                        <a href="{{ url_for('creative_agents.edit_creative_agent', tenant_id=tenant_id, agent_id=agent.id) }}" class="btn btn-secondary btn-sm">Edit</a>
+                        <button onclick="deleteAgent({{ agent.id }}, '{{ agent.name }}')" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+<style>
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+
+.empty-state-icon {
+    font-size: 4rem;
+    margin: 2rem 0;
+}
+
+.empty-state-message {
+    font-size: 1.1rem;
+    color: #666;
+    max-width: 600px;
+    margin: 0 auto 2rem;
+    line-height: 1.6;
+}
+
+.empty-state-actions {
+    margin-top: 2rem;
+}
+
+.btn-large {
+    padding: 1rem 2rem;
+    font-size: 1.1rem;
+}
+
+.badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+    background: #e3f2fd;
+    color: #1976d2;
+    border-radius: 4px;
+    margin-right: 0.25rem;
+}
+
+.badge-secondary {
+    background: #f5f5f5;
+    color: #666;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+
+th {
+    text-align: left;
+    padding: 0.75rem;
+    background: #f9fafb;
+    border-bottom: 2px solid #e5e7eb;
+    font-weight: 600;
+    color: #374151;
+}
+
+td {
+    padding: 0.75rem;
+    border-bottom: 1px solid #e5e7eb;
+    vertical-align: top;
+}
+
+tbody tr:hover {
+    background: #f9fafb;
+}
+</style>
+
+<script>
+function testAgent(agentId, agentName) {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+
+    fetch(`{{ script_name }}/tenant/{{ tenant_id }}/creative-agents/${agentId}/test`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        btn.disabled = false;
+        btn.textContent = 'Test';
+
+        if (data.success) {
+            alert(`✅ Connection Successful!\n\nAgent: ${agentName}\nFormats Found: ${data.format_count}\n\nSample Formats:\n${data.sample_formats.join('\n')}`);
+        } else {
+            alert(`❌ Connection Failed\n\n${data.error}`);
+        }
+    })
+    .catch(error => {
+        btn.disabled = false;
+        btn.textContent = 'Test';
+        alert(`❌ Test Failed\n\n${error.message}`);
+    });
+}
+
+function deleteAgent(agentId, agentName) {
+    if (confirm(`Are you sure you want to delete "${agentName}"?\n\nThis will remove access to any custom formats provided by this agent.`)) {
+        fetch(`{{ script_name }}/tenant/{{ tenant_id }}/creative-agents/${agentId}/delete`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (response.ok) {
+                window.location.reload();
+            } else {
+                return response.json().then(err => {
+                    alert(err.error || 'Could not delete creative agent');
+                    return Promise.reject(err);
+                });
+            }
+        })
+        .catch(error => {
+            if (error.message) {
+                alert('Failed to delete creative agent: ' + error.message);
+            }
+        });
+    }
+}
+</script>
+{% endblock %}

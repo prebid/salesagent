@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block title %}{% if agent %}Edit{% else %}Add{% endif %} Creative Agent - {{ tenant_name }} - Sales Agent Admin{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>{% if agent %}Edit{% else %}Add{% endif %} Creative Agent</h2>
+        <a href="{{ url_for('creative_agents.list_creative_agents', tenant_id=tenant_id) }}" class="btn btn-secondary">← Back to Creative Agents</a>
+    </div>
+
+    <form method="POST" action="{% if agent %}{{ url_for('creative_agents.edit_creative_agent', tenant_id=tenant_id, agent_id=agent.id) }}{% else %}{{ url_for('creative_agents.add_creative_agent', tenant_id=tenant_id) }}{% endif %}">
+        <div class="form-section">
+            <h3>Basic Information</h3>
+
+            <div class="form-group">
+                <label for="name">Agent Name <span style="color: #ef4444;">*</span></label>
+                <input type="text" id="name" name="name"
+                       value="{{ agent.name if agent else '' }}"
+                       placeholder="e.g., My Custom Creative Agent"
+                       required>
+                <small>A friendly name to identify this creative agent</small>
+            </div>
+
+            <div class="form-group">
+                <label for="agent_url">Agent URL <span style="color: #ef4444;">*</span></label>
+                <input type="url" id="agent_url" name="agent_url"
+                       value="{{ agent.agent_url if agent else '' }}"
+                       placeholder="https://your-creative-agent.example.com"
+                       required>
+                <small>The base URL of the creative agent (MCP endpoint will be at /mcp/)</small>
+            </div>
+
+            <div class="form-group">
+                <label for="priority">Priority</label>
+                <input type="number" id="priority" name="priority"
+                       value="{{ agent.priority if agent else 10 }}"
+                       min="1" max="100"
+                       placeholder="10">
+                <small>Lower numbers = higher priority. Default is 10. The default AdCP agent has priority 1.</small>
+            </div>
+
+            <div class="checkbox-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="enabled" name="enabled"
+                           {% if not agent or agent.enabled %}checked{% endif %}>
+                    <span class="checkbox-custom"></span>
+                    <span class="checkbox-text">Enable this creative agent</span>
+                </label>
+                <small>When disabled, formats from this agent will not be available</small>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>Authentication (Optional)</h3>
+            <p class="form-section-description">
+                If your creative agent requires authentication, configure the credentials below.
+            </p>
+
+            <div class="form-group">
+                <label for="auth_type">Authentication Type</label>
+                <select id="auth_type" name="auth_type">
+                    <option value="">None</option>
+                    <option value="bearer" {% if agent and agent.auth_type == 'bearer' %}selected{% endif %}>Bearer Token</option>
+                    <option value="api_key" {% if agent and agent.auth_type == 'api_key' %}selected{% endif %}>API Key</option>
+                </select>
+                <small>Select the authentication method required by your creative agent</small>
+            </div>
+
+            <div class="form-group">
+                <label for="auth_credentials">Credentials</label>
+                <input type="password" id="auth_credentials" name="auth_credentials"
+                       value="{{ agent.auth_credentials if agent else '' }}"
+                       placeholder="Enter token or API key">
+                <small>
+                    {% if agent %}
+                    Leave blank to keep existing credentials. Enter a new value to update.
+                    {% else %}
+                    The token or API key for authenticating with the creative agent
+                    {% endif %}
+                </small>
+            </div>
+        </div>
+
+        <div class="form-section" style="background: #f9fafb; padding: 1.5rem; border-radius: 6px;">
+            <h3 style="margin-top: 0;">📖 How Creative Agents Work</h3>
+            <ul style="margin: 0.5rem 0; padding-left: 1.5rem; line-height: 1.8; color: #374151;">
+                <li><strong>Format Discovery:</strong> The sales agent will call your creative agent's <code>list_creative_formats</code> MCP tool to discover available formats</li>
+                <li><strong>Format Details:</strong> Each format includes specifications like dimensions, duration, file requirements, etc.</li>
+                <li><strong>Priority System:</strong> If multiple agents provide the same format_id, the agent with lower priority number wins</li>
+                <li><strong>Caching:</strong> Format definitions are cached to improve performance</li>
+                <li><strong>Testing:</strong> After saving, you can test the connection to ensure your agent is reachable</li>
+            </ul>
+        </div>
+
+        <div class="button-group">
+            <button type="submit" class="btn btn-primary">{% if agent %}Update{% else %}Add{% endif %} Creative Agent</button>
+            <a href="{{ url_for('creative_agents.list_creative_agents', tenant_id=tenant_id) }}" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<style>
+.form-section {
+    margin-bottom: 2rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.form-section:last-of-type {
+    border-bottom: none;
+}
+
+.form-section h3 {
+    margin: 0 0 1rem 0;
+    color: #374151;
+}
+
+.form-section-description {
+    margin: 0 0 1.5rem 0;
+    color: #6b7280;
+}
+
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+    color: #374151;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 1rem;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.form-group small {
+    display: block;
+    margin-top: 0.25rem;
+    color: #6b7280;
+    font-size: 0.875rem;
+}
+
+.checkbox-group {
+    margin-bottom: 1.5rem;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: start;
+    gap: 0.75rem;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+}
+
+.checkbox-custom {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #d1d5db;
+    border-radius: 4px;
+    display: inline-block;
+    flex-shrink: 0;
+    position: relative;
+}
+
+.checkbox-label input[type="checkbox"]:checked + .checkbox-custom {
+    background: #3b82f6;
+    border-color: #3b82f6;
+}
+
+.checkbox-label input[type="checkbox"]:checked + .checkbox-custom::after {
+    content: '✓';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    font-weight: bold;
+}
+
+.checkbox-label input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+}
+
+.checkbox-text {
+    font-weight: 500;
+    color: #374151;
+}
+
+.button-group {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 2rem;
+}
+</style>
+{% endblock %}

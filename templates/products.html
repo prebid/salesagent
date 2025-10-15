@@ -62,7 +62,10 @@
                 <td>{{ product.description or '-' }}</td>
                 <td>
                     {% for format in product.formats %}
-                    <span class="badge">{{ format }}</span>
+                        {# Format is now resolved with name field from creative agent #}
+                        <span class="badge" title="{{ format.format_id }} ({{ format.agent_url }})">
+                            {{ format.name }}
+                        </span>
                     {% endfor %}
                 </td>
                 <td>

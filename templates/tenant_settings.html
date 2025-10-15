@@ -1634,6 +1634,29 @@ REJECT - Creative cannot be approved:
                     </div>
                 </form>
             </div>
+
+            <div class="form-section">
+                <h3>Creative Agents</h3>
+                <p class="form-section-description">
+                    Manage creative agents that provide ad format definitions and rendering capabilities. The default AdCP creative agent is always available.
+                </p>
+
+                <div style="margin-bottom: 1rem;">
+                    <a href="{{ url_for('creative_agents.list_creative_agents', tenant_id=tenant.tenant_id) }}"
+                       class="btn btn-primary">
+                        Manage Creative Agents
+                    </a>
+                </div>
+
+                <div style="padding: 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;">
+                    <p style="margin: 0; color: #6b7280; font-size: 0.875rem;">
+                        💡 <strong>What are Creative Agents?</strong><br>
+                        Creative agents are external services that define ad formats (like "Display 300x250" or "Video Pre-Roll 30s")
+                        and handle creative rendering. You can add custom creative agents to support proprietary formats or
+                        integrate with specialized creative services.
+                    </p>
+                </div>
+            </div>
         </div>
 
         <!-- API Settings -->

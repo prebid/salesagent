@@ -15,6 +15,8 @@ from src.admin.blueprints.api import api_bp
 from src.admin.blueprints.auth import auth_bp, init_oauth
 from src.admin.blueprints.authorized_properties import authorized_properties_bp
 from src.admin.blueprints.core import core_bp
+from src.admin.blueprints.creative_agents import creative_agents_bp
+
 # creatives_bp removed - creative_formats table dropped in migration f2addf453200
 from src.admin.blueprints.format_search import bp as format_search_bp
 from src.admin.blueprints.gam import gam_bp
@@ -263,6 +265,7 @@ def create_app(config=None):
     app.register_blueprint(settings_bp, url_prefix="/tenant/<tenant_id>/settings")
     app.register_blueprint(adapters_bp, url_prefix="/tenant/<tenant_id>")
     app.register_blueprint(authorized_properties_bp, url_prefix="/tenant")  # Tenant-specific routes
+    app.register_blueprint(creative_agents_bp, url_prefix="/tenant/<tenant_id>/creative-agents")
     app.register_blueprint(inventory_bp)  # Has its own internal routing
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(format_search_bp)  # Format search API (/api/formats)
