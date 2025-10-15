@@ -323,7 +323,13 @@ def view_gam_line_item(tenant_id, line_item_id):
                 adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
 
                 if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
-                    return render_template("error.html", error="GAM not configured for this tenant"), 400
+                    return (
+                        render_template(
+                            "error.html",
+                            error="Please connect your GAM account first. Go to Ad Server settings to configure GAM.",
+                        ),
+                        400,
+                    )
 
                 # Initialize GAM reporting service
                 reporting_service = GAMReportingService(
@@ -415,7 +421,12 @@ def get_gam_custom_targeting_keys(tenant_id):
             adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
 
             if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
-                return jsonify({"error": "GAM not configured for this tenant"}), 400
+                return (
+                    jsonify(
+                        {"error": "Please connect your GAM account first. Go to Ad Server settings to configure GAM."}
+                    ),
+                    400,
+                )
 
             # Create OAuth2 client
             from googleads import oauth2
@@ -463,7 +474,15 @@ def sync_gam_inventory(tenant_id):
             adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
 
             if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
-                return jsonify({"success": False, "error": "GAM not configured for this tenant"}), 400
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Please connect your GAM account before trying to sync inventory. Go to Ad Server settings to configure GAM.",
+                        }
+                    ),
+                    400,
+                )
 
             # Create OAuth2 client
             from googleads import oauth2
@@ -538,7 +557,14 @@ def get_gam_line_item_api(tenant_id, line_item_id):
                 adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
 
                 if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
-                    return jsonify({"error": "GAM not configured for this tenant"}), 400
+                    return (
+                        jsonify(
+                            {
+                                "error": "Please connect your GAM account first. Go to Ad Server settings to configure GAM."
+                            }
+                        ),
+                        400,
+                    )
 
                 # Initialize GAM reporting service
                 reporting_service = GAMReportingService(

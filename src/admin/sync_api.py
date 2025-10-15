@@ -465,7 +465,10 @@ def sync_tenant_orders(tenant_id):
         adapter_config = db_session.scalars(stmt).first()
 
         if not adapter_config or not adapter_config.gam_network_code:
-            return jsonify({"error": "GAM not configured for tenant"}), 400
+            return (
+                jsonify({"error": "Please connect your GAM account first. Go to Ad Server settings to configure GAM."}),
+                400,
+            )
 
         # Create sync job
         sync_id = f"orders_sync_{tenant_id}_{int(datetime.now().timestamp())}"

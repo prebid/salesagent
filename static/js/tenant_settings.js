@@ -133,7 +133,7 @@ function testSlack() {
         if (data.success) {
             alert('✅ Test notification sent successfully!');
         } else {
-            alert('❌ Test failed: ' + data.message);
+            alert('❌ Test failed: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -160,7 +160,7 @@ function saveAdapter() {
             alert('Adapter settings saved successfully!');
             location.reload();
         } else {
-            alert('Error: ' + data.message);
+            alert('Error: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -239,7 +239,7 @@ function detectGAMNetwork() {
             document.getElementById('gam_network_code').value = data.network_code;
             alert(`✅ Network code detected: ${data.network_code}`);
         } else {
-            alert('❌ ' + data.message);
+            alert('❌ ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -263,7 +263,7 @@ function saveBusinessRules() {
         if (data.success) {
             alert('Business rules saved successfully!');
         } else {
-            alert('Error: ' + data.message);
+            alert('Error: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -286,7 +286,7 @@ function configureGAM() {
             alert('✅ GAM configuration saved successfully!');
             location.reload();
         } else {
-            alert('❌ Error: ' + data.message);
+            alert('❌ Error: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -318,7 +318,7 @@ function testGAMConnection() {
         if (data.success) {
             alert('✅ Connection successful!');
         } else {
-            alert('❌ Connection failed: ' + data.message);
+            alert('❌ Connection failed: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -350,7 +350,7 @@ function syncGAMInventory() {
             alert(`✅ Synced ${data.count} ad units successfully!`);
             location.reload();
         } else {
-            alert('❌ Sync failed: ' + data.message);
+            alert('❌ Sync failed: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -425,7 +425,7 @@ function deletePrincipal(principalId) {
             alert('Principal deleted successfully');
             location.reload();
         } else {
-            alert('Error: ' + data.message);
+            alert('Error: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -455,7 +455,7 @@ function testSignalsEndpoint() {
         if (data.success) {
             alert('✅ Connection successful! Found ' + data.signal_count + ' signals');
         } else {
-            alert('❌ Connection failed: ' + data.message);
+            alert('❌ Connection failed: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -487,7 +487,7 @@ function updatePrincipal(principalId) {
         if (data.success) {
             alert('Principal updated successfully');
         } else {
-            alert('Error: ' + data.message);
+            alert('Error: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -523,7 +523,7 @@ function fetchGAMAdvertisers() {
         if (data.success) {
             displayGAMAdvertisers(data.advertisers);
         } else {
-            alert('❌ Failed to fetch advertisers: ' + data.message);
+            alert('❌ Failed to fetch advertisers: ' + (data.error || data.message || 'Unknown error'));
         }
     })
     .catch(error => {
