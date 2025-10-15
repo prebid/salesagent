@@ -62,6 +62,8 @@ class SchemaSyncChecker:
             "/schemas/v1/media-buy/get-products-request.json",
             "/schemas/v1/core/creative-asset.json",
             "/schemas/v1/core/targeting.json",
+            "/schemas/v1/media-buy/package-request.json",  # Critical for format_ids structure
+            "/schemas/v1/core/format-id.json",  # Critical for format_ids validation
         ]
 
         # Endpoints we actually implement (only validate schemas for these)
@@ -111,8 +113,10 @@ class SchemaSyncChecker:
                 "/schemas/v1/core/measurement.json",
                 "/schemas/v1/core/creative-policy.json",
                 "/schemas/v1/core/format.json",
+                "/schemas/v1/core/format-id.json",  # Added per PR #123
                 "/schemas/v1/core/frequency-cap.json",
                 "/schemas/v1/core/package.json",
+                "/schemas/v1/media-buy/package-request.json",  # Added per PR #123
                 "/schemas/v1/core/media-buy.json",
                 "/schemas/v1/core/error.json",
                 "/schemas/v1/core/response.json",
@@ -238,6 +242,46 @@ class SchemaSyncChecker:
         # Normalize and hash the schema
         normalized = json.dumps(schema_data, sort_keys=True)
         return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+    async def validate_format_ids_structure(self) -> bool:
+        """Validate that package-request.json uses FormatId objects, not strings.
+
+        This prevents the issue where cached schemas had format_ids as strings
+        instead of FormatId objects with $ref to format-id.json.
+        """
+        print("🔍 Validating format_ids structure in package-request.json...")
+
+        try:
+            schema_ref = "/schemas/v1/media-buy/package-request.json"
+            cached_schema = self._load_cached_schema(schema_ref)
+
+            if not cached_schema:
+                self.log_error(f"Missing cached schema: {schema_ref}")
+                return False
+
+            # Check if format_ids uses $ref to format-id.json
+            format_ids_def = cached_schema.get("properties", {}).get("format_ids", {})
+            items_def = format_ids_def.get("items", {})
+
+            if "$ref" in items_def:
+                ref_value = items_def["$ref"]
+                if ref_value == "/schemas/v1/core/format-id.json":
+                    self.log_success("✅ package-request.json correctly uses FormatId objects (not strings)")
+                    return True
+                else:
+                    self.log_error(f"format_ids has unexpected $ref: {ref_value} (expected /schemas/v1/core/format-id.json)")
+                    return False
+            elif items_def.get("type") == "string":
+                self.log_error("❌ format_ids uses strings instead of FormatId objects! Schema is outdated.")
+                self.log_error("   Run: uv run python scripts/check_schema_sync.py --update")
+                return False
+            else:
+                self.log_warning(f"format_ids has unexpected structure: {items_def}")
+                return False
+
+        except Exception as e:
+            self.log_error(f"Failed to validate format_ids structure: {e}")
+            return False
 
     async def check_critical_schemas(self) -> bool:
         """Check if critical schemas are in sync."""
@@ -516,6 +560,7 @@ class SchemaSyncChecker:
         print("📡 Comparing local cached schemas with live schemas from adcontextprotocol.org\n")
 
         checks = [
+            ("Format IDs Structure Validation", self.validate_format_ids_structure),
             ("Schema Index", self.check_schema_index),
             ("Critical Schemas", self.check_critical_schemas),
             ("All Schemas in Index", self.check_all_schemas_in_index),

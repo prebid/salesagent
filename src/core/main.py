@@ -3736,9 +3736,12 @@ def _create_media_buy_impl(
         with get_db_session() as session:
             # Get products from database
             from sqlalchemy.orm import selectinload
-            stmt = select(ProductModel).where(
-                ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids)
-            ).options(selectinload(ProductModel.pricing_options))
+
+            stmt = (
+                select(ProductModel)
+                .where(ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids))
+                .options(selectinload(ProductModel.pricing_options))
+            )
             products = session.scalars(stmt).all()
 
             # Build product lookup map
@@ -4377,6 +4380,24 @@ def _create_media_buy_impl(
                 package_dict = package.model_dump(exclude_none=True, mode="python")
             else:
                 package_dict = package
+
+            # Convert format_ids (request field) to format_ids_to_provide (response field)
+            # Per AdCP spec: request has format_ids, response has format_ids_to_provide (both use FormatId objects)
+            # Supports backward compatibility with string format IDs from older clients
+            if "format_ids" in package_dict and package_dict["format_ids"]:
+                format_ids_to_provide = []
+                for fmt_id in package_dict["format_ids"]:
+                    if isinstance(fmt_id, str):
+                        # Convert string format ID to FormatId object
+                        format_ids_to_provide.append(
+                            {"agent_url": "https://creative.adcontextprotocol.org", "id": fmt_id}
+                        )
+                    elif isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id:
+                        # Already a FormatId object
+                        format_ids_to_provide.append(fmt_id)
+                package_dict["format_ids_to_provide"] = format_ids_to_provide
+                # Remove format_ids from response (only format_ids_to_provide should be in response)
+                del package_dict["format_ids"]
 
             # Override/add response-specific fields (package_id and status are set by server)
             response_package = {
@@ -6059,7 +6080,11 @@ def get_product_catalog() -> list[Product]:
     tenant = get_current_tenant()
 
     with get_db_session() as session:
-        stmt = select(ModelProduct).filter_by(tenant_id=tenant["tenant_id"]).options(selectinload(ModelProduct.pricing_options))
+        stmt = (
+            select(ModelProduct)
+            .filter_by(tenant_id=tenant["tenant_id"])
+            .options(selectinload(ModelProduct.pricing_options))
+        )
         products = session.scalars(stmt).all()
 
         loaded_products = []

@@ -67,8 +67,10 @@ class TestGetProductsRequestAdapter:
         # Verify fields preserved
         assert reconstructed.promoted_offering == "https://example.com"
         assert reconstructed.brief == "Test brief"
-        # Generated schema may expand filters dict with all fields
-        assert reconstructed.filters["format_ids"] == ["display_300x250"]
+        # After AdCP PR #123: format_ids are FormatId objects, not strings
+        assert len(reconstructed.filters["format_ids"]) == 1
+        assert reconstructed.filters["format_ids"][0]["id"] == "display_300x250"
+        assert reconstructed.filters["format_ids"][0]["agent_url"]
 
     def test_adcp_compliant_dump(self):
         """Adapter can dump as AdCP-compliant dict."""

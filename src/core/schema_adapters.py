@@ -98,6 +98,23 @@ class GetProductsRequest(BaseModel):
         Returns:
             Generated schema instance that can be validated against AdCP JSON Schema
         """
+        # Convert filters to match generated schema format
+        # Generated schema expects format_ids as list[FormatId] objects, not strings
+        filters_dict = None
+        if self.filters:
+            # Handle both dict and Pydantic model cases
+            if isinstance(self.filters, dict):
+                filters_dict = self.filters.copy()
+            else:
+                filters_dict = self.filters.model_dump(exclude_none=True)
+
+            # Convert format_ids from strings to FormatId objects if present
+            if "format_ids" in filters_dict and filters_dict["format_ids"]:
+                filters_dict["format_ids"] = [
+                    {"agent_url": "https://creatives.adcontextprotocol.org", "id": fmt_id}
+                    for fmt_id in filters_dict["format_ids"]
+                ]
+
         # Determine which variant to use
         variant: _GeneratedGetProductsRequest1 | _GeneratedGetProductsRequest2
         if self.promoted_offering and not self.brand_manifest:
@@ -105,7 +122,7 @@ class GetProductsRequest(BaseModel):
             variant = _GeneratedGetProductsRequest1(
                 promoted_offering=self.promoted_offering,
                 brief=self.brief or None,
-                filters=self.filters,  # type: ignore[arg-type]
+                filters=filters_dict,  # type: ignore[arg-type]
             )
         elif self.brand_manifest:
             # Use variant 2 (requires brand_manifest)
@@ -113,7 +130,7 @@ class GetProductsRequest(BaseModel):
                 promoted_offering=self.promoted_offering,
                 brand_manifest=self.brand_manifest,  # type: ignore[arg-type]
                 brief=self.brief or None,
-                filters=self.filters,  # type: ignore[arg-type]
+                filters=filters_dict,  # type: ignore[arg-type]
             )
         else:
             # Fallback - shouldn't happen due to validator
