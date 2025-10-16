@@ -965,7 +965,8 @@ def delete_product(tenant_id, product_id):
                         400,
                     )
 
-            # Delete the product
+            # Delete the product and related pricing options
+            # Cascade will handle pricing_options deletion
             db_session.delete(product)
             db_session.commit()
 
@@ -975,11 +976,25 @@ def delete_product(tenant_id, product_id):
 
     except Exception as e:
         logger.error(f"Error deleting product {product_id}: {e}", exc_info=True)
-        # Sanitize error messages to prevent information leakage
+
+        # Rollback on any error
+        try:
+            db_session.rollback()
+        except:
+            pass
+
+        # More specific error handling
         error_message = str(e)
+
+        # Check for common error types
+        if "ForeignKeyViolation" in error_message or "foreign key constraint" in error_message.lower():
+            logger.error(f"Foreign key constraint violation when deleting product {product_id}")
+            return jsonify({"error": "Cannot delete product - it is referenced by other records"}), 400
+
         if "ValidationError" in error_message or "pattern" in error_message.lower():
             logger.warning(f"Product validation error for {product_id}: {error_message}")
             return jsonify({"error": "Product data validation failed"}), 400
 
+        # Generic error
         logger.error(f"Product deletion failed for {product_id}: {error_message}")
-        return jsonify({"error": "Failed to delete product. Please contact support."}), 500
+        return jsonify({"error": f"Failed to delete product: {error_message}"}), 500
