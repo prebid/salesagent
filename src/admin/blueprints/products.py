@@ -780,6 +780,9 @@ def edit_product(tenant_id, product_id):
 
                 # Parse pricing options from form FIRST
                 pricing_options_data = parse_pricing_options_from_form(form_data)
+                logger.info(
+                    f"[DEBUG] Parsed {len(pricing_options_data) if pricing_options_data else 0} pricing options: {pricing_options_data}"
+                )
 
                 # CRITICAL: Products MUST have at least one pricing option
                 if not pricing_options_data or len(pricing_options_data) == 0:
