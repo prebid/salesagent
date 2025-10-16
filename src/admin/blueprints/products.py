@@ -321,10 +321,11 @@ def list_products(tenant_id):
                 )
 
                 # Debug: Log raw formats data
-                if formats_data:
-                    logger.info(
-                        f"[DEBUG] Product {product.product_id} formats_data: {formats_data[:2]}"
-                    )  # First 2 for brevity
+                logger.info(f"[DEBUG] Product {product.product_id} raw product.formats from DB: {product.formats}")
+                logger.info(f"[DEBUG] Product {product.product_id} formats_data after parsing: {formats_data}")
+                logger.info(
+                    f"[DEBUG] Product {product.product_id} formats_data type: {type(formats_data)}, len: {len(formats_data)}"
+                )
 
                 # Resolve format names from creative agent registry
                 resolved_formats = []
@@ -421,6 +422,11 @@ def list_products(tenant_id):
                         )
 
                 logger.info(f"[DEBUG] Product {product.product_id} resolved {len(resolved_formats)} formats")
+                if formats_data and not resolved_formats:
+                    logger.error(
+                        f"[DEBUG] Product {product.product_id} ERROR: Had {len(formats_data)} formats but resolved 0! "
+                        f"This means format resolution failed."
+                    )
 
                 product_dict = {
                     "product_id": product.product_id,
@@ -846,6 +852,10 @@ def edit_product(tenant_id, product_id):
                 pricing_fields = {k: v for k, v in form_data.items() if "pricing" in k or "rate_" in k or "floor_" in k}
                 logger.info(f"[DEBUG] Pricing form fields for product {product_id}: {pricing_fields}")
 
+                # Debug: Log ALL form keys to diagnose format submission
+                logger.info(f"[DEBUG] ALL form keys: {list(request.form.keys())}")
+                logger.info(f"[DEBUG] Form data dict keys: {list(form_data.keys())}")
+
                 # Update basic fields
                 product.name = form_data.get("name", product.name)
                 product.description = form_data.get("description", product.description)
@@ -853,6 +863,8 @@ def edit_product(tenant_id, product_id):
                 # Parse formats - expecting multiple checkbox values in format "agent_url|format_id"
                 formats_raw = request.form.getlist("formats")
                 logger.info(f"[DEBUG] Edit product {product_id}: formats_raw from form = {formats_raw}")
+                logger.info(f"[DEBUG] formats_raw length: {len(formats_raw)}")
+                logger.info(f"[DEBUG] formats_raw bool: {bool(formats_raw)}")
                 if formats_raw:
                     # Convert from "agent_url|format_id" to FormatId dict structure
                     formats = []
@@ -1018,8 +1030,16 @@ def edit_product(tenant_id, product_id):
                 logger.info(f"[DEBUG] About to commit product {product_id}")
                 logger.info(f"[DEBUG] product.formats = {product.formats}")
                 logger.info(f"[DEBUG] product.formats type = {type(product.formats)}")
+                logger.info(f"[DEBUG] SQLAlchemy dirty objects: {db_session.dirty}")
+                logger.info(
+                    f"[DEBUG] SQLAlchemy modified attributes: {[attr for obj in db_session.dirty for attr in db_session.get_attribute_history(obj, 'formats').added]}"
+                )
 
                 db_session.commit()
+
+                # Debug: Verify formats after commit by re-querying
+                db_session.refresh(product)
+                logger.info(f"[DEBUG] After commit - product.formats from DB: {product.formats}")
 
                 flash(f"Product '{product.name}' updated successfully", "success")
                 return redirect(url_for("products.list_products", tenant_id=tenant_id))
