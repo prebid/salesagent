@@ -697,6 +697,10 @@ def edit_product(tenant_id, product_id):
                 # Sanitize form data
                 form_data = sanitize_form_data(request.form.to_dict())
 
+                # Debug: Log pricing-related form fields
+                pricing_fields = {k: v for k, v in form_data.items() if "pricing" in k or "rate_" in k or "floor_" in k}
+                logger.info(f"[DEBUG] Pricing form fields for product {product_id}: {pricing_fields}")
+
                 # Update basic fields
                 product.name = form_data.get("name", product.name)
                 product.description = form_data.get("description", product.description)
@@ -774,17 +778,18 @@ def edit_product(tenant_id, product_id):
                 # Note: min_spend is now stored in pricing_options[].min_spend_per_package
                 from decimal import Decimal
 
-                # Delete existing pricing options and recreate from form
-                db_session.query(PricingOption).filter_by(  # legacy-ok
-                    tenant_id=tenant_id, product_id=product_id
-                ).delete()
-
+                # Parse pricing options from form FIRST
                 pricing_options_data = parse_pricing_options_from_form(form_data)
 
                 # CRITICAL: Products MUST have at least one pricing option
                 if not pricing_options_data or len(pricing_options_data) == 0:
                     flash("Product must have at least one pricing option", "error")
                     return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+                # Only delete existing pricing options after validating new ones exist
+                db_session.query(PricingOption).filter_by(  # legacy-ok
+                    tenant_id=tenant_id, product_id=product_id
+                ).delete()
 
                 if pricing_options_data:
                     logger.info(
