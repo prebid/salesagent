@@ -4,6 +4,7 @@ import logging
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
+from sqlalchemy.orm import attributes
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
@@ -66,6 +67,7 @@ def mock_config(tenant_id, product_id, **kwargs):
                 config["predictable_ids"] = "predictable_ids" in request.form
 
                 product.implementation_config = config
+                attributes.flag_modified(product, "implementation_config")
                 session.commit()
 
                 flash("Mock adapter configuration saved successfully!", "success")
