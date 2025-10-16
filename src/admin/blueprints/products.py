@@ -802,13 +802,23 @@ def edit_product(tenant_id, product_id):
                         return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
                     product.formats = formats
+                    # Flag JSONB column as modified so SQLAlchemy generates UPDATE
+                    from sqlalchemy.orm import attributes
+
+                    attributes.flag_modified(product, "formats")
 
                 # Parse countries - from multi-select
                 countries_list = request.form.getlist("countries")
                 if countries_list and "ALL" not in countries_list:
                     product.countries = countries_list
+                    from sqlalchemy.orm import attributes
+
+                    attributes.flag_modified(product, "countries")
                 else:
                     product.countries = None
+                    from sqlalchemy.orm import attributes
+
+                    attributes.flag_modified(product, "countries")
 
                 # Get pricing based on line item type (GAM form) or delivery type (other adapters)
                 line_item_type = form_data.get("line_item_type")
