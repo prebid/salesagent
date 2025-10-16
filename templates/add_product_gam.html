@@ -87,8 +87,15 @@
         <p style="color: #666; margin-bottom: 1.5rem;">Select ad units first, then choose matching creative formats</p>
 
         <!-- Message shown before ad units are selected -->
-        <div id="formats-placeholder" style="padding: 2rem; background: #f8f9fa; border: 2px dashed #ddd; border-radius: 4px; text-align: center; color: #666;">
+        <div id="formats-placeholder" style="{% if product and product.formats %}display: none;{% else %}padding: 2rem; background: #f8f9fa; border: 2px dashed #ddd; border-radius: 4px; text-align: center; color: #666;{% endif %}">
             <p style="margin: 0; font-size: 1.1rem;">↑ Select ad units above to see compatible creative formats</p>
+        </div>
+
+        <!-- Search box for formats (shown when formats are visible) -->
+        <div id="format-search-box" style="display: {% if product and product.formats %}block{% else %}none{% endif %}; margin-bottom: 1rem;">
+            <input type="text" id="format-search-input" placeholder="Search formats by name, type, or size..."
+                   style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;"
+                   onkeyup="filterGAMFormats()">
         </div>
 
         <!-- Size-type combos being searched (shown after ad units selected) -->
@@ -97,10 +104,15 @@
             <div id="search-target-list" style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
         </div>
 
-        <!-- Formats container (hidden until ad units selected) -->
-        <div id="formats-container" style="display: none; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+        <!-- Formats container (hidden until ad units selected, or shown if editing product with formats) -->
+        <div id="formats-container" style="display: {% if product and product.formats %}grid{% else %}none{% endif %}; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 1rem; max-height: 500px; overflow-y: auto; padding: 1rem; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
             {% for format in formats %}
-            <label class="format-card" data-format-id="{{ format.format_id }}" data-dimensions="{{ format.dimensions or '' }}" data-type="{{ format.type }}" style="border: 2px solid #ddd; border-radius: 4px; padding: 1rem; cursor: pointer; transition: all 0.2s;">
+            <label class="format-card"
+                   data-format-id="{{ format.format_id }}"
+                   data-dimensions="{{ format.dimensions or '' }}"
+                   data-type="{{ format.type }}"
+                   data-search="{{ format.name|lower }} {{ format.type|lower }} {{ format.dimensions or '' }}"
+                   style="border: 2px solid #ddd; border-radius: 4px; padding: 1rem; cursor: pointer; transition: all 0.2s; background: white;">
                 <input type="checkbox" name="formats" value="{{ format.format_id }}" style="margin-right: 0.5rem;">
                 <strong>{{ format.name }}</strong><br>
                 <small style="color: #666;">
@@ -113,9 +125,9 @@
         </div>
 
         <!-- Format selection summary -->
-        <div id="format-summary" style="display: none; padding: 1rem; background: #d4edda; border: 1px solid #28a745; border-radius: 4px; margin-top: 1rem;">
+        <div id="format-summary" style="display: {% if product and product.formats %}block{% else %}none{% endif %}; padding: 1rem; background: #d4edda; border: 1px solid #28a745; border-radius: 4px; margin-top: 1rem;">
             <strong style="color: #155724;">✓ Selected:</strong>
-            <span id="format-count" style="font-weight: 600;">0</span> format(s)
+            <span id="format-count" style="font-weight: 600;">{% if product and product.formats %}{{ product.formats|length }}{% else %}0{% endif %}</span> format(s)
         </div>
 
         <!-- Section 4: Pricing Options (AdCP PR #88) -->
@@ -368,15 +380,18 @@ async function autoSuggestFormats(selectedCheckboxes) {
     const container = document.getElementById('formats-container');
     const searchTargets = document.getElementById('format-search-targets');
     const searchTargetList = document.getElementById('search-target-list');
+    const searchBox = document.getElementById('format-search-box');
 
     if (adUnitConstraints.length === 0) {
         placeholder.style.display = 'block';
         container.style.display = 'none';
         searchTargets.style.display = 'none';
+        searchBox.style.display = 'none';
         return;
     }
 
     placeholder.style.display = 'none';
+    searchBox.style.display = 'block';
 
     // Helper: Check if format fits within any ad unit constraint
     function formatFitsConstraint(formatWidth, formatHeight, formatType) {
@@ -691,6 +706,37 @@ function removePricingOption(index) {
     if (element) {
         element.remove();
     }
+}
+
+// Filter formats based on search input
+function filterGAMFormats() {
+    const searchInput = document.getElementById('format-search-input');
+    const searchTerm = searchInput.value.toLowerCase();
+    const formatCards = document.querySelectorAll('.format-card');
+    let visibleCount = 0;
+
+    formatCards.forEach(card => {
+        const formatName = card.querySelector('strong').textContent.toLowerCase();
+        const formatType = card.getAttribute('data-type').toLowerCase();
+        const formatDimensions = card.getAttribute('data-dimensions') || '';
+
+        const matches = formatName.includes(searchTerm) ||
+                       formatType.includes(searchTerm) ||
+                       formatDimensions.includes(searchTerm);
+
+        if (matches) {
+            card.style.display = 'block';
+            visibleCount++;
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    // Update format count
+    const checkedCount = Array.from(document.querySelectorAll('.format-card input[type="checkbox"]:checked'))
+        .filter(cb => cb.closest('.format-card').style.display !== 'none')
+        .length;
+    document.getElementById('format-count').textContent = checkedCount;
 }
 </script>
 

@@ -925,7 +925,7 @@ def edit_product(tenant_id, product_id):
                     tenant_id=tenant_id,
                     product=product_dict,
                     inventory_synced=inventory_synced,
-                    formats=get_creative_formats(),
+                    formats=get_creative_formats(tenant_id=tenant_id),
                     currencies=currencies,
                 )
             else:

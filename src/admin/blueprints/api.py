@@ -20,6 +20,55 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__)
 
 
+@api_bp.route("/formats/list", methods=["GET"])
+def list_formats():
+    """List all available creative formats from registered creative agents.
+
+    Query params:
+        tenant_id: Optional tenant ID for tenant-specific formats
+
+    Returns:
+        JSON with format list grouped by agent URL
+    """
+    from src.core.format_resolver import list_available_formats
+
+    tenant_id = request.args.get("tenant_id")
+
+    try:
+        # Get all formats from creative agent registry
+        formats = list_available_formats(tenant_id=tenant_id)
+
+        # Group formats by agent URL for frontend compatibility
+        agents = {}
+        for fmt in formats:
+            agent_url = fmt.agent_url
+            if agent_url not in agents:
+                agents[agent_url] = []
+
+            # Convert to dict for JSON serialization
+            format_dict = {
+                "format_id": fmt.format_id,
+                "name": fmt.name,
+                "type": fmt.type,
+                "category": fmt.category,
+                "description": fmt.description,
+                "iab_specification": fmt.iab_specification,
+            }
+
+            # Add dimensions if available
+            dimensions = fmt.get_primary_dimensions()
+            if dimensions:
+                width, height = dimensions
+                format_dict["dimensions"] = f"{width}x{height}"
+
+            agents[agent_url].append(format_dict)
+
+        return jsonify({"agents": agents, "total_formats": len(formats)})
+    except Exception as e:
+        logger.error(f"Error listing formats: {e}", exc_info=True)
+        return jsonify({"error": str(e), "agents": {}}), 500
+
+
 @api_bp.route("/health", methods=["GET"])
 def api_health():
     """API health check endpoint."""
