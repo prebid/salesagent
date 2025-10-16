@@ -22,6 +22,32 @@ logger = logging.getLogger(__name__)
 products_bp = Blueprint("products", __name__)
 
 
+def _format_id_to_display_name(format_id: str) -> str:
+    """Convert a format_id to a friendly display name when format lookup fails.
+
+    Examples:
+        "leaderboard_728x90" → "Leaderboard (728x90)"
+        "rectangle_300x250" → "Rectangle (300x250)"
+        "display_300x250" → "Display (300x250)"
+        "video_instream" → "Video Instream"
+        "native_card" → "Native Card"
+    """
+    import re
+
+    # Extract dimensions if present
+    size_match = re.search(r"(\d+)x(\d+)", format_id)
+
+    # Remove dimensions and underscores, convert to title case
+    base_name = re.sub(r"_?\d+x\d+", "", format_id)
+    base_name = base_name.replace("_", " ").title()
+
+    # Add dimensions back if found
+    if size_match:
+        return f"{base_name} ({size_match.group(0)})"
+    else:
+        return base_name
+
+
 def get_creative_formats(
     tenant_id: str | None = None,
     max_width: int | None = None,
@@ -351,12 +377,44 @@ def list_products(tenant_id):
                                 {"format_id": format_id, "agent_url": agent_url, "name": format_obj.name}
                             )
                         else:
-                            # No agent_url - use format_id as name (legacy format)
-                            resolved_formats.append({"format_id": format_id, "agent_url": None, "name": format_id})
+                            # No agent_url - try to find format in registry by format_id
+                            # This handles legacy formats that don't have agent_url stored
+                            from src.core.format_resolver import list_available_formats
+
+                            all_formats = list_available_formats(tenant_id=tenant_id)
+                            matching_format = None
+                            for fmt in all_formats:
+                                if fmt.format_id == format_id:
+                                    matching_format = fmt
+                                    break
+
+                            if matching_format:
+                                resolved_formats.append(
+                                    {
+                                        "format_id": format_id,
+                                        "agent_url": matching_format.agent_url,
+                                        "name": matching_format.name,
+                                    }
+                                )
+                            else:
+                                # Format not found in registry - generate friendly name from format_id
+                                resolved_formats.append(
+                                    {
+                                        "format_id": format_id,
+                                        "agent_url": None,
+                                        "name": _format_id_to_display_name(format_id),
+                                    }
+                                )
                     except Exception as e:
                         logger.warning(f"Could not resolve format {format_id} from {agent_url}: {e}")
-                        # Use format_id as name if resolution fails
-                        resolved_formats.append({"format_id": format_id, "agent_url": agent_url, "name": format_id})
+                        # Use friendly name as fallback
+                        resolved_formats.append(
+                            {
+                                "format_id": format_id,
+                                "agent_url": agent_url,
+                                "name": _format_id_to_display_name(format_id),
+                            }
+                        )
 
                 logger.info(f"[DEBUG] Product {product.product_id} resolved {len(resolved_formats)} formats")
 
@@ -1032,7 +1090,9 @@ def edit_product(tenant_id, product_id):
                 # Build set of selected format IDs for template checking
                 # Use composite key (agent_url, format_id) tuples per AdCP spec (same as main.py)
                 selected_format_ids = set()
-                logger.info(f"[DEBUG] Building selected_format_ids from product_dict['formats']: {product_dict['formats']}")
+                logger.info(
+                    f"[DEBUG] Building selected_format_ids from product_dict['formats']: {product_dict['formats']}"
+                )
                 for fmt in product_dict["formats"]:
                     agent_url = None
                     format_id = None
