@@ -16,7 +16,7 @@
     </div>
     {% endif %}
 
-    <form id="product-form" method="POST">
+    <form id="product-form" method="POST" onsubmit="debugFormSubmission(event)">
         <!-- Section 1: Product Basics -->
         <h3 style="margin-top: 0; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Product Information</h3>
         <p style="color: #666; margin-bottom: 1.5rem;">Basic product details that buyers will see</p>
@@ -474,7 +474,6 @@ async function autoSuggestFormats(selectedCheckboxes) {
                 // This format fits - show it
                 matchingCount++;
                 card.style.display = 'block';
-                checkbox.disabled = false;
 
                 // Auto-check if not already checked
                 if (!checkbox.checked) {
@@ -489,16 +488,19 @@ async function autoSuggestFormats(selectedCheckboxes) {
                     }, 2000);
                 }
             } else {
-                // This format doesn't fit - hide it completely
+                // This format doesn't fit - hide it but preserve checked state
+                // User might have selected it deliberately, so don't uncheck it
+                // IMPORTANT: Don't disable checkbox - disabled inputs don't submit with form!
                 card.style.display = 'none';
-                checkbox.disabled = true;
-                checkbox.checked = false;
+                // checkbox.disabled = true; // REMOVED - would prevent form submission
+                // DO NOT uncheck: checkbox.checked = false;
             }
         } else {
-            // No dimensions - hide it
+            // No dimensions - hide it but preserve checked state
+            // IMPORTANT: Don't disable checkbox - disabled inputs don't submit with form!
             card.style.display = 'none';
-            checkbox.disabled = true;
-            checkbox.checked = false;
+            // checkbox.disabled = true; // REMOVED - would prevent form submission
+            // DO NOT uncheck: checkbox.checked = false;
         }
     });
 
@@ -711,6 +713,22 @@ function removePricingOption(index) {
     if (element) {
         element.remove();
     }
+}
+
+// Debug form submission
+function debugFormSubmission(event) {
+    const formatCheckboxes = document.querySelectorAll('input[name="formats"]:checked');
+    const formatValues = Array.from(formatCheckboxes).map(cb => cb.value);
+    console.log('[DEBUG] Form submission - checked formats:', formatValues);
+    console.log('[DEBUG] Form submission - total checked:', formatValues.length);
+
+    if (formatValues.length === 0) {
+        console.error('[DEBUG] NO FORMATS CHECKED ON SUBMIT!');
+        // Don't prevent submission, just log the issue
+    }
+
+    // Continue with form submission
+    return true;
 }
 
 // Filter formats based on search input
