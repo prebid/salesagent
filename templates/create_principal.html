@@ -129,14 +129,16 @@ function loadAdvertisers() {
         selectElement.innerHTML = '';
         selectElement.disabled = false;
 
-        // Add default option
-        const defaultOption = document.createElement('option');
-        defaultOption.value = '';
-        defaultOption.textContent = 'Select an advertiser...';
-        selectElement.appendChild(defaultOption);
-
         // Add advertiser options
         if (data.advertisers && data.advertisers.length > 0) {
+            // Add a "Select..." prompt option first (disabled)
+            const promptOption = document.createElement('option');
+            promptOption.value = '';
+            promptOption.textContent = '-- Select a GAM Advertiser --';
+            promptOption.disabled = true;
+            promptOption.selected = true;
+            selectElement.appendChild(promptOption);
+
             data.advertisers.forEach(advertiser => {
                 const option = document.createElement('option');
                 option.value = advertiser.id;

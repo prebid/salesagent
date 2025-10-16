@@ -947,3 +947,195 @@ function selectAdapter(adapterType) {
 function selectGAMAdapter() {
     selectAdapter('google_ad_manager');
 }
+
+// Copy A2A configuration to clipboard
+function copyA2AConfig(principalId, principalName, accessToken) {
+    // Determine the A2A server URL
+    let a2aUrl;
+    if (config.isProduction) {
+        // Production: Use subdomain or virtual host
+        if (config.subdomain) {
+            a2aUrl = `https://${config.subdomain}.sales-agent.scope3.com/a2a`;
+        } else if (config.virtualHost) {
+            a2aUrl = `https://${config.virtualHost}/a2a`;
+        } else {
+            a2aUrl = `https://sales-agent.scope3.com/a2a`;
+        }
+    } else {
+        // Development: Use localhost with configured port
+        a2aUrl = `http://localhost:${config.a2aPort}/a2a`;
+    }
+
+    // Create the configuration text
+    const configText = `# API Configuration for ${principalName}
+
+API Endpoint: ${a2aUrl}
+API Token: ${accessToken}
+Principal ID: ${principalId}
+
+# Use this token in your API requests:
+# Example curl command:
+curl -X POST ${a2aUrl}/some-endpoint \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${accessToken}" \\
+  -d '{"your": "data"}'`;
+
+    // Copy to clipboard
+    navigator.clipboard.writeText(configText).then(() => {
+        // Show success feedback
+        const button = event.target;
+        const originalText = button.textContent;
+        button.textContent = '✓ Copied!';
+        button.classList.add('btn-success');
+        button.classList.remove('btn-outline-primary');
+
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.classList.remove('btn-success');
+            button.classList.add('btn-outline-primary');
+        }, 2000);
+    }).catch(err => {
+        alert('Failed to copy to clipboard: ' + err.message);
+    });
+}
+
+// Edit principal platform mappings
+function editPrincipalMappings(principalId, principalName) {
+    // Update modal title
+    document.getElementById('editPrincipalModalTitle').textContent = `Edit Platform Mappings - ${principalName}`;
+
+    // Store the principal ID for later use when saving
+    document.getElementById('saveMappingsBtn').dataset.principalId = principalId;
+
+    // Fetch current principal configuration
+    fetch(`${config.scriptName}/tenant/${config.tenantId}/principal/${principalId}`, {
+        method: 'GET',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            displayPrincipalMappingsForm(data.principal);
+            // Show the modal using Bootstrap
+            const modal = new bootstrap.Modal(document.getElementById('editPrincipalModal'));
+            modal.show();
+        } else {
+            alert('Error loading principal: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        alert('Error: ' + error.message);
+    });
+}
+
+// Display the principal mappings form
+function displayPrincipalMappingsForm(principal) {
+    const formContainer = document.getElementById('editPrincipalForm');
+    const platformMappings = principal.platform_mappings || {};
+
+    let formHtml = '<div class="mb-3"><p class="text-muted">Configure how this advertiser maps to your ad server platforms.</p></div>';
+
+    // GAM mapping
+    const gamMapping = platformMappings.google_ad_manager || {};
+    formHtml += `
+        <div class="mb-3">
+            <label class="form-label"><strong>Google Ad Manager</strong></label>
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" id="gam_enabled" ${gamMapping.enabled ? 'checked' : ''}>
+                <label class="form-check-label" for="gam_enabled">
+                    Enable GAM integration
+                </label>
+            </div>
+            <div id="gam_config" style="${gamMapping.enabled ? '' : 'display: none;'}">
+                <label for="gam_advertiser_id" class="form-label">GAM Advertiser ID</label>
+                <input type="text" class="form-control" id="gam_advertiser_id"
+                       value="${gamMapping.advertiser_id || ''}"
+                       placeholder="Enter GAM advertiser/company ID">
+                <small class="form-text text-muted">The GAM company/advertiser ID (numeric)</small>
+            </div>
+        </div>
+        <hr>
+    `;
+
+    // Mock mapping
+    const mockMapping = platformMappings.mock || {};
+    formHtml += `
+        <div class="mb-3">
+            <label class="form-label"><strong>Mock Adapter (Testing)</strong></label>
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" id="mock_enabled" ${mockMapping.enabled ? 'checked' : ''}>
+                <label class="form-check-label" for="mock_enabled">
+                    Enable Mock adapter for testing
+                </label>
+            </div>
+        </div>
+    `;
+
+    formContainer.innerHTML = formHtml;
+
+    // Add event listener to toggle GAM config visibility
+    document.getElementById('gam_enabled').addEventListener('change', function() {
+        document.getElementById('gam_config').style.display = this.checked ? 'block' : 'none';
+    });
+}
+
+// Save principal platform mappings
+function savePrincipalMappings() {
+    const principalId = document.getElementById('saveMappingsBtn').dataset.principalId;
+
+    // Build the platform mappings from form
+    const platformMappings = {};
+
+    // GAM mapping
+    const gamEnabled = document.getElementById('gam_enabled').checked;
+    if (gamEnabled) {
+        const gamAdvertiserId = document.getElementById('gam_advertiser_id').value.trim();
+        if (gamAdvertiserId) {
+            platformMappings.google_ad_manager = {
+                advertiser_id: gamAdvertiserId,
+                enabled: true
+            };
+        } else {
+            alert('Please enter a GAM Advertiser ID or disable GAM integration');
+            return;
+        }
+    }
+
+    // Mock mapping
+    const mockEnabled = document.getElementById('mock_enabled').checked;
+    if (mockEnabled) {
+        platformMappings.mock = {
+            advertiser_id: `mock_${principalId}`,
+            enabled: true
+        };
+    }
+
+    // Save via API
+    fetch(`${config.scriptName}/tenant/${config.tenantId}/principal/${principalId}/update_mappings`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            platform_mappings: platformMappings
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Platform mappings updated successfully');
+            // Close modal
+            const modal = bootstrap.Modal.getInstance(document.getElementById('editPrincipalModal'));
+            modal.hide();
+            // Reload page to show updated mappings
+            location.reload();
+        } else {
+            alert('Error: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        alert('Error: ' + error.message);
+    });
+}
