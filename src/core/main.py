@@ -4538,32 +4538,72 @@ async def _create_media_buy_impl(
 
                 # If found and has format_ids, validate and use those
                 if matching_package and hasattr(matching_package, "format_ids") and matching_package.format_ids:
-                    # Extract format IDs from FormatId objects
-                    requested_format_ids = []
-                    for fmt in matching_package.format_ids:
-                        if isinstance(fmt, dict):
-                            requested_format_ids.append(fmt.get("id"))
-                        elif hasattr(fmt, "id"):
-                            requested_format_ids.append(fmt.id)
-                        elif isinstance(fmt, str):
-                            requested_format_ids.append(fmt)
-
                     # Validate that requested formats are supported by product
-                    product_format_ids = set(product.formats) if product.formats else set()
-                    unsupported_formats = [f for f in requested_format_ids if f not in product_format_ids]
+                    # Format is composite key: (agent_url, format_id) per AdCP spec
+                    # Note: AdCP JSON uses "id" field, but Pydantic object uses "format_id" attribute
+                    # Build set of (agent_url, format_id) tuples for comparison
+                    product_format_keys = set()
+                    if product.formats:
+                        for fmt in product.formats:
+                            agent_url = None
+                            format_id = None
+
+                            if isinstance(fmt, dict):
+                                # Database JSONB: uses "id" per AdCP spec
+                                agent_url = fmt.get("agent_url")
+                                format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
+                            elif hasattr(fmt, "agent_url") and (hasattr(fmt, "format_id") or hasattr(fmt, "id")):
+                                # Pydantic object: uses "format_id" attribute (serializes to "id" in JSON)
+                                agent_url = fmt.agent_url
+                                format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
+                            elif isinstance(fmt, str):
+                                # Legacy: plain string format ID (no agent_url)
+                                format_id = fmt
+
+                            if format_id:
+                                product_format_keys.add((agent_url, format_id))
+
+                    # Build set of requested format keys for comparison
+                    requested_format_keys = set()
+                    for fmt in matching_package.format_ids:
+                        agent_url = None
+                        format_id = None
+
+                        if isinstance(fmt, dict):
+                            # JSON from request: uses "id" per AdCP spec
+                            agent_url = fmt.get("agent_url")
+                            format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
+                        elif hasattr(fmt, "agent_url") and (hasattr(fmt, "format_id") or hasattr(fmt, "id")):
+                            # Pydantic object: uses "format_id" attribute
+                            agent_url = fmt.agent_url
+                            format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
+                        elif isinstance(fmt, str):
+                            # Legacy: plain string
+                            format_id = fmt
+
+                        if format_id:
+                            requested_format_keys.add((agent_url, format_id))
+
+                    unsupported_formats = [
+                        f"{url}/{fid}" if url else fid for url, fid in requested_format_keys if (url, fid) not in product_format_keys
+                    ]
 
                     if unsupported_formats:
+                        supported_formats_str = ", ".join(
+                            [f"{url}/{fid}" if url else fid for url, fid in product_format_keys]
+                        )
                         error_msg = (
                             f"Product '{product.name}' ({product.product_id}) does not support requested format(s): "
-                            f"{', '.join(unsupported_formats)}. Supported formats: {', '.join(product_format_ids)}"
+                            f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
                         )
                         raise ValueError(error_msg)
 
-                    format_ids_to_use = requested_format_ids
+                    # Preserve original format objects for format_ids_to_use
+                    format_ids_to_use = list(matching_package.format_ids)
 
             # Fallback to product's formats if no request format_ids
             if not format_ids_to_use:
-                format_ids_to_use = [product.formats[0]] if product.formats else []
+                format_ids_to_use = list(product.formats) if product.formats else []
 
             # Get CPM from pricing_options
             cpm = 10.0  # Default
