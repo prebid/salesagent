@@ -392,7 +392,7 @@ function aiReviewCreative(creativeId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert(`AI Review Complete:\n\nDecision: ${data.decision}\n\nReasoning: ${data.reasoning}`);
+            alert(`AI Review Complete:\n\nStatus: ${data.status}\n\nReason: ${data.reason}\n\nConfidence: ${data.confidence}`);
             window.location.reload();
         } else {
             alert('Error: ' + (data.error || 'Unknown error'));
@@ -496,8 +496,13 @@ function viewCreativeDetails(creativeId) {
         }
     } else {
         html += `<div style="text-align: center; padding: 3rem; color: #999;">
-                    <p>No preview available for this creative.</p>
-                    <p style="font-size: 0.9rem; margin-top: 0.5rem;">Creative data: ${JSON.stringify(creativeData || {}, null, 2)}</p>
+                    <div style="font-size: 3rem; margin-bottom: 1rem;">🖼️</div>
+                    <h3 style="color: #666; margin-bottom: 0.5rem;">No Preview Available</h3>
+                    <p style="color: #999; margin-bottom: 1rem;">This creative doesn't have preview data yet.</p>
+                    <details style="text-align: left; max-width: 600px; margin: 0 auto; padding: 1rem; background: #f9fafb; border-radius: 8px;">
+                        <summary style="cursor: pointer; font-weight: 600; color: #666;">Show Creative Data</summary>
+                        <pre style="margin-top: 1rem; padding: 1rem; background: white; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; text-align: left;">${JSON.stringify(creativeData || {}, null, 2)}</pre>
+                    </details>
                  </div>`;
     }
 
