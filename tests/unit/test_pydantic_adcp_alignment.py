@@ -16,6 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.schemas import (
+    FormatId,
     GetProductsRequest,
     ProductFilters,
 )
@@ -43,7 +44,10 @@ class TestGetProductsRequestAlignment:
                 delivery_type="guaranteed",
                 is_fixed_price=True,
                 format_types=["video", "display"],
-                format_ids=["display_300x250", "video_30s"],
+                format_ids=[
+                    FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+                    FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_30s"),
+                ],
                 standard_formats_only=False,
             ),
         )
@@ -55,7 +59,9 @@ class TestGetProductsRequestAlignment:
         assert req.filters.delivery_type == "guaranteed"
         assert req.filters.is_fixed_price is True
         assert req.filters.format_types == ["video", "display"]
-        assert req.filters.format_ids == ["display_300x250", "video_30s"]
+        assert len(req.filters.format_ids) == 2
+        assert req.filters.format_ids[0].id == "display_300x250"
+        assert req.filters.format_ids[1].id == "video_30s"
         assert req.filters.standard_formats_only is False
 
     def test_filters_as_dict(self):
@@ -150,13 +156,18 @@ class TestProductFiltersModel:
     def test_array_filters(self):
         """Test array filter fields (format_types, format_ids)."""
         filters = ProductFilters(
-            format_types=["video", "display", "audio"], format_ids=["display_300x250", "video_30s", "audio_15s"]
+            format_types=["video", "display", "audio"],
+            format_ids=[
+                FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+                FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_30s"),
+                FormatId(agent_url="https://creative.adcontextprotocol.org", id="audio_15s"),
+            ],
         )
 
         assert len(filters.format_types) == 3
         assert "video" in filters.format_types
         assert len(filters.format_ids) == 3
-        assert "display_300x250" in filters.format_ids
+        assert filters.format_ids[0].id == "display_300x250"
 
     def test_model_dump_excludes_none(self):
         """Test that model_dump with exclude_none only includes set fields."""
@@ -208,13 +219,18 @@ class TestAdCPSchemaCompatibility:
             filters={
                 "delivery_type": "non_guaranteed",
                 "format_types": ["video"],
-                "format_ids": ["video_30s", "video_15s"],
+                "format_ids": [
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_30s"},
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_15s"},
+                ],
             },
         )
 
         assert req.filters.delivery_type == "non_guaranteed"
         assert req.filters.format_types == ["video"]
         assert len(req.filters.format_ids) == 2
+        assert req.filters.format_ids[0].id == "video_30s"
+        assert req.filters.format_ids[1].id == "video_15s"
 
 
 class TestRegressionPrevention:

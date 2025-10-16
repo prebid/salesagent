@@ -29,18 +29,28 @@ def test_list_creative_formats_request_minimal():
 
 def test_list_creative_formats_request_with_all_params():
     """Test that ListCreativeFormatsRequest accepts all optional filter parameters."""
+    from src.core.schemas import FormatId
+
+    # AdCP v2.4 requires structured FormatId objects, not strings
+    format_ids = [
+        FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_16x9"),
+        FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_4x3"),
+    ]
+
     req = ListCreativeFormatsRequest(
         adcp_version="1.5.0",
         type="video",
         standard_only=True,
         category="standard",
-        format_ids=["video_16x9", "video_4x3"],
+        format_ids=format_ids,
     )
     assert req.adcp_version == "1.5.0"
     assert req.type == "video"
     assert req.standard_only is True
     assert req.category == "standard"
-    assert req.format_ids == ["video_16x9", "video_4x3"]
+    assert len(req.format_ids) == 2
+    assert req.format_ids[0].id == "video_16x9"
+    assert req.format_ids[1].id == "video_4x3"
 
 
 def test_filtering_by_type(integration_db, sample_tenant):

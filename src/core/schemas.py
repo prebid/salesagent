@@ -903,7 +903,7 @@ class ProductFilters(BaseModel):
         None,
         description="Filter by format types",
     )
-    format_ids: list[str] | None = Field(
+    format_ids: list["FormatId"] | None = Field(
         None,
         description="Filter by specific format IDs",
     )
@@ -911,6 +911,28 @@ class ProductFilters(BaseModel):
         None,
         description="Only return products accepting IAB standard formats",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_legacy_format_ids(cls, values: dict) -> dict:
+        """Upgrade legacy string format_ids to FormatId objects for backward compatibility."""
+        if not isinstance(values, dict):
+            return values
+
+        format_ids = values.get("format_ids")
+        if format_ids and isinstance(format_ids, list):
+            from src.core.format_cache import upgrade_legacy_format_id
+
+            # Upgrade any string format_ids to FormatId objects
+            upgraded = []
+            for fmt_id in format_ids:
+                if isinstance(fmt_id, str):
+                    upgraded.append(upgrade_legacy_format_id(fmt_id))
+                else:
+                    upgraded.append(fmt_id)
+            values["format_ids"] = upgraded
+
+        return values
 
 
 class GetProductsRequest(AdCPBaseModel):
@@ -1062,7 +1084,9 @@ class ListCreativeFormatsRequest(AdCPBaseModel):
     type: str | None = Field(None, description="Filter by format type (audio, video, display)")
     standard_only: bool | None = Field(None, description="Only return IAB standard formats")
     category: str | None = Field(None, description="Filter by format category (standard, custom)")
-    format_ids: list[str] | None = Field(None, description="Filter by specific format IDs")
+    format_ids: list["FormatId"] | None = Field(
+        None, description="Return only these specific format IDs (e.g., from get_products response)"
+    )
     asset_types: list[str] | None = Field(
         None,
         description="Filter to formats that include these asset types (e.g., ['image', 'text'], ['javascript'])",
@@ -1077,6 +1101,28 @@ class ListCreativeFormatsRequest(AdCPBaseModel):
     min_height: int | None = Field(None, description="Minimum height in pixels (inclusive)")
     is_responsive: bool | None = Field(None, description="Filter for responsive formats that adapt to container size")
     name_search: str | None = Field(None, description="Search for formats by name (case-insensitive partial match)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_legacy_format_ids(cls, values: dict) -> dict:
+        """Upgrade legacy string format_ids to FormatId objects for backward compatibility."""
+        if not isinstance(values, dict):
+            return values
+
+        format_ids = values.get("format_ids")
+        if format_ids and isinstance(format_ids, list):
+            from src.core.format_cache import upgrade_legacy_format_id
+
+            # Upgrade any string format_ids to FormatId objects
+            upgraded = []
+            for fmt_id in format_ids:
+                if isinstance(fmt_id, str):
+                    upgraded.append(upgrade_legacy_format_id(fmt_id))
+                else:
+                    upgraded.append(fmt_id)
+            values["format_ids"] = upgraded
+
+        return values
 
 
 class ListCreativeFormatsResponse(AdCPBaseModel):
@@ -1978,10 +2024,10 @@ class Package(BaseModel):
     creative_assignments: list[dict[str, Any]] | None = Field(
         None, description="Creative assets assigned to this package"
     )
-    # AdCP v2.4 request field (input) - array of strings
-    format_ids: list[str] | None = Field(
+    # AdCP v2.4 request field (input) - array of FormatId objects
+    format_ids: list[FormatId] | None = Field(
         None,
-        description="Format IDs for this package (array of format ID strings from list_creative_formats)",
+        description="Format IDs for this package (array of FormatId objects with agent_url and id)",
     )
 
     # AdCP v2.4 response field (output) - array of FormatId objects
@@ -2008,6 +2054,28 @@ class Package(BaseModel):
     created_at: datetime | None = Field(None, description="Internal: Creation timestamp")
     updated_at: datetime | None = Field(None, description="Internal: Last update timestamp")
     metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata")
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_legacy_format_ids(cls, values: dict) -> dict:
+        """Upgrade legacy string format_ids to FormatId objects for backward compatibility."""
+        if not isinstance(values, dict):
+            return values
+
+        format_ids = values.get("format_ids")
+        if format_ids and isinstance(format_ids, list):
+            from src.core.format_cache import upgrade_legacy_format_id
+
+            # Upgrade any string format_ids to FormatId objects
+            upgraded = []
+            for fmt_id in format_ids:
+                if isinstance(fmt_id, str):
+                    upgraded.append(upgrade_legacy_format_id(fmt_id))
+                else:
+                    upgraded.append(fmt_id)
+            values["format_ids"] = upgraded
+
+        return values
 
     def model_dump(self, **kwargs):
         """Override to provide AdCP-compliant responses while preserving internal fields."""

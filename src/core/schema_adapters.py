@@ -21,7 +21,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
-from src.core.schemas import AdCPBaseModel
+from src.core.schemas import AdCPBaseModel, FormatId
 from src.core.schemas_generated._schemas_v1_media_buy_get_products_request_json import (
     GetProductsRequest as _GeneratedGetProductsRequest,
 )
@@ -503,7 +503,9 @@ class ListCreativeFormatsRequest(BaseModel):
     type: str | None = Field(None, description="Filter by format type")
     standard_only: bool | None = Field(None, description="Only return IAB standard formats")
     category: str | None = Field(None, description="Filter by category")
-    format_ids: list[str] | None = Field(None, description="Filter by specific format IDs")
+    format_ids: list[FormatId] | None = Field(
+        None, description="Return only these specific format IDs (e.g., from get_products response)"
+    )
 
     def to_generated(self) -> _GeneratedListCreativeFormatsRequest:
         """Convert to generated schema for protocol validation."""
