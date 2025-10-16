@@ -174,7 +174,7 @@ def media_buy_detail(tenant_id, media_buy_id):
             principal = None
             if media_buy.principal_id:
                 stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=media_buy.principal_id)
-            principal = db_session.scalars(stmt).first()
+                principal = db_session.scalars(stmt).first()
 
             return render_template(
                 "media_buy_detail.html", tenant_id=tenant_id, media_buy=media_buy, principal=principal
