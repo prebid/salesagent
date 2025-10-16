@@ -281,6 +281,11 @@ class Format(BaseModel):
     )
     iab_specification: str | None = Field(None, description="Name of the IAB specification (if applicable)")
     description: str | None = Field(None, description="Human-readable description of the format")
+    renders: list[dict[str, Any]] | None = Field(
+        None,
+        description="Specification of rendered pieces (AdCP v2.4 spec). "
+        "Each render contains role and dimensions. Most formats have a single 'primary' render.",
+    )
     requirements: dict[str, Any] | None = Field(
         None, description="Technical specifications for this format (e.g., dimensions, duration, file size limits)"
     )
@@ -301,6 +306,31 @@ class Format(BaseModel):
         None,
         description="For generative formats: array of FormatId objects this format can generate per AdCP spec",
     )
+
+    def get_primary_dimensions(self) -> tuple[int, int] | None:
+        """Extract primary dimensions from renders array.
+
+        Returns:
+            Tuple of (width, height) in pixels, or None if not available.
+        """
+        # Try renders field first (AdCP v2.4 spec)
+        if self.renders and len(self.renders) > 0:
+            primary_render = self.renders[0]  # First render is typically primary
+            if "dimensions" in primary_render:
+                dims = primary_render["dimensions"]
+                width = dims.get("width")
+                height = dims.get("height")
+                if width is not None and height is not None:
+                    return (int(width), int(height))
+
+        # Fallback to requirements field (legacy)
+        if self.requirements:
+            width = self.requirements.get("width")
+            height = self.requirements.get("height")
+            if width is not None and height is not None:
+                return (int(width), int(height))
+
+        return None
 
 
 # FORMAT_REGISTRY removed - now using dynamic format discovery via CreativeAgentRegistry

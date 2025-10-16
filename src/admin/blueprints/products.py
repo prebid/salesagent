@@ -91,17 +91,20 @@ def get_creative_formats(
             "duration": None,
         }
 
-        # Add dimensions for display/video formats
-        if fmt.requirements and "width" in fmt.requirements and "height" in fmt.requirements:
-            format_dict["dimensions"] = f"{fmt.requirements['width']}x{fmt.requirements['height']}"
+        # Add dimensions for display/video formats using the helper method
+        dimensions = fmt.get_primary_dimensions()
+        if dimensions:
+            width, height = dimensions
+            format_dict["dimensions"] = f"{width}x{height}"
             if idx < 5:
-                logger.info(f"[DEBUG] Format {idx}: Got dimensions from requirements: {format_dict['dimensions']}")
-        elif "_" in fmt.format_id:
+                logger.info(f"[DEBUG] Format {idx}: Got dimensions: {format_dict['dimensions']}")
+        elif "_" in str(fmt.format_id):
             # Fallback: Parse dimensions from format_id (e.g., "display_300x250_image" → "300x250")
-            # This handles creative agents that don't populate requirements field
+            # This handles creative agents that don't populate renders or requirements field
             import re
 
-            match = re.search(r"_(\d+)x(\d+)_", fmt.format_id)
+            format_id_str = str(fmt.format_id)
+            match = re.search(r"_(\d+)x(\d+)_", format_id_str)
             if match:
                 format_dict["dimensions"] = f"{match.group(1)}x{match.group(2)}"
                 if idx < 5:
