@@ -1857,12 +1857,16 @@ def _sync_creatives_impl(
                 # Use savepoint for individual creative transaction isolation
                 with session.begin_nested():
                     # Check if creative already exists (always check for upsert/patch behavior)
+                    # SECURITY: Must filter by principal_id to prevent cross-principal modification
                     existing_creative = None
                     if creative.get("creative_id"):
                         from src.core.database.models import Creative as DBCreative
 
+                        # Query for existing creative with security filter
                         stmt = select(DBCreative).filter_by(
-                            tenant_id=tenant["tenant_id"], creative_id=creative.get("creative_id")
+                            tenant_id=tenant["tenant_id"],
+                            principal_id=principal_id,  # SECURITY: Prevent cross-principal modification
+                            creative_id=creative.get("creative_id"),
                         )
                         existing_creative = session.scalars(stmt).first()
 
@@ -3075,8 +3079,10 @@ def _list_creatives_impl(
 
     start_time = time.time()
 
-    # Authentication (optional for discovery, like list_creative_formats)
-    principal_id = get_principal_from_context(context)  # Returns None if no auth
+    # Authentication - REQUIRED (creatives contain sensitive data)
+    # Unlike discovery endpoints (list_creative_formats), this returns actual creative assets
+    # which are principal-specific and must be access-controlled
+    principal_id = _get_principal_id_from_context(context)
 
     # Get tenant information
     tenant = get_current_tenant()
@@ -3091,8 +3097,8 @@ def _list_creatives_impl(
         from src.core.database.models import CreativeAssignment as DBAssignment
         from src.core.database.models import MediaBuy
 
-        # Build query
-        stmt = select(DBCreative).filter_by(tenant_id=tenant["tenant_id"])
+        # Build query - filter by tenant AND principal for security
+        stmt = select(DBCreative).filter_by(tenant_id=tenant["tenant_id"], principal_id=principal_id)
 
         # Apply filters
         if req.media_buy_id:
@@ -3621,7 +3627,9 @@ def _list_authorized_properties_impl(
         raise ToolError("AUTHENTICATION_ERROR", "Could not resolve tenant from context")
 
     tenant_id = tenant["tenant_id"]
-    principal_id = _get_principal_id_from_context(context)
+
+    # Authentication is OPTIONAL for discovery endpoints (returns public inventory)
+    principal_id = get_principal_from_context(context)  # Returns None if no auth
 
     # Apply testing hooks
     from src.core.testing_hooks import TestingContext
@@ -3749,8 +3757,8 @@ def _list_authorized_properties_impl(
             audit_logger = get_audit_logger("AdCP", tenant_id)
             audit_logger.log_operation(
                 operation="list_authorized_properties",
-                principal_name=principal_id,
-                principal_id=principal_id,
+                principal_name=principal_id or "anonymous",
+                principal_id=principal_id or "anonymous",
                 adapter_id="mcp_server",
                 success=True,
                 details={
