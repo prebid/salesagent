@@ -166,44 +166,27 @@
 
         <h3 style="margin-top: 2rem;">Creative Formats</h3>
         <div class="alert" style="background: #e3f2fd; border-color: #90caf9; color: #1565c0; margin-bottom: 1rem;">
-            <strong>ℹ️ Configure Creative Formats:</strong> Select the creative formats this product supports.
-            Formats are fetched from the reference creative agent (https://creative.adcontextprotocol.org).
+            <strong>ℹ️ Creative Formats:</strong> This product's formats are managed in the product edit page.
+            <a href="{{ url_for('products.edit_product', tenant_id=tenant_id, product_id=product.product_id) }}" style="color: #1565c0; text-decoration: underline;">Edit Product →</a>
         </div>
 
-        {% if formats %}
-        <div style="margin-bottom: 1rem;">
-            <input type="text" id="format-search" placeholder="Search formats by name, type, or size..."
-                   style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;"
-                   onkeyup="filterFormats()">
-        </div>
-
-        <div id="formats-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; max-height: 400px; overflow-y: auto; padding: 1rem; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
-            {% for format in formats %}
-            <label class="format-card"
-                   data-format-id="{{ format.format_id }}"
-                   data-search="{{ format.name|lower }} {{ format.type|lower }} {{ format.dimensions or '' }}"
-                   style="border: 2px solid #ddd; border-radius: 4px; padding: 0.75rem; cursor: pointer; transition: all 0.2s; background: white;">
-                <input type="checkbox" name="formats" value="{{ format.format_id }}"
-                       {% if format.format_id in selected_formats %}checked{% endif %}
-                       style="margin-right: 0.5rem;">
-                <strong>{{ format.name }}</strong><br>
-                <small style="color: #666;">
-                    {{ format.type }}
-                    {% if format.dimensions %} - {{ format.dimensions }}{% endif %}
-                    {% if format.duration %} - {{ format.duration }}{% endif %}
-                </small>
-            </label>
-            {% endfor %}
-        </div>
-
-        <div id="format-summary" style="padding: 0.75rem; background: #d4edda; border: 1px solid #28a745; border-radius: 4px; margin-top: 1rem;">
-            <strong style="color: #155724;">Selected:</strong>
-            <span id="format-count" style="font-weight: 600;">{{ selected_formats|length }}</span> format(s)
+        {% if product.formats %}
+        <div style="padding: 1rem; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
+            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                {% for format in product.formats %}
+                <span class="badge" style="display: inline-block; padding: 0.5rem 0.75rem; background: #e3f2fd; color: #1565c0; border-radius: 4px; font-size: 0.9rem;">
+                    {% if format.id or format.format_id %}
+                        {{ format.id or format.format_id }}
+                    {% else %}
+                        {{ format }}
+                    {% endif %}
+                </span>
+                {% endfor %}
+            </div>
         </div>
         {% else %}
         <div class="alert alert-warning" style="background: #fff3cd; border-color: #ffc107;">
-            <strong>⚠️ No formats available:</strong> Could not fetch formats from creative agents.
-            Please check your network connection or creative agent configuration.
+            <strong>⚠️ No formats configured:</strong> Please edit the product to add creative formats.
         </div>
         {% endif %}
 
@@ -253,56 +236,6 @@ document.getElementById('test_mode').addEventListener('change', function() {
     }
 });
 
-// Format search and filtering
-function filterFormats() {
-    const searchInput = document.getElementById('format-search');
-    const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
-    const formatCards = document.querySelectorAll('.format-card');
-
-    formatCards.forEach(card => {
-        const searchData = card.getAttribute('data-search') || '';
-        if (searchData.includes(searchTerm)) {
-            card.style.display = '';
-        } else {
-            card.style.display = 'none';
-        }
-    });
-}
-
-// Update format count on checkbox change
-function updateFormatCount() {
-    const checkedBoxes = document.querySelectorAll('input[name="formats"]:checked');
-    const countElement = document.getElementById('format-count');
-    if (countElement) {
-        countElement.textContent = checkedBoxes.length;
-    }
-}
-
-// Add event listeners for format checkboxes
-document.addEventListener('DOMContentLoaded', function() {
-    const formatCheckboxes = document.querySelectorAll('input[name="formats"]');
-    formatCheckboxes.forEach(checkbox => {
-        checkbox.addEventListener('change', updateFormatCount);
-
-        // Visual feedback on selection
-        checkbox.addEventListener('change', function() {
-            const card = this.closest('.format-card');
-            if (this.checked) {
-                card.style.borderColor = '#28a745';
-                card.style.backgroundColor = '#d4edda';
-            } else {
-                card.style.borderColor = '#ddd';
-                card.style.backgroundColor = 'white';
-            }
-        });
-
-        // Initialize visual state
-        if (checkbox.checked) {
-            const card = checkbox.closest('.format-card');
-            card.style.borderColor = '#28a745';
-            card.style.backgroundColor = '#d4edda';
-        }
-    });
-});
+// Test mode auto-adjustment remains
 </script>
 {% endblock %}
