@@ -1097,12 +1097,13 @@ class MockAdServer(AdServerAdapter):
     def update_media_buy(
         self,
         media_buy_id: str,
+        buyer_ref: str,
         action: str,
         package_id: str | None,
         budget: int | None,
         today: datetime,
     ) -> UpdateMediaBuyResponse:
-        return UpdateMediaBuyResponse(status="accepted")
+        return UpdateMediaBuyResponse(media_buy_id=media_buy_id, buyer_ref=buyer_ref)
 
     def get_config_ui_endpoint(self) -> str | None:
         """Return the URL path for the mock adapter's configuration UI."""

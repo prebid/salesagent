@@ -5611,12 +5611,13 @@ def _update_media_buy_impl(
         action = "resume_media_buy" if req.active else "pause_media_buy"
         result = adapter.update_media_buy(
             media_buy_id=req.media_buy_id,
+            buyer_ref=req.buyer_ref or "",
             action=action,
             package_id=None,
             budget=None,
             today=datetime.combine(today, datetime.min.time()),
         )
-        if result.status == "failed":
+        if result.errors:
             return result
 
     # Handle package-level updates
@@ -5627,16 +5628,20 @@ def _update_media_buy_impl(
                 action = "resume_package" if pkg_update.active else "pause_package"
                 result = adapter.update_media_buy(
                     media_buy_id=req.media_buy_id,
+                    buyer_ref=req.buyer_ref or "",
                     action=action,
                     package_id=pkg_update.package_id,
                     budget=None,
                     today=datetime.combine(today, datetime.min.time()),
                 )
-                if result.status == "failed":
+                if result.errors:
+                    error_message = (
+                        result.errors[0].get("message", "Update failed") if result.errors else "Update failed"
+                    )
                     ctx_manager.update_workflow_step(
                         step.step_id,
                         status="failed",
-                        error_message=result.detail or "Update failed",
+                        error_message=error_message,
                     )
                     return result
 
@@ -5644,31 +5649,39 @@ def _update_media_buy_impl(
             if pkg_update.impressions is not None:
                 result = adapter.update_media_buy(
                     media_buy_id=req.media_buy_id,
+                    buyer_ref=req.buyer_ref or "",
                     action="update_package_impressions",
                     package_id=pkg_update.package_id,
                     budget=pkg_update.impressions,
                     today=datetime.combine(today, datetime.min.time()),
                 )
-                if result.status == "failed":
+                if result.errors:
+                    error_message = (
+                        result.errors[0].get("message", "Update failed") if result.errors else "Update failed"
+                    )
                     ctx_manager.update_workflow_step(
                         step.step_id,
                         status="failed",
-                        error_message=result.detail or "Update failed",
+                        error_message=error_message,
                     )
                     return result
             elif pkg_update.budget is not None:
                 result = adapter.update_media_buy(
                     media_buy_id=req.media_buy_id,
+                    buyer_ref=req.buyer_ref or "",
                     action="update_package_budget",
                     package_id=pkg_update.package_id,
                     budget=int(pkg_update.budget),
                     today=datetime.combine(today, datetime.min.time()),
                 )
-                if result.status == "failed":
+                if result.errors:
+                    error_message = (
+                        result.errors[0].get("message", "Update failed") if result.errors else "Update failed"
+                    )
                     ctx_manager.update_workflow_step(
                         step.step_id,
                         status="failed",
-                        error_message=result.detail or "Update failed",
+                        error_message=error_message,
                     )
                     return result
 
@@ -6528,6 +6541,7 @@ def complete_task(req, context):
                         action = "resume_media_buy" if original_req.active else "pause_media_buy"
                         adapter.update_media_buy(
                             media_buy_id=original_req.media_buy_id,
+                            buyer_ref=original_req.buyer_ref or "",
                             action=action,
                             package_id=None,
                             budget=None,
@@ -6541,6 +6555,7 @@ def complete_task(req, context):
                                 action = "resume_package" if pkg_update.active else "pause_package"
                                 adapter.update_media_buy(
                                     media_buy_id=original_req.media_buy_id,
+                                    buyer_ref=original_req.buyer_ref or "",
                                     action=action,
                                     package_id=pkg_update.package_id,
                                     budget=None,

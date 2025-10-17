@@ -663,7 +663,13 @@ class GoogleAdManager(AdServerAdapter):
         )
 
     def update_media_buy(
-        self, media_buy_id: str, action: str, package_id: str | None, budget: int | None, today: datetime
+        self,
+        media_buy_id: str,
+        buyer_ref: str,
+        action: str,
+        package_id: str | None,
+        budget: int | None,
+        today: datetime,
     ) -> UpdateMediaBuyResponse:
         """Update a media buy in GAM."""
         # Admin-only actions
@@ -671,11 +677,12 @@ class GoogleAdManager(AdServerAdapter):
 
         # Check if action requires admin privileges
         if action in admin_only_actions and not self._is_admin_principal():
+            from src.core.schemas import Error
+
             return UpdateMediaBuyResponse(
                 media_buy_id=media_buy_id,
-                status="failed",
-                reason="Only admin users can approve orders",
-                message="Action denied: insufficient privileges",
+                buyer_ref=buyer_ref,
+                errors=[Error(code="insufficient_privileges", message="Only admin users can approve orders")],
             )
 
         # Check if manual approval is required for media buy updates
@@ -686,18 +693,23 @@ class GoogleAdManager(AdServerAdapter):
             step_id = self.workflow_manager.create_approval_workflow_step(media_buy_id, f"update_media_buy_{action}")
 
             if step_id:
+                # Manual approval success - no errors
                 return UpdateMediaBuyResponse(
                     media_buy_id=media_buy_id,
-                    status="submitted",
-                    message=f"Media buy update action '{action}' submitted for approval. " f"Workflow step: {step_id}",
-                    workflow_step_id=step_id,
+                    buyer_ref=buyer_ref,
                 )
             else:
+                from src.core.schemas import Error
+
                 return UpdateMediaBuyResponse(
                     media_buy_id=media_buy_id,
-                    status="failed",
-                    reason="Failed to create approval workflow step",
-                    message="Unable to process update request - workflow creation failed",
+                    buyer_ref=buyer_ref,
+                    errors=[
+                        Error(
+                            code="workflow_creation_failed",
+                            message="Failed to create approval workflow step",
+                        )
+                    ],
                 )
 
         # Check for activate_order action with guaranteed items
@@ -711,27 +723,29 @@ class GoogleAdManager(AdServerAdapter):
                 step_id = self.workflow_manager.create_activation_workflow_step(media_buy_id, [])
 
                 if step_id:
+                    # Activation workflow created - success (no errors)
                     return UpdateMediaBuyResponse(
                         media_buy_id=media_buy_id,
-                        status="submitted",
-                        reason=f"Cannot auto-activate order with guaranteed line items: {', '.join(item_types)}",
-                        message=f"Manual approval required for guaranteed inventory. Workflow step: {step_id}",
-                        workflow_step_id=step_id,
+                        buyer_ref=buyer_ref,
                     )
                 else:
+                    from src.core.schemas import Error
+
                     return UpdateMediaBuyResponse(
                         media_buy_id=media_buy_id,
-                        status="failed",
-                        reason=f"Cannot auto-activate order with guaranteed line items: {', '.join(item_types)}",
-                        message="Manual approval required for guaranteed inventory, but workflow creation failed",
+                        buyer_ref=buyer_ref,
+                        errors=[
+                            Error(
+                                code="activation_workflow_failed",
+                                message=f"Cannot auto-activate order with guaranteed line items: {', '.join(item_types)}",
+                            )
+                        ],
                     )
 
-        # For allowed actions in automatic mode, return success with action details
+        # For allowed actions in automatic mode, return success (no errors)
         return UpdateMediaBuyResponse(
             media_buy_id=media_buy_id,
-            status="accepted",
-            detail=f"Action '{action}' processed successfully",
-            message=f"Media buy {media_buy_id} updated with action: {action}",
+            buyer_ref=buyer_ref,
         )
 
     def update_media_buy_performance_index(self, media_buy_id: str, package_performance: list) -> bool:

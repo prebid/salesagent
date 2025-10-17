@@ -148,7 +148,13 @@ class AdServerAdapter(ABC):
 
     @abstractmethod
     def update_media_buy(
-        self, media_buy_id: str, action: str, package_id: str | None, budget: int | None, today: datetime
+        self,
+        media_buy_id: str,
+        buyer_ref: str,
+        action: str,
+        package_id: str | None,
+        budget: int | None,
+        today: datetime,
     ) -> UpdateMediaBuyResponse:
         """Updates a media buy with a specific action."""
         pass

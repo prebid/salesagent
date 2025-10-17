@@ -204,9 +204,13 @@ class Kevel(AdServerAdapter):
         # Validate targeting
         unsupported_features = self._validate_targeting(request.targeting_overlay)
         if unsupported_features:
+            from src.core.schemas import Error
+
             error_msg = f"Unsupported targeting features for Kevel: {'; '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
-            return CreateMediaBuyResponse(media_buy_id="", status="failed", detail=error_msg)
+            return CreateMediaBuyResponse(
+                buyer_ref=request.buyer_ref, errors=[Error(code="unsupported_targeting", message=error_msg)]
+            )
 
         # Generate a media buy ID
         media_buy_id = f"kevel_{request.po_number}" if request.po_number else f"kevel_{int(datetime.now().timestamp())}"
@@ -533,14 +537,29 @@ class Kevel(AdServerAdapter):
             return True
 
     def update_media_buy(
-        self, media_buy_id: str, action: str, package_id: str | None, budget: int | None, today: datetime
+        self,
+        media_buy_id: str,
+        buyer_ref: str,
+        action: str,
+        package_id: str | None,
+        budget: int | None,
+        today: datetime,
     ) -> UpdateMediaBuyResponse:
         """Updates a media buy in Kevel using standardized actions."""
+        from src.core.schemas import Error
+
         self.log(f"Kevel.update_media_buy for {media_buy_id} with action {action}", dry_run_prefix=False)
 
         if action not in REQUIRED_UPDATE_ACTIONS:
             return UpdateMediaBuyResponse(
-                status="failed", reason=f"Action '{action}' not supported. Supported actions: {REQUIRED_UPDATE_ACTIONS}"
+                media_buy_id=media_buy_id,
+                buyer_ref=buyer_ref,
+                errors=[
+                    Error(
+                        code="unsupported_action",
+                        message=f"Action '{action}' not supported. Supported actions: {REQUIRED_UPDATE_ACTIONS}",
+                    )
+                ],
             )
 
         if self.dry_run:
@@ -575,7 +594,9 @@ class Kevel(AdServerAdapter):
                 self.log(f"  Payload: {{'Impressions': {new_impressions}}}")
 
             return UpdateMediaBuyResponse(
-                status="accepted", implementation_date=today, detail=f"Would {action} in Kevel"
+                media_buy_id=media_buy_id,
+                buyer_ref=buyer_ref,
+                implementation_date=today,
             )
         else:
             try:
@@ -600,7 +621,11 @@ class Kevel(AdServerAdapter):
 
                     flight = next((f for f in flights if f["Name"] == package_id), None)
                     if not flight:
-                        return UpdateMediaBuyResponse(status="failed", reason=f"Flight '{package_id}' not found")
+                        return UpdateMediaBuyResponse(
+                            media_buy_id=media_buy_id,
+                            buyer_ref=buyer_ref,
+                            errors=[Error(code="flight_not_found", message=f"Flight '{package_id}' not found")],
+                        )
 
                     # Update flight status
                     update_payload = {"IsActive": action == "resume_package"}
@@ -623,7 +648,11 @@ class Kevel(AdServerAdapter):
 
                     flight = next((f for f in flights if f["Name"] == package_id), None)
                     if not flight:
-                        return UpdateMediaBuyResponse(status="failed", reason=f"Flight '{package_id}' not found")
+                        return UpdateMediaBuyResponse(
+                            media_buy_id=media_buy_id,
+                            buyer_ref=buyer_ref,
+                            errors=[Error(code="flight_not_found", message=f"Flight '{package_id}' not found")],
+                        )
 
                     # Calculate impressions based on action
                     if action == "update_package_budget":
@@ -641,9 +670,15 @@ class Kevel(AdServerAdapter):
                     update_response.raise_for_status()
 
                 return UpdateMediaBuyResponse(
-                    status="accepted", implementation_date=today, detail=f"Successfully executed {action} in Kevel"
+                    media_buy_id=media_buy_id,
+                    buyer_ref=buyer_ref,
+                    implementation_date=today,
                 )
 
             except requests.exceptions.RequestException as e:
                 self.log(f"Error updating Kevel flight: {e}")
-                return UpdateMediaBuyResponse(status="failed", reason=str(e))
+                return UpdateMediaBuyResponse(
+                    media_buy_id=media_buy_id,
+                    buyer_ref=buyer_ref,
+                    errors=[Error(code="api_error", message=str(e))],
+                )
