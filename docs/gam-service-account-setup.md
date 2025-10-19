@@ -7,6 +7,16 @@ The AdCP Sales Agent supports two authentication methods for Google Ad Manager:
 1. **OAuth (Refresh Token)** - User-based authentication requiring manual token refresh
 2. **Service Account** - Automated authentication using Google Cloud service accounts (recommended for production)
 
+## 🚀 New: Automatic Service Account Provisioning (Recommended for Partners)
+
+**For partner integrations, we now create and manage service accounts for you automatically!**
+
+Instead of partners sending us their service account JSON credentials, we:
+1. Create a service account in our GCP project
+2. Provide you with the service account email
+3. You add this email as a user in your GAM with Trafficker role
+4. We handle all credential management securely
+
 ## Service Account Benefits
 
 - ✅ **No manual refresh**: Service accounts don't expire like OAuth tokens
@@ -15,6 +25,23 @@ The AdCP Sales Agent supports two authentication methods for Google Ad Manager:
 - ✅ **Audit trail**: Service account shows in GAM audit logs
 - ✅ **Multi-tenant**: Each tenant can have their own service account
 - ✅ **Cloud-native**: Credentials stored encrypted in database, no file management
+
+## Security Model
+
+Service account authentication uses **two-factor control**:
+
+1. **Private Key** (we control): Stored encrypted in our database, used to cryptographically sign API requests
+2. **GAM User List** (partner controls): Partner must explicitly add the service account email to their GAM
+
+**Both are required for access:**
+- Just knowing the email is NOT enough - API calls must be signed with the private key
+- Just having the private key is NOT enough - partner must grant permissions in their GAM
+
+**Partner maintains control:**
+- Can revoke access anytime by removing email from GAM
+- Controls what permissions to grant (Trafficker, Salesperson, etc.)
+- Can restrict to specific advertisers via GAM teams
+- All activity appears in their GAM audit logs
 
 ## Required Service Account Roles
 
@@ -78,7 +105,51 @@ Network:
   - Read (to get timezone and network info)
 ```
 
-## Setup Instructions
+## Prerequisites for Automatic Service Account Creation
+
+The automatic service account creation feature requires:
+
+1. **GCP Project Configuration**: The `GCP_PROJECT_ID` environment variable must be set to your Google Cloud Project ID
+2. **Service Account Permissions**: The application's default credentials must have permissions to create service accounts and keys in that project (requires `roles/iam.serviceAccountAdmin` or `roles/iam.serviceAccountKeyAdmin`)
+
+If you haven't set these up yet, see your system administrator or cloud platform documentation.
+
+## Setup Instructions (New Automatic Flow - Recommended)
+
+### Step 1: Request Service Account Creation
+
+1. Log into the Admin UI (http://localhost:8001 or your production URL)
+2. Navigate to **Tenant Settings** → **Ad Server**
+3. Select **Google Ad Manager** as your adapter
+4. Scroll to the **Service Account Integration** section
+5. Click **🔑 Create Service Account**
+6. Wait a few seconds while we create the service account in our GCP project
+7. Copy the service account email that appears
+
+### Step 2: Add Service Account to Your GAM
+
+1. Log into your [Google Ad Manager](https://admanager.google.com/) account
+2. Navigate to **Admin** → **Access & authorization** → **Users**
+3. Click **New user**
+4. Paste the service account email from Step 1
+5. Assign role: **Trafficker** (recommended)
+6. Under **Teams**, select specific advertisers (optional but recommended for security)
+7. Click **Save**
+
+### Step 3: Test Connection
+
+1. Return to the Admin UI settings page
+2. Click **Test Connection** button
+3. If successful, you're done! If not, verify:
+   - Service account email was added correctly in GAM
+   - Trafficker role was assigned
+   - You clicked Save in GAM
+
+---
+
+## Alternative: Manual Service Account Setup (Legacy)
+
+**Note**: The automatic flow above is recommended. Use this only if you need to create your own service account.
 
 ### Step 1: Create Service Account in Google Cloud Console
 

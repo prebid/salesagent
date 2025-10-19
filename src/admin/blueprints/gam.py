@@ -712,6 +712,89 @@ def get_sync_status(tenant_id, sync_id):
         return jsonify({"error": str(e)}), 500
 
 
+@gam_bp.route("/create-service-account", methods=["POST"])
+@log_admin_action("create_gam_service_account")
+@require_tenant_access()
+def create_service_account(tenant_id):
+    """Create a GCP service account for GAM integration.
+
+    This creates a service account in our GCP project, generates credentials,
+    and stores them encrypted in the database. The partner then configures
+    this service account email in their GAM.
+    """
+    if session.get("role") == "viewer":
+        return jsonify({"success": False, "error": "Access denied"}), 403
+
+    try:
+        # Get GCP project ID from environment or configuration
+        gcp_project_id = os.environ.get("GCP_PROJECT_ID")
+        if not gcp_project_id:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "GCP_PROJECT_ID not configured. Please set this environment variable.",
+                    }
+                ),
+                500,
+            )
+
+        from src.services.gcp_service_account_service import GCPServiceAccountService
+
+        service = GCPServiceAccountService(gcp_project_id=gcp_project_id)
+
+        # Create service account for tenant
+        try:
+            service_account_email, _ = service.create_service_account_for_tenant(tenant_id=tenant_id)
+
+            return jsonify(
+                {
+                    "success": True,
+                    "service_account_email": service_account_email,
+                    "message": "Service account created successfully. Please add this email as a user in your Google Ad Manager with Trafficker role.",
+                }
+            )
+
+        except ValueError as e:
+            # Tenant not found or already has service account
+            return jsonify({"success": False, "error": str(e)}), 400
+
+        except Exception as e:
+            logger.error(f"Error creating service account for tenant {tenant_id}: {e}", exc_info=True)
+            return jsonify({"success": False, "error": f"Failed to create service account: {str(e)}"}), 500
+
+    except Exception as e:
+        logger.error(f"Error in create_service_account endpoint: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@gam_bp.route("/get-service-account-email", methods=["GET"])
+@require_tenant_access(api_mode=True)
+def get_service_account_email(tenant_id):
+    """Get the service account email for a tenant.
+
+    Returns the service account email if one has been created for this tenant.
+    """
+    try:
+        gcp_project_id = os.environ.get("GCP_PROJECT_ID")
+        if not gcp_project_id:
+            return jsonify({"error": "GCP_PROJECT_ID not configured"}), 500
+
+        from src.services.gcp_service_account_service import GCPServiceAccountService
+
+        service = GCPServiceAccountService(gcp_project_id=gcp_project_id)
+        email = service.get_service_account_email(tenant_id)
+
+        if email:
+            return jsonify({"success": True, "service_account_email": email})
+        else:
+            return jsonify({"success": True, "service_account_email": None, "message": "No service account created"})
+
+    except Exception as e:
+        logger.error(f"Error getting service account email: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @gam_bp.route("/api/line-item/<line_item_id>", methods=["GET"])
 @require_tenant_access(api_mode=True)
 def get_gam_line_item_api(tenant_id, line_item_id):

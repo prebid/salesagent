@@ -1233,3 +1233,84 @@ function savePrincipalMappings() {
         alert('Error: ' + error.message);
     });
 }
+
+// Service Account Management Functions
+function createServiceAccount() {
+    const button = document.getElementById('create-service-account-btn');
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Creating...';
+
+    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/create-service-account`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Service account created successfully!\n\nEmail: ' + data.service_account_email + '\n\n' + data.message);
+            // Reload page to show the service account email and next steps
+            location.reload();
+        } else {
+            alert('Error creating service account: ' + (data.error || 'Unknown error'));
+            button.disabled = false;
+            button.innerHTML = '🔑 Create Service Account';
+        }
+    })
+    .catch(error => {
+        alert('Error: ' + error.message);
+        button.disabled = false;
+        button.innerHTML = '🔑 Create Service Account';
+    });
+}
+
+function copyServiceAccountEmail() {
+    const emailElement = document.querySelector('code');
+    if (emailElement) {
+        const email = emailElement.textContent;
+        navigator.clipboard.writeText(email).then(() => {
+            const button = event.target;
+            const originalText = button.textContent;
+            button.textContent = '✓ Copied!';
+            button.classList.add('btn-success');
+            button.classList.remove('btn-secondary');
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.classList.remove('btn-success');
+                button.classList.add('btn-secondary');
+            }, 2000);
+        });
+    }
+}
+
+function testGAMServiceAccountConnection() {
+    const button = event.target;
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Testing...';
+
+    // Use existing GAM test connection endpoint
+    // The backend will automatically use service account if configured
+    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/test-connection`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        button.disabled = false;
+        button.innerHTML = 'Test Connection';
+
+        if (data.success) {
+            alert('✅ Connection successful!\n\nNetwork: ' + (data.network_name || 'N/A') + '\nNetwork Code: ' + (data.network_code || 'N/A'));
+        } else {
+            alert('❌ Connection failed!\n\n' + (data.error || 'Unknown error') + '\n\nPlease make sure:\n1. You added the service account email to your GAM\n2. You assigned the Trafficker role\n3. You clicked Save in GAM');
+        }
+    })
+    .catch(error => {
+        button.disabled = false;
+        button.innerHTML = 'Test Connection';
+        alert('Error: ' + error.message);
+    });
+}

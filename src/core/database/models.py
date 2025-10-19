@@ -572,7 +572,17 @@ class AdapterConfig(Base):
     # Google Ad Manager
     gam_network_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     gam_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
-    _gam_service_account_json: Mapped[str | None] = mapped_column("gam_service_account_json", Text, nullable=True)
+    _gam_service_account_json: Mapped[str | None] = mapped_column(
+        "gam_service_account_json",
+        Text,
+        nullable=True,
+        comment="Encrypted service account key. Required to authenticate AS the service account when calling GAM API. Partner must also add the email to their GAM for access.",
+    )
+    gam_service_account_email: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Email of auto-provisioned service account. Partner adds this to their GAM user list with appropriate permissions.",
+    )
     gam_auth_method: Mapped[str] = mapped_column(String(50), nullable=False, server_default="oauth")
     gam_trafficker_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     gam_manual_approval_required: Mapped[bool] = mapped_column(Boolean, default=False)

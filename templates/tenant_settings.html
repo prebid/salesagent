@@ -791,6 +791,55 @@
                     {% endif %}
                     {% endif %}
 
+                    <!-- Service Account Integration Option -->
+                    <div class="form-section" style="margin-top: 2rem; padding-top: 2rem; border-top: 2px solid #e5e7eb;">
+                        <h3>🔧 Alternative: Service Account Integration (Recommended for Partners)</h3>
+                        <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+                            For partner integrations, we can create and manage a service account for you. This is more secure and doesn't require sharing credentials.
+                        </p>
+
+                        {% if adapter_config and adapter_config.get('service_account_email') %}
+                        <!-- Service account already created -->
+                        <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981;">
+                            <h4>✅ Service Account Created</h4>
+                            <p style="margin: 0.5rem 0;">
+                                <strong>Service Account Email:</strong><br>
+                                <code style="background: #e5e7eb; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.9em;">{{ adapter_config.get('service_account_email') }}</code>
+                            </p>
+                            <div style="margin-top: 1rem; padding: 1rem; background: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 4px;">
+                                <p style="margin: 0; font-size: 0.875rem;"><strong>⚠️ Next Steps:</strong></p>
+                                <ol style="margin: 0.5rem 0 0 1.5rem; padding: 0; font-size: 0.875rem;">
+                                    <li>Log into your Google Ad Manager account</li>
+                                    <li>Go to <strong>Admin → Access & authorization → Users</strong></li>
+                                    <li>Click <strong>New user</strong></li>
+                                    <li>Add the service account email above</li>
+                                    <li>Assign the <strong>Trafficker</strong> role</li>
+                                    <li>Click <strong>Save</strong></li>
+                                    <li>Come back and click "Test Connection" below</li>
+                                </ol>
+                            </div>
+                            <div style="margin-top: 1rem;">
+                                <button onclick="testGAMServiceAccountConnection()" class="btn btn-primary btn-sm">
+                                    Test Connection
+                                </button>
+                                <button onclick="copyServiceAccountEmail()" class="btn btn-secondary btn-sm" style="margin-left: 0.5rem;">
+                                    📋 Copy Email
+                                </button>
+                            </div>
+                        </div>
+                        {% else %}
+                        <!-- No service account yet -->
+                        <div class="status-card" style="background: #f9fafb; border-left: 4px solid #9ca3af;">
+                            <p style="margin: 0 0 1rem 0; font-size: 0.875rem;">
+                                We'll create a service account in our GCP project and provide you with the email address. You then add this email as a user in your Google Ad Manager with the Trafficker role.
+                            </p>
+                            <button onclick="createServiceAccount()" class="btn btn-success" id="create-service-account-btn">
+                                🔑 Create Service Account
+                            </button>
+                        </div>
+                        {% endif %}
+                    </div>
+
                     <div class="form-group" style="margin-top: 2rem;">
                         {% if adapter_config and adapter_config.get('refresh_token') %}
                         <button onclick="saveGAMConfig()" class="btn btn-primary">Save Configuration</button>

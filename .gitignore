@@ -16,6 +16,10 @@ gam_ad_units.json
 client_secret*.json
 credentials*.json
 
+# GCP Service Account Keys
+*-key.json
+adcp-manager-key.json
+
 # Build artifacts
 *.egg-info/
 *.egg-info

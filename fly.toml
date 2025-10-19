@@ -55,6 +55,8 @@ primary_region = "iad"
   # A2A Configuration
   A2A_MOCK_MODE = "false"
   A2A_SERVER_URL = "https://sales-agent.scope3.com/a2a"
+  # GCP Configuration (for auto-provisioning service accounts)
+  GCP_PROJECT_ID = "bok-playground"
 
 [mounts]
   source = "adcp_data"

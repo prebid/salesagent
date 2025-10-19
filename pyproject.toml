@@ -8,6 +8,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=2.11.0", # Required for context.get_http_request() support
     "google-generativeai>=0.5.4",
+    "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
     "google-ads>=24.1.0",
     "requests>=2.32.3",

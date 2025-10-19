@@ -162,6 +162,7 @@ fi
 # Copy required files from root workspace
 echo ""
 echo "Copying files from root workspace..."
+cp $CONDUCTOR_ROOT_PATH/adcp-manager-key.json .
 
 # Create .env file with secrets from multiple sources
 echo "Creating .env file with secrets and workspace configuration..."
