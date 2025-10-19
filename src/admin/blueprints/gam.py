@@ -581,6 +581,10 @@ def sync_gam_inventory(tenant_id):
                     409,
                 )
 
+            # Extract config values before starting background thread (avoid session issues)
+            gam_network_code = adapter_config.gam_network_code
+            gam_refresh_token = adapter_config.gam_refresh_token
+
             # Create sync job
             sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
             sync_job = SyncJob(
@@ -613,12 +617,12 @@ def sync_gam_inventory(tenant_id):
                         oauth2_client = oauth2.GoogleRefreshTokenClient(
                             client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),
                             client_secret=os.environ.get("GAM_OAUTH_CLIENT_SECRET"),
-                            refresh_token=adapter_config.gam_refresh_token,
+                            refresh_token=gam_refresh_token,
                         )
 
                         # Create GAM client
                         client = ad_manager.AdManagerClient(
-                            oauth2_client, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
+                            oauth2_client, "AdCP Sales Agent", network_code=gam_network_code
                         )
 
                         # Initialize GAM inventory discovery
