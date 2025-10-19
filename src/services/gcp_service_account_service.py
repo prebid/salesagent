@@ -162,14 +162,23 @@ class GCPServiceAccountService:
 
             # Create service account
             try:
+                logger.info(f"Creating service account with account_id='{account_id}' for tenant {tenant_id}")
                 service_account = self._create_service_account(
                     account_id=account_id, display_name=display_name or f"AdCP Sales Agent - {tenant_id}"
                 )
-                logger.info(f"Created service account: {service_account.email}")
+                service_account_email = service_account.email
+                logger.info(f"Successfully created service account: {service_account_email}")
+
+                # Verify service account was created (helps catch propagation issues)
+                try:
+                    self._verify_service_account_exists(service_account_email)
+                except Exception as e:
+                    logger.warning(f"Service account verification failed, but continuing: {e}")
 
                 # Create key for service account
-                service_account_json = self._create_service_account_key(service_account.email)
-                logger.info(f"Created service account key for: {service_account.email}")
+                logger.info(f"Creating key for service account: {service_account_email}")
+                service_account_json = self._create_service_account_key(service_account_email)
+                logger.info(f"Successfully created service account key for: {service_account_email}")
 
                 # Store in database
                 adapter_config.gam_service_account_email = service_account.email
@@ -198,17 +207,47 @@ class GCPServiceAccountService:
         Raises:
             Exception: If creation fails
         """
-        request = types.CreateServiceAccountRequest()
-        request.account_id = account_id
-        request.name = f"projects/{self.gcp_project_id}"
+        try:
+            request = types.CreateServiceAccountRequest()
+            request.account_id = account_id
+            request.name = f"projects/{self.gcp_project_id}"
 
-        service_account = types.ServiceAccount()
-        service_account.display_name = display_name
-        request.service_account = service_account
+            service_account = types.ServiceAccount()
+            service_account.display_name = display_name
+            request.service_account = service_account
 
-        account = self.iam_client.create_service_account(request=request)
-        logger.info(f"Created service account: {account.email}")
-        return account
+            logger.info(
+                f"Calling IAM API to create service account: account_id={account_id}, project={self.gcp_project_id}"
+            )
+            account = self.iam_client.create_service_account(request=request)
+            logger.info(f"IAM API returned service account with email: {account.email}")
+            return account
+        except Exception as e:
+            logger.error(f"Failed to create service account with account_id={account_id}: {e}", exc_info=True)
+            raise
+
+    def _verify_service_account_exists(self, service_account_email: str) -> bool:
+        """Verify that a service account exists in GCP.
+
+        Args:
+            service_account_email: Email of the service account to verify
+
+        Returns:
+            True if exists
+
+        Raises:
+            Exception: If service account doesn't exist or verification fails
+        """
+        try:
+            request = iam_admin_v1.GetServiceAccountRequest()
+            request.name = f"projects/{self.gcp_project_id}/serviceAccounts/{service_account_email}"
+
+            account = self.iam_client.get_service_account(request=request)
+            logger.info(f"Verified service account exists: {account.email}")
+            return True
+        except Exception as e:
+            logger.error(f"Service account verification failed for {service_account_email}: {e}")
+            raise
 
     def _create_service_account_key(self, service_account_email: str) -> str:
         """Create a key for a service account.
@@ -222,16 +261,54 @@ class GCPServiceAccountService:
         Raises:
             Exception: If key creation fails
         """
-        request = types.CreateServiceAccountKeyRequest()
-        request.name = f"projects/{self.gcp_project_id}/serviceAccounts/{service_account_email}"
+        try:
+            request = types.CreateServiceAccountKeyRequest()
+            resource_name = f"projects/{self.gcp_project_id}/serviceAccounts/{service_account_email}"
+            request.name = resource_name
 
-        key = self.iam_client.create_service_account_key(request=request)
+            logger.info(f"Calling IAM API to create key for service account: {resource_name}")
+            key = self.iam_client.create_service_account_key(request=request)
 
-        # Extract private key data (this is the JSON credentials)
-        # The private_key_data is bytes, need to decode to string
-        service_account_json = key.private_key_data.decode("utf-8")
+            # Extract private key data (this is the JSON credentials)
+            # The private_key_data is bytes, need to decode to string
+            service_account_json = key.private_key_data.decode("utf-8")
+            logger.info(f"Successfully created and retrieved key for {service_account_email}")
 
-        return service_account_json
+            return service_account_json
+        except Exception as e:
+            logger.error(
+                f"Failed to create key for service account {service_account_email} (resource: {resource_name}): {e}",
+                exc_info=True,
+            )
+            raise
+
+    def test_connection(self) -> dict:
+        """Test GCP IAM API connectivity and permissions.
+
+        Returns:
+            Dict with test results including project, permissions, and any errors
+        """
+        result = {"project_id": self.gcp_project_id, "can_list": False, "can_create": False, "errors": []}
+
+        try:
+            # Test listing service accounts (requires serviceAccountViewer or higher)
+            list_request = iam_admin_v1.ListServiceAccountsRequest()
+            list_request.name = f"projects/{self.gcp_project_id}"
+
+            response = self.iam_client.list_service_accounts(request=list_request)
+            account_count = len(list(response))
+            result["can_list"] = True
+            result["service_account_count"] = account_count
+            logger.info(f"Successfully listed {account_count} service accounts in project {self.gcp_project_id}")
+        except Exception as e:
+            result["errors"].append(f"Failed to list service accounts: {e}")
+            logger.error(f"Failed to list service accounts: {e}", exc_info=True)
+
+        # Note: We can't really test 'can_create' without actually creating one,
+        # so we'll just check if we have the list permission as a basic sanity check
+        result["can_create"] = result["can_list"]  # Approximation
+
+        return result
 
     def get_service_account_email(self, tenant_id: str) -> str | None:
         """Get the service account email for a tenant.
