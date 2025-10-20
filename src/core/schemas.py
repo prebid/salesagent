@@ -1261,8 +1261,14 @@ class Creative(BaseModel):
         None, description="Package IDs or buyer_refs to assign this creative to"
     )
 
-    # Multi-asset support (AdCP spec)
-    assets: list[dict[str, Any]] | None = Field(None, description="For multi-asset formats like carousels")
+    # Multi-asset support (AdCP spec v2.4+)
+    # Assets are keyed by asset_id from the format's asset_requirements
+    # Example: {"main_image": {"asset_type": "image", "url": "..."}, "logo": {"asset_type": "image", "url": "..."}}
+    assets: dict[str, dict[str, Any]] | None = Field(
+        None,
+        description="Assets keyed by asset_id from format asset_requirements (AdCP v2.4+). "
+        "Keys MUST match asset_id values from the format specification.",
+    )
 
     # === AdCP v1.3+ Creative Management Fields ===
     # Fully compliant with AdCP specification for third-party tags and native creatives

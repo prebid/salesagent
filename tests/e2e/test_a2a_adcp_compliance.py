@@ -367,7 +367,7 @@ class TestA2AAdCPCompliance:
                 "add_creative_assets",
                 {
                     "media_buy_id": "mb_test_123",
-                    "assets": [{"url": "https://example.com/creative.jpg", "format": "display_300x250"}],
+                    "assets": {"main": {"asset_type": "image", "url": "https://example.com/creative.jpg"}},
                 },
             ),
             ("get_signals", {"signal_types": ["contextual"]}),

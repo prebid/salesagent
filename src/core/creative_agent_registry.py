@@ -480,10 +480,29 @@ class CreativeAgentRegistry:
         Args:
             agent_url: URL of the creative agent
             format_id: Format ID for the creative
-            creative_manifest: Complete creative manifest with all required assets
+            creative_manifest: Complete creative manifest with all required assets.
+                Assets MUST be a dictionary keyed by asset_id from format's asset_requirements.
+                Example: {
+                    "creative_id": "c123",
+                    "name": "Banner Ad",
+                    "format_id": "display_300x250",
+                    "assets": {
+                        "main_image": {"asset_type": "image", "url": "https://..."},
+                        "logo": {"asset_type": "image", "url": "https://..."}
+                    }
+                }
 
         Returns:
-            Preview response containing array of preview variants with preview_url
+            Preview response containing array of preview variants with preview_url.
+            Example: {
+                "previews": [{
+                    "name": "Default",
+                    "renders": [{
+                        "preview_url": "https://...",
+                        "dimensions": {"width": 300, "height": 250}
+                    }]
+                }]
+            }
         """
         # Build MCP client
         transport = StreamableHttpTransport(url=f"{agent_url}/mcp")

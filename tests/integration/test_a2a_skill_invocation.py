@@ -763,7 +763,7 @@ class TestA2ASkillInvocation:
                         "creative_id": "creative_test_1",
                         "name": "Test Creative",
                         "format_id": "display_300x250",
-                        "assets": [{"asset_id": "asset_1", "url": "https://example.com/creative.jpg"}],
+                        "assets": {"asset_1": {"asset_type": "image", "url": "https://example.com/creative.jpg"}},
                     }
                 ]
             }

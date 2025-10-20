@@ -345,7 +345,7 @@ class TestIntegration:
                             "name": "Display Banner",
                             "type": "display",
                             "description": "Standard banner",
-                            "assets": [],
+                            "assets": {},
                             "delivery_options": {},
                         }
                     ],

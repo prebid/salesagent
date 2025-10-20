@@ -93,7 +93,7 @@ class TestA2AMessageFieldValidation:
                         "buyer_ref": "creative_test_001",
                         "format_id": "display_300x250",
                         "name": "Test Creative",
-                        "assets": [{"asset_type": "image", "url": "https://example.com/image.jpg"}],
+                        "assets": {"main_image": {"asset_type": "image", "url": "https://example.com/image.jpg"}},
                     }
                 ],
                 "validation_mode": "strict",
