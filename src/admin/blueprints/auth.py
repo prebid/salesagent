@@ -316,7 +316,6 @@ def google_callback():
                 # Check if user is super admin or has tenant access
                 if is_super_admin(email):
                     session["tenant_id"] = tenant_id
-                    session["tenant_name"] = tenant.name
                     session["is_super_admin"] = True
                     flash(f"Welcome {user.get('name', email)}! (Super Admin)", "success")
 
@@ -344,7 +343,6 @@ def google_callback():
                     user_record = ensure_user_in_tenant(email, tenant_id, role="admin", name=user.get("name"))
 
                     session["tenant_id"] = tenant_id
-                    session["tenant_name"] = tenant.name
                     session["is_tenant_admin"] = user_record.role == "admin"
                     flash(f"Welcome {user.get('name', email)}!", "success")
 
@@ -418,7 +416,6 @@ def google_callback():
             user_record = ensure_user_in_tenant(email, tenant.tenant_id, role="admin", name=user.get("name"))
 
             session["tenant_id"] = tenant.tenant_id
-            session["tenant_name"] = tenant.name
             session["is_tenant_admin"] = user_record.role == "admin"
             flash(f"Welcome {user.get('name', email)}! ({access_type.title()} Access)", "success")
 
@@ -479,7 +476,6 @@ def select_tenant():
         for tenant in session["available_tenants"]:
             if tenant["tenant_id"] == tenant_id:
                 session["tenant_id"] = tenant_id
-                session["tenant_name"] = tenant["name"]
                 session["is_tenant_admin"] = tenant["is_admin"]
                 session.pop("available_tenants", None)  # Clean up
                 flash(f"Welcome to {tenant['name']}!", "success")

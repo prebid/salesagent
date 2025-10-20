@@ -115,9 +115,7 @@
     <div class="header">
         <div class="container">
             <h1>
-                {% if session.tenant_name and session.role != 'super_admin' %}
-                    {{ session.tenant_name }} Sales Agent Dashboard
-                {% elif tenant and tenant.name %}
+                {% if tenant and tenant.name and session.role != 'super_admin' %}
                     {{ tenant.name }} Sales Agent Dashboard
                 {% else %}
                     Sales Agent Admin
@@ -130,15 +128,15 @@
                         {% if session.role == 'super_admin' %}
                             <span class="status" style="background: #9b59b6;">Super Admin</span>
                         {% elif session.role == 'tenant_admin' %}
-                            <span class="status" style="background: #3498db;">{{ session.tenant_name }} (Legacy Admin)</span>
+                            <span class="status" style="background: #3498db;">{% if tenant %}{{ tenant.name }}{% endif %} (Legacy Admin)</span>
                         {% elif session.role == 'admin' %}
-                            <span class="status" style="background: #e74c3c;">{{ session.tenant_name }} Admin</span>
+                            <span class="status" style="background: #e74c3c;">{% if tenant %}{{ tenant.name }}{% endif %} Admin</span>
                         {% elif session.role == 'manager' %}
-                            <span class="status" style="background: #f39c12;">{{ session.tenant_name }} Manager</span>
+                            <span class="status" style="background: #f39c12;">{% if tenant %}{{ tenant.name }}{% endif %} Manager</span>
                         {% elif session.role == 'viewer' %}
-                            <span class="status" style="background: #95a5a6;">{{ session.tenant_name }} Viewer</span>
+                            <span class="status" style="background: #95a5a6;">{% if tenant %}{{ tenant.name }}{% endif %} Viewer</span>
                         {% else %}
-                            <span class="status" style="background: #3498db;">{{ session.tenant_name }}</span>
+                            <span class="status" style="background: #3498db;">{% if tenant %}{{ tenant.name }}{% endif %}</span>
                         {% endif %}
                     </span>
                     {% if session.role == 'super_admin' %}

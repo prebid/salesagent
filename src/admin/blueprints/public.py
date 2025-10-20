@@ -316,7 +316,6 @@ def provision_tenant():
 
             # Set tenant context in session
             session["tenant_id"] = tenant_id
-            session["tenant_name"] = publisher_name
             session["is_tenant_admin"] = True
             session["role"] = "admin"
 

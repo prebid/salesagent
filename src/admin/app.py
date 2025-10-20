@@ -220,13 +220,37 @@ def create_app(config=None):
         logger.info(f"Redirecting external domain {apx_host}/admin to subdomain: {redirect_url}")
         return redirect(redirect_url, code=302)
 
-    # Add context processor to make script_name available in templates
+    # Add context processor to make script_name and tenant available in templates
     @app.context_processor
-    def inject_script_name():
-        """Make the script_name (e.g., /admin) available in all templates."""
+    def inject_context():
+        """Make the script_name (e.g., /admin) and current tenant available in all templates."""
+        from flask import session
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Tenant
+
+        context = {}
+
+        # Inject script_name
         if os.environ.get("PRODUCTION") == "true":
-            return {"script_name": "/admin"}
-        return {"script_name": ""}
+            context["script_name"] = "/admin"
+        else:
+            context["script_name"] = ""
+
+        # Inject fresh tenant data if user is logged in with a tenant
+        tenant_id = session.get("tenant_id")
+        if tenant_id:
+            try:
+                with get_db_session() as db_session:
+                    stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+                    tenant = db_session.scalars(stmt).first()
+                    if tenant:
+                        context["tenant"] = tenant
+            except Exception as e:
+                logger.warning(f"Could not load tenant {tenant_id} for context: {e}")
+
+        return context
 
     # Add after_request handler to fix hardcoded URLs in HTML responses
     @app.after_request
