@@ -549,6 +549,38 @@
                             <div id="apxdnswidget"></div>
                         </div>
 
+                        <!-- Domain Registration Status (Approximated Backend) -->
+                        <div id="domain-registration-container" style="display: none; margin-top: 1rem; padding: 1rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+                            <h4 style="font-size: 1rem; margin-bottom: 0.5rem;">🔒 Domain Registration Status</h4>
+                            <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+                                Your domain must be registered with the backend to enable HTTPS/TLS and traffic routing.
+                            </p>
+
+                            <!-- Status display -->
+                            <div id="domain-status-display" style="margin-bottom: 1rem;">
+                                <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem; background: white; border: 1px solid #e5e7eb; border-radius: 6px;">
+                                    <span id="domain-status-icon" style="font-size: 1.25rem;">⏳</span>
+                                    <div style="flex: 1;">
+                                        <div style="font-weight: 600; font-size: 0.875rem;" id="domain-status-text">Checking status...</div>
+                                        <div style="color: #6b7280; font-size: 0.75rem;" id="domain-status-details"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Action buttons -->
+                            <div style="display: flex; gap: 0.5rem;">
+                                <button type="button" class="btn btn-secondary btn-sm" id="check-domain-status-btn" onclick="checkDomainRegistrationStatus()">
+                                    Check Status
+                                </button>
+                                <button type="button" class="btn btn-primary btn-sm" id="register-domain-btn" onclick="registerDomain()" style="display: none;">
+                                    Register Domain
+                                </button>
+                                <button type="button" class="btn btn-outline-danger btn-sm" id="unregister-domain-btn" onclick="unregisterDomain()" style="display: none;">
+                                    Unregister Domain
+                                </button>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
 
@@ -2228,6 +2260,22 @@ document.addEventListener("DOMContentLoaded", function() {
     // Initialize on page load if virtual host has a value
     initializeDNSWidget();
 
+    // Show/hide domain registration container based on virtual host
+    function updateDomainRegistrationVisibility() {
+        const virtualHost = virtualHostInput.value.trim();
+        const domainRegistrationContainer = document.getElementById('domain-registration-container');
+
+        if (virtualHost && domainRegistrationContainer) {
+            domainRegistrationContainer.style.display = 'block';
+        } else if (domainRegistrationContainer) {
+            domainRegistrationContainer.style.display = 'none';
+        }
+    }
+
+    // Watch for virtual host changes to show/hide registration container
+    virtualHostInput.addEventListener('input', updateDomainRegistrationVisibility);
+    updateDomainRegistrationVisibility(); // Initial check
+
     // Form submission handler - show warning if DNS not verified
     const accountForm = document.getElementById('account-settings-form');
     if (accountForm) {
@@ -2260,6 +2308,168 @@ document.addEventListener("DOMContentLoaded", function() {
         });
     }
 });
+
+// Domain Registration Functions (defined globally for onclick handlers)
+async function checkDomainRegistrationStatus() {
+    const virtualHostInput = document.getElementById('virtual_host');
+    const domain = virtualHostInput.value.trim();
+
+    if (!domain) {
+        alert('Please enter a domain first');
+        return;
+    }
+
+    const statusIcon = document.getElementById('domain-status-icon');
+    const statusText = document.getElementById('domain-status-text');
+    const statusDetails = document.getElementById('domain-status-details');
+    const registerBtn = document.getElementById('register-domain-btn');
+    const unregisterBtn = document.getElementById('unregister-domain-btn');
+    const checkBtn = document.getElementById('check-domain-status-btn');
+
+    // Show loading state
+    statusIcon.textContent = '⏳';
+    statusText.textContent = 'Checking status...';
+    statusDetails.textContent = '';
+    checkBtn.disabled = true;
+
+    try {
+        const scriptName = document.getElementById('settings-config').dataset.scriptName || '';
+        const tenantId = document.getElementById('settings-config').dataset.tenantId;
+
+        const response = await fetch(`${scriptName}/tenant/${tenantId}/settings/approximated-domain-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ domain: domain })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            if (data.registered) {
+                // Domain is registered
+                statusIcon.textContent = '✅';
+                statusText.textContent = 'Domain Registered';
+                statusDetails.textContent = data.tls_enabled
+                    ? 'HTTPS/TLS enabled - domain is ready'
+                    : 'TLS certificate pending (wait 1-2 minutes)';
+                registerBtn.style.display = 'none';
+                unregisterBtn.style.display = 'inline-block';
+            } else {
+                // Domain not registered
+                statusIcon.textContent = '❌';
+                statusText.textContent = 'Domain Not Registered';
+                statusDetails.textContent = 'Click "Register Domain" to enable HTTPS/TLS';
+                registerBtn.style.display = 'inline-block';
+                unregisterBtn.style.display = 'none';
+            }
+        } else {
+            statusIcon.textContent = '⚠️';
+            statusText.textContent = 'Check Failed';
+            statusDetails.textContent = data.error || 'Unknown error';
+            registerBtn.style.display = 'none';
+            unregisterBtn.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Error checking domain status:', error);
+        statusIcon.textContent = '⚠️';
+        statusText.textContent = 'Error';
+        statusDetails.textContent = error.message;
+        registerBtn.style.display = 'none';
+        unregisterBtn.style.display = 'none';
+    } finally {
+        checkBtn.disabled = false;
+    }
+}
+
+async function registerDomain() {
+    const virtualHostInput = document.getElementById('virtual_host');
+    const domain = virtualHostInput.value.trim();
+
+    if (!domain) {
+        alert('Please enter a domain first');
+        return;
+    }
+
+    if (!confirm(`Register domain ${domain}?\n\nThis will:\n• Issue HTTPS/TLS certificate\n• Enable traffic routing\n• Take 1-2 minutes to complete`)) {
+        return;
+    }
+
+    const registerBtn = document.getElementById('register-domain-btn');
+    registerBtn.disabled = true;
+    registerBtn.textContent = 'Registering...';
+
+    try {
+        const scriptName = document.getElementById('settings-config').dataset.scriptName || '';
+        const tenantId = document.getElementById('settings-config').dataset.tenantId;
+
+        const response = await fetch(`${scriptName}/tenant/${tenantId}/settings/approximated-register-domain`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ domain: domain })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            alert(`✅ ${data.message}\n\nWait 1-2 minutes for TLS certificate to be issued.`);
+            // Refresh status
+            await checkDomainRegistrationStatus();
+        } else {
+            alert(`❌ Registration failed:\n${data.error}`);
+        }
+    } catch (error) {
+        console.error('Error registering domain:', error);
+        alert(`❌ Error: ${error.message}`);
+    } finally {
+        registerBtn.disabled = false;
+        registerBtn.textContent = 'Register Domain';
+    }
+}
+
+async function unregisterDomain() {
+    const virtualHostInput = document.getElementById('virtual_host');
+    const domain = virtualHostInput.value.trim();
+
+    if (!domain) {
+        alert('Please enter a domain first');
+        return;
+    }
+
+    if (!confirm(`⚠️ Unregister domain ${domain}?\n\nThis will:\n• Remove HTTPS/TLS certificate\n• Stop traffic routing\n• Domain will stop working\n\nAre you sure?`)) {
+        return;
+    }
+
+    const unregisterBtn = document.getElementById('unregister-domain-btn');
+    unregisterBtn.disabled = true;
+    unregisterBtn.textContent = 'Unregistering...';
+
+    try {
+        const scriptName = document.getElementById('settings-config').dataset.scriptName || '';
+        const tenantId = document.getElementById('settings-config').dataset.tenantId;
+
+        const response = await fetch(`${scriptName}/tenant/${tenantId}/settings/approximated-unregister-domain`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ domain: domain })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            alert(`✅ ${data.message}`);
+            // Refresh status
+            await checkDomainRegistrationStatus();
+        } else {
+            alert(`❌ Unregistration failed:\n${data.error}`);
+        }
+    } catch (error) {
+        console.error('Error unregistering domain:', error);
+        alert(`❌ Error: ${error.message}`);
+    } finally {
+        unregisterBtn.disabled = false;
+        unregisterBtn.textContent = 'Unregister Domain';
+    }
+}
 </script>
 
 <!-- Edit Principal Mappings Modal -->
