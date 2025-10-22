@@ -138,6 +138,41 @@ class ApproveAdaptationResponse(BaseModel):
     message: str
 
 
+def run_async_in_sync_context(coroutine):
+    """
+    Helper to run async coroutines from sync code, handling event loop conflicts.
+
+    This is needed when calling async functions from sync code that may be called
+    from an async context (like FastMCP tools). It detects if there's already a
+    running event loop and uses a thread pool to avoid "asyncio.run() cannot be
+    called from a running event loop" errors.
+
+    Args:
+        coroutine: The async coroutine to run
+
+    Returns:
+        The result of the coroutine
+    """
+    import asyncio
+    import concurrent.futures
+
+    try:
+        # Check if there's already a running event loop
+        asyncio.get_running_loop()
+        # We're in an async context, run in thread pool to avoid nested loop error
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(lambda: asyncio.run(coroutine))
+            return future.result()
+    except RuntimeError:
+        # No running loop, safe to create one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coroutine)
+        finally:
+            loop.close()
+
+
 def safe_parse_json_field(field_value, field_name="field", default=None):
     """
     Safely parse a database field that might be JSON string (SQLite) or dict (PostgreSQL JSONB).
@@ -2025,14 +2060,15 @@ def _sync_creatives_impl(
                             if creative_format:
                                 try:
                                     # Get format to find creative agent URL
-                                    import asyncio
 
                                     from src.core.creative_agent_registry import get_creative_agent_registry
 
                                     registry = get_creative_agent_registry()
 
                                     # List all formats to find the matching one
-                                    all_formats = asyncio.run(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
+                                    all_formats = run_async_in_sync_context(
+                                        registry.list_all_formats(tenant_id=tenant["tenant_id"])
+                                    )
 
                                     # Find matching format
                                     format_obj = None
@@ -2111,7 +2147,7 @@ def _sync_creatives_impl(
                                                     f"context_id={context_id}"
                                                 )
 
-                                                build_result = asyncio.run(
+                                                build_result = run_async_in_sync_context(
                                                     registry.build_creative(
                                                         agent_url=format_obj.agent_url,
                                                         format_id=creative_format,
@@ -2204,7 +2240,7 @@ def _sync_creatives_impl(
                                                 f"has_url={bool(data.get('url'))}"
                                             )
 
-                                            preview_result = asyncio.run(
+                                            preview_result = run_async_in_sync_context(
                                                 registry.preview_creative(
                                                     agent_url=format_obj.agent_url,
                                                     format_id=format_id_str,
@@ -2348,6 +2384,9 @@ def _sync_creatives_impl(
                         # Create new creative
                         from src.core.database.models import Creative as DBCreative
 
+                        # Extract creative_id for error reporting (must be defined before any validation)
+                        creative_id = creative.get("creative_id", "unknown")
+
                         # Prepare data field with all creative properties
                         data = {
                             "url": creative.get("url"),
@@ -2370,14 +2409,15 @@ def _sync_creatives_impl(
                         if creative_format:
                             try:
                                 # Get format to find creative agent URL
-                                import asyncio
 
                                 from src.core.creative_agent_registry import get_creative_agent_registry
 
                                 registry = get_creative_agent_registry()
 
                                 # List all formats to find the matching one
-                                all_formats = asyncio.run(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
+                                all_formats = run_async_in_sync_context(
+                                    registry.list_all_formats(tenant_id=tenant["tenant_id"])
+                                )
 
                                 # Find matching format
                                 format_obj = None
@@ -2454,7 +2494,7 @@ def _sync_creatives_impl(
                                             f"message_length={len(message) if message else 0}"
                                         )
 
-                                        build_result = asyncio.run(
+                                        build_result = run_async_in_sync_context(
                                             registry.build_creative(
                                                 agent_url=format_obj.agent_url,
                                                 format_id=format_id_str,
@@ -2535,7 +2575,7 @@ def _sync_creatives_impl(
                                             f"has_url={bool(data.get('url'))}"
                                         )
 
-                                        preview_result = asyncio.run(
+                                        preview_result = run_async_in_sync_context(
                                             registry.preview_creative(
                                                 agent_url=format_obj.agent_url,
                                                 format_id=format_id_str,
