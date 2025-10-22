@@ -636,7 +636,20 @@ function performSelectiveSync() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
     })
-        .then(response => response.json())
+        .then(async response => {
+            // Check HTTP status first before parsing JSON
+            if (!response.ok) {
+                // Try to parse error message from JSON response
+                try {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+                } catch (e) {
+                    // If JSON parsing fails, use status text
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+            }
+            return response.json();
+        })
         .then(data => {
             if (data.error) {
                 throw new Error(data.error);

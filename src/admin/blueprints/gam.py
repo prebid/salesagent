@@ -546,9 +546,11 @@ def sync_gam_inventory(tenant_id):
         return jsonify({"success": False, "error": "Access denied"}), 403
 
     try:
-        # Get sync mode from request body (default to "full")
+        # Get sync mode from request body (default to "incremental" - safer since it doesn't delete data)
         request_data = request.get_json() or {}
-        sync_mode = request_data.get("mode", "full")
+        sync_mode = request_data.get("mode", "incremental")
+
+        logger.info(f"Inventory sync request - tenant: {tenant_id}, mode: {sync_mode}, request_data: {request_data}")
 
         if sync_mode not in ["full", "incremental"]:
             return jsonify({"success": False, "error": "Invalid sync mode. Must be 'full' or 'incremental'"}), 400

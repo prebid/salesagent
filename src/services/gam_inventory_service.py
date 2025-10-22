@@ -731,23 +731,33 @@ class GAMInventoryService:
 
         self.db.commit()
 
-    def get_ad_unit_tree(self, tenant_id: str) -> dict[str, Any]:
+    def get_ad_unit_tree(self, tenant_id: str, limit: int = 1000) -> dict[str, Any]:
         """
         Get hierarchical ad unit tree from database.
 
+        For large inventories (10k+ ad units), this returns a limited set
+        to prevent browser timeouts. Use the search endpoint for finding
+        specific ad units.
+
         Args:
             tenant_id: Tenant ID
+            limit: Maximum number of ad units to return (default 1000)
 
         Returns:
-            Hierarchical tree structure
+            Hierarchical tree structure with limited ad units
         """
-        # Get all ad units
-        stmt = select(GAMInventory).where(
-            and_(
-                GAMInventory.tenant_id == tenant_id,
-                GAMInventory.inventory_type == "ad_unit",
-                GAMInventory.status != "STALE",
+        # Get ad units with limit to prevent timeouts on large inventories
+        stmt = (
+            select(GAMInventory)
+            .where(
+                and_(
+                    GAMInventory.tenant_id == tenant_id,
+                    GAMInventory.inventory_type == "ad_unit",
+                    GAMInventory.status != "STALE",
+                )
             )
+            .order_by(GAMInventory.name)
+            .limit(limit)
         )
         ad_units = self.db.scalars(stmt).all()
 
@@ -864,9 +874,13 @@ class GAMInventoryService:
         inventory_type: str | None = None,
         status: str | None = None,
         sizes: list[dict[str, int]] | None = None,
+        limit: int = 500,
     ) -> list[dict[str, Any]]:
         """
         Search inventory with filters.
+
+        For large inventories, results are limited to prevent timeouts.
+        Use more specific search terms to narrow results.
 
         Args:
             tenant_id: Tenant ID
@@ -874,9 +888,10 @@ class GAMInventoryService:
             inventory_type: Filter by type (ad_unit, placement, label)
             status: Filter by status
             sizes: Filter ad units by size support
+            limit: Maximum results to return (default 500)
 
         Returns:
-            List of matching inventory items
+            List of matching inventory items (up to limit)
         """
         filters = [GAMInventory.tenant_id == tenant_id, GAMInventory.status != "STALE"]
 
@@ -892,7 +907,7 @@ class GAMInventoryService:
                 or_(GAMInventory.name.ilike(f"%{query}%"), func.cast(GAMInventory.path, String).ilike(f"%{query}%"))
             )
 
-        stmt = select(GAMInventory).where(and_(*filters))
+        stmt = select(GAMInventory).where(and_(*filters)).order_by(GAMInventory.name).limit(limit)
         results = self.db.scalars(stmt).all()
 
         # Filter by sizes if specified

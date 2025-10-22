@@ -1350,7 +1350,7 @@ REJECT - Creative cannot be approved:
                             {% if running_sync %}
                                 <strong>⏳ Sync in progress...</strong>
                                 <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem;">
-                                    Started {{ running_sync.started_at.strftime('%I:%M %p') }}. This may take several minutes for large inventories.
+                                    Started {{ running_sync.started_at.strftime('%Y-%m-%d %I:%M %p UTC') }}. This may take several minutes for large inventories.
                                 </p>
                                 <p style="margin: 0.5rem 0 0 0; font-size: 0.75rem; color: #666;">
                                     <em>The sync will continue even if you navigate away from this page.</em>
