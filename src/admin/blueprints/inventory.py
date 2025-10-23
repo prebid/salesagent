@@ -573,9 +573,7 @@ def sync_inventory(tenant_id):
                     )
 
                     # Create GAM client with service account credentials
-                    client = ad_manager.AdManagerClient(
-                        oauth2_credentials, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
-                    )
+                    client = ad_manager.AdManagerClient(oauth2_credentials, adapter_config.gam_network_code)
                 finally:
                     # Clean up temp file
                     try:
