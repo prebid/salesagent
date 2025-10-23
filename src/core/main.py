@@ -2873,14 +2873,22 @@ def _sync_creatives_impl(
                 for package_id in package_ids:
                     # Find which media buy this package belongs to
                     # Packages are stored in media_buy.raw_request["packages"]
+                    # Note: package_id can be either the server-generated package_id OR buyer_ref
                     stmt = select(MediaBuy).filter_by(tenant_id=tenant["tenant_id"])
                     media_buys = session.scalars(stmt).all()
 
                     media_buy_id = None
+                    actual_package_id = None
                     for mb in media_buys:
                         packages = mb.raw_request.get("packages", [])
-                        if any(pkg.get("package_id") == package_id for pkg in packages):
-                            media_buy_id = mb.media_buy_id
+                        # Check both package_id (server-generated) and buyer_ref (client-provided)
+                        for pkg in packages:
+                            if pkg.get("package_id") == package_id or pkg.get("buyer_ref") == package_id:
+                                media_buy_id = mb.media_buy_id
+                                # Use the server-generated package_id for storage
+                                actual_package_id = pkg.get("package_id", package_id)
+                                break
+                        if media_buy_id:
                             break
 
                     if not media_buy_id:
@@ -2896,7 +2904,7 @@ def _sync_creatives_impl(
                         tenant_id=tenant["tenant_id"],
                         assignment_id=str(uuid.uuid4()),
                         media_buy_id=media_buy_id,
-                        package_id=package_id,
+                        package_id=actual_package_id,  # Use resolved package_id
                         creative_id=creative_id,
                         weight=100,
                         created_at=datetime.now(UTC),

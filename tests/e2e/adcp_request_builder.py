@@ -106,6 +106,9 @@ def build_sync_creatives_request(
     patch: bool = False,
     dry_run: bool = False,
     webhook_url: str | None = None,
+    assignments: dict[str, list[str]] | None = None,
+    delete_missing: bool = False,
+    validation_mode: str = "strict",
 ) -> dict[str, Any]:
     """
     Build a valid AdCP V2.3 sync_creatives request.
@@ -115,6 +118,9 @@ def build_sync_creatives_request(
         patch: If True, only update provided fields (default: False)
         dry_run: If True, preview changes without applying (default: False)
         webhook_url: Optional webhook for async notifications
+        assignments: Optional dict mapping creative_id to list of package_ids
+        delete_missing: If True, delete creatives not in the sync list (default: False)
+        validation_mode: Validation mode - "strict" or "lenient" (default: strict)
 
     Returns:
         Valid AdCP V2.3 SyncCreativesRequest dict
@@ -123,8 +129,12 @@ def build_sync_creatives_request(
         "creatives": creatives,
         "patch": patch,
         "dry_run": dry_run,
-        "validation_mode": "strict",
+        "validation_mode": validation_mode,
+        "delete_missing": delete_missing,
     }
+
+    if assignments:
+        request["assignments"] = assignments
 
     if webhook_url:
         request["push_notification_config"] = {
