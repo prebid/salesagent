@@ -507,7 +507,7 @@ def sync_inventory(tenant_id):
                 select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
             ).first()
 
-            if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
+            if not adapter_config or not adapter_config.gam_network_code:
                 return (
                     jsonify(
                         {
@@ -517,6 +517,25 @@ def sync_inventory(tenant_id):
                     400,
                 )
 
+            # Check authentication method - support both OAuth and service account
+            auth_method = getattr(adapter_config, "gam_auth_method", None)
+
+            if not auth_method:
+                # Legacy: infer auth method from available credentials
+                if adapter_config.gam_refresh_token:
+                    auth_method = "oauth"
+                elif hasattr(adapter_config, "gam_service_account_json") and adapter_config.gam_service_account_json:
+                    auth_method = "service_account"
+                else:
+                    return (
+                        jsonify(
+                            {
+                                "error": "Please connect your GAM account before trying to sync inventory. Go to Ad Server settings to configure GAM."
+                            }
+                        ),
+                        400,
+                    )
+
             # Parse request body for selective sync options
             data = request.get_json() or {}
             sync_types = data.get("types", None)  # None means sync all
@@ -525,22 +544,60 @@ def sync_inventory(tenant_id):
 
             # Import and use GAM inventory discovery
             import os
+            import json
+            import tempfile
 
             from googleads import ad_manager, oauth2
+            import google.oauth2.service_account
 
             from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 
-            # Create OAuth2 client
-            oauth2_client = oauth2.GoogleRefreshTokenClient(
-                client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),
-                client_secret=os.environ.get("GAM_OAUTH_CLIENT_SECRET"),
-                refresh_token=adapter_config.gam_refresh_token,
-            )
+            # Create credentials based on auth method
+            if auth_method == "service_account":
+                # Service account authentication
+                if not hasattr(adapter_config, "gam_service_account_json") or not adapter_config.gam_service_account_json:
+                    return jsonify({"error": "Service account credentials not found"}), 400
 
-            # Create GAM client
-            client = ad_manager.AdManagerClient(
-                oauth2_client, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
-            )
+                # Get service account JSON (already decrypted by model property)
+                service_account_json_str = adapter_config.gam_service_account_json
+
+                # Write to temporary file (required for google.oauth2.service_account.Credentials)
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                    f.write(service_account_json_str)
+                    temp_keyfile = f.name
+
+                try:
+                    # Create service account credentials (same pattern as GAM health check)
+                    oauth2_credentials = google.oauth2.service_account.Credentials.from_service_account_file(
+                        temp_keyfile, scopes=["https://www.googleapis.com/auth/dfp"]
+                    )
+
+                    # Create GAM client with service account credentials
+                    client = ad_manager.AdManagerClient(
+                        oauth2_credentials, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
+                    )
+                finally:
+                    # Clean up temp file
+                    try:
+                        os.unlink(temp_keyfile)
+                    except Exception:
+                        pass
+            else:
+                # OAuth authentication
+                if not adapter_config.gam_refresh_token:
+                    return jsonify({"error": "OAuth refresh token not found"}), 400
+
+                # Create OAuth2 client
+                oauth2_client = oauth2.GoogleRefreshTokenClient(
+                    client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),
+                    client_secret=os.environ.get("GAM_OAUTH_CLIENT_SECRET"),
+                    refresh_token=adapter_config.gam_refresh_token,
+                )
+
+                # Create GAM client
+                client = ad_manager.AdManagerClient(
+                    oauth2_client, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
+                )
 
             # Initialize GAM inventory discovery
             discovery = GAMInventoryDiscovery(client=client, tenant_id=tenant_id)
