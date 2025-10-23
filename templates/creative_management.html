@@ -146,7 +146,7 @@
                 <strong style="font-size: 0.9rem; color: #666;">📊 Campaigns ({{ creative.assignment_count }}):</strong>
                 <div style="margin-top: 0.5rem; display: flex; flex-wrap: gap: 0.5rem;">
                     {% for buy in creative.media_buys %}
-                    <a href="{{ url_for('operations.operations_dashboard', tenant_id=tenant_id) }}#{{ buy.media_buy_id }}"
+                    <a href="{{ url_for('operations.reporting', tenant_id=tenant_id) }}#{{ buy.media_buy_id }}"
                        style="padding: 0.25rem 0.75rem; background: #f3f4f6; border-radius: 4px; text-decoration: none; color: #374151; font-size: 0.85rem;">
                         {{ buy.order_name }} ({{ buy.status }})
                     </a>

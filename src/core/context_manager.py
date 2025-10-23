@@ -594,8 +594,8 @@ class ContextManager(DatabaseManager):
                         headers = {"Content-Type": "application/json"}
 
                         # Add HMAC signature if configured
-                        if webhook_config.auth_type == "hmac_sha256" and webhook_config.auth_config:
-                            secret = webhook_config.auth_config.get("secret")
+                        if webhook_config.authentication_type == "hmac_sha256" and webhook_config.webhook_secret:
+                            secret = webhook_config.webhook_secret
                             if secret:
                                 from src.core.webhook_authenticator import WebhookAuthenticator
 
