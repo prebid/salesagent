@@ -131,28 +131,111 @@ class AdCPRequestHandler(RequestHandler):
         Raises:
             ValueError: If authentication fails
         """
+        # Import tenant resolution functions
+        from src.core.config_loader import (
+            get_tenant_by_id,
+            get_tenant_by_subdomain,
+            get_tenant_by_virtual_host,
+            set_current_tenant,
+        )
+
         # Get request headers for debugging (case-insensitive lookup)
         headers = getattr(_request_context, "request_headers", {})
-        apx_host = "NOT_PRESENT"
-        for key, value in headers.items():
-            if key.lower() == "apx-incoming-host":
-                apx_host = value
-                break
 
-        # Authenticate using the token
-        principal_id = get_principal_from_token(auth_token)
+        # Helper to get header case-insensitively
+        def get_header(header_name: str) -> str | None:
+            for key, value in headers.items():
+                if key.lower() == header_name.lower():
+                    return value
+            return None
+
+        apx_host = get_header("apx-incoming-host") or "NOT_PRESENT"
+        host = get_header("host")
+        tenant_header = get_header("x-adcp-tenant")
+
+        logger.info("[A2A AUTH] Resolving tenant from headers:")
+        logger.info(f"  Host: {host}")
+        logger.info(f"  Apx-Incoming-Host: {apx_host}")
+        logger.info(f"  x-adcp-tenant: {tenant_header}")
+
+        # CRITICAL: Resolve tenant from headers FIRST (before authentication)
+        # This matches the MCP pattern in main.py::get_principal_from_context()
+        requested_tenant_id = None
+        tenant_context = None
+        detection_method = None
+
+        # 1. Check Host header for subdomain
+        if not requested_tenant_id and host:
+            subdomain = host.split(".")[0] if "." in host else None
+            if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
+                logger.info(f"[A2A AUTH] Looking up tenant by subdomain: {subdomain}")
+                tenant_context = get_tenant_by_subdomain(subdomain)
+                if tenant_context:
+                    requested_tenant_id = tenant_context["tenant_id"]
+                    detection_method = "subdomain"
+                    set_current_tenant(tenant_context)
+                    logger.info(f"[A2A AUTH] ✅ Tenant detected from subdomain: {subdomain} → {requested_tenant_id}")
+                else:
+                    # Try virtual host lookup
+                    logger.info(f"[A2A AUTH] Trying virtual host lookup for: {host}")
+                    tenant_context = get_tenant_by_virtual_host(host)
+                    if tenant_context:
+                        requested_tenant_id = tenant_context["tenant_id"]
+                        detection_method = "host header (virtual host)"
+                        set_current_tenant(tenant_context)
+                        logger.info(f"[A2A AUTH] ✅ Tenant detected from Host header: {host} → {requested_tenant_id}")
+
+        # 2. Check x-adcp-tenant header
+        if not requested_tenant_id and tenant_header:
+            logger.info(f"[A2A AUTH] Looking up tenant from x-adcp-tenant: {tenant_header}")
+            tenant_context = get_tenant_by_subdomain(tenant_header)
+            if tenant_context:
+                requested_tenant_id = tenant_context["tenant_id"]
+                detection_method = "x-adcp-tenant (subdomain)"
+                set_current_tenant(tenant_context)
+                logger.info(
+                    f"[A2A AUTH] ✅ Tenant detected from x-adcp-tenant: {tenant_header} → {requested_tenant_id}"
+                )
+            else:
+                # Fallback: assume it's a tenant_id
+                tenant_context = get_tenant_by_id(tenant_header)
+                if tenant_context:
+                    requested_tenant_id = tenant_context["tenant_id"]
+                    detection_method = "x-adcp-tenant (direct)"
+                    set_current_tenant(tenant_context)
+                    logger.info(f"[A2A AUTH] ✅ Tenant detected from x-adcp-tenant: {requested_tenant_id}")
+
+        # 3. Check Apx-Incoming-Host header (for Approximated.app routing)
+        if not requested_tenant_id and apx_host and apx_host != "NOT_PRESENT":
+            logger.info(f"[A2A AUTH] Looking up tenant by Apx-Incoming-Host: {apx_host}")
+            tenant_context = get_tenant_by_virtual_host(apx_host)
+            if tenant_context:
+                requested_tenant_id = tenant_context["tenant_id"]
+                detection_method = "apx-incoming-host"
+                set_current_tenant(tenant_context)
+                logger.info(f"[A2A AUTH] ✅ Tenant detected from Apx-Incoming-Host: {apx_host} → {requested_tenant_id}")
+
+        if requested_tenant_id:
+            logger.info(f"[A2A AUTH] Final tenant_id: {requested_tenant_id} (via {detection_method})")
+        else:
+            logger.warning("[A2A AUTH] ⚠️  No tenant detected from headers - will use global token lookup")
+
+        # NOW authenticate with tenant context (if we have one)
+        principal_id = get_principal_from_token(auth_token, requested_tenant_id)
         if not principal_id:
             raise ServerError(
                 InvalidRequestError(
                     message=f"Invalid authentication token (not found in database). "
                     f"Token: {auth_token[:20]}..., "
+                    f"Tenant: {requested_tenant_id or 'any'}, "
                     f"Apx-Incoming-Host: {apx_host}"
                 )
             )
 
-        # Get tenant info (set as side effect of authentication)
-        tenant = get_current_tenant()
-        if not tenant:
+        # Get tenant info (either from header detection or from token lookup)
+        if not tenant_context:
+            tenant_context = get_current_tenant()
+        if not tenant_context:
             raise ServerError(
                 InvalidRequestError(
                     message=f"Unable to determine tenant from authentication. "
@@ -165,10 +248,14 @@ class AdCPRequestHandler(RequestHandler):
         if not context_id:
             context_id = f"a2a_{datetime.now(UTC).timestamp()}"
 
+        logger.info(
+            f"[A2A AUTH] ✅ Authentication successful: tenant={tenant_context['tenant_id']}, principal={principal_id}"
+        )
+
         # Create ToolContext
         return ToolContext(
             context_id=context_id,
-            tenant_id=tenant["tenant_id"],
+            tenant_id=tenant_context["tenant_id"],
             principal_id=principal_id,
             tool_name=tool_name,
             request_timestamp=datetime.now(UTC),

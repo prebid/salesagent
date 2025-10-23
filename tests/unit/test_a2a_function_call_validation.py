@@ -189,9 +189,17 @@ class TestFunctionCallIntegration:
         try:
             # Mock only the external dependencies, not the function calls themselves
             with (pytest.MonkeyPatch().context() as m,):
-                # Mock external auth functions
-                m.setattr("src.a2a_server.adcp_a2a_server.get_principal_from_token", lambda x: "test_principal")
+                # Mock external auth functions (updated signature: token, tenant_id)
+                m.setattr(
+                    "src.a2a_server.adcp_a2a_server.get_principal_from_token",
+                    lambda token, tenant_id=None: "test_principal",
+                )
                 m.setattr("src.a2a_server.adcp_a2a_server.get_current_tenant", lambda: {"tenant_id": "test_tenant"})
+                # Mock tenant resolution functions (return None to use fallback path)
+                m.setattr("src.core.config_loader.get_tenant_by_subdomain", lambda x: None)
+                m.setattr("src.core.config_loader.get_tenant_by_virtual_host", lambda x: None)
+                m.setattr("src.core.config_loader.get_tenant_by_id", lambda x: None)
+                m.setattr("src.core.config_loader.set_current_tenant", lambda x: None)
 
                 # Test that the method can be called without errors
                 tool_context = self.handler._create_tool_context_from_a2a(
