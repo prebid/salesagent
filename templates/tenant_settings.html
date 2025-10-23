@@ -2349,9 +2349,25 @@ async function checkDomainRegistrationStatus() {
                 // Domain is registered
                 statusIcon.textContent = '✅';
                 statusText.textContent = 'Domain Registered';
-                statusDetails.textContent = data.tls_enabled
-                    ? 'HTTPS/TLS enabled - domain is ready'
-                    : 'TLS certificate pending (wait 1-2 minutes)';
+
+                let details = [];
+                if (data.ssl_active) {
+                    details.push('HTTPS/TLS active');
+                } else if (data.tls_enabled) {
+                    details.push('TLS certificate pending (wait 1-2 minutes)');
+                } else {
+                    details.push('TLS not yet active');
+                }
+
+                if (data.target_address) {
+                    details.push(`Backend: ${data.target_address}`);
+                }
+
+                if (data.status) {
+                    details.push(`Status: ${data.status}`);
+                }
+
+                statusDetails.textContent = details.join(' • ');
                 registerBtn.style.display = 'none';
                 unregisterBtn.style.display = 'inline-block';
             } else {

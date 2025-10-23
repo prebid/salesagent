@@ -1060,21 +1060,30 @@ def check_approximated_domain_status(tenant_id):
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
-        # Check domain registration status
+        # Check domain registration status using correct Approximated API endpoint
         response = requests.get(
-            f"https://cloud.approximated.app/api/domains/{domain}",
-            headers={"api-key": approximated_api_key},
+            f"https://cloud.approximated.app/api/vhosts/by/incoming/{domain}",
+            headers={
+                "api-key": approximated_api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
             timeout=10,
         )
 
         if response.status_code == 200:
-            domain_data = response.json()
+            response_data = response.json()
+            # Approximated API wraps data in 'data' key
+            domain_data = response_data.get("data", response_data)
+
             return jsonify(
                 {
                     "success": True,
                     "registered": True,
                     "status": domain_data.get("status"),
-                    "tls_enabled": domain_data.get("tls_enabled", False),
+                    "tls_enabled": domain_data.get("has_ssl", False),
+                    "ssl_active": domain_data.get("status", "").startswith("ACTIVE_SSL"),
+                    "target_address": domain_data.get("target_address"),
                 }
             )
         elif response.status_code == 404:
@@ -1113,11 +1122,21 @@ def register_approximated_domain(tenant_id):
             if tenant.virtual_host != domain:
                 return jsonify({"success": False, "error": "Domain must match tenant's virtual_host"}), 400
 
-        # Register domain with Approximated
+        # Get backend target address from environment
+        backend_url = os.getenv("APPROXIMATED_BACKEND_URL", "adcp-sales-agent.fly.dev")
+
+        # Register domain with Approximated using correct API endpoint
         response = requests.post(
-            "https://cloud.approximated.app/api/domains",
-            headers={"api-key": approximated_api_key},
-            json={"domain": domain},
+            "https://cloud.approximated.app/api/vhosts",
+            headers={
+                "api-key": approximated_api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={
+                "incoming_address": domain,
+                "target_address": backend_url,
+            },
             timeout=10,
         )
 
@@ -1155,10 +1174,14 @@ def unregister_approximated_domain(tenant_id):
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
-        # Unregister domain from Approximated
+        # Unregister domain from Approximated using correct API endpoint
         response = requests.delete(
-            f"https://cloud.approximated.app/api/domains/{domain}",
-            headers={"api-key": approximated_api_key},
+            f"https://cloud.approximated.app/api/vhosts/by/incoming/{domain}",
+            headers={
+                "api-key": approximated_api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
             timeout=10,
         )
 
