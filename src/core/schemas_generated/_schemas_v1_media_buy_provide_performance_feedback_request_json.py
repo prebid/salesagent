@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -50,15 +50,15 @@ class ProvidePerformanceFeedbackRequest(BaseModel):
         ),
     ]
     package_id: Annotated[
-        Optional[str],
+        str | None,
         Field(description="Specific package within the media buy (if feedback is package-specific)", min_length=1),
     ] = None
     creative_id: Annotated[
-        Optional[str], Field(description="Specific creative asset (if feedback is creative-specific)", min_length=1)
+        str | None, Field(description="Specific creative asset (if feedback is creative-specific)", min_length=1)
     ] = None
-    metric_type: Annotated[Optional[MetricType], Field(description="The business metric being measured")] = (
+    metric_type: Annotated[MetricType | None, Field(description="The business metric being measured")] = (
         "overall_performance"
     )
-    feedback_source: Annotated[Optional[FeedbackSource], Field(description="Source of the performance data")] = (
+    feedback_source: Annotated[FeedbackSource | None, Field(description="Source of the performance data")] = (
         "buyer_attribution"
     )

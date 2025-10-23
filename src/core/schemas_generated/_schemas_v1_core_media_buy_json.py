@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field, RootModel
 
@@ -40,31 +40,31 @@ class TargetingOverlay(BaseModel):
         extra="forbid",
     )
     geo_country_any_of: Annotated[
-        Optional[list[GeoCountryAnyOfItem]],
+        list[GeoCountryAnyOfItem] | None,
         Field(
             description="Restrict delivery to specific countries (ISO codes). Use for regulatory compliance or RCT testing."
         ),
     ] = None
     geo_region_any_of: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         Field(
             description="Restrict delivery to specific regions/states. Use for regulatory compliance or RCT testing."
         ),
     ] = None
     geo_metro_any_of: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         Field(
             description="Restrict delivery to specific metro areas (DMA codes). Use for regulatory compliance or RCT testing."
         ),
     ] = None
     geo_postal_code_any_of: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         Field(
             description="Restrict delivery to specific postal/ZIP codes. Use for regulatory compliance or RCT testing."
         ),
     ] = None
     frequency_cap: Annotated[
-        Optional[FrequencyCap],
+        FrequencyCap | None,
         Field(description="Frequency capping settings for package-level application", title="Frequency Cap"),
     ] = None
 
@@ -74,7 +74,7 @@ class CreativeAssignment(BaseModel):
         extra="forbid",
     )
     creative_id: Annotated[str, Field(description="Unique identifier for the creative")]
-    weight: Annotated[Optional[float], Field(description="Delivery weight for this creative", ge=0.0, le=100.0)] = None
+    weight: Annotated[float | None, Field(description="Delivery weight for this creative", ge=0.0, le=100.0)] = None
 
 
 class FormatIdsToProvideItem(BaseModel):
@@ -108,33 +108,33 @@ class Package(BaseModel):
         extra="forbid",
     )
     package_id: Annotated[str, Field(description="Publisher's unique identifier for the package")]
-    buyer_ref: Annotated[Optional[str], Field(description="Buyer's reference identifier for this package")] = None
-    product_id: Annotated[Optional[str], Field(description="ID of the product this package is based on")] = None
+    buyer_ref: Annotated[str | None, Field(description="Buyer's reference identifier for this package")] = None
+    product_id: Annotated[str | None, Field(description="ID of the product this package is based on")] = None
     budget: Annotated[
-        Optional[float],
+        float | None,
         Field(description="Budget allocation for this package in the currency specified by the pricing option", ge=0.0),
     ] = None
-    pacing: Annotated[Optional[Pacing], Field(description="Budget pacing strategy", title="Pacing")] = None
+    pacing: Annotated[Pacing | None, Field(description="Budget pacing strategy", title="Pacing")] = None
     pricing_option_id: Annotated[
-        Optional[str], Field(description="ID of the selected pricing option from the product's pricing_options array")
+        str | None, Field(description="ID of the selected pricing option from the product's pricing_options array")
     ] = None
     bid_price: Annotated[
-        Optional[float],
+        float | None,
         Field(description="Bid price for auction-based CPM pricing (present if using cpm-auction-option)", ge=0.0),
     ] = None
-    impressions: Annotated[Optional[float], Field(description="Impression goal for this package", ge=0.0)] = None
+    impressions: Annotated[float | None, Field(description="Impression goal for this package", ge=0.0)] = None
     targeting_overlay: Annotated[
-        Optional[TargetingOverlay],
+        TargetingOverlay | None,
         Field(
             description="Optional geographic refinements for media buys. Most targeting should be expressed in the brief and handled by the publisher. These fields are primarily for geographic restrictions (RCT testing, regulatory compliance).",
             title="Targeting Overlay",
         ),
     ] = None
     creative_assignments: Annotated[
-        Optional[list[CreativeAssignment]], Field(description="Creative assets assigned to this package")
+        list[CreativeAssignment] | None, Field(description="Creative assets assigned to this package")
     ] = None
     format_ids_to_provide: Annotated[
-        Optional[list[FormatIdsToProvideItem]],
+        list[FormatIdsToProvideItem] | None,
         Field(description="Format IDs that creative assets will be provided for this package"),
     ] = None
     status: Annotated[Status1, Field(description="Status of a package", title="Package Status")]
@@ -145,13 +145,13 @@ class MediaBuy(BaseModel):
         extra="forbid",
     )
     media_buy_id: Annotated[str, Field(description="Publisher's unique identifier for the media buy")]
-    buyer_ref: Annotated[Optional[str], Field(description="Buyer's reference identifier for this media buy")] = None
+    buyer_ref: Annotated[str | None, Field(description="Buyer's reference identifier for this media buy")] = None
     status: Annotated[Status, Field(description="Status of a media buy", title="Media Buy Status")]
     promoted_offering: Annotated[str, Field(description="Description of advertiser and what is being promoted")]
     total_budget: Annotated[float, Field(description="Total budget amount", ge=0.0)]
     packages: Annotated[list[Package], Field(description="Array of packages within this media buy")]
     creative_deadline: Annotated[
-        Optional[AwareDatetime], Field(description="ISO 8601 timestamp for creative upload deadline")
+        AwareDatetime | None, Field(description="ISO 8601 timestamp for creative upload deadline")
     ] = None
-    created_at: Annotated[Optional[AwareDatetime], Field(description="Creation timestamp")] = None
-    updated_at: Annotated[Optional[AwareDatetime], Field(description="Last update timestamp")] = None
+    created_at: Annotated[AwareDatetime | None, Field(description="Creation timestamp")] = None
+    updated_at: Annotated[AwareDatetime | None, Field(description="Last update timestamp")] = None

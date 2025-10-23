@@ -5,15 +5,15 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field
 
 
 class Colors(BaseModel):
-    primary: Optional[str] = None
-    secondary: Optional[str] = None
-    accent: Optional[str] = None
+    primary: str | None = None
+    secondary: str | None = None
+    accent: str | None = None
 
 
 class PromotedOfferingsAsset(BaseModel):
@@ -22,8 +22,8 @@ class PromotedOfferingsAsset(BaseModel):
     )
     asset_type: Literal["promoted_offerings"]
     url: Annotated[
-        Optional[AnyUrl], Field(description="URL of the advertiser's brand or offering (e.g., https://retailer.com)")
+        AnyUrl | None, Field(description="URL of the advertiser's brand or offering (e.g., https://retailer.com)")
     ] = None
-    colors: Annotated[Optional[Colors], Field(description="Brand colors")] = None
-    fonts: Annotated[Optional[list[str]], Field(description="Brand fonts")] = None
-    tone: Annotated[Optional[str], Field(description="Brand tone/voice")] = None
+    colors: Annotated[Colors | None, Field(description="Brand colors")] = None
+    fonts: Annotated[list[str] | None, Field(description="Brand fonts")] = None
+    tone: Annotated[str | None, Field(description="Brand tone/voice")] = None

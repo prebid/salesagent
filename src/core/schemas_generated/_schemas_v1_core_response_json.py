@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,7 +15,7 @@ class ProtocolResponse(BaseModel):
         extra="forbid",
     )
     message: Annotated[str, Field(description="Human-readable summary")]
-    context_id: Annotated[Optional[str], Field(description="Session continuity identifier")] = None
+    context_id: Annotated[str | None, Field(description="Session continuity identifier")] = None
     data: Annotated[
-        Optional[Any], Field(description="AdCP task-specific response data (see individual task response schemas)")
+        Any | None, Field(description="AdCP task-specific response data (see individual task response schemas)")
     ] = None

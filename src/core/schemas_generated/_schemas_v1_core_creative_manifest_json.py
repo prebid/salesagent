@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Literal, Optional, Union
+from typing import Annotated, Literal
 
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field
 
@@ -47,9 +47,9 @@ class Assets(BaseModel):
     url: Annotated[AnyUrl, Field(description="URL to hosted image asset")]
     width: Annotated[int, Field(description="Image width in pixels", ge=1)]
     height: Annotated[int, Field(description="Image height in pixels", ge=1)]
-    format: Annotated[Optional[Format], Field(description="Image file format")] = None
-    file_size: Annotated[Optional[int], Field(description="File size in bytes", ge=0)] = None
-    alt: Annotated[Optional[str], Field(description="Alternative text for accessibility")] = None
+    format: Annotated[Format | None, Field(description="Image file format")] = None
+    file_size: Annotated[int | None, Field(description="File size in bytes", ge=0)] = None
+    alt: Annotated[str | None, Field(description="Alternative text for accessibility")] = None
 
 
 class Format1(Enum):
@@ -75,12 +75,12 @@ class Assets14(BaseModel):
     width: Annotated[int, Field(description="Video width in pixels", ge=1)]
     height: Annotated[int, Field(description="Video height in pixels", ge=1)]
     duration_seconds: Annotated[float, Field(description="Video duration in seconds", ge=0.0)]
-    format: Annotated[Optional[Format1], Field(description="Video container format")] = None
-    codec: Annotated[Optional[Codec], Field(description="Video codec")] = None
-    bitrate_mbps: Annotated[Optional[float], Field(description="Video bitrate in Mbps", ge=0.0)] = None
-    file_size: Annotated[Optional[int], Field(description="File size in bytes", ge=0)] = None
+    format: Annotated[Format1 | None, Field(description="Video container format")] = None
+    codec: Annotated[Codec | None, Field(description="Video codec")] = None
+    bitrate_mbps: Annotated[float | None, Field(description="Video bitrate in Mbps", ge=0.0)] = None
+    file_size: Annotated[int | None, Field(description="File size in bytes", ge=0)] = None
     aspect_ratio: Annotated[
-        Optional[str], Field(description="Aspect ratio (e.g., '16:9', '9:16')", pattern="^\\d+:\\d+$")
+        str | None, Field(description="Aspect ratio (e.g., '16:9', '9:16')", pattern="^\\d+:\\d+$")
     ] = None
 
 
@@ -120,12 +120,12 @@ class Assets15(BaseModel):
     asset_type: Literal["audio"]
     url: Annotated[AnyUrl, Field(description="URL to hosted audio asset")]
     duration_seconds: Annotated[float, Field(description="Audio duration in seconds", ge=0.0)]
-    format: Annotated[Optional[Format2], Field(description="Audio file format")] = None
-    codec: Annotated[Optional[Codec1], Field(description="Audio codec")] = None
-    bitrate_kbps: Annotated[Optional[float], Field(description="Audio bitrate in Kbps", ge=0.0)] = None
-    sample_rate_hz: Annotated[Optional[SampleRateHz], Field(description="Sample rate in Hz")] = None
-    channels: Annotated[Optional[Channels], Field(description="Audio channel configuration")] = None
-    file_size: Annotated[Optional[int], Field(description="File size in bytes", ge=0)] = None
+    format: Annotated[Format2 | None, Field(description="Audio file format")] = None
+    codec: Annotated[Codec1 | None, Field(description="Audio codec")] = None
+    bitrate_kbps: Annotated[float | None, Field(description="Audio bitrate in Kbps", ge=0.0)] = None
+    sample_rate_hz: Annotated[SampleRateHz | None, Field(description="Sample rate in Hz")] = None
+    channels: Annotated[Channels | None, Field(description="Audio channel configuration")] = None
+    file_size: Annotated[int | None, Field(description="File size in bytes", ge=0)] = None
 
 
 class VastVersion(Enum):
@@ -143,8 +143,8 @@ class Assets16(BaseModel):
     asset_type: Literal["vast_tag"]
     content: Annotated[str, Field(description="Complete VAST XML content")]
     vast_version: Annotated[VastVersion, Field(description="VAST specification version")]
-    vpaid_enabled: Annotated[Optional[bool], Field(description="Whether VPAID is used")] = None
-    duration_seconds: Annotated[Optional[float], Field(description="Expected video duration in seconds", ge=0.0)] = None
+    vpaid_enabled: Annotated[bool | None, Field(description="Whether VPAID is used")] = None
+    duration_seconds: Annotated[float | None, Field(description="Expected video duration in seconds", ge=0.0)] = None
 
 
 class Format3(Enum):
@@ -159,8 +159,8 @@ class Assets17(BaseModel):
     )
     asset_type: Literal["text"]
     content: Annotated[str, Field(description="Text content")]
-    length: Annotated[Optional[int], Field(description="Character count", ge=0)] = None
-    format: Annotated[Optional[Format3], Field(description="Text format")] = "plain"
+    length: Annotated[int | None, Field(description="Character count", ge=0)] = None
+    format: Annotated[Format3 | None, Field(description="Text format")] = "plain"
 
 
 class Purpose(Enum):
@@ -176,7 +176,7 @@ class Assets18(BaseModel):
     )
     asset_type: Literal["url"]
     url: Annotated[AnyUrl, Field(description="The URL")]
-    purpose: Annotated[Optional[Purpose], Field(description="Purpose of this URL")] = None
+    purpose: Annotated[Purpose | None, Field(description="Purpose of this URL")] = None
 
 
 class Method(Enum):
@@ -199,8 +199,8 @@ class Method1(Enum):
 
 class Security(BaseModel):
     method: Method1
-    hmac_header: Optional[str] = None
-    api_key_header: Optional[str] = None
+    hmac_header: str | None = None
+    api_key_header: str | None = None
 
 
 class Assets19(BaseModel):
@@ -209,15 +209,15 @@ class Assets19(BaseModel):
     )
     asset_type: Literal["webhook"]
     url: Annotated[AnyUrl, Field(description="Webhook URL to call for dynamic content")]
-    method: Optional[Method] = "POST"
-    timeout_ms: Annotated[Optional[int], Field(ge=10, le=5000)] = 500
+    method: Method | None = "POST"
+    timeout_ms: Annotated[int | None, Field(ge=10, le=5000)] = 500
     supported_macros: Annotated[
-        Optional[list[str]], Field(description="Universal macros that can be passed to webhook")
+        list[str] | None, Field(description="Universal macros that can be passed to webhook")
     ] = None
-    required_macros: Annotated[Optional[list[str]], Field(description="Universal macros that must be provided")] = None
+    required_macros: Annotated[list[str] | None, Field(description="Universal macros that must be provided")] = None
     response_type: ResponseType
     security: Security
-    fallback_required: Optional[bool] = True
+    fallback_required: bool | None = True
 
 
 class Assets20(BaseModel):
@@ -226,10 +226,10 @@ class Assets20(BaseModel):
     )
     asset_type: Literal["html"]
     content: Annotated[str, Field(description="Complete HTML content")]
-    url: Annotated[Optional[AnyUrl], Field(description="URL to externally hosted HTML file")] = None
-    width: Annotated[Optional[int], Field(description="Ad width in pixels", ge=1)] = None
-    height: Annotated[Optional[int], Field(description="Ad height in pixels", ge=1)] = None
-    file_size: Annotated[Optional[int], Field(description="Total file size in bytes", ge=0)] = None
+    url: Annotated[AnyUrl | None, Field(description="URL to externally hosted HTML file")] = None
+    width: Annotated[int | None, Field(description="Ad width in pixels", ge=1)] = None
+    height: Annotated[int | None, Field(description="Ad height in pixels", ge=1)] = None
+    file_size: Annotated[int | None, Field(description="Total file size in bytes", ge=0)] = None
 
 
 class Assets21(BaseModel):
@@ -237,11 +237,11 @@ class Assets21(BaseModel):
         extra="forbid",
     )
     asset_type: Literal["html"]
-    content: Annotated[Optional[str], Field(description="Complete HTML content")] = None
+    content: Annotated[str | None, Field(description="Complete HTML content")] = None
     url: Annotated[AnyUrl, Field(description="URL to externally hosted HTML file")]
-    width: Annotated[Optional[int], Field(description="Ad width in pixels", ge=1)] = None
-    height: Annotated[Optional[int], Field(description="Ad height in pixels", ge=1)] = None
-    file_size: Annotated[Optional[int], Field(description="Total file size in bytes", ge=0)] = None
+    width: Annotated[int | None, Field(description="Ad width in pixels", ge=1)] = None
+    height: Annotated[int | None, Field(description="Ad height in pixels", ge=1)] = None
+    file_size: Annotated[int | None, Field(description="Total file size in bytes", ge=0)] = None
 
 
 class Assets22(BaseModel):
@@ -250,8 +250,8 @@ class Assets22(BaseModel):
     )
     asset_type: Literal["javascript"]
     content: Annotated[str, Field(description="JavaScript code content")]
-    url: Annotated[Optional[AnyUrl], Field(description="URL to external JavaScript file")] = None
-    inline: Annotated[Optional[bool], Field(description="Whether code should be inlined vs external script tag")] = None
+    url: Annotated[AnyUrl | None, Field(description="URL to external JavaScript file")] = None
+    inline: Annotated[bool | None, Field(description="Whether code should be inlined vs external script tag")] = None
 
 
 class Assets23(BaseModel):
@@ -259,9 +259,9 @@ class Assets23(BaseModel):
         extra="forbid",
     )
     asset_type: Literal["javascript"]
-    content: Annotated[Optional[str], Field(description="JavaScript code content")] = None
+    content: Annotated[str | None, Field(description="JavaScript code content")] = None
     url: Annotated[AnyUrl, Field(description="URL to external JavaScript file")]
-    inline: Annotated[Optional[bool], Field(description="Whether code should be inlined vs external script tag")] = None
+    inline: Annotated[bool | None, Field(description="Whether code should be inlined vs external script tag")] = None
 
 
 class CreativeManifest(BaseModel):
@@ -272,7 +272,7 @@ class CreativeManifest(BaseModel):
         FormatId, Field(description="Structured format identifier with agent URL and format name", title="Format ID")
     ]
     promoted_offering: Annotated[
-        Optional[str],
+        str | None,
         Field(
             description="Product name or offering being advertised. Maps to promoted_offerings in create_media_buy request to associate creative with the product being promoted."
         ),
@@ -280,17 +280,17 @@ class CreativeManifest(BaseModel):
     assets: Annotated[
         dict[
             str,
-            Union[
-                Assets,
-                Assets14,
-                Assets15,
-                Assets16,
-                Assets17,
-                Assets18,
-                Assets19,
-                Union[Assets20, Assets21],
-                Union[Assets22, Assets23],
-            ],
+            Assets
+            | Assets14
+            | Assets15
+            | Assets16
+            | Assets17
+            | Assets18
+            | Assets19
+            | Assets20
+            | Assets21
+            | Assets22
+            | Assets23,
         ],
         Field(
             description="Map of asset IDs to actual asset content. Each key MUST match an asset_id from the format's assets_required array (e.g., 'banner_image', 'clickthrough_url', 'video_file', 'vast_tag'). The asset_id is the technical identifier used to match assets to format requirements."

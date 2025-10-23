@@ -5,16 +5,16 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class QuartileData(BaseModel):
-    q1_views: Annotated[Optional[float], Field(description="25% completion views", ge=0.0)] = None
-    q2_views: Annotated[Optional[float], Field(description="50% completion views", ge=0.0)] = None
-    q3_views: Annotated[Optional[float], Field(description="75% completion views", ge=0.0)] = None
-    q4_views: Annotated[Optional[float], Field(description="100% completion views", ge=0.0)] = None
+    q1_views: Annotated[float | None, Field(description="25% completion views", ge=0.0)] = None
+    q2_views: Annotated[float | None, Field(description="50% completion views", ge=0.0)] = None
+    q3_views: Annotated[float | None, Field(description="75% completion views", ge=0.0)] = None
+    q4_views: Annotated[float | None, Field(description="100% completion views", ge=0.0)] = None
 
 
 class VenueBreakdownItem(BaseModel):
@@ -22,30 +22,30 @@ class VenueBreakdownItem(BaseModel):
         extra="forbid",
     )
     venue_id: Annotated[str, Field(description="Venue identifier")]
-    venue_name: Annotated[Optional[str], Field(description="Human-readable venue name")] = None
+    venue_name: Annotated[str | None, Field(description="Human-readable venue name")] = None
     venue_type: Annotated[
-        Optional[str], Field(description="Venue type (e.g., 'airport', 'transit', 'retail', 'billboard')")
+        str | None, Field(description="Venue type (e.g., 'airport', 'transit', 'retail', 'billboard')")
     ] = None
     impressions: Annotated[int, Field(description="Impressions delivered at this venue", ge=0)]
-    loop_plays: Annotated[Optional[int], Field(description="Loop plays at this venue", ge=0)] = None
-    screens_used: Annotated[Optional[int], Field(description="Number of screens used at this venue", ge=0)] = None
+    loop_plays: Annotated[int | None, Field(description="Loop plays at this venue", ge=0)] = None
+    screens_used: Annotated[int | None, Field(description="Number of screens used at this venue", ge=0)] = None
 
 
 class DoohMetrics(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    loop_plays: Annotated[Optional[int], Field(description="Number of times ad played in rotation", ge=0)] = None
-    screens_used: Annotated[Optional[int], Field(description="Number of unique screens displaying the ad", ge=0)] = None
-    screen_time_seconds: Annotated[Optional[int], Field(description="Total display time in seconds", ge=0)] = None
+    loop_plays: Annotated[int | None, Field(description="Number of times ad played in rotation", ge=0)] = None
+    screens_used: Annotated[int | None, Field(description="Number of unique screens displaying the ad", ge=0)] = None
+    screen_time_seconds: Annotated[int | None, Field(description="Total display time in seconds", ge=0)] = None
     sov_achieved: Annotated[
-        Optional[float], Field(description="Actual share of voice delivered (0.0 to 1.0)", ge=0.0, le=1.0)
+        float | None, Field(description="Actual share of voice delivered (0.0 to 1.0)", ge=0.0, le=1.0)
     ] = None
     calculation_notes: Annotated[
-        Optional[str], Field(description="Explanation of how DOOH impressions were calculated")
+        str | None, Field(description="Explanation of how DOOH impressions were calculated")
     ] = None
     venue_breakdown: Annotated[
-        Optional[list[VenueBreakdownItem]], Field(description="Per-venue performance breakdown")
+        list[VenueBreakdownItem] | None, Field(description="Per-venue performance breakdown")
     ] = None
 
 
@@ -53,37 +53,37 @@ class DeliveryMetrics(BaseModel):
     model_config = ConfigDict(
         extra="allow",
     )
-    impressions: Annotated[Optional[float], Field(description="Impressions delivered", ge=0.0)] = None
-    spend: Annotated[Optional[float], Field(description="Amount spent", ge=0.0)] = None
-    clicks: Annotated[Optional[float], Field(description="Total clicks", ge=0.0)] = None
-    ctr: Annotated[Optional[float], Field(description="Click-through rate (clicks/impressions)", ge=0.0, le=1.0)] = None
-    views: Annotated[Optional[float], Field(description="Views at threshold (for CPV)", ge=0.0)] = None
-    completed_views: Annotated[Optional[float], Field(description="100% completions (for CPCV)", ge=0.0)] = None
+    impressions: Annotated[float | None, Field(description="Impressions delivered", ge=0.0)] = None
+    spend: Annotated[float | None, Field(description="Amount spent", ge=0.0)] = None
+    clicks: Annotated[float | None, Field(description="Total clicks", ge=0.0)] = None
+    ctr: Annotated[float | None, Field(description="Click-through rate (clicks/impressions)", ge=0.0, le=1.0)] = None
+    views: Annotated[float | None, Field(description="Views at threshold (for CPV)", ge=0.0)] = None
+    completed_views: Annotated[float | None, Field(description="100% completions (for CPCV)", ge=0.0)] = None
     completion_rate: Annotated[
-        Optional[float], Field(description="Completion rate (completed_views/impressions)", ge=0.0, le=1.0)
+        float | None, Field(description="Completion rate (completed_views/impressions)", ge=0.0, le=1.0)
     ] = None
     conversions: Annotated[
-        Optional[float], Field(description="Conversions (reserved for future CPA pricing support)", ge=0.0)
+        float | None, Field(description="Conversions (reserved for future CPA pricing support)", ge=0.0)
     ] = None
     leads: Annotated[
-        Optional[float], Field(description="Leads generated (reserved for future CPL pricing support)", ge=0.0)
+        float | None, Field(description="Leads generated (reserved for future CPL pricing support)", ge=0.0)
     ] = None
-    grps: Annotated[Optional[float], Field(description="Gross Rating Points delivered (for CPP)", ge=0.0)] = None
+    grps: Annotated[float | None, Field(description="Gross Rating Points delivered (for CPP)", ge=0.0)] = None
     reach: Annotated[
-        Optional[float],
+        float | None,
         Field(
             description="Unique reach - units depend on measurement provider (e.g., individuals, households, devices, cookies). See delivery_measurement.provider for methodology.",
             ge=0.0,
         ),
     ] = None
     frequency: Annotated[
-        Optional[float],
+        float | None,
         Field(
             description="Average frequency per individual (typically measured over campaign duration, but can vary by measurement provider)",
             ge=0.0,
         ),
     ] = None
-    quartile_data: Annotated[Optional[QuartileData], Field(description="Video quartile completion data")] = None
+    quartile_data: Annotated[QuartileData | None, Field(description="Video quartile completion data")] = None
     dooh_metrics: Annotated[
-        Optional[DoohMetrics], Field(description="DOOH-specific metrics (only included for DOOH campaigns)")
+        DoohMetrics | None, Field(description="DOOH-specific metrics (only included for DOOH campaigns)")
     ] = None

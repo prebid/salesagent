@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field
 
@@ -16,6 +16,6 @@ class AudioAsset(BaseModel):
     )
     asset_type: Literal["audio"]
     url: Annotated[AnyUrl, Field(description="URL to the audio asset")]
-    duration_ms: Annotated[Optional[int], Field(description="Audio duration in milliseconds", ge=0)] = None
-    format: Annotated[Optional[str], Field(description="Audio file format (mp3, wav, aac, etc.)")] = None
-    bitrate_kbps: Annotated[Optional[int], Field(description="Audio bitrate in kilobits per second", ge=1)] = None
+    duration_ms: Annotated[int | None, Field(description="Audio duration in milliseconds", ge=0)] = None
+    format: Annotated[str | None, Field(description="Audio file format (mp3, wav, aac, etc.)")] = None
+    bitrate_kbps: Annotated[int | None, Field(description="Audio bitrate in kilobits per second", ge=1)] = None

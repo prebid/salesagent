@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,13 +17,13 @@ class Error(BaseModel):
     code: Annotated[str, Field(description="Error code for programmatic handling")]
     message: Annotated[str, Field(description="Human-readable error message")]
     field: Annotated[
-        Optional[str], Field(description="Field path associated with the error (e.g., 'packages[0].targeting')")
+        str | None, Field(description="Field path associated with the error (e.g., 'packages[0].targeting')")
     ] = None
-    suggestion: Annotated[Optional[str], Field(description="Suggested fix for the error")] = None
-    retry_after: Annotated[
-        Optional[float], Field(description="Seconds to wait before retrying the operation", ge=0.0)
-    ] = None
-    details: Annotated[Optional[Any], Field(description="Additional task-specific error details")] = None
+    suggestion: Annotated[str | None, Field(description="Suggested fix for the error")] = None
+    retry_after: Annotated[float | None, Field(description="Seconds to wait before retrying the operation", ge=0.0)] = (
+        None
+    )
+    details: Annotated[Any | None, Field(description="Additional task-specific error details")] = None
 
 
 class ProvidePerformanceFeedbackResponse(BaseModel):
@@ -32,7 +32,7 @@ class ProvidePerformanceFeedbackResponse(BaseModel):
     )
     success: Annotated[bool, Field(description="Whether the performance feedback was successfully received")]
     errors: Annotated[
-        Optional[list[Error]],
+        list[Error] | None,
         Field(
             description="Task-specific errors and warnings (e.g., invalid measurement period, missing campaign data)"
         ),

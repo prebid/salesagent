@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field
 
@@ -16,7 +16,7 @@ class ImageAsset(BaseModel):
     )
     asset_type: Literal["image"]
     url: Annotated[AnyUrl, Field(description="URL to the image asset")]
-    width: Annotated[Optional[int], Field(description="Image width in pixels", ge=1)] = None
-    height: Annotated[Optional[int], Field(description="Image height in pixels", ge=1)] = None
-    format: Annotated[Optional[str], Field(description="Image file format (jpg, png, gif, webp, etc.)")] = None
-    alt_text: Annotated[Optional[str], Field(description="Alternative text for accessibility")] = None
+    width: Annotated[int | None, Field(description="Image width in pixels", ge=1)] = None
+    height: Annotated[int | None, Field(description="Image height in pixels", ge=1)] = None
+    format: Annotated[str | None, Field(description="Image file format (jpg, png, gif, webp, etc.)")] = None
+    alt_text: Annotated[str | None, Field(description="Alternative text for accessibility")] = None

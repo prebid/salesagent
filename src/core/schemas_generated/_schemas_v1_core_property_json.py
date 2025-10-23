@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
@@ -81,7 +81,7 @@ class Property(BaseModel):
     name: Annotated[str, Field(description="Human-readable property name")]
     identifiers: Annotated[list[Identifier], Field(description="Array of identifiers for this property", min_length=1)]
     tags: Annotated[
-        Optional[list[Tag]],
+        list[Tag] | None,
         Field(description="Tags for categorization and grouping (e.g., network membership, content categories)"),
     ] = None
     publisher_domain: Annotated[

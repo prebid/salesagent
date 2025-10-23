@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,4 +15,4 @@ class CreativeAssignment(BaseModel):
         extra="forbid",
     )
     creative_id: Annotated[str, Field(description="Unique identifier for the creative")]
-    weight: Annotated[Optional[float], Field(description="Delivery weight for this creative", ge=0.0, le=100.0)] = None
+    weight: Annotated[float | None, Field(description="Delivery weight for this creative", ge=0.0, le=100.0)] = None

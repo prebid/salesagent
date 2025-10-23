@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -30,13 +30,13 @@ class AuthorizedSalesAgents(BaseModel):
         extra="forbid",
     )
     field_schema: Annotated[
-        Optional[str], Field(alias="$schema", description="JSON Schema identifier for this adagents.json file")
+        str | None, Field(alias="$schema", description="JSON Schema identifier for this adagents.json file")
     ] = "https://adcontextprotocol.org/schemas/v1/adagents.json"
     authorized_agents: Annotated[
         list[AuthorizedAgent],
         Field(description="Array of sales agents authorized to sell this publisher's inventory", min_length=1),
     ]
     last_updated: Annotated[
-        Optional[AwareDatetime],
+        AwareDatetime | None,
         Field(description="ISO 8601 timestamp indicating when this file was last updated (optional but recommended)"),
     ] = None

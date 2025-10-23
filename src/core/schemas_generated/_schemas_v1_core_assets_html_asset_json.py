@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,4 +16,4 @@ class HtmlAsset(BaseModel):
     )
     asset_type: Literal["html"]
     content: Annotated[str, Field(description="HTML content")]
-    version: Annotated[Optional[str], Field(description="HTML version (e.g., 'HTML5')")] = None
+    version: Annotated[str | None, Field(description="HTML version (e.g., 'HTML5')")] = None

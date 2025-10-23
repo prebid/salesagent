@@ -16,7 +16,7 @@ from pydantic import AnyUrl
 
 from src.core.schemas_generated._schemas_v1_media_buy_get_products_request_json import (
     BrandManifest,
-    BrandManifest8,
+    BrandManifest10,
     Filters,
     GetProductsRequest,
 )
@@ -29,7 +29,7 @@ from src.core.schemas_generated._schemas_v1_media_buy_get_products_response_json
 def create_get_products_request(
     brief: str = "",
     promoted_offering: str | None = None,
-    brand_manifest: BrandManifest | BrandManifest8 | str | dict[str, Any] | None = None,
+    brand_manifest: BrandManifest | BrandManifest10 | str | dict[str, Any] | None = None,
     filters: Filters | dict[str, Any] | None = None,
 ) -> GetProductsRequest:
     """Create GetProductsRequest.
@@ -65,15 +65,15 @@ def create_get_products_request(
         filters_obj = filters
 
     # Convert brand_manifest to proper type
-    brand_manifest_obj: BrandManifest | BrandManifest8 | AnyUrl | None = None
+    brand_manifest_obj: BrandManifest | BrandManifest10 | AnyUrl | None = None
     if isinstance(brand_manifest, dict):
-        # Choose BrandManifest or BrandManifest8 based on what's provided
+        # Choose BrandManifest or BrandManifest10 based on what's provided
         if "url" in brand_manifest and brand_manifest["url"] is not None:
             # Has url - use BrandManifest (url-required variant)
             brand_manifest_obj = BrandManifest(**brand_manifest)
         elif "name" in brand_manifest:
-            # Only name - use BrandManifest8 (both optional)
-            brand_manifest_obj = BrandManifest8(**brand_manifest)
+            # Only name - use BrandManifest10 (both optional)
+            brand_manifest_obj = BrandManifest10(**brand_manifest)
     elif isinstance(brand_manifest, str):
         # URL string
         brand_manifest_obj = AnyUrl(brand_manifest)  # type: ignore[assignment]
@@ -83,7 +83,7 @@ def create_get_products_request(
     # Handle promoted_offering → brand_manifest conversion (backward compat)
     if promoted_offering and not brand_manifest_obj:
         # Convert promoted_offering to brand_manifest for AdCP spec compliance
-        brand_manifest_obj = BrandManifest8(name=promoted_offering)
+        brand_manifest_obj = BrandManifest10(name=promoted_offering)
 
     # Create single flat GetProductsRequest (AdCP spec fields only)
     return GetProductsRequest(
@@ -126,7 +126,7 @@ __all__ = [
     "GetProductsRequest",
     "GetProductsResponse",
     "BrandManifest",
-    "BrandManifest8",
+    "BrandManifest10",
     "Filters",
     "Product",
 ]

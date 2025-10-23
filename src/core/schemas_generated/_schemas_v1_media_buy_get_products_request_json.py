@@ -168,7 +168,7 @@ class BrandManifest(BaseModel):
     metadata: Annotated[Metadata | None, Field(description="Additional brand metadata")] = None
 
 
-class Asset10(BaseModel):
+class Asset12(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -189,7 +189,7 @@ class Asset10(BaseModel):
     metadata: Annotated[dict[str, Any] | None, Field(description="Additional asset-specific metadata")] = None
 
 
-class ProductCatalog9(BaseModel):
+class ProductCatalog11(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -206,7 +206,7 @@ class ProductCatalog9(BaseModel):
     ] = None
 
 
-class BrandManifest8(BaseModel):
+class BrandManifest10(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -230,13 +230,13 @@ class BrandManifest8(BaseModel):
     ] = None
     tagline: Annotated[str | None, Field(description="Brand tagline or slogan")] = None
     assets: Annotated[
-        list[Asset10] | None,
+        list[Asset12] | None,
         Field(
             description="Brand asset library with explicit assets and tags. Assets are referenced inline with URLs pointing to CDN-hosted files."
         ),
     ] = None
     product_catalog: Annotated[
-        ProductCatalog9 | None,
+        ProductCatalog11 | None,
         Field(
             description="Product catalog information for e-commerce advertisers. Enables SKU-level creative generation and product selection."
         ),
@@ -307,7 +307,7 @@ class GetProductsRequest(BaseModel):
     )
     brief: Annotated[str | None, Field(description="Natural language description of campaign requirements")] = None
     brand_manifest: Annotated[
-        BrandManifest | BrandManifest8 | AnyUrl,
+        BrandManifest | BrandManifest10 | AnyUrl,
         Field(
             description="Brand manifest provided either as an inline object or a URL string pointing to a hosted manifest",
             examples=[

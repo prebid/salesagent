@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field
 
@@ -16,8 +16,8 @@ class VideoAsset(BaseModel):
     )
     asset_type: Literal["video"]
     url: Annotated[AnyUrl, Field(description="URL to the video asset")]
-    width: Annotated[Optional[int], Field(description="Video width in pixels", ge=1)] = None
-    height: Annotated[Optional[int], Field(description="Video height in pixels", ge=1)] = None
-    duration_ms: Annotated[Optional[int], Field(description="Video duration in milliseconds", ge=0)] = None
-    format: Annotated[Optional[str], Field(description="Video file format (mp4, webm, mov, etc.)")] = None
-    bitrate_kbps: Annotated[Optional[int], Field(description="Video bitrate in kilobits per second", ge=1)] = None
+    width: Annotated[int | None, Field(description="Video width in pixels", ge=1)] = None
+    height: Annotated[int | None, Field(description="Video height in pixels", ge=1)] = None
+    duration_ms: Annotated[int | None, Field(description="Video duration in milliseconds", ge=0)] = None
+    format: Annotated[str | None, Field(description="Video file format (mp4, webm, mov, etc.)")] = None
+    bitrate_kbps: Annotated[int | None, Field(description="Video bitrate in kilobits per second", ge=1)] = None

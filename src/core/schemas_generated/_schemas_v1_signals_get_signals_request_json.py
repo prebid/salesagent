@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Optional, Union
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
@@ -27,8 +27,8 @@ class DeliverTo(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    platforms: Annotated[Union[str, list[str]], Field(description="Target platforms for signal deployment")]
-    accounts: Annotated[Optional[list[Account]], Field(description="Specific platform-account combinations")] = None
+    platforms: Annotated[str | list[str], Field(description="Target platforms for signal deployment")]
+    accounts: Annotated[list[Account] | None, Field(description="Specific platform-account combinations")] = None
     countries: Annotated[list[Country], Field(description="Countries where signals will be used (ISO codes)")]
 
 
@@ -42,11 +42,11 @@ class Filters(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    catalog_types: Annotated[Optional[list[CatalogType]], Field(description="Filter by catalog type")] = None
-    data_providers: Annotated[Optional[list[str]], Field(description="Filter by specific data providers")] = None
-    max_cpm: Annotated[Optional[float], Field(description="Maximum CPM price filter", ge=0.0)] = None
+    catalog_types: Annotated[list[CatalogType] | None, Field(description="Filter by catalog type")] = None
+    data_providers: Annotated[list[str] | None, Field(description="Filter by specific data providers")] = None
+    max_cpm: Annotated[float | None, Field(description="Maximum CPM price filter", ge=0.0)] = None
     min_coverage_percentage: Annotated[
-        Optional[float], Field(description="Minimum coverage requirement", ge=0.0, le=100.0)
+        float | None, Field(description="Minimum coverage requirement", ge=0.0, le=100.0)
     ] = None
 
 
@@ -56,5 +56,5 @@ class GetSignalsRequest(BaseModel):
     )
     signal_spec: Annotated[str, Field(description="Natural language description of the desired signals")]
     deliver_to: Annotated[DeliverTo, Field(description="Where the signals need to be delivered")]
-    filters: Annotated[Optional[Filters], Field(description="Filters to refine results")] = None
-    max_results: Annotated[Optional[int], Field(description="Maximum number of results to return", ge=1)] = None
+    filters: Annotated[Filters | None, Field(description="Filters to refine results")] = None
+    max_results: Annotated[int | None, Field(description="Maximum number of results to return", ge=1)] = None

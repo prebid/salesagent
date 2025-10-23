@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,12 +27,12 @@ class Deployment(BaseModel):
         extra="forbid",
     )
     platform: Annotated[str, Field(description="Platform name")]
-    account: Annotated[Optional[str], Field(description="Specific account if applicable")] = None
+    account: Annotated[str | None, Field(description="Specific account if applicable")] = None
     is_live: Annotated[bool, Field(description="Whether signal is currently active")]
     scope: Annotated[Scope, Field(description="Deployment scope")]
-    decisioning_platform_segment_id: Annotated[Optional[str], Field(description="Platform-specific segment ID")] = None
+    decisioning_platform_segment_id: Annotated[str | None, Field(description="Platform-specific segment ID")] = None
     estimated_activation_duration_minutes: Annotated[
-        Optional[float], Field(description="Time to activate if not live", ge=0.0)
+        float | None, Field(description="Time to activate if not live", ge=0.0)
     ] = None
 
 
@@ -65,13 +65,13 @@ class Error(BaseModel):
     code: Annotated[str, Field(description="Error code for programmatic handling")]
     message: Annotated[str, Field(description="Human-readable error message")]
     field: Annotated[
-        Optional[str], Field(description="Field path associated with the error (e.g., 'packages[0].targeting')")
+        str | None, Field(description="Field path associated with the error (e.g., 'packages[0].targeting')")
     ] = None
-    suggestion: Annotated[Optional[str], Field(description="Suggested fix for the error")] = None
-    retry_after: Annotated[
-        Optional[float], Field(description="Seconds to wait before retrying the operation", ge=0.0)
-    ] = None
-    details: Annotated[Optional[Any], Field(description="Additional task-specific error details")] = None
+    suggestion: Annotated[str | None, Field(description="Suggested fix for the error")] = None
+    retry_after: Annotated[float | None, Field(description="Seconds to wait before retrying the operation", ge=0.0)] = (
+        None
+    )
+    details: Annotated[Any | None, Field(description="Additional task-specific error details")] = None
 
 
 class GetSignalsResponse(BaseModel):
@@ -80,6 +80,6 @@ class GetSignalsResponse(BaseModel):
     )
     signals: Annotated[list[Signal], Field(description="Array of matching signals")]
     errors: Annotated[
-        Optional[list[Error]],
+        list[Error] | None,
         Field(description="Task-specific errors and warnings (e.g., signal discovery or pricing issues)"),
     ] = None

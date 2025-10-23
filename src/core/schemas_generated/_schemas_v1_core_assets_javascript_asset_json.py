@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,4 +23,4 @@ class JavascriptAsset(BaseModel):
     )
     asset_type: Literal["javascript"]
     content: Annotated[str, Field(description="JavaScript content")]
-    module_type: Annotated[Optional[ModuleType], Field(description="JavaScript module type")] = None
+    module_type: Annotated[ModuleType | None, Field(description="JavaScript module type")] = None

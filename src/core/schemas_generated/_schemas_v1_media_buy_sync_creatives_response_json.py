@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -25,30 +25,30 @@ class Creative(BaseModel):
     )
     creative_id: Annotated[str, Field(description="Creative ID from the request")]
     action: Annotated[Action, Field(description="Action taken for this creative")]
-    platform_id: Annotated[Optional[str], Field(description="Platform-specific ID assigned to the creative")] = None
+    platform_id: Annotated[str | None, Field(description="Platform-specific ID assigned to the creative")] = None
     changes: Annotated[
-        Optional[list[str]], Field(description="Field names that were modified (only present when action='updated')")
+        list[str] | None, Field(description="Field names that were modified (only present when action='updated')")
     ] = None
     errors: Annotated[
-        Optional[list[str]], Field(description="Validation or processing errors (only present when action='failed')")
+        list[str] | None, Field(description="Validation or processing errors (only present when action='failed')")
     ] = None
-    warnings: Annotated[Optional[list[str]], Field(description="Non-fatal warnings about this creative")] = None
+    warnings: Annotated[list[str] | None, Field(description="Non-fatal warnings about this creative")] = None
     preview_url: Annotated[
-        Optional[AnyUrl],
+        AnyUrl | None,
         Field(description="Preview URL for generative creatives (only present for generative formats)"),
     ] = None
     expires_at: Annotated[
-        Optional[AwareDatetime],
+        AwareDatetime | None,
         Field(description="ISO 8601 timestamp when preview link expires (only present when preview_url exists)"),
     ] = None
     assigned_to: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         Field(
             description="Package IDs this creative was successfully assigned to (only present when assignments were requested)"
         ),
     ] = None
     assignment_errors: Annotated[
-        Optional[dict[str, str]],
+        dict[str, str] | None,
         Field(description="Assignment errors by package ID (only present when assignment failures occurred)"),
     ] = None
 
@@ -57,5 +57,5 @@ class SyncCreativesResponse(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    dry_run: Annotated[Optional[bool], Field(description="Whether this was a dry run (no actual changes made)")] = None
+    dry_run: Annotated[bool | None, Field(description="Whether this was a dry run (no actual changes made)")] = None
     creatives: Annotated[list[Creative], Field(description="Results for each creative processed")]

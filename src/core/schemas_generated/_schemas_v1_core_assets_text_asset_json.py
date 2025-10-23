@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,5 +16,5 @@ class TextAsset(BaseModel):
     )
     asset_type: Literal["text"]
     content: Annotated[str, Field(description="Text content")]
-    max_length: Annotated[Optional[int], Field(description="Maximum character length constraint", ge=1)] = None
-    language: Annotated[Optional[str], Field(description="Language code (e.g., 'en', 'es', 'fr')")] = None
+    max_length: Annotated[int | None, Field(description="Maximum character length constraint", ge=1)] = None
+    language: Annotated[str | None, Field(description="Language code (e.g., 'en', 'es', 'fr')")] = None

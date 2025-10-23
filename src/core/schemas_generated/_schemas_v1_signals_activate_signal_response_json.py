@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -17,13 +17,13 @@ class Error(BaseModel):
     code: Annotated[str, Field(description="Error code for programmatic handling")]
     message: Annotated[str, Field(description="Human-readable error message")]
     field: Annotated[
-        Optional[str], Field(description="Field path associated with the error (e.g., 'packages[0].targeting')")
+        str | None, Field(description="Field path associated with the error (e.g., 'packages[0].targeting')")
     ] = None
-    suggestion: Annotated[Optional[str], Field(description="Suggested fix for the error")] = None
-    retry_after: Annotated[
-        Optional[float], Field(description="Seconds to wait before retrying the operation", ge=0.0)
-    ] = None
-    details: Annotated[Optional[Any], Field(description="Additional task-specific error details")] = None
+    suggestion: Annotated[str | None, Field(description="Suggested fix for the error")] = None
+    retry_after: Annotated[float | None, Field(description="Seconds to wait before retrying the operation", ge=0.0)] = (
+        None
+    )
+    details: Annotated[Any | None, Field(description="Additional task-specific error details")] = None
 
 
 class ActivateSignalResponse(BaseModel):
@@ -31,15 +31,15 @@ class ActivateSignalResponse(BaseModel):
         extra="forbid",
     )
     decisioning_platform_segment_id: Annotated[
-        Optional[str], Field(description="The platform-specific ID to use once activated")
+        str | None, Field(description="The platform-specific ID to use once activated")
     ] = None
     estimated_activation_duration_minutes: Annotated[
-        Optional[float], Field(description="Estimated time to complete (optional)", ge=0.0)
+        float | None, Field(description="Estimated time to complete (optional)", ge=0.0)
     ] = None
     deployed_at: Annotated[
-        Optional[AwareDatetime], Field(description="Timestamp when activation completed (optional)")
+        AwareDatetime | None, Field(description="Timestamp when activation completed (optional)")
     ] = None
     errors: Annotated[
-        Optional[list[Error]],
+        list[Error] | None,
         Field(description="Task-specific errors and warnings (e.g., activation failures, platform issues)"),
     ] = None

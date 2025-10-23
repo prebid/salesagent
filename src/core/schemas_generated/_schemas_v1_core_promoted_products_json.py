@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,22 +15,22 @@ class PromotedProducts(BaseModel):
         extra="forbid",
     )
     manifest_skus: Annotated[
-        Optional[list[str]], Field(description="Direct product SKU references from the brand manifest product catalog")
+        list[str] | None, Field(description="Direct product SKU references from the brand manifest product catalog")
     ] = None
     manifest_tags: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         Field(
             description="Select products by tags from the brand manifest product catalog (e.g., 'organic', 'sauces', 'holiday')"
         ),
     ] = None
     manifest_category: Annotated[
-        Optional[str],
+        str | None,
         Field(
             description="Select products from a specific category in the brand manifest product catalog (e.g., 'beverages/soft-drinks', 'food/sauces')"
         ),
     ] = None
     manifest_query: Annotated[
-        Optional[str],
+        str | None,
         Field(
             description="Natural language query to select products from the brand manifest (e.g., 'all Kraft Heinz pasta sauces', 'organic products under $20')"
         ),

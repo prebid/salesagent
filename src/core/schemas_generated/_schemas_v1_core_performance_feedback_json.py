@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -51,10 +51,10 @@ class PerformanceFeedback(BaseModel):
     feedback_id: Annotated[str, Field(description="Unique identifier for this performance feedback submission")]
     media_buy_id: Annotated[str, Field(description="Publisher's media buy identifier")]
     package_id: Annotated[
-        Optional[str], Field(description="Specific package within the media buy (if feedback is package-specific)")
+        str | None, Field(description="Specific package within the media buy (if feedback is package-specific)")
     ] = None
     creative_id: Annotated[
-        Optional[str], Field(description="Specific creative asset (if feedback is creative-specific)")
+        str | None, Field(description="Specific creative asset (if feedback is creative-specific)")
     ] = None
     measurement_period: Annotated[MeasurementPeriod, Field(description="Time period for performance measurement")]
     performance_index: Annotated[
@@ -68,6 +68,6 @@ class PerformanceFeedback(BaseModel):
     status: Annotated[Status, Field(description="Processing status of the performance feedback")]
     submitted_at: Annotated[AwareDatetime, Field(description="ISO 8601 timestamp when feedback was submitted")]
     applied_at: Annotated[
-        Optional[AwareDatetime],
+        AwareDatetime | None,
         Field(description="ISO 8601 timestamp when feedback was applied to optimization algorithms"),
     ] = None

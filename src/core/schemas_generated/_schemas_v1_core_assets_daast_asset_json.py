@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Literal, Optional, Union
+from typing import Annotated, Literal
 
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, RootModel
 
@@ -36,15 +36,15 @@ class DaastAsset1(BaseModel):
     )
     asset_type: Literal["daast"]
     url: Annotated[AnyUrl, Field(description="URL endpoint that returns DAAST XML")]
-    content: Annotated[Optional[str], Field(description="Inline DAAST XML content")] = None
-    daast_version: Annotated[Optional[DaastVersion], Field(description="DAAST specification version")] = None
+    content: Annotated[str | None, Field(description="Inline DAAST XML content")] = None
+    daast_version: Annotated[DaastVersion | None, Field(description="DAAST specification version")] = None
     duration_ms: Annotated[
-        Optional[int], Field(description="Expected audio duration in milliseconds (if known)", ge=0)
+        int | None, Field(description="Expected audio duration in milliseconds (if known)", ge=0)
     ] = None
     tracking_events: Annotated[
-        Optional[list[TrackingEvent]], Field(description="Tracking events supported by this DAAST tag")
+        list[TrackingEvent] | None, Field(description="Tracking events supported by this DAAST tag")
     ] = None
-    companion_ads: Annotated[Optional[bool], Field(description="Whether companion display ads are included")] = None
+    companion_ads: Annotated[bool | None, Field(description="Whether companion display ads are included")] = None
 
 
 class DaastAsset2(BaseModel):
@@ -52,21 +52,21 @@ class DaastAsset2(BaseModel):
         extra="forbid",
     )
     asset_type: Literal["daast"]
-    url: Annotated[Optional[AnyUrl], Field(description="URL endpoint that returns DAAST XML")] = None
+    url: Annotated[AnyUrl | None, Field(description="URL endpoint that returns DAAST XML")] = None
     content: Annotated[str, Field(description="Inline DAAST XML content")]
-    daast_version: Annotated[Optional[DaastVersion], Field(description="DAAST specification version")] = None
+    daast_version: Annotated[DaastVersion | None, Field(description="DAAST specification version")] = None
     duration_ms: Annotated[
-        Optional[int], Field(description="Expected audio duration in milliseconds (if known)", ge=0)
+        int | None, Field(description="Expected audio duration in milliseconds (if known)", ge=0)
     ] = None
     tracking_events: Annotated[
-        Optional[list[TrackingEvent]], Field(description="Tracking events supported by this DAAST tag")
+        list[TrackingEvent] | None, Field(description="Tracking events supported by this DAAST tag")
     ] = None
-    companion_ads: Annotated[Optional[bool], Field(description="Whether companion display ads are included")] = None
+    companion_ads: Annotated[bool | None, Field(description="Whether companion display ads are included")] = None
 
 
-class DaastAsset(RootModel[Union[DaastAsset1, DaastAsset2]]):
+class DaastAsset(RootModel[DaastAsset1 | DaastAsset2]):
     root: Annotated[
-        Union[DaastAsset1, DaastAsset2],
+        DaastAsset1 | DaastAsset2,
         Field(
             description="DAAST (Digital Audio Ad Serving Template) tag for third-party audio ad serving",
             title="DAAST Asset",

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,5 +17,5 @@ class ActivateSignalRequest(BaseModel):
     signal_agent_segment_id: Annotated[str, Field(description="The universal identifier for the signal to activate")]
     platform: Annotated[str, Field(description="The target platform for activation")]
     account: Annotated[
-        Optional[str], Field(description="Account identifier (required for account-specific activation)")
+        str | None, Field(description="Account identifier (required for account-specific activation)")
     ] = None

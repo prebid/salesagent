@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -32,11 +32,11 @@ class AggregatedTotals(BaseModel):
     )
     impressions: Annotated[float, Field(description="Total impressions delivered across all media buys", ge=0.0)]
     spend: Annotated[float, Field(description="Total amount spent across all media buys", ge=0.0)]
-    clicks: Annotated[
-        Optional[float], Field(description="Total clicks across all media buys (if applicable)", ge=0.0)
-    ] = None
+    clicks: Annotated[float | None, Field(description="Total clicks across all media buys (if applicable)", ge=0.0)] = (
+        None
+    )
     video_completions: Annotated[
-        Optional[float], Field(description="Total video completions across all media buys (if applicable)", ge=0.0)
+        float | None, Field(description="Total video completions across all media buys (if applicable)", ge=0.0)
     ] = None
     media_buy_count: Annotated[int, Field(description="Number of media buys included in the response", ge=0)]
 
@@ -61,10 +61,10 @@ class PricingModel(Enum):
 
 
 class QuartileData(BaseModel):
-    q1_views: Annotated[Optional[float], Field(description="25% completion views", ge=0.0)] = None
-    q2_views: Annotated[Optional[float], Field(description="50% completion views", ge=0.0)] = None
-    q3_views: Annotated[Optional[float], Field(description="75% completion views", ge=0.0)] = None
-    q4_views: Annotated[Optional[float], Field(description="100% completion views", ge=0.0)] = None
+    q1_views: Annotated[float | None, Field(description="25% completion views", ge=0.0)] = None
+    q2_views: Annotated[float | None, Field(description="50% completion views", ge=0.0)] = None
+    q3_views: Annotated[float | None, Field(description="75% completion views", ge=0.0)] = None
+    q4_views: Annotated[float | None, Field(description="100% completion views", ge=0.0)] = None
 
 
 class VenueBreakdownItem(BaseModel):
@@ -72,70 +72,70 @@ class VenueBreakdownItem(BaseModel):
         extra="forbid",
     )
     venue_id: Annotated[str, Field(description="Venue identifier")]
-    venue_name: Annotated[Optional[str], Field(description="Human-readable venue name")] = None
+    venue_name: Annotated[str | None, Field(description="Human-readable venue name")] = None
     venue_type: Annotated[
-        Optional[str], Field(description="Venue type (e.g., 'airport', 'transit', 'retail', 'billboard')")
+        str | None, Field(description="Venue type (e.g., 'airport', 'transit', 'retail', 'billboard')")
     ] = None
     impressions: Annotated[int, Field(description="Impressions delivered at this venue", ge=0)]
-    loop_plays: Annotated[Optional[int], Field(description="Loop plays at this venue", ge=0)] = None
-    screens_used: Annotated[Optional[int], Field(description="Number of screens used at this venue", ge=0)] = None
+    loop_plays: Annotated[int | None, Field(description="Loop plays at this venue", ge=0)] = None
+    screens_used: Annotated[int | None, Field(description="Number of screens used at this venue", ge=0)] = None
 
 
 class DoohMetrics(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    loop_plays: Annotated[Optional[int], Field(description="Number of times ad played in rotation", ge=0)] = None
-    screens_used: Annotated[Optional[int], Field(description="Number of unique screens displaying the ad", ge=0)] = None
-    screen_time_seconds: Annotated[Optional[int], Field(description="Total display time in seconds", ge=0)] = None
+    loop_plays: Annotated[int | None, Field(description="Number of times ad played in rotation", ge=0)] = None
+    screens_used: Annotated[int | None, Field(description="Number of unique screens displaying the ad", ge=0)] = None
+    screen_time_seconds: Annotated[int | None, Field(description="Total display time in seconds", ge=0)] = None
     sov_achieved: Annotated[
-        Optional[float], Field(description="Actual share of voice delivered (0.0 to 1.0)", ge=0.0, le=1.0)
+        float | None, Field(description="Actual share of voice delivered (0.0 to 1.0)", ge=0.0, le=1.0)
     ] = None
     calculation_notes: Annotated[
-        Optional[str], Field(description="Explanation of how DOOH impressions were calculated")
+        str | None, Field(description="Explanation of how DOOH impressions were calculated")
     ] = None
     venue_breakdown: Annotated[
-        Optional[list[VenueBreakdownItem]], Field(description="Per-venue performance breakdown")
+        list[VenueBreakdownItem] | None, Field(description="Per-venue performance breakdown")
     ] = None
 
 
 class Totals(BaseModel):
-    impressions: Annotated[Optional[float], Field(description="Impressions delivered", ge=0.0)] = None
-    spend: Annotated[Optional[float], Field(description="Amount spent", ge=0.0)] = None
-    clicks: Annotated[Optional[float], Field(description="Total clicks", ge=0.0)] = None
-    ctr: Annotated[Optional[float], Field(description="Click-through rate (clicks/impressions)", ge=0.0, le=1.0)] = None
-    views: Annotated[Optional[float], Field(description="Views at threshold (for CPV)", ge=0.0)] = None
-    completed_views: Annotated[Optional[float], Field(description="100% completions (for CPCV)", ge=0.0)] = None
+    impressions: Annotated[float | None, Field(description="Impressions delivered", ge=0.0)] = None
+    spend: Annotated[float | None, Field(description="Amount spent", ge=0.0)] = None
+    clicks: Annotated[float | None, Field(description="Total clicks", ge=0.0)] = None
+    ctr: Annotated[float | None, Field(description="Click-through rate (clicks/impressions)", ge=0.0, le=1.0)] = None
+    views: Annotated[float | None, Field(description="Views at threshold (for CPV)", ge=0.0)] = None
+    completed_views: Annotated[float | None, Field(description="100% completions (for CPCV)", ge=0.0)] = None
     completion_rate: Annotated[
-        Optional[float], Field(description="Completion rate (completed_views/impressions)", ge=0.0, le=1.0)
+        float | None, Field(description="Completion rate (completed_views/impressions)", ge=0.0, le=1.0)
     ] = None
     conversions: Annotated[
-        Optional[float], Field(description="Conversions (reserved for future CPA pricing support)", ge=0.0)
+        float | None, Field(description="Conversions (reserved for future CPA pricing support)", ge=0.0)
     ] = None
     leads: Annotated[
-        Optional[float], Field(description="Leads generated (reserved for future CPL pricing support)", ge=0.0)
+        float | None, Field(description="Leads generated (reserved for future CPL pricing support)", ge=0.0)
     ] = None
-    grps: Annotated[Optional[float], Field(description="Gross Rating Points delivered (for CPP)", ge=0.0)] = None
+    grps: Annotated[float | None, Field(description="Gross Rating Points delivered (for CPP)", ge=0.0)] = None
     reach: Annotated[
-        Optional[float],
+        float | None,
         Field(
             description="Unique reach - units depend on measurement provider (e.g., individuals, households, devices, cookies). See delivery_measurement.provider for methodology.",
             ge=0.0,
         ),
     ] = None
     frequency: Annotated[
-        Optional[float],
+        float | None,
         Field(
             description="Average frequency per individual (typically measured over campaign duration, but can vary by measurement provider)",
             ge=0.0,
         ),
     ] = None
-    quartile_data: Annotated[Optional[QuartileData], Field(description="Video quartile completion data")] = None
+    quartile_data: Annotated[QuartileData | None, Field(description="Video quartile completion data")] = None
     dooh_metrics: Annotated[
-        Optional[DoohMetrics], Field(description="DOOH-specific metrics (only included for DOOH campaigns)")
+        DoohMetrics | None, Field(description="DOOH-specific metrics (only included for DOOH campaigns)")
     ] = None
     effective_rate: Annotated[
-        Optional[float],
+        float | None,
         Field(
             description="Effective rate paid per unit based on pricing_model (e.g., actual CPM for 'cpm', actual cost per completed view for 'cpcv', actual cost per point for 'cpp')",
             ge=0.0,
@@ -145,9 +145,9 @@ class Totals(BaseModel):
 
 class ByPackageItem(BaseModel):
     package_id: Annotated[str, Field(description="Publisher's package identifier")]
-    buyer_ref: Annotated[Optional[str], Field(description="Buyer's reference identifier for this package")] = None
+    buyer_ref: Annotated[str | None, Field(description="Buyer's reference identifier for this package")] = None
     pacing_index: Annotated[
-        Optional[float], Field(description="Delivery pace (1.0 = on track, <1.0 = behind, >1.0 = ahead)", ge=0.0)
+        float | None, Field(description="Delivery pace (1.0 = on track, <1.0 = behind, >1.0 = ahead)", ge=0.0)
     ] = None
 
 
@@ -165,7 +165,7 @@ class MediaBuyDelivery(BaseModel):
         extra="forbid",
     )
     media_buy_id: Annotated[str, Field(description="Publisher's media buy identifier")]
-    buyer_ref: Annotated[Optional[str], Field(description="Buyer's reference identifier for this media buy")] = None
+    buyer_ref: Annotated[str | None, Field(description="Buyer's reference identifier for this media buy")] = None
     status: Annotated[
         Status,
         Field(
@@ -173,24 +173,24 @@ class MediaBuyDelivery(BaseModel):
         ),
     ]
     expected_availability: Annotated[
-        Optional[AwareDatetime],
+        AwareDatetime | None,
         Field(
             description="When delayed data is expected to be available (only present when status is reporting_delayed)"
         ),
     ] = None
     is_adjusted: Annotated[
-        Optional[bool],
+        bool | None,
         Field(
             description="Indicates this delivery contains updated data for a previously reported period. Buyer should replace previous period data with these totals."
         ),
     ] = None
     pricing_model: Annotated[
-        Optional[PricingModel],
+        PricingModel | None,
         Field(description="Supported pricing models for advertising products", title="Pricing Model"),
     ] = None
     totals: Totals
     by_package: Annotated[list[ByPackageItem], Field(description="Metrics broken down by package")]
-    daily_breakdown: Annotated[Optional[list[DailyBreakdownItem]], Field(description="Day-by-day delivery")] = None
+    daily_breakdown: Annotated[list[DailyBreakdownItem] | None, Field(description="Day-by-day delivery")] = None
 
 
 class Error(BaseModel):
@@ -200,13 +200,13 @@ class Error(BaseModel):
     code: Annotated[str, Field(description="Error code for programmatic handling")]
     message: Annotated[str, Field(description="Human-readable error message")]
     field: Annotated[
-        Optional[str], Field(description="Field path associated with the error (e.g., 'packages[0].targeting')")
+        str | None, Field(description="Field path associated with the error (e.g., 'packages[0].targeting')")
     ] = None
-    suggestion: Annotated[Optional[str], Field(description="Suggested fix for the error")] = None
-    retry_after: Annotated[
-        Optional[float], Field(description="Seconds to wait before retrying the operation", ge=0.0)
-    ] = None
-    details: Annotated[Optional[Any], Field(description="Additional task-specific error details")] = None
+    suggestion: Annotated[str | None, Field(description="Suggested fix for the error")] = None
+    retry_after: Annotated[float | None, Field(description="Seconds to wait before retrying the operation", ge=0.0)] = (
+        None
+    )
+    details: Annotated[Any | None, Field(description="Additional task-specific error details")] = None
 
 
 class GetMediaBuyDeliveryResponse(BaseModel):
@@ -214,30 +214,30 @@ class GetMediaBuyDeliveryResponse(BaseModel):
         extra="forbid",
     )
     notification_type: Annotated[
-        Optional[NotificationType],
+        NotificationType | None,
         Field(
             description="Type of webhook notification (only present in webhook deliveries): scheduled = regular periodic update, final = campaign completed, delayed = data not yet available, adjusted = resending period with updated data"
         ),
     ] = None
     partial_data: Annotated[
-        Optional[bool],
+        bool | None,
         Field(
             description="Indicates if any media buys in this webhook have missing/delayed data (only present in webhook deliveries)"
         ),
     ] = None
     unavailable_count: Annotated[
-        Optional[int],
+        int | None,
         Field(
             description="Number of media buys with reporting_delayed or failed status (only present in webhook deliveries when partial_data is true)",
             ge=0,
         ),
     ] = None
     sequence_number: Annotated[
-        Optional[int],
+        int | None,
         Field(description="Sequential notification number (only present in webhook deliveries, starts at 1)", ge=1),
     ] = None
     next_expected_at: Annotated[
-        Optional[AwareDatetime],
+        AwareDatetime | None,
         Field(
             description="ISO 8601 timestamp for next expected notification (only present in webhook deliveries when notification_type is not 'final')"
         ),
@@ -247,7 +247,7 @@ class GetMediaBuyDeliveryResponse(BaseModel):
     ]
     currency: Annotated[str, Field(description="ISO 4217 currency code", pattern="^[A-Z]{3}$")]
     aggregated_totals: Annotated[
-        Optional[AggregatedTotals],
+        AggregatedTotals | None,
         Field(
             description="Combined metrics across all returned media buys. Only included in API responses (get_media_buy_delivery), not in webhook notifications."
         ),
@@ -259,6 +259,6 @@ class GetMediaBuyDeliveryResponse(BaseModel):
         ),
     ]
     errors: Annotated[
-        Optional[list[Error]],
+        list[Error] | None,
         Field(description="Task-specific errors and warnings (e.g., missing delivery data, reporting platform issues)"),
     ] = None

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,4 +16,4 @@ class CssAsset(BaseModel):
     )
     asset_type: Literal["css"]
     content: Annotated[str, Field(description="CSS content")]
-    media: Annotated[Optional[str], Field(description="CSS media query context (e.g., 'screen', 'print')")] = None
+    media: Annotated[str | None, Field(description="CSS media query context (e.g., 'screen', 'print')")] = None
