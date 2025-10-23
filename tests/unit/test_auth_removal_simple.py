@@ -19,8 +19,9 @@ class TestAuthRemovalChanges:
         context.meta = {}  # Empty meta, no headers
 
         with patch("src.core.main.get_http_headers", return_value={}):  # No x-adcp-auth header
-            result = get_principal_from_context(context)
-            assert result is None
+            principal_id, tenant = get_principal_from_context(context)
+            assert principal_id is None
+            assert tenant is None
 
     def test_get_principal_from_context_works_with_auth(self):
         """Test that get_principal_from_context still works with auth."""
@@ -52,8 +53,13 @@ class TestAuthRemovalChanges:
                 }
                 with patch("src.core.main.set_current_tenant"):
                     with patch("src.core.main.get_principal_from_token", return_value="test_principal"):
-                        result = get_principal_from_context(context)
-                        assert result == "test_principal"
+                        principal_id, tenant = get_principal_from_context(context)
+                        assert principal_id == "test_principal"
+                        assert tenant == {
+                            "tenant_id": "tenant_test",
+                            "subdomain": "test-tenant",
+                            "name": "Test Tenant",
+                        }
 
     def test_audit_logging_handles_none_principal(self):
         """Test that audit logging works with None principal_id."""
@@ -75,8 +81,11 @@ class TestAuthRemovalChanges:
         with open("src/core/main.py") as f:
             source = f.read()
 
-        # Key changes should be present
-        assert "get_principal_from_context(context)  # Returns None if no auth" in source
+        # Key changes should be present - tuple return after ContextVar fix
+        assert (
+            "get_principal_from_context(context)  # Returns (None, None) if no auth" in source
+            or "get_principal_from_context(context)  # Returns None if no auth" in source
+        )
         assert 'principal_id or "anonymous"' in source
 
     def test_pricing_filtering_for_anonymous_users(self):

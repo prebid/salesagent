@@ -20,7 +20,6 @@ Security Fixes:
 from unittest.mock import Mock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
 
 def test_get_current_tenant_fails_without_context():
@@ -40,8 +39,17 @@ def test_get_current_tenant_fails_without_context():
     assert "breach tenant isolation" in error_msg.lower()
 
 
-def test_get_principal_from_context_rejects_when_no_tenant_detected():
-    """Test that authentication fails if tenant cannot be determined from headers."""
+def test_get_principal_from_context_uses_global_lookup_when_no_tenant_detected():
+    """Test that authentication uses global token lookup when tenant cannot be determined from headers.
+
+    This is the CORRECT behavior:
+    - If tenant IS detected from headers → validate token belongs to that tenant
+    - If NO tenant detected → global lookup finds token's actual tenant and sets context
+
+    The security we maintain:
+    - Cross-tenant token usage is blocked (if wonderstruck subdomain detected, test-agent token rejected)
+    - But if NO subdomain detected (e.g., through proxy), we look up which tenant the token belongs to
+    """
     from src.core.main import get_principal_from_context
 
     # Create mock context with auth token but no tenant detection possible
@@ -54,11 +62,22 @@ def test_get_principal_from_context_rejects_when_no_tenant_detected():
     }
 
     # Mock get_http_headers to return empty dict (forcing fallback to context.meta)
-    with patch("src.core.main.get_http_headers", return_value={}):
-        # Should raise ToolError because tenant cannot be determined
-        with pytest.raises(ToolError) as exc_info:
-            get_principal_from_context(context)
+    # Mock get_principal_from_token and get_current_tenant to simulate successful global lookup
+    mock_tenant = {"tenant_id": "tenant_test", "subdomain": "test"}
+    with (
+        patch("src.core.main.get_http_headers", return_value={}),
+        patch("src.core.main.get_principal_from_token") as mock_get_principal,
+        patch("src.core.main.get_current_tenant", return_value=mock_tenant),
+    ):
+        # Global lookup should succeed and return principal_id
+        mock_get_principal.return_value = "principal_abc123"
 
-        error = exc_info.value
-        assert error.args[0] == "TENANT_DETECTION_FAILED"
-        assert "Cannot determine tenant" in error.args[1]
+        # Should succeed via global token lookup and return tuple
+        principal_id, tenant = get_principal_from_context(context)
+
+        # Verify we got the principal ID and tenant
+        assert principal_id == "principal_abc123"
+        assert tenant == mock_tenant
+
+        # Verify get_principal_from_token was called with None for tenant_id (global lookup)
+        mock_get_principal.assert_called_once_with("some-valid-token", None)
