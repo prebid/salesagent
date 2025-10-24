@@ -44,22 +44,24 @@ class TestAuthRemovalChanges:
                 "host": "test-tenant.sales-agent.scope3.com",
             },
         ):
-            # Mock tenant lookup to succeed
-            with patch("src.core.main.get_tenant_by_subdomain") as mock_tenant_lookup:
-                mock_tenant_lookup.return_value = {
-                    "tenant_id": "tenant_test",
-                    "subdomain": "test-tenant",
-                    "name": "Test Tenant",
-                }
-                with patch("src.core.main.set_current_tenant"):
-                    with patch("src.core.main.get_principal_from_token", return_value="test_principal"):
-                        principal_id, tenant = get_principal_from_context(context)
-                        assert principal_id == "test_principal"
-                        assert tenant == {
-                            "tenant_id": "tenant_test",
-                            "subdomain": "test-tenant",
-                            "name": "Test Tenant",
-                        }
+            # Mock virtual host lookup to fail (not a virtual host)
+            with patch("src.core.main.get_tenant_by_virtual_host", return_value=None):
+                # Mock subdomain lookup to succeed
+                with patch("src.core.main.get_tenant_by_subdomain") as mock_tenant_lookup:
+                    mock_tenant_lookup.return_value = {
+                        "tenant_id": "tenant_test",
+                        "subdomain": "test-tenant",
+                        "name": "Test Tenant",
+                    }
+                    with patch("src.core.main.set_current_tenant"):
+                        with patch("src.core.main.get_principal_from_token", return_value="test_principal"):
+                            principal_id, tenant = get_principal_from_context(context)
+                            assert principal_id == "test_principal"
+                            assert tenant == {
+                                "tenant_id": "tenant_test",
+                                "subdomain": "test-tenant",
+                                "name": "Test Tenant",
+                            }
 
     def test_audit_logging_handles_none_principal(self):
         """Test that audit logging works with None principal_id."""

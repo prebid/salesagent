@@ -66,6 +66,8 @@ def test_get_principal_from_context_uses_global_lookup_when_no_tenant_detected()
     mock_tenant = {"tenant_id": "tenant_test", "subdomain": "test"}
     with (
         patch("src.core.main.get_http_headers", return_value={}),
+        patch("src.core.main.get_tenant_by_virtual_host", return_value=None),  # localhost not a virtual host
+        patch("src.core.main.get_tenant_by_subdomain", return_value=None),  # localhost not a subdomain
         patch("src.core.main.get_principal_from_token") as mock_get_principal,
         patch("src.core.main.get_current_tenant", return_value=mock_tenant),
     ):

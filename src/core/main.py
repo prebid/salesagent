@@ -542,34 +542,39 @@ def get_principal_from_context(
     tenant_context = None
     detection_method = None
 
-    # 1. Check host header for subdomain FIRST (most common case)
+    # 1. Check host header - try virtual host FIRST, then fall back to subdomain
     if not requested_tenant_id:
         host = _get_header_case_insensitive(headers, "host") or ""
-        subdomain = host.split(".")[0] if "." in host else None
-        console.print(f"[blue]Extracted subdomain from Host header: {subdomain}[/blue]")
-        if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
-            # Look up tenant by subdomain to get actual tenant_id
-            console.print(f"[blue]Looking up tenant by subdomain: {subdomain}[/blue]")
-            tenant_context = get_tenant_by_subdomain(subdomain)
-            if tenant_context:
-                requested_tenant_id = tenant_context["tenant_id"]
-                detection_method = "subdomain"
-                set_current_tenant(tenant_context)
-                console.print(
-                    f"[green]Tenant detected from subdomain: {subdomain} → tenant_id: {requested_tenant_id}[/green]"
-                )
-            else:
-                console.print(f"[yellow]No tenant found for subdomain: {subdomain}[/yellow]")
-                # If subdomain lookup failed, try virtual host lookup with full hostname
-                console.print(f"[blue]Trying virtual host lookup for full hostname: {host}[/blue]")
-                tenant_context = get_tenant_by_virtual_host(host)
+        console.print(f"[blue]Checking Host header: {host}[/blue]")
+
+        # CRITICAL: Try virtual host lookup FIRST before extracting subdomain
+        # This prevents issues where a subdomain happens to match a virtual host
+        # (e.g., "test-agent" subdomain vs "test-agent.adcontextprotocol.org" virtual host)
+        tenant_context = get_tenant_by_virtual_host(host)
+        if tenant_context:
+            requested_tenant_id = tenant_context["tenant_id"]
+            detection_method = "host header (virtual host)"
+            set_current_tenant(tenant_context)
+            console.print(
+                f"[green]Tenant detected from Host header virtual host: {host} → tenant_id: {requested_tenant_id}[/green]"
+            )
+        else:
+            # Fallback to subdomain extraction if virtual host lookup failed
+            subdomain = host.split(".")[0] if "." in host else None
+            console.print(f"[blue]No virtual host match, extracting subdomain from Host header: {subdomain}[/blue]")
+            if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
+                # Look up tenant by subdomain to get actual tenant_id
+                console.print(f"[blue]Looking up tenant by subdomain: {subdomain}[/blue]")
+                tenant_context = get_tenant_by_subdomain(subdomain)
                 if tenant_context:
                     requested_tenant_id = tenant_context["tenant_id"]
-                    detection_method = "host header (virtual host)"
+                    detection_method = "subdomain"
                     set_current_tenant(tenant_context)
                     console.print(
-                        f"[green]Tenant detected from Host header virtual host: {host} → tenant_id: {requested_tenant_id}[/green]"
+                        f"[green]Tenant detected from subdomain: {subdomain} → tenant_id: {requested_tenant_id}[/green]"
                     )
+                else:
+                    console.print(f"[yellow]No tenant found for subdomain: {subdomain}[/yellow]")
 
     # 2. Check x-adcp-tenant header (set by nginx for path-based routing)
     if not requested_tenant_id:
