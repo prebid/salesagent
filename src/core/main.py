@@ -4055,22 +4055,28 @@ def list_authorized_properties(
     Returns:
         ListAuthorizedPropertiesResponse with properties and tag metadata
     """
-    # DEBUG: Log what FastMCP provides
-    console.print("[yellow]DEBUG MCP list_authorized_properties:[/yellow]")
-    console.print(f"[yellow]  context={context}[/yellow]")
-    console.print(f"[yellow]  context type={type(context)}[/yellow]")
+    # DEBUG: Log what FastMCP provides (using logger instead of console for production visibility)
+    import logging
+
+    logger = logging.getLogger(__name__)
+    logger.info("=" * 80)
+    logger.info("DEBUG MCP list_authorized_properties ENTRY")
+    logger.info(f"  context={context}")
+    logger.info(f"  context type={type(context)}")
     if context:
-        console.print(f"[yellow]  context.meta={getattr(context, 'meta', 'NO META')}[/yellow]")
+        logger.info(f"  context.meta={getattr(context, 'meta', 'NO META')}")
 
     # Try get_http_headers()
     try:
         from fastmcp.utilities.context import get_http_headers
 
         headers = get_http_headers(include_all=True)
-        console.print(f"[yellow]  get_http_headers()={headers}[/yellow]")
+        logger.info(f"  get_http_headers(include_all=True)={headers}")
+        logger.info(f"  get_http_headers() keys: {list(headers.keys()) if headers else 'NONE'}")
     except Exception as e:
-        console.print(f"[yellow]  get_http_headers() failed: {e}[/yellow]")
+        logger.error(f"  get_http_headers() failed: {e}")
 
+    logger.info("=" * 80)
     return _list_authorized_properties_impl(req, context)
 
 
