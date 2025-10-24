@@ -6,7 +6,7 @@ import os
 from datetime import UTC, datetime
 
 from flask import Blueprint, jsonify, render_template, request, session
-from googleads import ad_manager
+from googleads import ad_manager, oauth2
 from sqlalchemy import select
 
 from src.adapters.gam.utils.constants import GAM_API_VERSION
@@ -530,8 +530,6 @@ def get_gam_custom_targeting_keys(tenant_id):
                 )
 
             # Create OAuth2 client
-            from googleads import oauth2
-
             oauth2_client = oauth2.GoogleRefreshTokenClient(
                 client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),
                 client_secret=os.environ.get("GAM_OAUTH_CLIENT_SECRET"),
@@ -819,8 +817,6 @@ def test_gam_connection(tenant_id):
                 )
 
             # Test by creating credentials and making a simple API call
-            from googleads import oauth2
-
             # Create GoogleAds OAuth2 client with refresh token
             oauth2_client = oauth2.GoogleRefreshTokenClient(
                 client_id=client_id,

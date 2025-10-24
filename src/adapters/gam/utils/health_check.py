@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Any
 
 import google.oauth2.service_account
-from googleads import ad_manager
+from googleads import ad_manager, oauth2
 
 from .constants import GAM_API_VERSION
 from .error_handler import GAMAuthenticationError, GAMConfigurationError
@@ -83,10 +83,11 @@ class GAMHealthChecker:
                 key_file, scopes=["https://www.googleapis.com/auth/dfp"]
             )
             # Wrap in GoogleCredentialsClient for AdManagerClient compatibility
-            from googleads import oauth2
             oauth2_client = oauth2.GoogleCredentialsClient(credentials)
 
-            self.client = ad_manager.AdManagerClient(oauth2_client, "AdCP Health Check", network_code=self.config.get("network_code"))
+            self.client = ad_manager.AdManagerClient(
+                oauth2_client, "AdCP Health Check", network_code=self.config.get("network_code")
+            )
             return True
 
         except Exception as e:
