@@ -23,8 +23,8 @@ def upgrade() -> None:
     # Add mock_manual_approval_required column to adapter_config table
     op.add_column('adapter_config', sa.Column('mock_manual_approval_required', sa.Boolean(), nullable=True))
 
-    # Set default value to False for existing rows
-    op.execute("UPDATE adapter_config SET mock_manual_approval_required = false WHERE adapter_type = 'mock'")
+    # Set default value to False for ALL existing rows (not just mock adapters)
+    op.execute("UPDATE adapter_config SET mock_manual_approval_required = false")
 
     # Make the column non-nullable after setting defaults
     op.alter_column('adapter_config', 'mock_manual_approval_required', nullable=False, server_default=sa.false())
