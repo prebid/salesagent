@@ -665,7 +665,6 @@ def _ai_review_creative_async(
                         webhook_url, creative_id, creative.status, creative_data, tenant_id
                     )
                     logger.info(f"[AI Review Async] Webhook called for {creative_id}")
-                    
             else:
                 logger.error(f"[AI Review Async] Creative not found: {creative_id}")
 
