@@ -467,9 +467,22 @@ def get_principal_from_context(
         return (None, None)
 
     # Log all relevant headers for debugging
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     host_header = _get_header_case_insensitive(headers, "host")
     apx_host_header = _get_header_case_insensitive(headers, "apx-incoming-host")
     tenant_header = _get_header_case_insensitive(headers, "x-adcp-tenant")
+
+    logger.info("=" * 80)
+    logger.info("TENANT DETECTION - Auth Headers Debug:")
+    logger.info(f"  Host: {host_header}")
+    logger.info(f"  Apx-Incoming-Host: {apx_host_header}")
+    logger.info(f"  x-adcp-tenant: {tenant_header}")
+    logger.info(f"  Total headers available: {len(headers)}")
+    logger.info("=" * 80)
+
     console.print("[blue]Auth Headers Debug:[/blue]")
     console.print(f"  Host: {host_header}")
     console.print(f"  Apx-Incoming-Host: {apx_host_header}")
@@ -4055,29 +4068,34 @@ def list_authorized_properties(
     Returns:
         ListAuthorizedPropertiesResponse with properties and tag metadata
     """
-    # DEBUG: Log what FastMCP provides (using logger instead of console for production visibility)
-    import logging
-
-    logger = logging.getLogger(__name__)
-    logger.info("=" * 80)
-    logger.info("DEBUG MCP list_authorized_properties ENTRY")
-    logger.info(f"  context={context}")
-    logger.info(f"  context type={type(context)}")
+    # FIX: Create MinimalContext with headers from FastMCP request (like A2A does)
+    # This ensures tenant detection works the same way for both MCP and A2A
+    tool_context = None
     if context:
-        logger.info(f"  context.meta={getattr(context, 'meta', 'NO META')}")
+        try:
+            # Access raw Starlette request headers via context.request_context.request
+            request = context.request_context.request
+            if request and hasattr(request, "headers"):
+                headers = dict(request.headers)
 
-    # Try get_http_headers()
-    try:
-        from fastmcp.utilities.context import get_http_headers
+                # Create MinimalContext matching A2A pattern
+                class MinimalContext:
+                    def __init__(self, headers):
+                        self.meta = {"headers": headers}
+                        self.headers = headers
 
-        headers = get_http_headers(include_all=True)
-        logger.info(f"  get_http_headers(include_all=True)={headers}")
-        logger.info(f"  get_http_headers() keys: {list(headers.keys()) if headers else 'NONE'}")
-    except Exception as e:
-        logger.error(f"  get_http_headers() failed: {e}")
+                tool_context = MinimalContext(headers)
+        except Exception as e:
+            # Fallback to passing context as-is
+            import logging
 
-    logger.info("=" * 80)
-    return _list_authorized_properties_impl(req, context)
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Could not extract headers from FastMCP context: {e}")
+            tool_context = context
+    else:
+        tool_context = context
+
+    return _list_authorized_properties_impl(req, tool_context)
 
 
 def _validate_pricing_model_selection(
