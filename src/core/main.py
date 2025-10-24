@@ -286,15 +286,7 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
                     # Also check if it's the admin token for this specific tenant
                     stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
                     tenant = session.scalars(stmt).first()
-                    if tenant and token == tenant.admin_token:
-                        console.print(f"[green]Token matches admin token for tenant '{tenant_id}'[/green]")
-                        # Set tenant context for admin token
-                        from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                        tenant_dict = serialize_tenant_to_dict(tenant)
-                        set_current_tenant(tenant_dict)
-                        return f"{tenant_id}_admin"
-                    console.print(f"[red]Token not found in tenant '{tenant_id}' and doesn't match admin token[/red]")
+                    console.print(f"[red]Token not found in tenant '{tenant_id}'[/red]")
                     return None
                 else:
                     console.print(f"[green]Found principal '{principal.principal_id}' in tenant '{tenant_id}'[/green]")
@@ -334,17 +326,6 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
                     console.print(
                         f"[bold green]Set tenant context to '{tenant.tenant_id}' (from principal)[/bold green]"
                     )
-
-                    # Check if this is the admin token for the tenant
-                    if token == tenant.admin_token:
-                        return f"{tenant.tenant_id}_admin"
-            else:
-                # Tenant was already set by caller - just check admin token
-                stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
-                tenant = session.scalars(stmt).first()
-                if tenant and token == tenant.admin_token:
-                    console.print(f"[green]Token is admin token for tenant '{tenant_id}'[/green]")
-                    return f"{tenant_id}_admin"
 
             return principal.principal_id
 
@@ -4962,7 +4943,9 @@ async def _create_media_buy_impl(
             )
 
             # Workflow step already created above - no need for separate task
-            pending_media_buy_id = f"pending_{uuid.uuid4().hex[:8]}"
+            # Generate permanent media buy ID (not "pending_xxx")
+            # This ID will be used whether pending or approved - only status changes
+            media_buy_id = f"mb_{uuid.uuid4().hex[:12]}"
 
             response_msg = (
                 f"Manual approval required. Workflow Step ID: {step.step_id}. Context ID: {persistent_ctx.context_id}"
@@ -4996,7 +4979,7 @@ async def _create_media_buy_impl(
 
                 slack_notifier.notify_media_buy_event(
                     event_type="approval_required",
-                    media_buy_id=pending_media_buy_id,
+                    media_buy_id=media_buy_id,
                     principal_name=principal_name,
                     details=notification_details,
                     tenant_name=tenant.get("name", "Unknown"),
@@ -5007,12 +4990,17 @@ async def _create_media_buy_impl(
             except Exception as e:
                 console.print(f"[yellow]⚠️ Failed to send manual approval Slack notification: {e}[/yellow]")
 
-            # Generate pending package IDs and prepare request with them
+            # Generate permanent package IDs (not dependent on media buy ID)
+            # These IDs will be used whether the media buy is pending or approved
             pending_packages = []
             raw_request_dict = req.model_dump(mode="json")  # Serialize datetimes to JSON-compatible format
 
             for idx, pkg in enumerate(req.packages, 1):
-                pending_package_id = f"{pending_media_buy_id}_pkg_{idx}"
+                # Generate permanent package ID using product_id and index
+                # Format: pkg_{product_id}_{timestamp_part}_{idx}
+                import secrets
+                package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
+
                 # Use product_id or buyer_ref for package name since Package schema doesn't have 'name'
                 pkg_name = f"Package {idx}"
                 if pkg.product_id:
@@ -5020,24 +5008,37 @@ async def _create_media_buy_impl(
                 elif pkg.buyer_ref:
                     pkg_name = f"{pkg.buyer_ref} - Package {idx}"
 
+                # Serialize the full package to include all fields (budget, targeting, etc.)
+                # Use model_dump_internal to get complete package data
+                if hasattr(pkg, "model_dump_internal"):
+                    pkg_dict = pkg.model_dump_internal()
+                elif hasattr(pkg, "model_dump"):
+                    pkg_dict = pkg.model_dump(exclude_none=True, mode="python")
+                else:
+                    pkg_dict = {}
+
+                # Build response with complete package data (matching auto-approval path)
                 pending_packages.append({
-                    "package_id": pending_package_id,
+                    **pkg_dict,  # Include all package fields (budget, targeting_overlay, creative_ids, etc.)
+                    "package_id": package_id,
                     "name": pkg_name,
-                    "status": "pending_approval",
+                    "buyer_ref": pkg.buyer_ref,  # Include buyer_ref from request package
+                    "status": TaskStatus.INPUT_REQUIRED,  # Consistent with TaskStatus enum (requires approval)
                 })
 
                 # Update the package in raw_request with the generated package_id so UI can find it
-                raw_request_dict["packages"][idx - 1]["package_id"] = pending_package_id
+                raw_request_dict["packages"][idx - 1]["package_id"] = package_id
 
-            # Create a pending media buy record in the database so it shows in the UI
+            # Create media buy record in the database with permanent ID
+            # Status is "pending_approval" but the ID is final
             with get_db_session() as session:
                 pending_buy = MediaBuy(
-                    media_buy_id=pending_media_buy_id,
+                    media_buy_id=media_buy_id,
                     buyer_ref=req.buyer_ref,
                     principal_id=principal.principal_id,
                     tenant_id=tenant["tenant_id"],
                     status="pending_approval",
-                    order_name=f"Pending Order - {req.buyer_ref}",
+                    order_name=f"{req.buyer_ref} - {start_time.strftime('%Y-%m-%d')}",
                     advertiser_name=principal.name,
                     budget=total_budget,
                     currency=request_currency or "USD",  # Use request_currency from validation above
@@ -5050,14 +5051,47 @@ async def _create_media_buy_impl(
                 )
                 session.add(pending_buy)
                 session.commit()
-                console.print(f"[green]✅ Created pending media buy {pending_media_buy_id} for approval[/green]")
+                console.print(f"[green]✅ Created media buy {media_buy_id} with status=pending_approval[/green]")
+
+            # Create MediaPackage records for structured querying
+            # This enables the UI to display packages and creative assignments to work properly
+            with get_db_session() as session:
+                from src.core.database.models import MediaPackage as DBMediaPackage
+
+                for pkg_data in pending_packages:
+                    package_config = {
+                        "package_id": pkg_data["package_id"],
+                        "name": pkg_data.get("name"),
+                        "status": pkg_data.get("status"),
+                    }
+                    # Add full package data from raw_request
+                    for idx, req_pkg in enumerate(req.packages):
+                        if idx == pending_packages.index(pkg_data):
+                            package_config.update({
+                                "product_id": req_pkg.product_id,
+                                "budget": req_pkg.budget.model_dump() if req_pkg.budget else None,
+                                "targeting_overlay": req_pkg.targeting_overlay.model_dump() if req_pkg.targeting_overlay else None,
+                                "creative_ids": req_pkg.creative_ids,
+                                "format_ids_to_provide": req_pkg.format_ids_to_provide,
+                            })
+                            break
+
+                    db_package = DBMediaPackage(
+                        media_buy_id=media_buy_id,
+                        package_id=pkg_data["package_id"],
+                        package_config=package_config,
+                    )
+                    session.add(db_package)
+
+                session.commit()
+                console.print(f"[green]✅ Created {len(pending_packages)} MediaPackage records[/green]")
 
             # Link the workflow step to the media buy so the approval button shows in UI
             with get_db_session() as session:
                 from src.core.database.models import ObjectWorkflowMapping
                 mapping = ObjectWorkflowMapping(
                     object_type="media_buy",
-                    object_id=pending_media_buy_id,
+                    object_id=media_buy_id,
                     step_id=step.step_id,
                     action="create"
                 )
@@ -5065,11 +5099,11 @@ async def _create_media_buy_impl(
                 session.commit()
                 console.print(f"[green]✅ Linked workflow step {step.step_id} to media buy[/green]")
 
-            # Return success response with pending packages
+            # Return success response with packages awaiting approval
             # The workflow_step_id in packages indicates approval is required
             return CreateMediaBuyResponse(
                 buyer_ref=req.buyer_ref,
-                media_buy_id=pending_media_buy_id,
+                media_buy_id=media_buy_id,
                 creative_deadline=None,
                 packages=pending_packages,
                 workflow_step_id=step.step_id,  # Client can track approval via this ID
@@ -5142,10 +5176,36 @@ async def _create_media_buy_impl(
             )
 
             # Workflow step already created above - no need for separate task
-            pending_media_buy_id = f"pending_{uuid.uuid4().hex[:8]}"
+            # Generate permanent media buy ID (not "pending_xxx")
+            media_buy_id = f"mb_{uuid.uuid4().hex[:12]}"
 
             response_msg = f"Media buy requires approval due to {reason.lower()}. Workflow Step ID: {step.step_id}. Context ID: {persistent_ctx.context_id}"
             ctx_manager.add_message(persistent_ctx.context_id, "assistant", response_msg)
+
+            # Generate permanent package IDs and prepare response packages
+            response_packages = []
+            for idx, pkg in enumerate(req.packages, 1):
+                # Generate permanent package ID
+                import secrets
+                package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
+
+                # Serialize the full package to include all fields (budget, targeting, etc.)
+                # Use model_dump_internal to get complete package data
+                if hasattr(pkg, "model_dump_internal"):
+                    pkg_dict = pkg.model_dump_internal()
+                elif hasattr(pkg, "model_dump"):
+                    pkg_dict = pkg.model_dump(exclude_none=True, mode="python")
+                else:
+                    pkg_dict = {}
+
+                # Build response with complete package data (matching auto-approval path)
+                response_packages.append({
+                    **pkg_dict,  # Include all package fields (budget, targeting_overlay, creative_ids, etc.)
+                    "package_id": package_id,
+                    "name": f"{pkg.product_id} - Package {idx}",
+                    "buyer_ref": pkg.buyer_ref,  # Include buyer_ref from request
+                    "status": TaskStatus.INPUT_REQUIRED,  # Consistent with TaskStatus enum (requires approval)
+                })
 
             # Send Slack notification for configuration-based approval requirement
             try:
@@ -5177,7 +5237,7 @@ async def _create_media_buy_impl(
 
                 slack_notifier.notify_media_buy_event(
                     event_type="config_approval_required",
-                    media_buy_id=pending_media_buy_id,
+                    media_buy_id=media_buy_id,
                     principal_name=principal_name,
                     details=notification_details,
                     tenant_name=tenant.get("name", "Unknown"),
@@ -5190,6 +5250,8 @@ async def _create_media_buy_impl(
 
             return CreateMediaBuyResponse(
                 buyer_ref=req.buyer_ref,
+                media_buy_id=media_buy_id,
+                packages=response_packages,  # Include packages with buyer_ref
                 workflow_step_id=step.step_id,
             )
 
@@ -5206,14 +5268,14 @@ async def _create_media_buy_impl(
         # Convert products to MediaPackages
         # If req.packages provided, use format_ids from request; otherwise use product.formats
         packages = []
-        for product in products_in_buy:
+        for idx, product in enumerate(products_in_buy, 1):
             # Determine format_ids to use
             format_ids_to_use = []
 
             # Check if this product has a corresponding package in the request with format_ids
+            matching_package = None
             if req.packages:
                 # Find the package for this product
-                matching_package = None
                 for pkg in req.packages:
                     if pkg.product_id == product.product_id:
                         matching_package = pkg
@@ -5313,14 +5375,31 @@ async def _create_media_buy_impl(
                 if first_option.rate:
                     cpm = float(first_option.rate)
 
+            # Generate permanent package ID (not product_id)
+            import secrets
+            package_id = f"pkg_{product.product_id}_{secrets.token_hex(4)}_{idx}"
+
+            # Get buyer_ref and budget from matching request package if available
+            buyer_ref = None
+            budget = None
+            if matching_package:
+                if hasattr(matching_package, 'buyer_ref'):
+                    buyer_ref = matching_package.buyer_ref
+                if hasattr(matching_package, 'budget'):
+                    budget = matching_package.budget
+
             packages.append(
                 MediaPackage(
-                    package_id=product.product_id,
+                    package_id=package_id,
                     name=product.name,
                     delivery_type=product.delivery_type,
                     cpm=cpm,
                     impressions=int(total_budget / cpm * 1000),
                     format_ids=format_ids_to_use,
+                    targeting_overlay=matching_package.targeting_overlay if matching_package and hasattr(matching_package, 'targeting_overlay') else None,
+                    buyer_ref=buyer_ref,
+                    product_id=product.product_id,  # Include product_id
+                    budget=budget,  # Include budget from request
                 )
             )
 
@@ -5398,6 +5477,7 @@ async def _create_media_buy_impl(
                     # Store full package config as JSON
                     package_config = {
                         "package_id": package_id,
+                        "name": resp_package.get("name"),  # Include package name from adapter response
                         "product_id": resp_package.get("product_id"),
                         "budget": resp_package.get("budget"),
                         "targeting_overlay": resp_package.get("targeting_overlay"),
@@ -5438,6 +5518,20 @@ async def _create_media_buy_impl(
                     creatives_list = session.scalars(creative_stmt).all()
                     creatives_map = {str(c.creative_id): c for c in creatives_list}
 
+                    # Validate all creative IDs exist (match update_media_buy behavior)
+                    found_creative_ids = set(creatives_map.keys())
+                    requested_creative_ids = set(all_creative_ids)
+                    missing_ids = requested_creative_ids - found_creative_ids
+
+                    if missing_ids:
+                        error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
+                        logger.error(error_msg)
+                        ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
+                        raise ToolError(
+                            "CREATIVES_NOT_FOUND",
+                            error_msg
+                        )
+
                 for i, package in enumerate(req.packages):
                     if package.creative_ids:
                         package_id = f"{response.media_buy_id}_pkg_{i+1}"
@@ -5454,10 +5548,9 @@ async def _create_media_buy_impl(
                             # Get creative from batch-loaded map
                             creative = creatives_map.get(creative_id)
 
+                            # This should never happen now due to validation above
                             if not creative:
-                                logger.warning(
-                                    f"Creative {creative_id} not found for package {package_id}, skipping assignment"
-                                )
+                                logger.error(f"Creative {creative_id} not in map despite validation - this is a bug")
                                 continue
 
                             # Create database assignment (always create, even if not yet uploaded to GAM)
@@ -5562,11 +5655,23 @@ async def _create_media_buy_impl(
                 # Remove format_ids from response (only format_ids_to_provide should be in response)
                 del package_dict["format_ids"]
 
+            # Determine package status based on whether creatives are assigned
+            # For auto-approved media buys:
+            # - COMPLETED if creatives are assigned and approved
+            # - WORKING if creatives still need to be provided
+            package_status = TaskStatus.WORKING  # Default: still working (needs creatives)
+            if package.creative_ids and len(package.creative_ids) > 0:
+                # Creatives are assigned, mark as completed
+                package_status = TaskStatus.COMPLETED
+            elif hasattr(package, 'format_ids_to_provide') and package.format_ids_to_provide:
+                # Format IDs requested but no creatives yet - still working
+                package_status = TaskStatus.WORKING
+
             # Override/add response-specific fields (package_id and status are set by server)
             response_package = {
                 **package_dict,
                 "package_id": f"{response.media_buy_id}_pkg_{i+1}",
-                "status": TaskStatus.WORKING,
+                "status": package_status,
             }
             response_packages.append(response_package)
 

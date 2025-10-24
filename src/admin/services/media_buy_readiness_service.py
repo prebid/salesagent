@@ -236,11 +236,11 @@ class MediaBuyReadinessService:
         State hierarchy (in priority order):
         1. failed - Media buy creation failed
         2. paused - Explicitly paused
-        3. needs_approval - Media buy awaiting manual approval OR creatives pending approval
+        3. needs_approval - Media buy itself awaiting manual approval (NOT creative approval)
         4. completed - Flight ended
         5. live - Currently serving (in flight, all creatives approved, no blockers)
         6. scheduled - Ready and waiting for start date
-        7. needs_creatives - No creatives assigned yet, or creatives are rejected
+        7. needs_creatives - Creatives need action (missing, pending approval, or rejected)
         8. draft - Initial state, not configured
         """
         # Check explicit status first
@@ -286,12 +286,14 @@ class MediaBuyReadinessService:
         if packages_total == 0:
             return "draft"
 
-        # Needs approval: has pending creatives (media buy approval already checked above)
-        if creatives_pending > 0:
-            return "needs_approval"
-
-        # Needs creatives: missing assignments, rejected creatives, or has packages but no creatives
-        if packages_total > packages_with_creatives or creatives_rejected > 0 or creatives_total == 0:
+        # Needs creatives: ANY creative action needed (missing, pending, or rejected)
+        # This includes creatives pending approval - they are still in "needs creatives" state
+        if (
+            packages_total > packages_with_creatives  # Missing creative assignments
+            or creatives_pending > 0  # Creatives pending approval
+            or creatives_rejected > 0  # Rejected creatives need replacement
+            or creatives_total == 0  # No creatives at all
+        ):
             return "needs_creatives"
 
         # Fallback (shouldn't reach here if logic is complete)

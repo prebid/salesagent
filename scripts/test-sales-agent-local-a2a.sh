@@ -5,7 +5,7 @@
 set -e
 
 SALES_AGENT_URL="http://localhost:8094/a2a"
-API_KEY="VoKnw2sp8VATpc92wnrTFZxTY9YohPGc"
+API_KEY="HVn6P9PWLykPgOKEWVuo5OpMP5fz8nDP"
 
 echo "🔗 Testing Local Sales Agent via A2A (JSON-RPC 2.0)"
 echo "Endpoint: $SALES_AGENT_URL"

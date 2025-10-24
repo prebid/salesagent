@@ -33,17 +33,6 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
             principal = session.scalars(stmt).first()
             if principal:
                 return principal.principal_id
-
-            # Also check if it's the admin token for this specific tenant
-            stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
-            tenant = session.scalars(stmt).first()
-            if tenant and token == tenant.admin_token:
-                # Set tenant context for admin token
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                tenant_dict = serialize_tenant_to_dict(tenant)
-                set_current_tenant(tenant_dict)
-                return f"admin_{tenant.tenant_id}"
         else:
             # No tenant specified - search globally
             stmt = select(Principal).filter_by(access_token=token)

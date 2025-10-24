@@ -5,7 +5,7 @@
 set -e
 
 SALES_AGENT_URL="http://localhost:8108/mcp"
-API_KEY="VoKnw2sp8VATpc92wnrTFZxTY9YohPGc"
+API_KEY="HVn6P9PWLykPgOKEWVuo5OpMP5fz8nDP"
 
 echo "🔗 Testing Local Sales Agent via MCP"
 echo "Endpoint: $SALES_AGENT_URL"

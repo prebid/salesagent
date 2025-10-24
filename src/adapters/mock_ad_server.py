@@ -706,10 +706,20 @@ class MockAdServer(AdServerAdapter):
         else:
             self.log(f"Would return: Campaign ID '{media_buy_id}' with status 'pending_creative'")
 
+        # Build packages response with buyer_ref from original request
+        response_packages = []
+        for idx, pkg in enumerate(packages):
+            pkg_dict = pkg.model_dump()
+            # Add buyer_ref from original request package if available
+            if request.packages and idx < len(request.packages):
+                pkg_dict["buyer_ref"] = request.packages[idx].buyer_ref
+            response_packages.append(pkg_dict)
+
         return CreateMediaBuyResponse(
             buyer_ref=request.buyer_ref,  # Required field per AdCP spec
             media_buy_id=media_buy_id,
             creative_deadline=datetime.now(UTC) + timedelta(days=2),
+            packages=response_packages,  # Include packages with buyer_ref
             errors=None,  # No errors for successful mock response
         )
 

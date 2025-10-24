@@ -110,6 +110,52 @@
 </div>
 {% endif %}
 
+<!-- Packages -->
+<div class="custom-card">
+    <h2>Packages</h2>
+    {% if packages %}
+        <div style="display: grid; gap: 1rem;">
+        {% for item in packages %}
+        <div style="border: 1px solid #e0e0e0; border-radius: 4px; padding: 1rem; background: #f9f9f9;">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                <strong style="font-size: 1.1em;">📦 {{ item.package.package_id }}</strong>
+                {% if item.product %}
+                <span style="color: #666; font-size: 0.9em;">Product: {{ item.product.name }}</span>
+                {% endif %}
+            </div>
+            <div class="detail-rows" style="margin-top: 0.5rem;">
+                {# Access fields from package_config JSONB #}
+                {% if item.package.package_config.get('name') %}
+                <div class="detail-row">
+                    <span class="label">Package Name:</span>
+                    <span class="value">{{ item.package.package_config.name }}</span>
+                </div>
+                {% endif %}
+                {% if item.package.package_config.get('budget') and item.package.package_config.budget.get('total') %}
+                <div class="detail-row">
+                    <span class="label">Budget:</span>
+                    <span class="value">${{ "%.2f"|format(item.package.package_config.budget.total) }}</span>
+                </div>
+                {% endif %}
+                {% if item.product %}
+                <div class="detail-row">
+                    <span class="label">Product ID:</span>
+                    <span class="value">{{ item.product.product_id }}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Product Name:</span>
+                    <span class="value">{{ item.product.name }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+        </div>
+    {% else %}
+        <p class="no-data">No packages configured for this media buy.</p>
+    {% endif %}
+</div>
+
 <!-- Creative Assignments -->
 <div class="custom-card">
     <h2>Creative Assignments</h2>
@@ -119,30 +165,32 @@
             <h3 class="package-header">📦 Package: {{ package_id }}</h3>
             <div class="creatives-grid">
                 {% for item in assignments %}
-                <div class="creative-card">
-                    <div class="creative-header">
-                        <strong>{{ item.creative.name }}</strong>
-                        <span class="status status-{{ item.creative.status }}">{{ item.creative.status|upper }}</span>
+                <a href="{{ url_for('creatives.review_creatives', tenant_id=tenant_id) }}?creative_id={{ item.creative.creative_id }}" class="creative-card-link">
+                    <div class="creative-card">
+                        <div class="creative-header">
+                            <strong>{{ item.creative.name }}</strong>
+                            <span class="status status-{{ item.creative.status }}">{{ item.creative.status|upper }}</span>
+                        </div>
+                        <div class="creative-details">
+                            <div class="creative-detail-row">
+                                <span class="label">Creative ID:</span>
+                                <span class="value">{{ item.creative.creative_id }}</span>
+                            </div>
+                            <div class="creative-detail-row">
+                                <span class="label">Format:</span>
+                                <span class="value">{{ item.creative.format or 'N/A' }}</span>
+                            </div>
+                            <div class="creative-detail-row">
+                                <span class="label">Weight:</span>
+                                <span class="value">{{ item.assignment.weight }}%</span>
+                            </div>
+                            <div class="creative-detail-row">
+                                <span class="label">Assigned:</span>
+                                <span class="value">{{ item.assignment.created_at.strftime('%Y-%m-%d %H:%M') if item.assignment.created_at else 'N/A' }}</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="creative-details">
-                        <div class="creative-detail-row">
-                            <span class="label">Creative ID:</span>
-                            <span class="value">{{ item.creative.creative_id }}</span>
-                        </div>
-                        <div class="creative-detail-row">
-                            <span class="label">Format:</span>
-                            <span class="value">{{ item.creative.format or 'N/A' }}</span>
-                        </div>
-                        <div class="creative-detail-row">
-                            <span class="label">Weight:</span>
-                            <span class="value">{{ item.assignment.weight }}%</span>
-                        </div>
-                        <div class="creative-detail-row">
-                            <span class="label">Assigned:</span>
-                            <span class="value">{{ item.assignment.created_at.strftime('%Y-%m-%d %H:%M') if item.assignment.created_at else 'N/A' }}</span>
-                        </div>
-                    </div>
-                </div>
+                </a>
                 {% endfor %}
             </div>
         </div>
@@ -523,11 +571,25 @@
     gap: 1rem;
 }
 
+.creative-card-link {
+    text-decoration: none;
+    color: inherit;
+    display: block;
+}
+
+.creative-card-link:hover .creative-card {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    border-color: #0066cc;
+}
+
 .creative-card {
     background: #f8f9fa;
     border: 1px solid #dee2e6;
     border-radius: 6px;
     padding: 1rem;
+    transition: all 0.2s ease;
+    cursor: pointer;
 }
 
 .creative-header {

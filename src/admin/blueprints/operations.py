@@ -160,7 +160,7 @@ def media_buy_detail(tenant_id, media_buy_id):
 
     from src.core.context_manager import ContextManager
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, WorkflowStep
+    from src.core.database.models import Creative, CreativeAssignment, MediaBuy, MediaPackage, Principal, Product, WorkflowStep
 
     try:
         with get_db_session() as db_session:
@@ -176,6 +176,24 @@ def media_buy_detail(tenant_id, media_buy_id):
             if media_buy.principal_id:
                 stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=media_buy.principal_id)
                 principal = db_session.scalars(stmt).first()
+
+            # Get packages for this media buy from MediaPackage table
+            stmt = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
+            media_packages = db_session.scalars(stmt).all()
+
+            packages = []
+            for media_pkg in media_packages:
+                # Extract product_id from package_config JSONB
+                product_id = media_pkg.package_config.get("product_id")
+                product = None
+                if product_id:
+                    stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
+                    product = db_session.scalars(stmt).first()
+
+                packages.append({
+                    "package": media_pkg,
+                    "product": product,
+                })
 
             # Get creative assignments for this media buy
             stmt = (
@@ -237,6 +255,7 @@ def media_buy_detail(tenant_id, media_buy_id):
                 tenant_id=tenant_id,
                 media_buy=media_buy,
                 principal=principal,
+                packages=packages,
                 workflow_steps=workflow_steps,
                 pending_approval_step=pending_approval_step,
                 status_message=status_message,

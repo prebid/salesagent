@@ -503,14 +503,27 @@ function saveBusinessRules() {
 
     fetch(`${config.scriptName}/tenant/${config.tenantId}/settings/business-rules`, {
         method: 'POST',
-        body: formData
+        body: formData,
+        redirect: 'manual'  // Don't follow redirects automatically
     })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
+    .then(response => {
+        // Server returns 302 redirect on success, or 200/400 with JSON on error
+        if (response.type === 'opaqueredirect' || response.status === 302) {
+            // Success - redirect was initiated
             alert('Business rules saved successfully!');
+            window.location.reload();
+        } else if (response.ok) {
+            // Try to parse as JSON if not a redirect
+            return response.json().then(data => {
+                if (data.success) {
+                    alert('Business rules saved successfully!');
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + (data.error || data.message || 'Unknown error'));
+                }
+            });
         } else {
-            alert('Error: ' + (data.error || data.message || 'Unknown error'));
+            throw new Error(`Server returned status ${response.status}`);
         }
     })
     .catch(error => {

@@ -185,8 +185,12 @@ class TestRealAIIntegration:
     def test_interpret_simple_delay(self):
         """Test interpreting simple delay instruction."""
         api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key or api_key == "test_key_for_mocking":
-            pytest.skip("Real GEMINI_API_KEY not available in CI environment")
+        # Skip if no key, or if it's a test/development/placeholder key
+        invalid_keys = ["test_key", "development", "your-gemini-api-key", "placeholder", "example"]
+        should_skip = not api_key or any(invalid in api_key.lower() for invalid in invalid_keys)
+
+        if should_skip:
+            pytest.skip(f"Real GEMINI_API_KEY not available (got: {api_key[:20] if api_key else 'None'}...)")
 
         orchestrator = AITestOrchestrator()  # Uses env var
         scenario = orchestrator.interpret_message("Wait 10 seconds before responding", "create_media_buy")
@@ -196,8 +200,9 @@ class TestRealAIIntegration:
     def test_interpret_rejection(self):
         """Test interpreting rejection instruction."""
         api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key or api_key == "test_key_for_mocking":
-            pytest.skip("Real GEMINI_API_KEY not available in CI environment")
+        invalid_keys = ["test_key", "development", "your-gemini-api-key", "placeholder", "example"]
+        if not api_key or any(invalid in api_key.lower() for invalid in invalid_keys):
+            pytest.skip(f"Real GEMINI_API_KEY not available (got: {api_key[:20] if api_key else 'None'}...)")
 
         orchestrator = AITestOrchestrator()
         scenario = orchestrator.interpret_message(
@@ -210,8 +215,9 @@ class TestRealAIIntegration:
     def test_interpret_hitl(self):
         """Test interpreting human-in-the-loop instruction."""
         api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key or api_key == "test_key_for_mocking":
-            pytest.skip("Real GEMINI_API_KEY not available in CI environment")
+        invalid_keys = ["test_key", "development", "your-gemini-api-key", "placeholder", "example"]
+        if not api_key or any(invalid in api_key.lower() for invalid in invalid_keys):
+            pytest.skip(f"Real GEMINI_API_KEY not available (got: {api_key[:20] if api_key else 'None'}...)")
 
         orchestrator = AITestOrchestrator()
         scenario = orchestrator.interpret_message(
@@ -224,8 +230,9 @@ class TestRealAIIntegration:
     def test_interpret_creative_reject(self):
         """Test interpreting creative rejection."""
         api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key or api_key == "test_key_for_mocking":
-            pytest.skip("Real GEMINI_API_KEY not available in CI environment")
+        invalid_keys = ["test_key", "development", "your-gemini-api-key", "placeholder", "example"]
+        if not api_key or any(invalid in api_key.lower() for invalid in invalid_keys):
+            pytest.skip(f"Real GEMINI_API_KEY not available (got: {api_key[:20] if api_key else 'None'}...)")
 
         orchestrator = AITestOrchestrator()
         scenario = orchestrator.interpret_message("reject this for missing click URL", "sync_creatives")
@@ -237,8 +244,9 @@ class TestRealAIIntegration:
     def test_interpret_creative_approve(self):
         """Test interpreting creative approval."""
         api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key or api_key == "test_key_for_mocking":
-            pytest.skip("Real GEMINI_API_KEY not available in CI environment")
+        invalid_keys = ["test_key", "development", "your-gemini-api-key", "placeholder", "example"]
+        if not api_key or any(invalid in api_key.lower() for invalid in invalid_keys):
+            pytest.skip(f"Real GEMINI_API_KEY not available (got: {api_key[:20] if api_key else 'None'}...)")
 
         orchestrator = AITestOrchestrator()
         scenario = orchestrator.interpret_message("approve this creative", "sync_creatives")
@@ -250,8 +258,9 @@ class TestRealAIIntegration:
     def test_interpret_creative_ask_for_field(self):
         """Test interpreting creative field request."""
         api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key or api_key == "test_key_for_mocking":
-            pytest.skip("Real GEMINI_API_KEY not available in CI environment")
+        invalid_keys = ["test_key", "development", "your-gemini-api-key", "placeholder", "example"]
+        if not api_key or any(invalid in api_key.lower() for invalid in invalid_keys):
+            pytest.skip(f"Real GEMINI_API_KEY not available (got: {api_key[:20] if api_key else 'None'}...)")
 
         orchestrator = AITestOrchestrator()
         scenario = orchestrator.interpret_message("ask for click tracker", "sync_creatives")

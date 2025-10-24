@@ -515,6 +515,53 @@ class ContextManager(DatabaseManager):
         finally:
             session.close()
 
+    def link_workflow_to_object(
+        self,
+        step_id: str,
+        object_type: str,
+        object_id: str,
+        action: str | None = None,
+    ) -> None:
+        """Link a workflow step to an object after the step is created.
+
+        This is useful when you need to associate objects with a workflow step
+        after the step has already been created.
+
+        Args:
+            step_id: The workflow step ID
+            object_type: Type of object (media_buy, creative, product, etc.)
+            object_id: The object's ID
+            action: Optional action being performed (defaults to step_type)
+        """
+        session = self.session
+        try:
+            # Get the step to use its step_type as default action
+            stmt = select(WorkflowStep).filter_by(step_id=step_id)
+            step = session.scalars(stmt).first()
+
+            if not step:
+                console.print(f"[yellow]⚠️ Step {step_id} not found, cannot link object[/yellow]")
+                return
+
+            obj_mapping = ObjectWorkflowMapping(
+                object_type=object_type,
+                object_id=object_id,
+                step_id=step_id,
+                action=action or step.step_type,
+                created_at=datetime.now(UTC),
+            )
+            session.add(obj_mapping)
+            session.commit()
+            console.print(
+                f"[green]✅ Linked {object_type} {object_id} to workflow step {step_id}[/green]"
+            )
+        except Exception as e:
+            session.rollback()
+            console.print(f"[red]Failed to link object to workflow: {e}[/red]")
+            raise
+        finally:
+            session.close()
+
     def _send_push_notifications(self, step: WorkflowStep, new_status: str, session: Any) -> None:
         """Send push notifications via registered webhooks for workflow step status changes.
 

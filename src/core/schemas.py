@@ -2657,6 +2657,9 @@ class MediaPackage(BaseModel):
     impressions: int
     format_ids: list[FormatId]  # FormatId objects per AdCP spec
     targeting_overlay: Optional["Targeting"] = None
+    buyer_ref: Optional[str] = None  # Optional buyer reference from request package
+    product_id: Optional[str] = None  # Product ID for this package
+    budget: Optional["Budget"] = None  # Budget information from request
 
 
 class PackagePerformance(BaseModel):

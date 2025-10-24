@@ -67,7 +67,10 @@
             <!-- Header -->
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
                 <div style="flex: 1;">
-                    <h3 style="margin: 0 0 0.5rem 0;">{{ creative.name }}</h3>
+                    <h3 style="margin: 0 0 0.25rem 0;">{{ creative.name }}</h3>
+                    <div style="color: #999; font-size: 0.85rem; font-family: monospace; margin-bottom: 0.5rem;">
+                        ID: {{ creative.creative_id }}
+                    </div>
                     <div style="color: #666; font-size: 0.9rem;">
                         <strong>Advertiser:</strong> {{ creative.principal_name }} |
                         <strong>Format:</strong> <span class="format-badge">{{ creative.format }}</span>

@@ -67,10 +67,15 @@ echo ""
 setup_docker_stack() {
     echo -e "${BLUE}🐳 Starting complete Docker stack (PostgreSQL + servers)...${NC}"
 
-    # Clean up any existing containers/volumes
-    echo "Cleaning up any existing Docker services and volumes..."
-    docker-compose down -v 2>/dev/null || true
-    docker volume prune -f 2>/dev/null || true
+    # Use unique project name to isolate from local dev environment
+    # This ensures test containers don't interfere with your running local containers
+    local TEST_PROJECT_NAME="adcp-test-$$"  # $$ = process ID, ensures uniqueness
+    export COMPOSE_PROJECT_NAME="$TEST_PROJECT_NAME"
+
+    # Clean up ONLY this test project's containers/volumes (not your local dev!)
+    echo "Cleaning up any existing TEST containers (project: $TEST_PROJECT_NAME)..."
+    docker-compose -p "$TEST_PROJECT_NAME" down -v 2>/dev/null || true
+    # DO NOT run docker volume prune - that affects ALL Docker volumes!
 
     # If ports are still in use, find new ones
     if lsof -i :${POSTGRES_PORT} >/dev/null 2>&1; then
@@ -116,15 +121,15 @@ print(' '.join(map(str, ports)))
 
     # Build and start services
     echo "Building Docker images (this may take 2-3 minutes on first run)..."
-    if ! docker-compose build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -20; then
+    if ! docker-compose -p "$TEST_PROJECT_NAME" build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -20; then
         echo -e "${RED}❌ Docker build failed${NC}"
         exit 1
     fi
 
     echo "Starting Docker services..."
-    if ! docker-compose up -d; then
+    if ! docker-compose -p "$TEST_PROJECT_NAME" up -d; then
         echo -e "${RED}❌ Docker services failed to start${NC}"
-        docker-compose logs
+        docker-compose -p "$TEST_PROJECT_NAME" logs
         exit 1
     fi
 
@@ -143,7 +148,7 @@ print(' '.join(map(str, ports)))
         fi
 
         # Check PostgreSQL
-        if docker-compose exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1; then
+        if docker-compose -p "$TEST_PROJECT_NAME" exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1; then
             echo -e "${GREEN}✓ PostgreSQL is ready (${elapsed}s)${NC}"
             break
         fi
@@ -154,7 +159,7 @@ print(' '.join(map(str, ports)))
     # Run migrations
     echo "Running database migrations..."
     # Use docker-compose exec to run migrations inside the container
-    if ! docker-compose exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" 2>/dev/null; then
+    if ! docker-compose -p "$TEST_PROJECT_NAME" exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" 2>/dev/null; then
         echo "Database adcp_test already exists, continuing..."
     fi
 
@@ -170,8 +175,9 @@ print(' '.join(map(str, ports)))
 
 # Docker teardown function
 teardown_docker_stack() {
-    echo -e "${BLUE}🐳 Stopping Docker stack...${NC}"
-    docker-compose down -v 2>/dev/null || true
+    echo -e "${BLUE}🐳 Stopping TEST Docker stack (project: $COMPOSE_PROJECT_NAME)...${NC}"
+    docker-compose -p "$COMPOSE_PROJECT_NAME" down -v 2>/dev/null || true
+    echo -e "${GREEN}✓ Test containers cleaned up (your local dev containers are untouched)${NC}"
 }
 
 # Trap to ensure cleanup on exit
