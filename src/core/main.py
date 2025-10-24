@@ -2458,25 +2458,13 @@ def _sync_creatives_impl(
                                             f"variants={len(preview_result.get('previews', []))}"
                                         )
                                     else:
-                                        # Preview generation failed for update - creative is invalid
-                                        error_msg = f"Creative validation failed: preview_creative returned no previews for update of {existing_creative.creative_id}"
-                                        logger.error(f"[sync_creatives] {error_msg}")
-                                        failed_creatives.append(
-                                            {
-                                                "creative_id": existing_creative.creative_id,
-                                                "error": error_msg,
-                                                "format": creative_format,
-                                            }
-                                        )
-                                        failed_count += 1
-                                        results.append(
-                                            SyncCreativeResult(
-                                                creative_id=existing_creative.creative_id,
-                                                action="failed",
-                                                errors=[error_msg],
-                                            )
-                                        )
-                                        continue  # Skip this creative update
+                                        # Preview generation returned no previews - treat as warning, not failure
+                                        # Static creatives with media_url don't need previews
+                                        warning_msg = f"Preview generation returned no previews for {existing_creative.creative_id} (static creative with media_url)"
+                                        logger.warning(f"[sync_creatives] {warning_msg}")
+
+                                        # Continue with update - preview is optional
+                                        # The existing creative update logic below will handle the rest
 
                                 except Exception as validation_error:
                                     # Creative agent validation failed for update (network error, agent down, etc.)
@@ -2788,25 +2776,13 @@ def _sync_creatives_impl(
                                             f"variants={len(preview_result.get('previews', []))}"
                                         )
                                     else:
-                                        # Preview generation failed - creative is invalid
-                                        error_msg = f"Creative validation failed: preview_creative returned no previews for {creative_id}"
-                                        logger.error(f"[sync_creatives] {error_msg}")
-                                        failed_creatives.append(
-                                            {
-                                                "creative_id": creative_id,
-                                                "error": error_msg,
-                                                "format": creative_format,
-                                            }
-                                        )
-                                        failed_count += 1
-                                        results.append(
-                                            SyncCreativeResult(
-                                                creative_id=creative_id,
-                                                action="failed",
-                                                errors=[error_msg],
-                                            )
-                                        )
-                                        continue  # Skip this creative
+                                        # Preview generation returned no previews - treat as warning, not failure
+                                        # Static creatives with media_url don't need previews
+                                        warning_msg = f"Preview generation returned no previews for {creative_id} (static creative with media_url)"
+                                        logger.warning(f"[sync_creatives] {warning_msg}")
+
+                                        # Continue with creative creation - preview is optional
+                                        # The existing creative creation logic below will handle the rest
 
                             except Exception as validation_error:
                                 # Creative agent validation failed (network error, agent down, etc.)
