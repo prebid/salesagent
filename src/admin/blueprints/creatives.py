@@ -58,10 +58,6 @@ def _cleanup_completed_tasks():
         for task_id in completed_tasks:
             del _ai_review_tasks[task_id]
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
-
-def _call_webhook_for_creative_status(
-    webhook_url: str, creative_id: str, status: str, creative_data: dict = None, tenant_id: str = None
-):
     """Call webhook to notify about creative status change with retry logic.
 
     Args:
@@ -135,6 +131,107 @@ def _call_webhook_for_creative_status(
         logger.error(f"Error setting up webhook delivery for creative {creative_id}: {e}", exc_info=True)
         return False
 
+def _call_webhook_for_creative_status(
+    db_session,
+    creative_id: str,
+    status: str,
+    tenant_id: str | None = None,
+    review_feedback: str | None = None,
+):
+    """Send protocol-level push notification for creative status update.
+
+    Looks up the associated WorkflowStep via ObjectWorkflowMapping for this creative,
+    extracts the stored push_notification_config from the step's request_data, and sends
+    a protocol webhook using ProtocolWebhookService with an AdCP-compliant result shape
+    (SyncCreativesResponse containing SyncCreativeResult for the single creative).
+
+    Returns:
+        bool: True if webhook delivered successfully, False otherwise (or if no config found)
+    """
+    try:
+        # Find latest workflow step for this creative to obtain push_notification_config
+        from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
+
+        stmt = (
+            select(ObjectWorkflowMapping)
+            .filter_by(object_type="creative", object_id=creative_id)
+            .order_by(ObjectWorkflowMapping.created_at.desc())
+        )
+        mapping = db_session.scalars(stmt).first()
+
+        if not mapping:
+            logger.debug(f"No workflow mapping found for creative {creative_id}; skipping webhook notification")
+            return False
+
+        step = db_session.get(WorkflowStep, mapping.step_id)
+        if not step or not step.request_data:
+            logger.debug(
+                f"Workflow step missing or has no request_data for creative {creative_id}; skipping webhook notification"
+            )
+            return False
+
+        webhook_config = step.request_data.get("push_notification_config")
+        if not webhook_config or not webhook_config.get("url"):
+            logger.debug(
+                f"No push_notification_config with URL present for creative {creative_id}; skipping webhook notification"
+            )
+            return False
+
+        # Build AdCP-compliant result payload
+        creative_result = {
+            "creative_id": creative_id,
+            "action": "updated",
+            "status": status,
+        }
+        if review_feedback:
+            creative_result["review_feedback"] = review_feedback
+
+        result = {"creatives": [creative_result]}
+
+        # Send protocol-level notification synchronously (no background thread), using outer session
+        from src.services.protocol_webhook_service import get_protocol_webhook_service
+        import asyncio
+
+        service = get_protocol_webhook_service()
+        try:
+            asyncio.run(
+                service.send_notification(
+                    webhook_config=webhook_config,
+                    task_id=step.step_id,
+                    task_type="sync_creatives",
+                    status="completed",
+                    result=result,
+                    error=None,
+                )
+            )
+        except RuntimeError as loop_err:
+            # If there's already a running loop (unlikely in Flask), fallback to create a new loop
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(
+                        service.send_notification(
+                            webhook_config=webhook_config,
+                            task_id=step.step_id,
+                            task_type="sync_creatives",
+                            status="completed",
+                            result=result,
+                            error=None,
+                        )
+                    )
+                finally:
+                    loop.close()
+            except Exception as send_e:
+                logger.warning(f"Failed to send protocol webhook for creative {creative_id}: {send_e}")
+
+        logger.info(
+            f"Sent protocol-level webhook notification for creative {creative_id} (status={status}) to {webhook_config.get('url')}"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"Error sending protocol webhook for creative {creative_id}: {e}", exc_info=True)
+        return False
 
 
 @creatives_bp.route("/", methods=["GET"])

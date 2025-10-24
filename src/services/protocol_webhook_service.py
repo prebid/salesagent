@@ -18,8 +18,10 @@ import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
+import asyncio
+import json
 
-import httpx
+import requests
 from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
@@ -56,7 +58,7 @@ class ProtocolWebhookService:
     """
 
     def __init__(self):
-        self.http_client = httpx.AsyncClient(timeout=10.0)
+        self._session = requests.Session()
         
     async def send_notification(
         self,
@@ -117,7 +119,6 @@ class ProtocolWebhookService:
         # Apply authentication based on schemes
         if "HMAC-SHA256" in schemes and credentials:
             # Sign payload with HMAC-SHA256
-            import json
 
             timestamp = str(int(time.time()))
             payload_str = json.dumps(payload, sort_keys=False, separators=(",", ":"))
@@ -135,19 +136,22 @@ class ProtocolWebhookService:
         try:
             logger.info(f"Sending protocol-level webhook notification for task {task_id} to {url}")
             
-            response = await self.http_client.post(url, json=payload, headers=headers)
+            def _post() -> requests.Response:
+                return self._session.post(url, json=payload, headers=headers, timeout=10.0)
+
+            response = await asyncio.to_thread(_post)
             response.raise_for_status()
 
             logger.info(f"Successfully sent webhook notification for task {task_id} (status: {response.status_code})")
             return True
 
-        except httpx.HTTPStatusError as e:
+        except requests.HTTPError as e:
             logger.warning(
                 f"Webhook notification failed for task {task_id}: HTTP {e.response.status_code} - {e.response.text}"
             )
             return False
 
-        except httpx.RequestError as e:
+        except requests.RequestException as e:
             logger.warning(f"Webhook notification failed for task {task_id}: {type(e).__name__} - {e}")
             return False
 
@@ -157,7 +161,7 @@ class ProtocolWebhookService:
 
     async def close(self):
         """Close HTTP client."""
-        await self.http_client.aclose()
+        self._session.close()
 
 
 # Global service instance
