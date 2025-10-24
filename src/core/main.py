@@ -442,18 +442,24 @@ def get_principal_from_context(
     # CRITICAL: get_http_headers() returns {} for sync tools, so we need fallback even for empty dict
     if not headers:  # Handles both None and {}
         console.print("[yellow]DEBUG: get_http_headers() empty, trying fallback methods[/yellow]")
-        if hasattr(context, "meta") and context.meta and "headers" in context.meta:
-            headers = context.meta["headers"]
-            console.print(f"[blue]DEBUG: Got {len(headers)} headers from context.meta[/blue]")
-        # Try other possible attributes
-        elif hasattr(context, "headers"):
-            headers = context.headers
-            console.print(f"[blue]DEBUG: Got {len(headers)} headers from context.headers[/blue]")
-        elif hasattr(context, "_headers"):
-            headers = context._headers
-            console.print(f"[blue]DEBUG: Got {len(headers)} headers from context._headers[/blue]")
+        # Only try context fallbacks if context is not None
+        if context is not None:
+            if hasattr(context, "meta") and context.meta and "headers" in context.meta:
+                headers = context.meta["headers"]
+                console.print(f"[blue]DEBUG: Got {len(headers)} headers from context.meta[/blue]")
+            # Try other possible attributes
+            elif hasattr(context, "headers"):
+                headers = context.headers
+                console.print(f"[blue]DEBUG: Got {len(headers)} headers from context.headers[/blue]")
+            elif hasattr(context, "_headers"):
+                headers = context._headers
+                console.print(f"[blue]DEBUG: Got {len(headers)} headers from context._headers[/blue]")
+            else:
+                console.print(
+                    "[yellow]DEBUG: No fallback attributes available (context provided but no headers)[/yellow]"
+                )
         else:
-            console.print("[yellow]DEBUG: No fallback attributes available[/yellow]")
+            console.print("[yellow]DEBUG: context=None and get_http_headers() failed - no headers available[/yellow]")
 
     # If still no headers dict available, return None
     if not headers:
@@ -746,8 +752,9 @@ except (RuntimeError, Exception) as e:
 
 mcp = FastMCP(
     name="AdCPSalesAgent",
-    # Use stateless HTTP mode to avoid session requirements
-    stateless_http=True,
+    # Enable sessions to allow proper HTTP context for header access
+    # This is needed for tenant detection via headers in unauthenticated calls
+    stateless_http=False,
 )
 
 # Initialize creative engine with minimal config (will be tenant-specific later)
