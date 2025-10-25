@@ -24,12 +24,22 @@ export GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-test_client_id}
 export GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-test_secret}
 export SUPER_ADMIN_EMAILS=${SUPER_ADMIN_EMAILS:-test@example.com}
 
-# Use in-memory database for tests unless specified
+# Configure database usage (PostgreSQL only)
+DEFAULT_POSTGRES_PORT=${POSTGRES_PORT:-5432}
+DEFAULT_DATABASE_URL=${DEFAULT_DATABASE_URL:-postgresql://adcp_user:secure_password_change_me@localhost:${DEFAULT_POSTGRES_PORT}/adcp_test}
+
 if [ -z "$DATABASE_URL" ]; then
-    export DATABASE_URL="sqlite:///:memory:"
-    echo "📊 Using in-memory SQLite database"
+    export DATABASE_URL="$DEFAULT_DATABASE_URL"
+    echo "📊 Using PostgreSQL database: $DATABASE_URL"
+elif [[ "$DATABASE_URL" == sqlite* ]]; then
+    echo "❌ SQLite is not supported. Set DATABASE_URL to a PostgreSQL connection string."
+    exit 1
 else
     echo "📊 Using database: $DATABASE_URL"
+fi
+
+if [ -z "$DB_TYPE" ]; then
+    export DB_TYPE="postgresql"
 fi
 
 # Function to run tests
@@ -71,7 +81,7 @@ check_skip_decorators() {
 
 # Initialize database if needed
 init_database() {
-    if [[ "$DATABASE_URL" != *":memory:"* ]]; then
+    if [[ "$DATABASE_URL" == postgresql* || "$DATABASE_URL" == postgres* ]]; then
         echo -e "\n${YELLOW}Running database migrations...${NC}"
         python migrate.py
         if [ $? -eq 0 ]; then
@@ -79,6 +89,8 @@ init_database() {
         else
             echo -e "${YELLOW}⚠️  Migration failed, continuing with existing schema${NC}"
         fi
+    else
+        echo -e "${YELLOW}⚠️  Skipping migrations for non-PostgreSQL database URL${NC}"
     fi
 }
 
@@ -121,7 +133,8 @@ main() {
             ;;
         ci)
             # CI-optimized test run
-            export DATABASE_URL="sqlite:///test.db"
+            export DATABASE_URL=${CI_DATABASE_URL:-postgresql://adcp_user:test_password@localhost:${DEFAULT_POSTGRES_PORT}/adcp_test}
+            export DB_TYPE="postgresql"
             init_database
             run_tests "tests/smoke/" "Smoke Tests" "-m smoke --junit-xml=test-results/smoke.xml" || ALL_PASSED=false
             run_tests "tests/unit/" "Unit Tests" "--junit-xml=test-results/unit.xml" || ALL_PASSED=false

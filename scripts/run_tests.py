@@ -14,6 +14,12 @@ from pathlib import Path
 # Add parent directory to path to import from project
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+DEFAULT_POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
+DEFAULT_DATABASE_URL = os.environ.get(
+    "DEFAULT_DATABASE_URL",
+    f"postgresql://adcp_user:secure_password_change_me@localhost:{DEFAULT_POSTGRES_PORT}/adcp_test",
+)
+
 # Test categories - now using directory structure
 TEST_CATEGORIES = {
     "unit": {"description": "Unit tests with minimal dependencies", "path": "tests/unit", "markers": "-m unit"},
@@ -57,9 +63,17 @@ def setup_test_environment():
     """Set up test environment variables."""
     env = os.environ.copy()
 
-    # Default test database
-    if "DATABASE_URL" not in env:
-        env["DATABASE_URL"] = "sqlite:///test_adcp.db"
+    # Default test database (PostgreSQL only)
+    database_url = env.get("DATABASE_URL")
+    if not database_url:
+        env["DATABASE_URL"] = DEFAULT_DATABASE_URL
+        print(f"📊 Using PostgreSQL database: {env['DATABASE_URL']}")
+    else:
+        if database_url.startswith("sqlite"):
+            raise SystemExit("❌ SQLite is not supported. Set DATABASE_URL to a PostgreSQL connection string.")
+        print(f"📊 Using database: {database_url}")
+
+    env.setdefault("DB_TYPE", "postgresql")
 
     # Set testing mode
     env["TESTING"] = "true"
@@ -81,21 +95,9 @@ def setup_test_environment():
     return env
 
 
-def clean_test_database(env):
-    """Clean up test database before running tests."""
-    if "sqlite" in env.get("DATABASE_URL", ""):
-        db_file = env["DATABASE_URL"].replace("sqlite:///", "")
-        if os.path.exists(db_file):
-            os.remove(db_file)
-            print(f"Cleaned up test database: {db_file}")
-
-
 def run_tests(categories, verbose=False, failfast=False, coverage=False, specific_test=None):
     """Run tests for specified categories."""
     env = setup_test_environment()
-
-    # Clean up any existing test database
-    clean_test_database(env)
 
     # Build pytest command
     pytest_opts = []
