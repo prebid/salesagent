@@ -41,7 +41,7 @@ class Assets(BaseModel):
     alt_text: Annotated[str | None, Field(description="Alternative text for accessibility")] = None
 
 
-class Assets54(BaseModel):
+class Assets67(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -53,7 +53,7 @@ class Assets54(BaseModel):
     bitrate_kbps: Annotated[int | None, Field(description="Video bitrate in kilobits per second", ge=1)] = None
 
 
-class Assets55(BaseModel):
+class Assets68(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -63,7 +63,7 @@ class Assets55(BaseModel):
     bitrate_kbps: Annotated[int | None, Field(description="Audio bitrate in kilobits per second", ge=1)] = None
 
 
-class Assets56(BaseModel):
+class Assets69(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -71,7 +71,7 @@ class Assets56(BaseModel):
     language: Annotated[str | None, Field(description="Language code (e.g., 'en', 'es', 'fr')")] = None
 
 
-class Assets57(BaseModel):
+class Assets70(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -79,7 +79,7 @@ class Assets57(BaseModel):
     version: Annotated[str | None, Field(description="HTML version (e.g., 'HTML5')")] = None
 
 
-class Assets58(BaseModel):
+class Assets71(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -93,7 +93,7 @@ class ModuleType(Enum):
     script = "script"
 
 
-class Assets59(BaseModel):
+class Assets72(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -128,7 +128,7 @@ class TrackingEvent(Enum):
     player_collapse = "playerCollapse"
 
 
-class Assets60(BaseModel):
+class Assets73(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -146,7 +146,7 @@ class Assets60(BaseModel):
     ] = None
 
 
-class Assets61(BaseModel):
+class Assets74(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -169,7 +169,7 @@ class DaastVersion(Enum):
     field_1_1 = "1.1"
 
 
-class TrackingEvent18(Enum):
+class TrackingEvent26(Enum):
     start = "start"
     first_quartile = "firstQuartile"
     midpoint = "midpoint"
@@ -183,7 +183,7 @@ class TrackingEvent18(Enum):
     unmute = "unmute"
 
 
-class Assets62(BaseModel):
+class Assets75(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -194,12 +194,12 @@ class Assets62(BaseModel):
         int | None, Field(description="Expected audio duration in milliseconds (if known)", ge=0)
     ] = None
     tracking_events: Annotated[
-        list[TrackingEvent18] | None, Field(description="Tracking events supported by this DAAST tag")
+        list[TrackingEvent26] | None, Field(description="Tracking events supported by this DAAST tag")
     ] = None
     companion_ads: Annotated[bool | None, Field(description="Whether companion display ads are included")] = None
 
 
-class Assets63(BaseModel):
+class Assets76(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -210,7 +210,7 @@ class Assets63(BaseModel):
         int | None, Field(description="Expected audio duration in milliseconds (if known)", ge=0)
     ] = None
     tracking_events: Annotated[
-        list[TrackingEvent18] | None, Field(description="Tracking events supported by this DAAST tag")
+        list[TrackingEvent26] | None, Field(description="Tracking events supported by this DAAST tag")
     ] = None
     companion_ads: Annotated[bool | None, Field(description="Whether companion display ads are included")] = None
 
@@ -370,7 +370,7 @@ class BrandManifest(BaseModel):
     metadata: Annotated[Metadata | None, Field(description="Additional brand metadata")] = None
 
 
-class Asset17(BaseModel):
+class Asset21(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -390,7 +390,7 @@ class Asset17(BaseModel):
     metadata: Annotated[dict[str, Any] | None, Field(description="Additional asset-specific metadata")] = None
 
 
-class ProductCatalog15(BaseModel):
+class ProductCatalog19(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -407,7 +407,7 @@ class ProductCatalog15(BaseModel):
     ] = None
 
 
-class BrandManifest14(BaseModel):
+class BrandManifest18(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -431,13 +431,13 @@ class BrandManifest14(BaseModel):
     ] = None
     tagline: Annotated[str | None, Field(description="Brand tagline or slogan")] = None
     assets: Annotated[
-        list[Asset17] | None,
+        list[Asset21] | None,
         Field(
             description="Brand asset library with explicit assets and tags. Assets are referenced inline with URLs pointing to CDN-hosted files."
         ),
     ] = None
     product_catalog: Annotated[
-        ProductCatalog15 | None,
+        ProductCatalog19 | None,
         Field(
             description="Product catalog information for e-commerce advertisers. Enables SKU-level creative generation and product selection."
         ),
@@ -489,7 +489,7 @@ class Offering(BaseModel):
     assets: Annotated[list[dict[str, Any]] | None, Field(description="Assets specific to this offering")] = None
 
 
-class AssetType25(Enum):
+class AssetType31(Enum):
     image = "image"
     video = "video"
     audio = "audio"
@@ -511,17 +511,17 @@ class AssetSelectors(BaseModel):
         list[str] | None, Field(description="Select assets with specific tags (e.g., ['holiday', 'premium'])")
     ] = None
     asset_types: Annotated[
-        list[AssetType25] | None, Field(description="Filter by asset type (e.g., ['image', 'video'])")
+        list[AssetType31] | None, Field(description="Filter by asset type (e.g., ['image', 'video'])")
     ] = None
     exclude_tags: Annotated[list[str] | None, Field(description="Exclude assets with these tags")] = None
 
 
-class Assets64(BaseModel):
+class Assets77(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
     brand_manifest: Annotated[
-        BrandManifest | BrandManifest14 | AnyUrl,
+        BrandManifest | BrandManifest18 | AnyUrl,
         Field(
             description="Brand manifest provided either as an inline object or a URL string pointing to a hosted manifest",
             examples=[
@@ -580,7 +580,7 @@ class UrlType(Enum):
     tracker_script = "tracker_script"
 
 
-class Assets65(BaseModel):
+class Assets78(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -618,18 +618,18 @@ class Creative(BaseModel):
         dict[
             str,
             Assets
-            | Assets54
-            | Assets55
-            | Assets56
-            | Assets57
-            | Assets58
-            | Assets59
-            | Assets60
-            | Assets61
-            | Assets62
-            | Assets63
-            | Assets64
-            | Assets65,
+            | Assets67
+            | Assets68
+            | Assets69
+            | Assets70
+            | Assets71
+            | Assets72
+            | Assets73
+            | Assets74
+            | Assets75
+            | Assets76
+            | Assets77
+            | Assets78,
         ],
         Field(description="Assets required by the format, keyed by asset_role"),
     ]

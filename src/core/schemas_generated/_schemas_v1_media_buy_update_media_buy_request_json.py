@@ -80,7 +80,7 @@ class Packages(BaseModel):
     creative_ids: Annotated[list[str] | None, Field(description="Update creative assignments")] = None
 
 
-class TargetingOverlay4(BaseModel):
+class TargetingOverlay5(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -129,7 +129,7 @@ class Packages1(BaseModel):
     ] = None
     active: Annotated[bool | None, Field(description="Pause/resume specific package")] = None
     targeting_overlay: Annotated[
-        TargetingOverlay4 | None,
+        TargetingOverlay5 | None,
         Field(
             description="Optional geographic refinements for media buys. Most targeting should be expressed in the brief and handled by the publisher. These fields are primarily for geographic restrictions (RCT testing, regulatory compliance).",
             title="Targeting Overlay",
@@ -210,7 +210,7 @@ class UpdateMediaBuyRequest1(BaseModel):
     ] = None
 
 
-class TargetingOverlay5(BaseModel):
+class TargetingOverlay6(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -259,7 +259,7 @@ class Packages2(BaseModel):
     ] = None
     active: Annotated[bool | None, Field(description="Pause/resume specific package")] = None
     targeting_overlay: Annotated[
-        TargetingOverlay5 | None,
+        TargetingOverlay6 | None,
         Field(
             description="Optional geographic refinements for media buys. Most targeting should be expressed in the brief and handled by the publisher. These fields are primarily for geographic restrictions (RCT testing, regulatory compliance).",
             title="Targeting Overlay",
@@ -268,7 +268,7 @@ class Packages2(BaseModel):
     creative_ids: Annotated[list[str] | None, Field(description="Update creative assignments")] = None
 
 
-class TargetingOverlay6(BaseModel):
+class TargetingOverlay7(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -317,7 +317,7 @@ class Packages3(BaseModel):
     ] = None
     active: Annotated[bool | None, Field(description="Pause/resume specific package")] = None
     targeting_overlay: Annotated[
-        TargetingOverlay6 | None,
+        TargetingOverlay7 | None,
         Field(
             description="Optional geographic refinements for media buys. Most targeting should be expressed in the brief and handled by the publisher. These fields are primarily for geographic restrictions (RCT testing, regulatory compliance).",
             title="Targeting Overlay",
@@ -326,7 +326,7 @@ class Packages3(BaseModel):
     creative_ids: Annotated[list[str] | None, Field(description="Update creative assignments")] = None
 
 
-class Authentication4(BaseModel):
+class Authentication5(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -360,7 +360,7 @@ class PushNotificationConfig3(BaseModel):
         ),
     ] = None
     authentication: Annotated[
-        Authentication4, Field(description="Authentication configuration for webhook delivery (A2A-compatible)")
+        Authentication5, Field(description="Authentication configuration for webhook delivery (A2A-compatible)")
     ]
 
 

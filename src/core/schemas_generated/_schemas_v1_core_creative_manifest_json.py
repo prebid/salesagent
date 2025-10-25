@@ -188,14 +188,14 @@ class ResponseType(Enum):
     javascript = "javascript"
 
 
-class Method1(Enum):
+class Method3(Enum):
     hmac_sha256 = "hmac_sha256"
     api_key = "api_key"
     none = "none"
 
 
 class Security(BaseModel):
-    method: Annotated[Method1, Field(description="Authentication method")]
+    method: Annotated[Method3, Field(description="Authentication method")]
     hmac_header: Annotated[str | None, Field(description="Header name for HMAC signature (e.g., 'X-Signature')")] = None
     api_key_header: Annotated[str | None, Field(description="Header name for API key (e.g., 'X-API-Key')")] = None
 
@@ -233,7 +233,7 @@ class DaastVersion(Enum):
     field_1_1 = "1.1"
 
 
-class TrackingEvent6(Enum):
+class TrackingEvent10(Enum):
     start = "start"
     first_quartile = "firstQuartile"
     midpoint = "midpoint"
@@ -258,7 +258,7 @@ class Assets24(BaseModel):
         int | None, Field(description="Expected audio duration in milliseconds (if known)", ge=0)
     ] = None
     tracking_events: Annotated[
-        list[TrackingEvent6] | None, Field(description="Tracking events supported by this DAAST tag")
+        list[TrackingEvent10] | None, Field(description="Tracking events supported by this DAAST tag")
     ] = None
     companion_ads: Annotated[bool | None, Field(description="Whether companion display ads are included")] = None
 
@@ -274,7 +274,7 @@ class Assets25(BaseModel):
         int | None, Field(description="Expected audio duration in milliseconds (if known)", ge=0)
     ] = None
     tracking_events: Annotated[
-        list[TrackingEvent6] | None, Field(description="Tracking events supported by this DAAST tag")
+        list[TrackingEvent10] | None, Field(description="Tracking events supported by this DAAST tag")
     ] = None
     companion_ads: Annotated[bool | None, Field(description="Whether companion display ads are included")] = None
 

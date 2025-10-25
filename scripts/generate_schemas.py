@@ -74,6 +74,7 @@ def download_missing_schema(ref: str, schema_dir: Path) -> bool:
         # Save to cache
         with open(ref_path, "w") as f:
             json.dump(schema, f, indent=2)
+            f.write("\n")  # Add trailing newline for pre-commit compatibility
 
         print(f"   ✅ Downloaded: {ref_filename}")
         return True
@@ -280,6 +281,7 @@ def generate_schemas_from_json(schema_dir: Path, output_file: Path):
             temp_file = temp_dir / schema_file.name
             with open(temp_file, "w") as f:
                 json.dump(resolved_schema, f, indent=2)
+                f.write("\n")  # Add trailing newline for pre-commit compatibility
 
         print(f"✅ Resolved all $refs, generated {len(list(temp_dir.glob('*.json')))} schemas")
 

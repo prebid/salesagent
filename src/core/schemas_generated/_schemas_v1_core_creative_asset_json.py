@@ -169,7 +169,7 @@ class DaastVersion(Enum):
     field_1_1 = "1.1"
 
 
-class TrackingEvent2(Enum):
+class TrackingEvent6(Enum):
     start = "start"
     first_quartile = "firstQuartile"
     midpoint = "midpoint"
@@ -194,7 +194,7 @@ class Assets9(BaseModel):
         int | None, Field(description="Expected audio duration in milliseconds (if known)", ge=0)
     ] = None
     tracking_events: Annotated[
-        list[TrackingEvent2] | None, Field(description="Tracking events supported by this DAAST tag")
+        list[TrackingEvent6] | None, Field(description="Tracking events supported by this DAAST tag")
     ] = None
     companion_ads: Annotated[bool | None, Field(description="Whether companion display ads are included")] = None
 
@@ -210,7 +210,7 @@ class Assets10(BaseModel):
         int | None, Field(description="Expected audio duration in milliseconds (if known)", ge=0)
     ] = None
     tracking_events: Annotated[
-        list[TrackingEvent2] | None, Field(description="Tracking events supported by this DAAST tag")
+        list[TrackingEvent6] | None, Field(description="Tracking events supported by this DAAST tag")
     ] = None
     companion_ads: Annotated[bool | None, Field(description="Whether companion display ads are included")] = None
 

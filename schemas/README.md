@@ -39,8 +39,11 @@ This allows simpler file management while preserving the logical structure.
 ### Automatic Update (Recommended)
 
 ```bash
-# Download all schemas from official registry
-uv run python scripts/refresh_schemas.py
+# Download all schemas from official registry (incremental, with ETag caching)
+uv run python scripts/refresh_adcp_schemas.py
+
+# Or force clean refresh (re-download everything)
+uv run python scripts/refresh_adcp_schemas.py --clean
 
 # Regenerate Pydantic models
 uv run python scripts/generate_schemas.py
@@ -137,7 +140,7 @@ Pre-commit hooks will block commits and show:
 
 ```
 ❌ Schema out of sync: create-media-buy-request.json
-   Run: uv run python scripts/refresh_schemas.py
+   Run: uv run python scripts/refresh_adcp_schemas.py
 ```
 
 Just run the suggested command and commit the changes.
