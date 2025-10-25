@@ -174,6 +174,7 @@ class AdCPSchemaValidator:
             # Save to cache
             with open(cache_path, "w") as f:
                 json.dump(index_data, f, indent=2)
+                f.write("\n")  # Add trailing newline for pre-commit compatibility
 
             # Save new metadata
             metadata = {
@@ -183,6 +184,7 @@ class AdCPSchemaValidator:
             }
             with open(meta_path, "w") as f:
                 json.dump(metadata, f, indent=2)
+                f.write("\n")  # Add trailing newline for pre-commit compatibility
 
             return index_data
 
@@ -256,6 +258,7 @@ class AdCPSchemaValidator:
             # Save to cache
             with open(cache_path, "w") as f:
                 json.dump(schema_data, f, indent=2)
+                f.write("\n")  # Add trailing newline for pre-commit compatibility
 
             # Save new metadata
             metadata = {
@@ -266,6 +269,7 @@ class AdCPSchemaValidator:
             }
             with open(meta_path, "w") as f:
                 json.dump(metadata, f, indent=2)
+                f.write("\n")  # Add trailing newline for pre-commit compatibility
 
             return schema_data
 
