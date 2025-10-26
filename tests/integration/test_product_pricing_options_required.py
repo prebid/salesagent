@@ -7,55 +7,87 @@ This test ensures that the bug fixed in PR #413 doesn't regress:
 - Product Pydantic schema validation must pass
 """
 
+import uuid
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption as PricingOptionModel
+from src.core.database.models import Principal as PrincipalModel
 from src.core.database.models import Product as ProductModel
+from src.core.database.models import Tenant as TenantModel
 from src.core.main import get_product_catalog
 from src.core.schemas import Product as ProductSchema
 
 
-@pytest.mark.skip_ci  # Skip in CI - requires complex test fixtures
 @pytest.mark.requires_db
-def test_get_product_catalog_loads_pricing_options(db_session, test_tenant, test_principal):
+def test_get_product_catalog_loads_pricing_options(integration_db):
     """Test that get_product_catalog() loads pricing_options relationship."""
     from src.core.context_management import set_current_tenant
 
-    # Set up context
-    tenant_config = {
-        "tenant_id": test_tenant.tenant_id,
-        "name": test_tenant.name,
-        "adapter_id": test_tenant.adapter_id,
-    }
-    set_current_tenant(tenant_config)
+    # Create test tenant
+    unique_id = str(uuid.uuid4())[:8]
+    now = datetime.now(UTC)
 
-    # Create a product with pricing options
-    product = ProductModel(
-        tenant_id=test_tenant.tenant_id,
-        product_id="test_product_with_pricing",
-        name="Test Product",
-        description="Test description",
-        formats=["display_300x250"],
-        targeting_template={},
-        delivery_type="guaranteed",
-        property_tags=["all_inventory"],
-    )
-    db_session.add(product)
-    db_session.flush()
+    with get_db_session() as session:
+        tenant = TenantModel(
+            tenant_id=f"test_tenant_{unique_id}",
+            name=f"Test Tenant {unique_id}",
+            subdomain=f"test_{unique_id}",
+            is_active=True,
+            ad_server="mock",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(tenant)
+        session.commit()
 
-    # Add pricing option
-    pricing_option = PricingOptionModel(
-        tenant_id=test_tenant.tenant_id,
-        product_id=product.product_id,
-        pricing_model="cpm",
-        rate=10.00,
-        currency="USD",
-        is_fixed=True,
-    )
-    db_session.add(pricing_option)
-    db_session.commit()
+        # Create test principal
+        principal = PrincipalModel(
+            tenant_id=tenant.tenant_id,
+            principal_id=f"test_principal_{unique_id}",
+            name=f"Test Principal {unique_id}",
+            access_token=f"test_token_{unique_id}",
+            platform_mappings={"mock": {"advertiser_id": f"test_advertiser_{unique_id}"}},
+        )
+        session.add(principal)
+        session.commit()
+
+        # Set up context
+        tenant_config = {
+            "tenant_id": tenant.tenant_id,
+            "name": tenant.name,
+            "adapter_id": tenant.ad_server,
+        }
+        set_current_tenant(tenant_config)
+
+        # Create a product with pricing options
+        product = ProductModel(
+            tenant_id=tenant.tenant_id,
+            product_id="test_product_with_pricing",
+            name="Test Product",
+            description="Test description",
+            formats=["display_300x250"],
+            targeting_template={},
+            delivery_type="guaranteed",
+            property_tags=["all_inventory"],
+        )
+        session.add(product)
+        session.flush()
+
+        # Add pricing option
+        pricing_option = PricingOptionModel(
+            tenant_id=tenant.tenant_id,
+            product_id=product.product_id,
+            pricing_model="cpm",
+            rate=10.00,
+            currency="USD",
+            is_fixed=True,
+        )
+        session.add(pricing_option)
+        session.commit()
 
     # Call get_product_catalog()
     products = get_product_catalog()
@@ -72,38 +104,51 @@ def test_get_product_catalog_loads_pricing_options(db_session, test_tenant, test
         assert len(prod.pricing_options) > 0, f"Product {prod.product_id} must have at least one pricing option"
 
 
-@pytest.mark.skip_ci  # Skip in CI - requires complex test fixtures
 @pytest.mark.requires_db
-def test_product_query_with_eager_loading(db_session, test_tenant):
+def test_product_query_with_eager_loading(integration_db):
     """Test that Product queries use eager loading for pricing_options."""
-    # Create a product with pricing options
-    product = ProductModel(
-        tenant_id=test_tenant.tenant_id,
-        product_id="test_eager_load",
-        name="Test Eager Load",
-        description="Test description",
-        formats=["display_300x250"],
-        targeting_template={},
-        delivery_type="guaranteed",
-        property_tags=["all_inventory"],
-    )
-    db_session.add(product)
-    db_session.flush()
+    # Create test tenant
+    unique_id = str(uuid.uuid4())[:8]
+    now = datetime.now(UTC)
 
-    # Add pricing option
-    pricing_option = PricingOptionModel(
-        tenant_id=test_tenant.tenant_id,
-        product_id=product.product_id,
-        pricing_model="cpm",
-        rate=15.00,
-        currency="USD",
-        is_fixed=True,
-    )
-    db_session.add(pricing_option)
-    db_session.commit()
+    with get_db_session() as session:
+        tenant = TenantModel(
+            tenant_id=f"test_tenant_{unique_id}",
+            name=f"Test Tenant {unique_id}",
+            subdomain=f"test_{unique_id}",
+            is_active=True,
+            ad_server="mock",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(tenant)
+        session.commit()
 
-    # Close session to force fresh query
-    db_session.close()
+        # Create a product with pricing options
+        product = ProductModel(
+            tenant_id=tenant.tenant_id,
+            product_id="test_eager_load",
+            name="Test Eager Load",
+            description="Test description",
+            formats=["display_300x250"],
+            targeting_template={},
+            delivery_type="guaranteed",
+            property_tags=["all_inventory"],
+        )
+        session.add(product)
+        session.flush()
+
+        # Add pricing option
+        pricing_option = PricingOptionModel(
+            tenant_id=tenant.tenant_id,
+            product_id=product.product_id,
+            pricing_model="cpm",
+            rate=15.00,
+            currency="USD",
+            is_fixed=True,
+        )
+        session.add(pricing_option)
+        session.commit()
 
     # Query product with eager loading (simulating get_product_catalog pattern)
     with get_db_session() as session:
@@ -111,7 +156,7 @@ def test_product_query_with_eager_loading(db_session, test_tenant):
 
         stmt = (
             select(ProductModel)
-            .filter_by(tenant_id=test_tenant.tenant_id, product_id="test_eager_load")
+            .filter_by(tenant_id=tenant.tenant_id, product_id="test_eager_load")
             .options(selectinload(ProductModel.pricing_options))
         )
 
@@ -125,45 +170,58 @@ def test_product_query_with_eager_loading(db_session, test_tenant):
         assert float(loaded_product.pricing_options[0].rate) == 15.00
 
 
-@pytest.mark.skip_ci  # Skip in CI - requires complex test fixtures
 @pytest.mark.requires_db
-def test_product_without_eager_loading_fails_validation(db_session, test_tenant):
+def test_product_without_eager_loading_fails_validation(integration_db):
     """Test that Products loaded without eager loading can't be converted to Pydantic schema.
 
     This is a regression test to ensure the bug doesn't come back.
     """
-    # Create a product with pricing options
-    product = ProductModel(
-        tenant_id=test_tenant.tenant_id,
-        product_id="test_no_eager_load",
-        name="Test No Eager Load",
-        description="Test description",
-        formats=["display_300x250"],
-        targeting_template={},
-        delivery_type="guaranteed",
-        property_tags=["all_inventory"],
-    )
-    db_session.add(product)
-    db_session.flush()
+    # Create test tenant
+    unique_id = str(uuid.uuid4())[:8]
+    now = datetime.now(UTC)
 
-    # Add pricing option
-    pricing_option = PricingOptionModel(
-        tenant_id=test_tenant.tenant_id,
-        product_id=product.product_id,
-        pricing_model="cpm",
-        rate=20.00,
-        currency="USD",
-        is_fixed=True,
-    )
-    db_session.add(pricing_option)
-    db_session.commit()
+    with get_db_session() as session:
+        tenant = TenantModel(
+            tenant_id=f"test_tenant_{unique_id}",
+            name=f"Test Tenant {unique_id}",
+            subdomain=f"test_{unique_id}",
+            is_active=True,
+            ad_server="mock",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(tenant)
+        session.commit()
 
-    # Close session to force fresh query
-    db_session.close()
+        # Create a product with pricing options
+        product = ProductModel(
+            tenant_id=tenant.tenant_id,
+            product_id="test_no_eager_load",
+            name="Test No Eager Load",
+            description="Test description",
+            formats=["display_300x250"],
+            targeting_template={},
+            delivery_type="guaranteed",
+            property_tags=["all_inventory"],
+        )
+        session.add(product)
+        session.flush()
+
+        # Add pricing option
+        pricing_option = PricingOptionModel(
+            tenant_id=tenant.tenant_id,
+            product_id=product.product_id,
+            pricing_model="cpm",
+            rate=20.00,
+            currency="USD",
+            is_fixed=True,
+        )
+        session.add(pricing_option)
+        session.commit()
 
     # Query product WITHOUT eager loading (the bug scenario)
     with get_db_session() as session:
-        stmt = select(ProductModel).filter_by(tenant_id=test_tenant.tenant_id, product_id="test_no_eager_load")
+        stmt = select(ProductModel).filter_by(tenant_id=tenant.tenant_id, product_id="test_no_eager_load")
         # NOTE: No .options(selectinload(...)) here - this is the bug!
 
         loaded_product = session.scalars(stmt).first()
@@ -190,39 +248,63 @@ def test_product_without_eager_loading_fails_validation(db_session, test_tenant)
             assert "pricing_options" in str(e).lower() or "field required" in str(e).lower()
 
 
-@pytest.mark.skip_ci  # Skip in CI - requires complex test fixtures
 @pytest.mark.requires_db
-def test_create_media_buy_loads_pricing_options(db_session, test_tenant, test_principal):
+def test_create_media_buy_loads_pricing_options(integration_db):
     """Test that create_media_buy logic loads pricing_options for currency detection."""
     # This tests the second place we fixed in PR #413
-    from src.core.database.models import PricingOption as PricingOptionModel
-    from src.core.database.models import Product as ProductModel
+    # Create test tenant
+    unique_id = str(uuid.uuid4())[:8]
+    now = datetime.now(UTC)
 
-    # Create a product with pricing options
-    product = ProductModel(
-        tenant_id=test_tenant.tenant_id,
-        product_id="test_cmb_pricing",
-        name="Test CMB Product",
-        description="Test description",
-        formats=["display_300x250"],
-        targeting_template={},
-        delivery_type="guaranteed",
-        property_tags=["all_inventory"],
-    )
-    db_session.add(product)
-    db_session.flush()
+    with get_db_session() as session:
+        tenant = TenantModel(
+            tenant_id=f"test_tenant_{unique_id}",
+            name=f"Test Tenant {unique_id}",
+            subdomain=f"test_{unique_id}",
+            is_active=True,
+            ad_server="mock",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(tenant)
+        session.commit()
 
-    # Add pricing option with EUR currency
-    pricing_option = PricingOptionModel(
-        tenant_id=test_tenant.tenant_id,
-        product_id=product.product_id,
-        pricing_model="cpm",
-        rate=25.00,
-        currency="EUR",  # Non-USD to test currency detection
-        is_fixed=True,
-    )
-    db_session.add(pricing_option)
-    db_session.commit()
+        # Create test principal
+        principal = PrincipalModel(
+            tenant_id=tenant.tenant_id,
+            principal_id=f"test_principal_{unique_id}",
+            name=f"Test Principal {unique_id}",
+            access_token=f"test_token_{unique_id}",
+            platform_mappings={"mock": {"advertiser_id": f"test_advertiser_{unique_id}"}},
+        )
+        session.add(principal)
+        session.commit()
+
+        # Create a product with pricing options
+        product = ProductModel(
+            tenant_id=tenant.tenant_id,
+            product_id="test_cmb_pricing",
+            name="Test CMB Product",
+            description="Test description",
+            formats=["display_300x250"],
+            targeting_template={},
+            delivery_type="guaranteed",
+            property_tags=["all_inventory"],
+        )
+        session.add(product)
+        session.flush()
+
+        # Add pricing option with EUR currency
+        pricing_option = PricingOptionModel(
+            tenant_id=tenant.tenant_id,
+            product_id=product.product_id,
+            pricing_model="cpm",
+            rate=25.00,
+            currency="EUR",  # Non-USD to test currency detection
+            is_fixed=True,
+        )
+        session.add(pricing_option)
+        session.commit()
 
     # Query product with eager loading (as fixed in PR #413)
     with get_db_session() as session:
@@ -230,7 +312,7 @@ def test_create_media_buy_loads_pricing_options(db_session, test_tenant, test_pr
 
         stmt = (
             select(ProductModel)
-            .where(ProductModel.tenant_id == test_tenant.tenant_id, ProductModel.product_id == product.product_id)
+            .where(ProductModel.tenant_id == tenant.tenant_id, ProductModel.product_id == product.product_id)
             .options(selectinload(ProductModel.pricing_options))
         )
 

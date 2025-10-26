@@ -380,45 +380,34 @@ def sample_products(integration_db, sample_tenant):
                 product_id="guaranteed_display",
                 name="Guaranteed Display Ads",
                 description="Premium guaranteed display advertising",
-                formats=[
-                    {
-                        "format_id": "display_300x250",
-                        "name": "Medium Rectangle",
-                        "type": "display",
-                        "description": "Standard display format",
-                        "width": 300,
-                        "height": 250,
-                        "delivery_options": {"hosted": None},
-                    }
-                ],
+                formats=["display_300x250", "display_728x90"],  # Format IDs only, not objects
                 targeting_template={"geo_country": {"values": ["US"], "required": False}},
                 delivery_type="guaranteed",
-                is_fixed_price=True,
-                cpm=15.0,
+                property_tags=["all_inventory"],  # Required per AdCP spec
                 is_custom=False,
                 countries=["US"],
+                measurement=None,
+                creative_policy=None,
+                price_guidance=None,
+                implementation_config=None,
+                properties=None,
             ),
             Product(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id="non_guaranteed_video",
                 name="Non-Guaranteed Video",
                 description="Programmatic video advertising",
-                formats=[
-                    {
-                        "format_id": "video_15s",
-                        "name": "15 Second Video",
-                        "type": "video",
-                        "description": "Short form video",
-                        "duration": 15,
-                        "delivery_options": {"vast": {"mime_types": ["video/mp4"]}},
-                    }
-                ],
+                formats=["video_15s", "video_30s"],  # Format IDs only, not objects
                 targeting_template={},
                 delivery_type="non_guaranteed",
-                is_fixed_price=False,
+                property_tags=["all_inventory"],  # Required per AdCP spec
                 price_guidance={"floor": 10.0, "p50": 20.0, "p75": 30.0, "p90": 40.0},
                 is_custom=False,
                 countries=["US", "CA"],
+                measurement=None,
+                creative_policy=None,
+                implementation_config=None,
+                properties=None,
             ),
         ]
 
@@ -463,21 +452,34 @@ def mcp_server(integration_db):
 
     port = get_free_port()
 
-    # Use the integration_db path (already created by the integration_db fixture)
-    db_path = integration_db
+    # Use the integration_db (PostgreSQL database name already created by the integration_db fixture)
+    db_name = integration_db
 
     # IMPORTANT: Close any existing connections to ensure the database is fully committed
     # This is necessary because the server subprocess will create a new connection
-    from src.core.database import database_session
+    # Note: SQLAlchemy 2.0 uses get_db_session() context manager, no global db_session to close
 
-    if database_session.db_session:
-        database_session.db_session.remove()
+    # Set up environment for the server (use PostgreSQL, not SQLite)
+    # Get PostgreSQL connection details from current DATABASE_URL
+    postgres_url = os.environ.get("DATABASE_URL", "")
+    if not postgres_url or not postgres_url.startswith("postgresql://"):
+        raise RuntimeError("mcp_server fixture requires PostgreSQL DATABASE_URL")
 
-    # Set up environment for the server
+    import re
+
+    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
+    match = re.match(pattern, postgres_url)
+    if match:
+        user, password, host, port_str, _ = match.groups()
+        postgres_port = int(port_str)
+        server_db_url = f"postgresql://{user}:{password}@{host}:{postgres_port}/{db_name}"
+    else:
+        raise RuntimeError(f"Failed to parse DATABASE_URL: {postgres_url}")
+
     env = os.environ.copy()
     env["ADCP_SALES_PORT"] = str(port)
-    env["DATABASE_URL"] = f"sqlite:///{db_path}"
-    env["DB_TYPE"] = "sqlite"
+    env["DATABASE_URL"] = server_db_url
+    env["DB_TYPE"] = "postgresql"
     env["ADCP_TESTING"] = "true"
     env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for better debugging
 
@@ -538,12 +540,12 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
 
     # Return server info
     class ServerInfo:
-        def __init__(self, port, process, db_path):
+        def __init__(self, port, process, db_name):
             self.port = port
             self.process = process
-            self.db_path = db_path
+            self.db_name = db_name
 
-    server = ServerInfo(port, process, db_path)
+    server = ServerInfo(port, process, db_name)
 
     yield server
 
@@ -555,7 +557,7 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
         process.kill()
         process.wait()
 
-    # Don't remove db_path - it's managed by integration_db fixture
+    # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
 
 
 @pytest.fixture

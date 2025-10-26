@@ -38,12 +38,12 @@ from src.core.validation_helpers import format_validation_error, run_async_in_sy
 def _sync_creatives_impl(
     creatives: list[dict],
     patch: bool = False,
-    assignments: dict = None,
+    assignments: dict | None = None,
     delete_missing: bool = False,
     dry_run: bool = False,
     validation_mode: str = "strict",
     push_notification_config: dict | None = None,
-    context: Context = None,
+    context: Context | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.4 spec compliant endpoint).
 
@@ -190,7 +190,12 @@ def _sync_creatives_impl(
                         SyncCreativeResult(
                             creative_id=creative_id,
                             action="failed",
+                            status=None,
+                            platform_id=None,
                             errors=[error_msg],
+                            review_feedback=None,
+                            assigned_to=None,
+                            assignment_errors=None,
                         )
                     )
                     continue  # Skip to next creative
@@ -601,7 +606,12 @@ def _sync_creatives_impl(
                                                 SyncCreativeResult(
                                                     creative_id=existing_creative.creative_id,
                                                     action="failed",
+                                                    status=None,
+                                                    platform_id=None,
                                                     errors=[error_msg],
+                                                    review_feedback=None,
+                                                    assigned_to=None,
+                                                    assignment_errors=None,
                                                 )
                                             )
                                             continue  # Skip this creative, move to next
@@ -629,7 +639,12 @@ def _sync_creatives_impl(
                                         SyncCreativeResult(
                                             creative_id=existing_creative.creative_id,
                                             action="failed",
+                                            status=None,
+                                            platform_id=None,
                                             errors=[error_msg],
+                                            review_feedback=None,
+                                            assigned_to=None,
+                                            assignment_errors=None,
                                         )
                                     )
                                     continue  # Skip this creative update
@@ -662,7 +677,9 @@ def _sync_creatives_impl(
                             creatives_needing_approval.append(creative_info)
 
                         # Record result for updated creative
-                        action = "updated" if changes else "unchanged"
+                        from typing import Literal
+
+                        action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
                         if action == "updated":
                             updated_count += 1
                         else:
@@ -673,7 +690,11 @@ def _sync_creatives_impl(
                                 creative_id=existing_creative.creative_id,
                                 action=action,
                                 status=existing_creative.status,
+                                platform_id=None,
                                 changes=changes,
+                                review_feedback=None,
+                                assigned_to=None,
+                                assignment_errors=None,
                             )
                         )
 
@@ -941,7 +962,12 @@ def _sync_creatives_impl(
                                                 SyncCreativeResult(
                                                     creative_id=creative_id,
                                                     action="failed",
+                                                    status=None,
+                                                    platform_id=None,
                                                     errors=[error_msg],
+                                                    review_feedback=None,
+                                                    assigned_to=None,
+                                                    assignment_errors=None,
                                                 )
                                             )
                                             continue  # Skip this creative, move to next
@@ -969,7 +995,12 @@ def _sync_creatives_impl(
                                     SyncCreativeResult(
                                         creative_id=creative_id,
                                         action="failed",
+                                        status=None,
+                                        platform_id=None,
                                         errors=[error_msg],
+                                        review_feedback=None,
+                                        assigned_to=None,
+                                        assignment_errors=None,
                                     )
                                 )
                                 continue  # Skip storing this creative
@@ -1069,6 +1100,10 @@ def _sync_creatives_impl(
                                 creative_id=db_creative.creative_id,
                                 action="created",
                                 status=db_creative.status,
+                                platform_id=None,
+                                review_feedback=None,
+                                assigned_to=None,
+                                assignment_errors=None,
                             )
                         )
 
@@ -1085,7 +1120,12 @@ def _sync_creatives_impl(
                     SyncCreativeResult(
                         creative_id=creative_id,
                         action="failed",
+                        status=None,
+                        platform_id=None,
                         errors=[error_msg],
+                        review_feedback=None,
+                        assigned_to=None,
+                        assignment_errors=None,
                     )
                 )
 
@@ -1387,12 +1427,12 @@ def _sync_creatives_impl(
 def sync_creatives(
     creatives: list[dict],
     patch: bool = False,
-    assignments: dict = None,
+    assignments: dict | None = None,
     delete_missing: bool = False,
     dry_run: bool = False,
     validation_mode: str = "strict",
     push_notification_config: dict | None = None,
-    context: Context = None,
+    context: Context | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.4 spec compliant endpoint).
 
@@ -1424,18 +1464,18 @@ def sync_creatives(
 
 
 def _list_creatives_impl(
-    media_buy_id: str = None,
-    buyer_ref: str = None,
-    status: str = None,
-    format: str = None,
-    tags: list[str] = None,
-    created_after: str = None,
-    created_before: str = None,
-    search: str = None,
-    filters: dict = None,
-    sort: dict = None,
-    pagination: dict = None,
-    fields: list[str] = None,
+    media_buy_id: str | None = None,
+    buyer_ref: str | None = None,
+    status: str | None = None,
+    format: str | None = None,
+    tags: list[str] | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    search: str | None = None,
+    filters: dict | None = None,
+    sort: dict | None = None,
+    pagination: dict | None = None,
+    fields: list[str] | None = None,
     include_performance: bool = False,
     include_assignments: bool = False,
     include_sub_assets: bool = False,
@@ -1443,7 +1483,7 @@ def _list_creatives_impl(
     limit: int = 50,
     sort_by: str = "created_date",
     sort_order: str = "desc",
-    context: Context = None,
+    context: Context | None = None,
 ) -> ListCreativesResponse:
     """List and search creative library (AdCP spec endpoint).
 

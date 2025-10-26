@@ -136,13 +136,19 @@ def _update_media_buy_impl(
     # Convert flat budget/currency/pacing to Budget object if budget provided
     budget_obj = None
     if budget is not None:
+        from typing import Literal
+
         from src.core.schemas import Budget
 
+        pacing_val: Literal["even", "asap", "daily_budget"] = "even"
+        if pacing in ("even", "asap", "daily_budget"):
+            pacing_val = pacing  # type: ignore[assignment]
         budget_obj = Budget(
             total=budget,
             currency=currency or "USD",  # Default to USD if not specified
-            pacing=pacing or "even",  # Default pacing
+            pacing=pacing_val,  # Default pacing
             daily_cap=daily_budget,  # Map daily_budget to daily_cap
+            auto_pause_on_budget_exhaustion=None,
         )
 
     # Build request with only valid AdCP fields
@@ -205,6 +211,7 @@ def _update_media_buy_impl(
         return UpdateMediaBuyResponse(
             media_buy_id=req.media_buy_id or "",
             buyer_ref=req.buyer_ref or "",
+            implementation_date=None,
             errors=[{"code": "principal_not_found", "message": error_msg}],
         )
 
@@ -233,6 +240,7 @@ def _update_media_buy_impl(
         return UpdateMediaBuyResponse(
             media_buy_id=req.media_buy_id or "",
             buyer_ref=req.buyer_ref or "",
+            implementation_date=None,
         )
 
     # Validate currency limits if flight dates or budget changes
@@ -272,6 +280,7 @@ def _update_media_buy_impl(
                     return UpdateMediaBuyResponse(
                         media_buy_id=req.media_buy_id or "",
                         buyer_ref=req.buyer_ref or "",
+                        implementation_date=None,
                         errors=[{"code": "currency_not_supported", "message": error_msg}],
                     )
 
@@ -319,6 +328,7 @@ def _update_media_buy_impl(
                                 return UpdateMediaBuyResponse(
                                     media_buy_id=req.media_buy_id or "",
                                     buyer_ref=req.buyer_ref or "",
+                                    implementation_date=None,
                                     errors=[{"code": "budget_limit_exceeded", "message": error_msg}],
                                 )
 
@@ -411,6 +421,7 @@ def _update_media_buy_impl(
                     return UpdateMediaBuyResponse(
                         media_buy_id=req.media_buy_id or "",
                         buyer_ref=req.buyer_ref or "",
+                        implementation_date=None,
                         errors=[{"code": "missing_package_id", "message": error_msg}],
                     )
 
@@ -441,6 +452,7 @@ def _update_media_buy_impl(
                         return UpdateMediaBuyResponse(
                             media_buy_id=req.media_buy_id or "",
                             buyer_ref=req.buyer_ref or "",
+                            implementation_date=None,
                             errors=[{"code": "media_buy_not_found", "message": error_msg}],
                         )
 
@@ -462,6 +474,7 @@ def _update_media_buy_impl(
                         return UpdateMediaBuyResponse(
                             media_buy_id=req.media_buy_id or "",
                             buyer_ref=req.buyer_ref or "",
+                            implementation_date=None,
                             errors=[{"code": "creatives_not_found", "message": error_msg}],
                         )
 
@@ -530,6 +543,7 @@ def _update_media_buy_impl(
             return UpdateMediaBuyResponse(
                 media_buy_id=req.media_buy_id or "",
                 buyer_ref=req.buyer_ref or "",
+                implementation_date=None,
                 errors=[{"code": "invalid_budget", "message": error_msg}],
             )
 
@@ -616,6 +630,7 @@ def _update_media_buy_impl(
     return UpdateMediaBuyResponse(
         media_buy_id=req.media_buy_id or "",
         buyer_ref=req.buyer_ref or "",
+        implementation_date=None,
         affected_packages=affected_packages if affected_packages else None,
     )
 

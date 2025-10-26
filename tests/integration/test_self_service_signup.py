@@ -299,31 +299,44 @@ class TestSelfServiceSignupFlow:
                     db_session.delete(tenant)
                     db_session.commit()
 
-    @pytest.mark.skip_ci  # OAuth mocking requires complex app context setup
     @pytest.mark.requires_db  # Uses database - skip in quick mode
-    def test_oauth_callback_redirects_to_onboarding_for_signup_flow(self, client):
+    def test_oauth_callback_redirects_to_onboarding_for_signup_flow(self, client, integration_db):
         """Test that OAuth callback redirects to onboarding when signup_flow is active.
 
-        NOTE: Skipped in CI due to Flask app context mocking complexity.
-        OAuth callback redirect to /signup/onboarding manually tested and working.
+        This test verifies the signup flow logic in the OAuth callback handler.
         """
-        with client.session_transaction() as sess:
-            sess["signup_flow"] = True
+        # Import the app to access oauth object
+        from src.admin.app import create_app
 
-        # Mock OAuth token response - requires complex app context setup
-        with patch("flask.current_app") as mock_current_app:
-            mock_oauth = MagicMock()
-            mock_oauth.google.authorize_access_token.return_value = {
+        app, _ = create_app({"TESTING": True, "SECRET_KEY": "test_key"})
+
+        # Mock OAuth at the app level (where it's actually used)
+        with patch.object(app, "oauth", create=True) as mock_oauth:
+            mock_google = MagicMock()
+            mock_google.authorize_access_token.return_value = {
                 "userinfo": {"email": "newuser@example.com", "name": "New User"},
                 "id_token": None,
             }
-            mock_current_app.oauth = mock_oauth
+            mock_oauth.google = mock_google
 
-            response = client.get("/auth/google/callback", follow_redirects=False)
+            # Create a test client with the mocked app
+            with app.test_client() as test_client:
+                # Set signup flow in session
+                with test_client.session_transaction() as sess:
+                    sess["signup_flow"] = True
 
-            # Should redirect to onboarding wizard
-            assert response.status_code == 302
-            assert "/signup/onboarding" in response.headers["Location"]
+                # Make the OAuth callback request
+                response = test_client.get("/auth/google/callback", follow_redirects=False)
+
+                # Should redirect to onboarding wizard
+                assert response.status_code == 302
+                assert "/signup/onboarding" in response.headers["Location"]
+
+                # Verify session was updated with user info
+                with test_client.session_transaction() as sess:
+                    assert sess.get("user") == "newuser@example.com"
+                    assert sess.get("user_name") == "New User"
+                    assert sess.get("signup_flow") is True
 
     def test_session_cleanup_after_provisioning(self, integration_db, client):
         """Test that signup session flags are cleared after provisioning."""

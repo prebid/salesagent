@@ -249,7 +249,7 @@ class AssetRequirement(BaseModel):
     asset_type: str = Field(..., description="Type of asset required")
     asset_role: str | None = Field(None, description="Optional descriptive label (not used for referencing)")
     required: bool = Field(True, description="Whether this asset is required")
-    quantity: int = Field(1, minimum=1, description="Number of assets of this type required")
+    quantity: int = Field(default=1, ge=1, description="Number of assets of this type required")
     requirements: dict[str, Any] | None = Field(None, description="Specific requirements for this asset type")
 
 
@@ -406,7 +406,7 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
         else:
             # For unknown format IDs, create a minimal Format object with FormatId
             formats.append(
-                Format(
+                Format(  # type: ignore[call-arg]
                     format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id=format_id),
                     name=format_id.replace("_", " ").title(),
                     type="display",  # Default to display
@@ -1341,28 +1341,32 @@ class Creative(BaseModel):
     template_variables: dict[str, Any] | None = Field(
         None,
         description="Variables for native ad templates per AdCP spec",
-        example={
-            "headline": "Amazing Product",
-            "body": "This product will change your life",
-            "main_image_url": "https://cdn.example.com/product.jpg",
-            "logo_url": "https://cdn.example.com/logo.png",
-            "cta_text": "Shop Now",
-            "advertiser_name": "Brand Name",
-            "price": "$99.99",
-            "star_rating": "4.5",
-        },
+        examples=[
+            {
+                "headline": "Amazing Product",
+                "body": "This product will change your life",
+                "main_image_url": "https://cdn.example.com/product.jpg",
+                "logo_url": "https://cdn.example.com/logo.png",
+                "cta_text": "Shop Now",
+                "advertiser_name": "Brand Name",
+                "price": "$99.99",
+                "star_rating": "4.5",
+            }
+        ],
     )
 
     # Platform-specific extension (not in core AdCP spec)
     delivery_settings: dict[str, Any] | None = Field(
         None,
         description="Platform-specific delivery configuration (extension)",
-        example={
-            "safe_frame_compatible": True,
-            "ssl_required": True,
-            "orientation_lock": "FREE_ORIENTATION",
-            "tracking_urls": ["https://..."],
-        },
+        examples=[
+            {
+                "safe_frame_compatible": True,
+                "ssl_required": True,
+                "orientation_lock": "FREE_ORIENTATION",
+                "tracking_urls": ["https://..."],
+            }
+        ],
     )
 
     # Internal fields (not in AdCP spec, but available for internal use)
@@ -1388,7 +1392,7 @@ class Creative(BaseModel):
             DeprecationWarning,
             stacklevel=2,
         )
-        return self.format
+        return self.format.id
 
     @property
     def content_uri(self) -> str:
@@ -1532,14 +1536,16 @@ class Creative(BaseModel):
         """Get the primary content URL for hosted assets."""
         return self.media_url or self.url
 
-    def set_third_party_snippet(self, snippet: str, snippet_type: str, settings: dict = None):
+    def set_third_party_snippet(self, snippet: str, snippet_type: str, settings: dict[str, Any] | None = None) -> None:
         """Convenience method to set up a third-party tag creative (AdCP v1.3+)."""
         self.snippet = snippet
-        self.snippet_type = snippet_type
+        self.snippet_type = snippet_type  # type: ignore[assignment]
         if settings:
             self.delivery_settings = settings
 
-    def set_native_template_variables(self, template_vars: dict[str, Any], settings: dict = None):
+    def set_native_template_variables(
+        self, template_vars: dict[str, Any], settings: dict[str, Any] | None = None
+    ) -> None:
         """Convenience method to set up a native creative (AdCP v1.3+)."""
         self.template_variables = template_vars
         if settings:
@@ -2368,12 +2374,14 @@ class CreateMediaBuyRequest(AdCPBaseModel):
 
     # Backward compatibility properties for old field names
     @property
-    def flight_start_date(self) -> date:
+    def flight_start_date(self) -> date | None:
         """Backward compatibility for old field name."""
-        return self.start_time.date() if self.start_time else None
+        if isinstance(self.start_time, datetime):
+            return self.start_time.date()
+        return None
 
     @property
-    def flight_end_date(self) -> date:
+    def flight_end_date(self) -> date | None:
         """Backward compatibility for old field name."""
         return self.end_time.date() if self.end_time else None
 
@@ -2816,7 +2824,7 @@ class UpdateMediaBuyRequest(AdCPBaseModel):
     @property
     def flight_start_date(self) -> date | None:
         """DEPRECATED: Use start_time instead. Backward compatibility only."""
-        if self.start_time:
+        if isinstance(self.start_time, datetime):
             warnings.warn("flight_start_date is deprecated. Use start_time instead.", DeprecationWarning, stacklevel=2)
             return self.start_time.date()
         return None

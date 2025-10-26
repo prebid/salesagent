@@ -16,21 +16,19 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-@pytest.mark.skip_ci  # Requires running MCP server
-@pytest.mark.requires_db  # Needs running MCP server - skip in quick mode
+@pytest.mark.requires_db
 class TestMCPToolRoundtripMinimal:
     """Test MCP tools with minimal parameters to catch schema construction bugs.
 
-    Note: These tests require a running MCP server and are skipped in CI.
-    Run manually with: pytest tests/integration/test_mcp_tool_roundtrip_minimal.py::TestMCPToolRoundtripMinimal
+    Uses the mcp_server fixture which starts a real MCP server with test database.
     """
 
     @pytest.fixture
-    async def mcp_client(self):
-        """Create MCP client for testing."""
-        # Use test token and localhost
-        headers = {"x-adcp-auth": "test_token_wonderstruck"}
-        transport = StreamableHttpTransport(url="http://localhost:8080/mcp/", headers=headers)
+    async def mcp_client(self, mcp_server, sample_tenant, sample_principal, sample_products):
+        """Create MCP client for testing with test data."""
+        # Use the mcp_server fixture which provides port and manages lifecycle
+        headers = {"x-adcp-auth": sample_principal["access_token"]}
+        transport = StreamableHttpTransport(url=f"http://localhost:{mcp_server.port}/mcp/", headers=headers)
         client = Client(transport=transport)
 
         async with client:
@@ -41,15 +39,20 @@ class TestMCPToolRoundtripMinimal:
         result = await mcp_client.call_tool("get_products", {"brand_manifest": {"name": "sustainable products"}})
 
         assert result is not None
-        assert "products" in result or "error" not in result
+        # FastMCP call_tool returns structured_content
+        content = result.structured_content if hasattr(result, "structured_content") else result
+        assert "products" in content
 
     async def test_create_media_buy_minimal(self, mcp_client):
         """Test create_media_buy with minimal required parameters."""
         # Get a product first
-        products = await mcp_client.call_tool(
+        products_result = await mcp_client.call_tool(
             "get_products", {"brand_manifest": {"name": "test product"}, "brief": "test"}
         )
 
+        products = (
+            products_result.structured_content if hasattr(products_result, "structured_content") else products_result
+        )
         if products and len(products.get("products", [])) > 0:
             product_id = products["products"][0]["product_id"]
 
@@ -66,7 +69,8 @@ class TestMCPToolRoundtripMinimal:
             )
 
             assert result is not None
-            assert "media_buy_id" in result or "status" in result
+            content = result.structured_content if hasattr(result, "structured_content") else result
+            assert "media_buy_id" in content or "status" in content
 
     async def test_update_media_buy_minimal(self, mcp_client):
         """Test update_media_buy with minimal parameters (no today field).
@@ -75,10 +79,13 @@ class TestMCPToolRoundtripMinimal:
         was accessed but didn't exist in the schema.
         """
         # Create a media buy first
-        products = await mcp_client.call_tool(
+        products_result = await mcp_client.call_tool(
             "get_products", {"brand_manifest": {"name": "test product"}, "brief": "test"}
         )
 
+        products = (
+            products_result.structured_content if hasattr(products_result, "structured_content") else products_result
+        )
         if products and len(products.get("products", [])) > 0:
             product_id = products["products"][0]["product_id"]
 
@@ -93,18 +100,24 @@ class TestMCPToolRoundtripMinimal:
                 },
             )
 
-            if "media_buy_id" in create_result:
+            create_content = (
+                create_result.structured_content if hasattr(create_result, "structured_content") else create_result
+            )
+            if "media_buy_id" in create_content:
                 # Now update it - this tests the datetime.combine code path
                 update_result = await mcp_client.call_tool(
                     "update_media_buy",
                     {
-                        "media_buy_id": create_result["media_buy_id"],
+                        "media_buy_id": create_content["media_buy_id"],
                         "active": False,  # This triggers datetime.combine at line 2711
                     },
                 )
 
                 assert update_result is not None
-                assert "status" in update_result
+                update_content = (
+                    update_result.structured_content if hasattr(update_result, "structured_content") else update_result
+                )
+                assert "status" in update_content
                 # Should not get TypeError: combine() argument 1 must be datetime.date, not None
 
     async def test_get_media_buy_delivery_minimal(self, mcp_client):
@@ -112,7 +125,8 @@ class TestMCPToolRoundtripMinimal:
         result = await mcp_client.call_tool("get_media_buy_delivery", {})  # All parameters are optional
 
         assert result is not None
-        assert "deliveries" in result or "aggregated_totals" in result
+        content = result.structured_content if hasattr(result, "structured_content") else result
+        assert "deliveries" in content or "aggregated_totals" in content
 
     async def test_sync_creatives_minimal(self, mcp_client):
         """Test sync_creatives with minimal required parameters."""
@@ -132,21 +146,24 @@ class TestMCPToolRoundtripMinimal:
         )
 
         assert result is not None
-        assert "creatives" in result or "status" in result
+        content = result.structured_content if hasattr(result, "structured_content") else result
+        assert "creatives" in content or "status" in content
 
     async def test_list_creatives_minimal(self, mcp_client):
         """Test list_creatives with no parameters (all optional)."""
         result = await mcp_client.call_tool("list_creatives", {})  # All parameters are optional
 
         assert result is not None
-        assert "creatives" in result
+        content = result.structured_content if hasattr(result, "structured_content") else result
+        assert "creatives" in content
 
     async def test_list_authorized_properties_minimal(self, mcp_client):
         """Test list_authorized_properties with no req parameter."""
         result = await mcp_client.call_tool("list_authorized_properties", {})  # req parameter is optional
 
         assert result is not None
-        assert "properties" in result
+        content = result.structured_content if hasattr(result, "structured_content") else result
+        assert "properties" in content
 
     async def test_update_performance_index_minimal(self, mcp_client):
         """Test update_performance_index with required parameters."""
@@ -160,6 +177,9 @@ class TestMCPToolRoundtripMinimal:
 
         assert result is not None
         # May return error if media_buy doesn't exist, but should not crash
+        # Just check we got some content back
+        content = result.structured_content if hasattr(result, "structured_content") else result
+        assert content is not None
 
 
 @pytest.mark.unit  # Changed from integration - these don't require server

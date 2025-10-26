@@ -152,7 +152,7 @@ class MockAdServer(AdServerAdapter):
         # Use global mode
         return self.hitl_mode
 
-    def _create_workflow_step(self, step_type: str, status: str, request_data: dict) -> dict:
+    def _create_workflow_step(self, step_type: str, status: str, request_data: dict) -> dict[str, Any]:
         """Create a workflow step for async HITL operations."""
         from src.core.config_loader import get_current_tenant
         from src.core.context_manager import get_context_manager
@@ -174,7 +174,13 @@ class MockAdServer(AdServerAdapter):
             owner="mock_adapter",
         )
 
-        return step
+        # Return the step as dict for compatibility
+        return {
+            "step_id": step.step_id,
+            "status": step.status,
+            "tool_name": step.tool_name,
+            "request_data": step.request_data,
+        }
 
     def _stream_working_updates(self, operation_name: str, delay_ms: int):
         """Stream progress updates during synchronous HITL operation."""
@@ -254,7 +260,7 @@ class MockAdServer(AdServerAdapter):
         thread.daemon = True
         thread.start()
 
-    def _send_completion_webhook(self, step_id: str, approved: bool, rejection_reason: str = None):
+    def _send_completion_webhook(self, step_id: str, approved: bool, rejection_reason: str | None = None):
         """Send webhook notification when async task completes."""
         if not self.async_webhook_url:
             return
@@ -385,7 +391,8 @@ class MockAdServer(AdServerAdapter):
             if scenario.error_message:
                 # Double-check this looks like an intentional test directive
                 # If the promoted_offering is just a normal business name, ignore error_message
-                if any(keyword in test_message.lower() for keyword in ["error", "fail", "reject", "throw", "raise"]):
+                test_message_lower = test_message.lower() if test_message else ""
+                if any(keyword in test_message_lower for keyword in ["error", "fail", "reject", "throw", "raise"]):
                     raise Exception(scenario.error_message)
                 else:
                     # This is likely a false positive from AI - log and ignore
@@ -401,7 +408,8 @@ class MockAdServer(AdServerAdapter):
                 return CreateMediaBuyResponse(
                     media_buy_id=f"pending_question_{id(request)}",
                     creative_deadline=None,
-                    buyer_ref=request.buyer_ref,
+                    buyer_ref=request.buyer_ref or "unknown",
+                    errors=[],
                 )
 
             # Handle async mode
@@ -498,20 +506,21 @@ class MockAdServer(AdServerAdapter):
             step_type="mock_create_media_buy", status="pending", request_data=request_data
         )
 
-        self.log(f"   Created workflow step: {step.step_id}")
+        self.log(f"   Created workflow step: {step['step_id']}")
 
         # Schedule auto-completion if configured
         if self.async_auto_complete:
             self.log(f"   Auto-completion scheduled in {self.async_auto_complete_delay_ms}ms")
-            self._schedule_async_completion(step.step_id, self.async_auto_complete_delay_ms)
+            self._schedule_async_completion(step["step_id"], self.async_auto_complete_delay_ms)
         else:
             self.log("   Manual completion required - use complete_task tool")
 
         # Return pending response
         return CreateMediaBuyResponse(
-            buyer_ref=request.buyer_ref,
-            media_buy_id=f"pending_{step.step_id}",
+            buyer_ref=request.buyer_ref or "unknown",
+            media_buy_id=f"pending_{step['step_id']}",
             creative_deadline=None,
+            errors=[],
         )
 
     def _create_media_buy_sync_with_delay(
@@ -622,7 +631,7 @@ class MockAdServer(AdServerAdapter):
             operation="create_media_buy",
             principal_name=self.principal.name,
             principal_id=self.principal.principal_id,
-            adapter_id=self.adapter_principal_id,
+            adapter_id=self.adapter_principal_id or "unknown",
             success=True,
             details={
                 "media_buy_id": media_buy_id,
@@ -719,11 +728,11 @@ class MockAdServer(AdServerAdapter):
 
         self.log(f"[DEBUG] MockAdapter: Returning {len(response_packages)} packages in response")
         return CreateMediaBuyResponse(
-            buyer_ref=request.buyer_ref,  # Required field per AdCP spec
+            buyer_ref=request.buyer_ref or "unknown",  # Required field per AdCP spec
             media_buy_id=media_buy_id,
             creative_deadline=datetime.now(UTC) + timedelta(days=2),
             packages=response_packages,  # Include packages with buyer_ref
-            errors=None,  # No errors for successful mock response
+            errors=[],  # No errors for successful mock response
         )
 
     def add_creative_assets(
@@ -760,13 +769,13 @@ class MockAdServer(AdServerAdapter):
             step_type="mock_add_creative_assets", status="pending", request_data=request_data
         )
 
-        self.log(f"   Created workflow step: {step.step_id}")
+        self.log(f"   Created workflow step: {step['step_id']}")
         self.log(f"   Processing {len(assets)} creative assets")
 
         # Schedule auto-completion if configured
         if self.async_auto_complete:
             self.log(f"   Auto-completion scheduled in {self.async_auto_complete_delay_ms}ms")
-            self._schedule_async_completion(step.step_id, self.async_auto_complete_delay_ms)
+            self._schedule_async_completion(step["step_id"], self.async_auto_complete_delay_ms)
         else:
             self.log("   Manual completion required - use complete_task tool")
 
@@ -824,11 +833,13 @@ class MockAdServer(AdServerAdapter):
                 approved_assets.append(asset)
             else:
                 rejected_assets.append((asset, rejection_reason))
-                self.log(f"❌ Creative {asset['id']} rejected: {rejection_reason}")
+                asset_id = asset.get("id", "unknown")
+                self.log(f"❌ Creative {asset_id} rejected: {rejection_reason}")
 
         if rejected_assets and not approved_assets:
             # All rejected
-            raise Exception(f"All creatives rejected: {', '.join([reason for _, reason in rejected_assets])}")
+            reasons = [reason if reason else "unknown" for _, reason in rejected_assets]
+            raise Exception(f"All creatives rejected: {', '.join(reasons)}")
         elif rejected_assets:
             # Some rejected - log warnings but continue with approved ones
             for asset, reason in rejected_assets:
@@ -858,7 +869,7 @@ class MockAdServer(AdServerAdapter):
             operation="add_creative_assets",
             principal_name=self.principal.name,
             principal_id=self.principal.principal_id,
-            adapter_id=self.adapter_principal_id,
+            adapter_id=self.adapter_principal_id or "unknown",
             success=True,
             details={"media_buy_id": media_buy_id, "creative_count": len(assets)},
         )
@@ -987,8 +998,11 @@ class MockAdServer(AdServerAdapter):
             self.log("  API Request: {")
             self.log(f"    'advertiser_id': '{self.adapter_principal_id}',")
             self.log(f"    'campaign_id': '{media_buy_id}',")
-            self.log(f"    'start_date': '{date_range.start.date()}',")
-            self.log(f"    'end_date': '{date_range.end.date()}'")
+            # date_range is ReportingPeriod which has start/end as datetime
+            start_str = date_range.start.date() if hasattr(date_range.start, "date") else str(date_range.start)
+            end_str = date_range.end.date() if hasattr(date_range.end, "date") else str(date_range.end)
+            self.log(f"    'start_date': '{start_str}',")
+            self.log(f"    'end_date': '{end_str}'")
             self.log("  }")
         else:
             self.log(f"Retrieving delivery data for campaign {media_buy_id}")
@@ -1108,7 +1122,9 @@ class MockAdServer(AdServerAdapter):
         return AdapterGetMediaBuyDeliveryResponse(
             media_buy_id=media_buy_id,
             reporting_period=date_range,
-            totals=DeliveryTotals(impressions=impressions, spend=spend, clicks=100, video_completions=5000),
+            totals=DeliveryTotals(
+                impressions=impressions, spend=spend, clicks=100, ctr=0.0, video_completions=5000, completion_rate=0.0
+            ),
             by_package=[],
             currency="USD",
         )
@@ -1155,7 +1171,12 @@ class MockAdServer(AdServerAdapter):
                 else:
                     logger.warning(f"[MockAdapter] Package {package_id} not found for media buy {media_buy_id}")
 
-        return UpdateMediaBuyResponse(media_buy_id=media_buy_id, buyer_ref=buyer_ref)
+        return UpdateMediaBuyResponse(
+            media_buy_id=media_buy_id,
+            buyer_ref=buyer_ref,
+            implementation_date=today,
+            errors=[],
+        )
 
     def get_config_ui_endpoint(self) -> str | None:
         """Return the URL path for the mock adapter's configuration UI."""
@@ -1171,9 +1192,8 @@ class MockAdServer(AdServerAdapter):
             # Import here to avoid circular imports
             from functools import wraps
 
-            from database_session import get_db_session
-
             from src.admin.utils import require_auth
+            from src.core.database.database_session import get_db_session
             from src.core.database.models import Product
 
             # Apply auth decorator manually
@@ -1274,9 +1294,9 @@ class MockAdServer(AdServerAdapter):
 
             return wrapped_view()
 
-    def validate_product_config(self, config: dict) -> list[str]:
+    def validate_product_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate mock adapter configuration."""
-        errors = []
+        errors: list[str] = []
 
         # Validate ranges
         if config.get("fill_rate", 0) < 0 or config.get("fill_rate", 0) > 100:
@@ -1297,7 +1317,9 @@ class MockAdServer(AdServerAdapter):
         if config.get("latency_ms", 0) < 0:
             errors.append("Latency cannot be negative")
 
-        return errors
+        if errors:
+            return False, "; ".join(errors)
+        return True, None
 
     def _calculate_delivery_progress(self, profile: str, current_day: int, total_days: int) -> float:
         """Calculate delivery progress based on profile.

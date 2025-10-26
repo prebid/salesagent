@@ -14,12 +14,12 @@ from src.core.database.models import Context, Principal, Tenant, WorkflowStep
 
 
 @pytest.mark.integration
-@pytest.mark.skip_ci
+@pytest.mark.requires_db
 class TestWorkflowLifecycle:
     """Test complete workflow lifecycle scenarios."""
 
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, integration_db):
         """Set up test environment."""
         self.ctx_mgr = ContextManager()
         self.tenant_id = "test_tenant"
