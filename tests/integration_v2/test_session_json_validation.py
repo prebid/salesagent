@@ -139,6 +139,7 @@ class TestSessionManagement:
             assert tenant2.name == "Created Tenant"  # Original name
 
 
+@pytest.mark.requires_db
 class TestJSONValidation:
     """Test JSON field validation."""
 
@@ -329,6 +330,7 @@ class TestJSONValidation:
             assert retrieved.comments[0]["text"] == "Please review"
 
 
+@pytest.mark.requires_db
 class TestIntegration:
     """Test integration of session management with JSON validation."""
 

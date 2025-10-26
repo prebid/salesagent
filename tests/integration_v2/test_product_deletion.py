@@ -406,6 +406,7 @@ class TestProductDeletion:
         assert response2.status_code == 400
 
 
+@pytest.mark.requires_db
 class TestEnvironmentFirstAuthentication:
     """Test the environment-first authentication approach we implemented."""
 

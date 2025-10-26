@@ -634,9 +634,11 @@ def get_product_catalog() -> list[Product]:
 
             # Convert pricing_options ORM objects to Pydantic objects
             pricing_options = []
+            logger.info(f"Product {product.name} ({product.product_id}) has {len(product.pricing_options)} pricing options loaded")
             for po in product.pricing_options:
+                fixed_str = "fixed" if po.is_fixed else "auction"
                 pricing_option_data = {
-                    "pricing_option_id": f"{po.pricing_model}_{po.currency}_{po.id}",
+                    "pricing_option_id": f"{po.pricing_model}_{po.currency.lower()}_{fixed_str}",
                     "pricing_model": po.pricing_model,
                     "rate": float(po.rate) if po.rate else None,
                     "currency": po.currency,

@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -514,6 +515,10 @@ class MediaPackage(Base):
 
     Stores packages separately from MediaBuy.raw_request for efficient lookups
     by package_id, which is needed for creative assignments.
+
+    AdCP package-level fields (budget, bid_price, pacing) are stored as dedicated
+    columns for query performance and data integrity, while package_config maintains
+    the full package structure for backward compatibility.
     """
 
     __tablename__ = "media_packages"
@@ -522,11 +527,37 @@ class MediaPackage(Base):
         String(100), ForeignKey("media_buys.media_buy_id"), primary_key=True, nullable=False
     )
     package_id: Mapped[str] = mapped_column(String(100), primary_key=True, nullable=False)
+
+    # AdCP package-level fields (extracted for querying and constraints)
+    budget: Mapped[Decimal | None] = mapped_column(
+        DECIMAL(15, 2),
+        nullable=True,
+        comment="Package budget allocation (AdCP spec: number, package-level)",
+    )
+    bid_price: Mapped[Decimal | None] = mapped_column(
+        DECIMAL(15, 2),
+        nullable=True,
+        comment="Bid price for auction-based pricing (AdCP spec: number, optional)",
+    )
+    pacing: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="Pacing strategy: even, asap, front_loaded (AdCP enum)",
+    )
+
+    # Full package configuration (includes all AdCP fields + internal fields)
     package_config: Mapped[dict] = mapped_column(JSONType, nullable=False)
 
     __table_args__ = (
         Index("idx_media_packages_media_buy", "media_buy_id"),
         Index("idx_media_packages_package", "package_id"),
+        Index("idx_media_packages_budget", "budget", postgresql_where=text("budget IS NOT NULL")),
+        CheckConstraint("budget > 0", name="ck_media_packages_budget_positive"),
+        CheckConstraint("bid_price >= 0", name="ck_media_packages_bid_price_non_negative"),
+        CheckConstraint(
+            "pacing IN ('even', 'asap', 'front_loaded')",
+            name="ck_media_packages_pacing_values",
+        ),
     )
 
 

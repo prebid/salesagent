@@ -223,8 +223,19 @@ class Kevel(AdServerAdapter):
         # Generate a media buy ID
         media_buy_id = f"kevel_{request.po_number}" if request.po_number else f"kevel_{int(datetime.now().timestamp())}"
 
-        # Calculate total budget
-        total_budget = sum((p.cpm * p.impressions / 1000) for p in packages)
+        # Calculate total budget using pricing_info if available
+        total_budget = 0
+        for package in packages:
+            # Use pricing_info if available (pricing_option_id flow), else fallback to package.cpm
+            pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
+            if pricing_info:
+                # Use rate from pricing option (fixed) or bid_price (auction)
+                rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
+            else:
+                # Fallback to legacy package.cpm
+                rate = package.cpm
+
+            total_budget += (rate * package.impressions / 1000)
 
         if self.dry_run:
             self.log(f"Would call: POST {self.base_url}/campaign")
@@ -239,6 +250,15 @@ class Kevel(AdServerAdapter):
 
             # Log flight creation for each package
             for package in packages:
+                # Get pricing for this package
+                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
+                if pricing_info:
+                    rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
+                    pricing_model = pricing_info.get("pricing_model", "cpm")
+                else:
+                    rate = package.cpm
+                    pricing_model = "cpm"
+
                 self.log(f"Would call: POST {self.base_url}/flight")
                 self.log("  Flight Payload: {")
                 self.log(f"    'Name': '{package.name}',")
@@ -246,7 +266,7 @@ class Kevel(AdServerAdapter):
                 self.log("    'Priority': 5,")
                 self.log("    'GoalType': 2,")  # Impressions goal
                 self.log(f"    'Impressions': {package.impressions},")
-                self.log(f"    'Price': {package.cpm},")  # Price is CPM in Kevel
+                self.log(f"    'Price': {rate},")  # Price from pricing option or fallback
                 self.log(f"    'StartDate': '{start_time.isoformat()}',")
                 self.log(f"    'EndDate': '{end_time.isoformat()}'")
 
@@ -287,13 +307,20 @@ class Kevel(AdServerAdapter):
             # Create flights for each package and track flight IDs
             package_responses = []
             for package in packages:
+                # Get pricing for this package
+                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
+                if pricing_info:
+                    rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
+                else:
+                    rate = package.cpm
+
                 flight_payload = {
                     "Name": package.name,
                     "CampaignId": campaign_id,
                     "Priority": 5,  # Standard priority
                     "GoalType": 2,  # Impressions goal
                     "Impressions": package.impressions,
-                    "Price": package.cpm,
+                    "Price": rate,  # Use pricing from pricing option or fallback
                     "StartDate": start_time.isoformat(),
                     "EndDate": end_time.isoformat(),
                     "IsActive": True,
@@ -322,26 +349,91 @@ class Kevel(AdServerAdapter):
                 flight_data = flight_response.json()
                 flight_id = flight_data.get("Id")
 
-                # Build package response with package_id and platform_flight_id
-                package_responses.append(
-                    {
-                        "package_id": package.package_id,
-                        "platform_line_item_id": str(flight_id) if flight_id else None,
-                    }
-                )
+                # Get matching request package for buyer_ref and other fields
+                matching_req_package = None
+                package_idx = packages.index(package)
+                if request.packages and package_idx < len(request.packages):
+                    matching_req_package = request.packages[package_idx]
+
+                # Build package response with ALL package data
+                package_dict = {
+                    "package_id": package.package_id,
+                    "product_id": package.product_id,
+                    "name": package.name,
+                    "delivery_type": package.delivery_type,
+                    "cpm": package.cpm,
+                    "impressions": package.impressions,
+                    "platform_line_item_id": str(flight_id) if flight_id else None,
+                }
+
+                # Add buyer_ref from request package if available
+                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
+                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+
+                # Add budget from request package if available (serialize to dict for JSON storage)
+                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
+                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object)
+                    if isinstance(matching_req_package.budget, (int, float)):
+                        package_dict["budget"] = {"total": float(matching_req_package.budget), "currency": "USD"}
+                    elif hasattr(matching_req_package.budget, "model_dump"):
+                        package_dict["budget"] = matching_req_package.budget.model_dump()
+                    else:
+                        package_dict["budget"] = dict(matching_req_package.budget) if isinstance(matching_req_package.budget, dict) else {"total": float(matching_req_package.budget), "currency": "USD"}
+
+                # Add targeting_overlay from package if available
+                if package.targeting_overlay:
+                    package_dict["targeting_overlay"] = package.targeting_overlay
+
+                # Add creative_ids from package if available (from uploaded inline creatives)
+                if package.creative_ids:
+                    package_dict["creative_ids"] = package.creative_ids
+
+                package_responses.append(package_dict)
 
             # Use the actual campaign ID from Kevel
             media_buy_id = f"kevel_{campaign_id}"
 
-        # For dry_run, build package responses without flight IDs
+        # For dry_run, build package responses with ALL package data (no flight IDs)
         if self.dry_run:
             package_responses = []
-            for package in packages:
-                package_responses.append(
-                    {
-                        "package_id": package.package_id,
-                    }
-                )
+            for idx, package in enumerate(packages):
+                # Get matching request package for buyer_ref and other fields
+                matching_req_package = None
+                if request.packages and idx < len(request.packages):
+                    matching_req_package = request.packages[idx]
+
+                package_dict = {
+                    "package_id": package.package_id,
+                    "product_id": package.product_id,
+                    "name": package.name,
+                    "delivery_type": package.delivery_type,
+                    "cpm": package.cpm,
+                    "impressions": package.impressions,
+                }
+
+                # Add buyer_ref from request package if available
+                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
+                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+
+                # Add budget from request package if available (serialize to dict for JSON storage)
+                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
+                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object)
+                    if isinstance(matching_req_package.budget, (int, float)):
+                        package_dict["budget"] = {"total": float(matching_req_package.budget), "currency": "USD"}
+                    elif hasattr(matching_req_package.budget, "model_dump"):
+                        package_dict["budget"] = matching_req_package.budget.model_dump()
+                    else:
+                        package_dict["budget"] = dict(matching_req_package.budget) if isinstance(matching_req_package.budget, dict) else {"total": float(matching_req_package.budget), "currency": "USD"}
+
+                # Add targeting_overlay from package if available
+                if package.targeting_overlay:
+                    package_dict["targeting_overlay"] = package.targeting_overlay
+
+                # Add creative_ids from package if available (from uploaded inline creatives)
+                if package.creative_ids:
+                    package_dict["creative_ids"] = package.creative_ids
+
+                package_responses.append(package_dict)
 
         return CreateMediaBuyResponse(
             buyer_ref=request.buyer_ref or "unknown",

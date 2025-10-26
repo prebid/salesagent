@@ -883,21 +883,35 @@ def update_business_rules(tenant_id):
                 manual_approval_value = data.get("human_review_required") in [True, "true", "on", 1, "1"]
                 tenant.human_review_required = manual_approval_value
 
-                # Also update the adapter's manual approval setting if using Mock adapter
-                if tenant.adapter_config and tenant.adapter_config.adapter_type == "mock":
-                    tenant.adapter_config.mock_manual_approval_required = manual_approval_value
+                # Update ALL adapters' manual approval settings
+                if tenant.adapter_config:
+                    adapter_type = tenant.adapter_config.adapter_type
+                    if adapter_type == "google_ad_manager":
+                        tenant.adapter_config.gam_manual_approval_required = manual_approval_value
+                    elif adapter_type == "mock":
+                        tenant.adapter_config.mock_manual_approval_required = manual_approval_value
+                    elif adapter_type == "kevel":
+                        tenant.adapter_config.kevel_manual_approval_required = manual_approval_value
             elif not request.is_json:
                 # Checkbox not present in form data means unchecked
                 tenant.human_review_required = False
-                # Also update Mock adapter setting if applicable
-                if tenant.adapter_config and tenant.adapter_config.adapter_type == "mock":
-                    tenant.adapter_config.mock_manual_approval_required = False
+                # Update ALL adapters' manual approval settings
+                if tenant.adapter_config:
+                    adapter_type = tenant.adapter_config.adapter_type
+                    if adapter_type == "google_ad_manager":
+                        tenant.adapter_config.gam_manual_approval_required = False
+                    elif adapter_type == "mock":
+                        tenant.adapter_config.mock_manual_approval_required = False
+                    elif adapter_type == "kevel":
+                        tenant.adapter_config.kevel_manual_approval_required = False
 
             # Update creative review settings
             if "approval_mode" in data:
                 approval_mode = data.get("approval_mode", "").strip()
                 if approval_mode in ["auto-approve", "require-human", "ai-powered"]:
                     tenant.approval_mode = approval_mode
+                    # NOTE: Creative approval is separate from media buy approval
+                    # Media buy approval is controlled by "human_review_required" field above
 
             if "creative_review_criteria" in data:
                 creative_review_criteria = data.get("creative_review_criteria")

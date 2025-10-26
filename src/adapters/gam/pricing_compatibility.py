@@ -111,7 +111,13 @@ class PricingCompatibility:
 
         # Decision tree for automatic selection
         if pricing_model == "flat_rate":
-            return "SPONSORSHIP"  # FLAT_RATE → CPD translation, SPONSORSHIP supports CPD
+            # FLAT_RATE → CPD (Cost Per Day) - GAM's native flat fee pricing model
+            # Using SPONSORSHIP because:
+            # - SPONSORSHIP supports CPD cost type natively
+            # - CPD means advertiser pays flat fee per day regardless of impressions/clicks
+            # - SPONSORSHIP uses percentage-based DAILY goals (100% to serve on all matching requests)
+            # - This matches the semantic intent of "flat rate" - fixed cost per day
+            return "SPONSORSHIP"  # FLAT_RATE → CPD, SPONSORSHIP supports CPD natively
 
         if pricing_model == "vcpm":
             return "STANDARD"  # VCPM only works with STANDARD in GAM

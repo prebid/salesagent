@@ -19,9 +19,9 @@
             <p style="margin: 0.5rem 0 0 0;">{{ status_message.message if status_message else "This media buy needs approval before it can proceed." }}</p>
         </div>
         <div style="display: flex; gap: 0.5rem;">
-            <form method="POST" action="{{ url_for('operations.approve_media_buy', tenant_id=tenant_id, media_buy_id=media_buy.media_buy_id) }}" style="display: inline;">
+            <form method="POST" action="{{ url_for('operations.approve_media_buy', tenant_id=tenant_id, media_buy_id=media_buy.media_buy_id) }}" style="display: inline;" onsubmit="return handleApprovalSubmit(event, this)">
                 <input type="hidden" name="action" value="approve">
-                <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Are you sure you want to approve this media buy?')">
+                <button type="submit" class="btn btn-success btn-sm" id="approveBtn">
                     ✅ Approve
                 </button>
             </form>
@@ -153,6 +153,56 @@
                     <span class="label">Product Name:</span>
                     <span class="value">{{ item.product.name }}</span>
                 </div>
+                {# Show pricing information - from package_config if available, else from product #}
+                {% if item.package.package_config.get('pricing_info') %}
+                    {% set pricing = item.package.package_config.pricing_info %}
+                    <div class="detail-row">
+                        <span class="label">Pricing Model:</span>
+                        <span class="value">
+                            <span style="background: #e3f2fd; padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: 600; text-transform: uppercase;">
+                                {{ pricing.pricing_model|upper|replace('_', ' ') }}
+                            </span>
+                        </span>
+                    </div>
+                    {% if pricing.rate or pricing.bid_price %}
+                    <div class="detail-row">
+                        <span class="label">Rate:</span>
+                        <span class="value">
+                            {% if pricing.is_fixed %}
+                                ${{ "%.2f"|format(pricing.rate) }} {{ pricing.currency }} (Fixed)
+                            {% else %}
+                                ${{ "%.2f"|format(pricing.bid_price or pricing.rate or 0) }} {{ pricing.currency }} (Bid Price)
+                            {% endif %}
+                        </span>
+                    </div>
+                    {% endif %}
+                    {% if pricing.pricing_model == 'flat_rate' and item.package.package_config.get('impressions') %}
+                    <div class="detail-row">
+                        <span class="label">Impressions:</span>
+                        <span class="value">{{ "{:,}".format(item.package.package_config.impressions|int) }}</span>
+                    </div>
+                    {% endif %}
+                {% elif item.product.pricing_options and item.product.pricing_options|length > 0 %}
+                    {# Fallback: Show first pricing option from product (for old media buys) #}
+                    {% set first_option = item.product.pricing_options[0] %}
+                    <div class="detail-row">
+                        <span class="label">Pricing Model:</span>
+                        <span class="value">
+                            <span style="background: #e3f2fd; padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: 600; text-transform: uppercase;">
+                                {{ first_option.pricing_model|upper|replace('_', ' ') }}
+                            </span>
+                        </span>
+                    </div>
+                    {% if first_option.rate %}
+                    <div class="detail-row">
+                        <span class="label">Rate:</span>
+                        <span class="value">
+                            ${{ "%.2f"|format(first_option.rate) }} {{ first_option.currency }}
+                            {% if first_option.is_fixed %}(Fixed){% else %}(Floor){% endif %}
+                        </span>
+                    </div>
+                    {% endif %}
+                {% endif %}
                 {% endif %}
             </div>
         </div>
@@ -655,5 +705,96 @@ window.onclick = function(event) {
         hideRejectModal();
     }
 }
+
+// Handle approval submission with loading feedback
+function handleApprovalSubmit(event, form) {
+    if (!confirm('Are you sure you want to approve this media buy? This will create orders and line items in the ad server.')) {
+        event.preventDefault();
+        return false;
+    }
+
+    // Show loading overlay
+    showLoadingOverlay();
+
+    // Let form submit normally
+    return true;
+}
+
+function showLoadingOverlay() {
+    const overlay = document.createElement('div');
+    overlay.id = 'approvalLoadingOverlay';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    `;
+
+    overlay.innerHTML = `
+        <div style="text-align: center; max-width: 500px; padding: 2rem;">
+            <div class="spinner" style="margin: 0 auto 2rem auto;"></div>
+            <h2 style="margin-bottom: 1rem; font-size: 1.5rem;">Processing Approval...</h2>
+            <p style="color: #ccc; margin-bottom: 1.5rem;">This may take 30-60 seconds</p>
+            <div id="progressSteps" style="text-align: left; background: rgba(255,255,255,0.1); padding: 1rem; border-radius: 8px;">
+                <div class="progress-step">⏳ Creating order in ad server...</div>
+                <div class="progress-step" style="opacity: 0.5;">⏳ Creating line items...</div>
+                <div class="progress-step" style="opacity: 0.5;">⏳ Uploading creatives...</div>
+                <div class="progress-step" style="opacity: 0.5;">⏳ Approving order...</div>
+                <div class="progress-step" style="opacity: 0.5;">⏳ Finalizing...</div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Simulate progress (since we can't get real progress from server side)
+    let step = 0;
+    const steps = overlay.querySelectorAll('.progress-step');
+    const progressInterval = setInterval(() => {
+        if (step < steps.length) {
+            steps[step].style.opacity = '1';
+            if (step > 0) {
+                steps[step - 1].innerHTML = steps[step - 1].innerHTML.replace('⏳', '✅');
+            }
+            step++;
+        }
+    }, 8000); // Progress every 8 seconds (5 steps * 8 = 40 seconds total)
+
+    // Store interval ID so we can clear it if needed
+    overlay.dataset.intervalId = progressInterval;
+}
+
+// Add spinner CSS
+const style = document.createElement('style');
+style.textContent = `
+    .spinner {
+        width: 50px;
+        height: 50px;
+        border: 5px solid rgba(255, 255, 255, 0.3);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    .progress-step {
+        padding: 0.5rem 0;
+        font-size: 0.95rem;
+        transition: opacity 0.3s ease;
+    }
+`;
+document.head.appendChild(style);
 </script>
 {% endblock %}

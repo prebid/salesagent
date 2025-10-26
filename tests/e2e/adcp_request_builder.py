@@ -209,6 +209,7 @@ def build_creative(
         "creative_id": creative_id,
         "format_id": format_id,
         "name": name,
+        "content_uri": asset_url,  # Required top-level URL field per AdCP spec
         "assets": assets,
         "status": status,
     }

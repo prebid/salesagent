@@ -331,6 +331,98 @@ class GAMWorkflowManager:
                 self.audit_logger.log_warning(error_msg)
             return None
 
+    def create_approval_polling_workflow_step(
+        self, media_buy_id: str, packages: list[MediaPackage], operation: str = "order_approval"
+    ) -> str | None:
+        """Creates a workflow step for background approval polling (NO_FORECAST_YET).
+
+        This workflow step tracks background polling of GAM order approval status.
+        When forecasting is ready, the order will be automatically approved and
+        a webhook notification will be sent.
+
+        Args:
+            media_buy_id: The GAM order ID awaiting approval
+            packages: List of packages in the media buy for context
+            operation: Type of approval operation (e.g., "order_approval")
+
+        Returns:
+            str: The workflow step ID if created successfully, None otherwise
+        """
+        step_id = f"b{uuid.uuid4().hex[:5]}"  # 6 chars total, 'b' prefix for background
+
+        # Build detailed action for background polling
+        action_details = {
+            "action_type": operation,
+            "order_id": media_buy_id,
+            "platform": "Google Ad Manager",
+            "automation_mode": "background_polling",
+            "status": "working",
+            "instructions": [
+                "GAM order approval is pending - forecasting not ready yet",
+                "Background task is polling GAM for forecasting completion",
+                "Order will be automatically approved when forecasting is ready",
+                "Webhook notification will be sent when approval completes",
+            ],
+            "gam_order_url": f"https://admanager.google.com/orders/{media_buy_id}",
+            "packages": [{"name": pkg.name, "impressions": pkg.impressions, "cpm": pkg.cpm} for pkg in packages],
+            "next_action": "automatic_approval_when_ready",
+            "polling_interval_seconds": 30,
+            "max_polling_duration_minutes": 15,
+        }
+
+        try:
+            with get_db_session() as db_session:
+                # Create a context for this workflow
+                context_id = f"ctx_{uuid.uuid4().hex[:12]}"
+                context = Context(
+                    context_id=context_id,
+                    tenant_id=self.tenant_id,
+                    principal_id=self.principal.principal_id,
+                )
+                db_session.add(context)
+
+                # Create workflow step with "working" status
+                workflow_step = WorkflowStep(
+                    step_id=step_id,
+                    context_id=context_id,
+                    step_type="background_task",
+                    tool_name=operation,
+                    request_data=action_details,
+                    status="working",  # Indicates background processing in progress
+                    owner="system",  # System owns background tasks
+                    assigned_to="background_approval_service",
+                    transaction_details={"gam_order_id": media_buy_id, "polling_started": datetime.now().isoformat()},
+                )
+
+                db_session.add(workflow_step)
+
+                # Create object mapping to link this step with the media buy
+                object_mapping = ObjectWorkflowMapping(
+                    object_type="media_buy",
+                    object_id=media_buy_id,
+                    step_id=step_id,
+                    action="approve",
+                )
+
+                db_session.add(object_mapping)
+                db_session.commit()
+
+                self.log(f"✓ Created background approval polling workflow step {step_id}")
+                if self.audit_logger:
+                    self.audit_logger.log_success(f"Created background approval polling workflow step: {step_id}")
+
+                # Send Slack notification if configured
+                self._send_workflow_notification(step_id, action_details)
+
+                return step_id
+
+        except Exception as e:
+            error_msg = f"Failed to create approval polling workflow step for order {media_buy_id}: {str(e)}"
+            self.log(f"[red]Error: {error_msg}[/red]")
+            if self.audit_logger:
+                self.audit_logger.log_warning(error_msg)
+            return None
+
     def _send_workflow_notification(self, step_id: str, action_details: dict[str, Any]) -> None:
         """Send Slack notification for workflow step if configured.
 

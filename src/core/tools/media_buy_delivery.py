@@ -202,7 +202,7 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
                 else:
                     progress = 1.0 if status == "completed" else 0.0
 
-                spend = float(buy.budget * progress) if buy.budget else 0.0
+                spend = float(buy.budget) * progress if buy.budget else 0.0
                 impressions = int(spend * 1000)  # Assume $1 CPM for simplicity
 
             # Create package delivery data
@@ -239,7 +239,7 @@ def _get_media_buy_delivery_impl(req: GetMediaBuyDeliveryRequest, context: Conte
             media_buy_count += 1
 
         except Exception as e:
-            console.print(f"[red]Error getting delivery for {media_buy_id}: {e}[/red]")
+            logger.error(f"Error getting delivery for {media_buy_id}: {e}")
             # Continue with other media buys
 
     # Create AdCP-compliant response

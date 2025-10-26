@@ -66,7 +66,12 @@ class GAMCreativesManager:
             media_buy_id, line_item_service if not self.dry_run else None
         )
 
+        # DEBUG: Log what we got from GAM
+        logger.info(f"[DEBUG] line_item_map keys: {list(line_item_map.keys())}")
+        logger.info(f"[DEBUG] creative_placeholders keys: {list(creative_placeholders.keys())}")
+
         for asset in assets:
+            logger.info(f"[DEBUG] Processing asset {asset.get('creative_id')} with package_assignments: {asset.get('package_assignments', [])}")
             # Validate creative asset against GAM requirements
             # Use adapter's method if available for test compatibility, otherwise use our own
             if self.adapter and hasattr(self.adapter, "_validate_creative_for_gam"):
@@ -125,6 +130,10 @@ class GAMCreativesManager:
                     logger.info(f"Would call: creative_service.createCreatives([{creative.get('name', 'unnamed')}])")
                     gam_creative_id = f"mock_creative_{random.randint(100000, 999999)}"
                 else:
+                    # DEBUG: Log the exact creative being sent to GAM
+                    logger.info(f"[DEBUG] Creating creative with fields: {list(creative.keys())}")
+                    logger.info(f"[DEBUG] Creative type: {creative.get('xsi_type')}")
+                    logger.info(f"[DEBUG] Creative data: {creative}")
                     created_creatives = creative_service.createCreatives([creative])
                     if not created_creatives:
                         logger.error(f"Failed to create creative {asset['creative_id']} - no creatives returned")
@@ -160,19 +169,43 @@ class GAMCreativesManager:
         if not self.dry_run and line_item_service:
             statement = (
                 self.client_manager.get_statement_builder()
-                .where("orderId = :orderId")
-                .with_bind_variable("orderId", int(media_buy_id))
+                .Where("orderId = :orderId")
+                .WithBindVariable("orderId", int(media_buy_id))
             )
             response = line_item_service.getLineItemsByStatement(statement.ToStatement())
-            line_items = response.get("results", [])
+            # GAM API returns a LineItemPage object (Zeep SOAP), not a dict
+            line_items = getattr(response, "results", [])
             line_item_map = {item["name"]: item["id"] for item in line_items}
 
             # Collect all creative placeholders from line items for size validation
+            # Key by BOTH line item name AND extracted package ID for flexible lookup
             creative_placeholders = {}
             for line_item in line_items:
-                package_name = line_item["name"]
-                placeholders = line_item.get("creativePlaceholders", [])
-                creative_placeholders[package_name] = placeholders
+                line_item_name = line_item["name"]
+                # Line item is also a Zeep object, use getattr
+                placeholders = getattr(line_item, "creativePlaceholders", [])
+
+                # Store by line item name (for backward compatibility)
+                creative_placeholders[line_item_name] = placeholders
+
+                # ALSO extract package ID from line item name and store by that
+                # NOTE: Line item names are configurable via tenant settings, but by default
+                # they end with "- prod_XXXXXX". We extract the product ID pattern.
+                # Package IDs are like "pkg_prod_XXXXXX_YYYYYYYY_N"
+                # We'll try to extract prod_XXXXXX and match against all package_assignments
+                if " - prod_" in line_item_name:
+                    product_id = line_item_name.split(" - prod_")[-1].strip()
+                    # Store with a "prod_" prefix for lookups
+                    creative_placeholders[f"prod_{product_id}"] = placeholders
+                    # Log the mapped sizes (Zeep objects - use getattr not .get())
+                    sizes = []
+                    for p in placeholders:
+                        size_obj = getattr(p, 'size', None)
+                        if size_obj:
+                            width = getattr(size_obj, 'width', 0)
+                            height = getattr(size_obj, 'height', 0)
+                            sizes.append(f"{width}x{height}")
+                    logger.info(f"[DEBUG] Mapped product ID 'prod_{product_id}' to placeholders: {sizes}")
         else:
             # In dry-run mode, create a mock line item map and placeholders
             # Support common test package names
@@ -278,6 +311,13 @@ class GAMCreativesManager:
         """
         validation_errors = []
 
+        # Helper function to safely get attribute from dict or object
+        def _get_attr(obj, name, default=None):
+            """Get attribute from dict or object."""
+            if isinstance(obj, dict):
+                return obj.get(name, default)
+            return getattr(obj, name, default)
+
         # Get asset dimensions
         try:
             asset_width, asset_height = self._get_creative_dimensions(asset, None)
@@ -293,17 +333,32 @@ class GAMCreativesManager:
 
         matching_placeholders_found = False
         for package_id in package_assignments:
+            # Try direct lookup first (for backward compatibility with line item names)
             placeholders = creative_placeholders.get(package_id, [])
+
+            # If not found, try matching by product ID extracted from package_id
+            # Package IDs are like "pkg_prod_XXXXXX_YYYYYYYY_N", extract "prod_XXXXXX"
+            if not placeholders and package_id.startswith("pkg_prod_"):
+                # Extract product ID: "pkg_prod_2215c038_63e4864a_1" -> "prod_2215c038"
+                parts = package_id.split("_")
+                if len(parts) >= 3:  # pkg_prod_XXXXXX_...
+                    product_id = f"prod_{parts[2]}"
+                    placeholders = creative_placeholders.get(product_id, [])
+                    if placeholders:
+                        logger.info(f"[DEBUG] Matched package {package_id} to product ID {product_id}")
             for placeholder in placeholders:
-                placeholder_size = placeholder.get("size", {})
-                placeholder_width = placeholder_size.get("width", 0)
-                placeholder_height = placeholder_size.get("height", 0)
+                # Placeholder can be a Zeep object or dict (in tests)
+                placeholder_size = _get_attr(placeholder, "size", None)
+                if not placeholder_size:
+                    continue
+                placeholder_width = _get_attr(placeholder_size, "width", 0)
+                placeholder_height = _get_attr(placeholder_size, "height", 0)
 
                 # 1x1 placeholders are wildcards in GAM (native templates or programmatic)
                 # They accept creatives of any size
                 if placeholder_width == 1 and placeholder_height == 1:
                     matching_placeholders_found = True
-                    template_id = placeholder.get("creativeTemplateId")
+                    template_id = _get_attr(placeholder, "creativeTemplateId", None)
                     if template_id:
                         logger.info(
                             f"Creative {asset_width}x{asset_height} matches 1x1 placeholder "
@@ -327,11 +382,22 @@ class GAMCreativesManager:
         if not matching_placeholders_found:
             available_sizes = []
             for package_id in package_assignments:
+                # Try direct lookup first
                 placeholders = creative_placeholders.get(package_id, [])
+
+                # If not found, try matching by product ID extracted from package_id
+                if not placeholders and package_id.startswith("pkg_prod_"):
+                    parts = package_id.split("_")
+                    if len(parts) >= 3:
+                        product_id = f"prod_{parts[2]}"
+                        placeholders = creative_placeholders.get(product_id, [])
                 for placeholder in placeholders:
-                    size = placeholder.get("size", {})
+                    # Placeholder can be a Zeep object or dict (in tests)
+                    size = _get_attr(placeholder, "size", None)
                     if size:
-                        available_sizes.append(f"{size.get('width', 0)}x{size.get('height', 0)}")
+                        width = _get_attr(size, "width", 0)
+                        height = _get_attr(size, "height", 0)
+                        available_sizes.append(f"{width}x{height}")
 
             validation_errors.append(
                 f"Creative size {asset_width}x{asset_height} does not match any LineItem placeholders. "
@@ -420,29 +486,59 @@ class GAMCreativesManager:
         """Create a hosted asset (image/video) creative for GAM."""
         width, height = self._get_creative_dimensions(asset)
 
-        # Upload the binary asset to GAM
-        uploaded_asset = self._upload_binary_asset(asset)
-        if not uploaded_asset:
-            raise Exception("Failed to upload binary asset")
+        # Get the creative URL
+        url = asset.get("url")
+        if not url:
+            raise Exception("No URL found for hosted asset creative")
 
         # Determine asset type
         asset_type = self._determine_asset_type(asset)
 
+        # Get click-through URL (required by GAM for redirect creatives)
+        # TODO: Implement proper click-through URL handling per AdCP spec
+        # For now, use the asset URL as fallback if no explicit click_url is provided
+        click_url = asset.get("clickthrough_url") or asset.get("landing_url") or asset.get("click_url") or url
+
         if asset_type == "image":
+            # ImageRedirectCreative requires both image URL and click-through URL
+            # Using asset URL as fallback for click_url (see TODO above)
+            if not click_url:
+                raise ValueError(
+                    f"Image creative {asset.get('creative_id')} missing required click_url. "
+                    f"GAM ImageRedirectCreative requires a destination URL."
+                )
+
+            # Validate that image URL is an actual URL, not binary data
+            if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                raise ValueError(
+                    f"Image creative {asset.get('creative_id')} has invalid URL: {url}. "
+                    f"GAM ImageRedirectCreative requires an HTTP(S) URL, not binary data."
+                )
+
             creative = {
-                "xsi_type": "ImageCreative",
+                "xsi_type": "ImageRedirectCreative",
                 "name": asset.get("name", f"AdCP Image Creative {asset.get('creative_id', 'unknown')}"),
                 "advertiserId": self.advertiser_id,
                 "size": {"width": width, "height": height},
-                "primaryImageAsset": uploaded_asset,
+                "imageUrl": url,
+                "destinationUrl": click_url,
             }
         elif asset_type == "video":
+            # For video, we can use VideoRedirectCreative
+            # Per AdCP spec, video assets have required duration field
+            # https://adcontextprotocol.org/schemas/v1/core/assets/video-asset.json
+            duration = asset.get("duration")
+            if not duration:
+                raise ValueError(f"Video creative {asset.get('creative_id')} missing required duration field")
+
             creative = {
-                "xsi_type": "VideoCreative",
+                "xsi_type": "VideoRedirectCreative",
                 "name": asset.get("name", f"AdCP Video Creative {asset.get('creative_id', 'unknown')}"),
                 "advertiserId": self.advertiser_id,
                 "size": {"width": width, "height": height},
-                "videoAsset": uploaded_asset,
+                "videoSourceUrl": url,
+                "destinationUrl": click_url,
+                "duration": int(duration * 1000),  # GAM expects milliseconds, AdCP provides seconds
             }
         else:
             raise Exception(f"Unsupported asset type: {asset_type}")
@@ -624,9 +720,28 @@ class GAMCreativesManager:
         package_assignments = asset.get("package_assignments", [])
 
         for package_id in package_assignments:
-            line_item_id = line_item_map.get(package_id)
+            # Line item map is keyed by line item name (which ends with "- prod_XXXXXX")
+            # Package IDs are like "pkg_prod_XXXXXX_YYYYYYYY_N"
+            # We need to match them by product ID
+            line_item_id = None
+
+            # Extract product ID from package_id: "pkg_prod_2215c038_..." -> "prod_2215c038"
+            if package_id.startswith("pkg_prod_"):
+                parts = package_id.split("_")
+                if len(parts) >= 3:
+                    product_id = f"prod_{parts[2]}"
+                    logger.info(f"[DEBUG] Looking for line item ending with ' - {product_id}'")
+                    # Find line item that ends with this product ID
+                    for line_item_name, item_id in line_item_map.items():
+                        logger.info(f"[DEBUG] Checking line item: {line_item_name}")
+                        logger.info(f"[DEBUG] Does it end with ' - {product_id}'? {line_item_name.endswith(f' - {product_id}')}")
+                        if line_item_name.endswith(f" - {product_id}"):
+                            line_item_id = item_id
+                            logger.info(f"[DEBUG] MATCH! Package {package_id} -> line item {line_item_name} (ID: {item_id})")
+                            break
+
             if not line_item_id:
-                logger.warning(f"Line item not found for package {package_id}")
+                logger.warning(f"Line item not found for package {package_id}. line_item_map has {len(line_item_map)} entries")
                 continue
 
             if self.dry_run:

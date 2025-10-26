@@ -631,7 +631,7 @@ def extract_budget_amount(budget: "Budget | float | dict | None", default_curren
         return (0.0, default_currency)
     elif isinstance(budget, dict):
         return (budget.get("total", 0.0), budget.get("currency", default_currency))
-    elif isinstance(budget, int | float):
+    elif isinstance(budget, (int, float)):
         return (float(budget), default_currency)
     else:
         # Budget object with .total and .currency attributes
@@ -2163,6 +2163,10 @@ class Package(BaseModel):
     impressions: float | None = Field(None, description="Impression goal for this package", gt=-1)
     targeting_overlay: Targeting | None = Field(None, description="Package-specific targeting")
     creative_ids: list[str] | None = Field(None, description="Creative IDs to assign to this package")
+    creatives: list[Creative] | None = Field(
+        None,
+        description="Full creative objects to upload and assign to this package at creation time (alternative to creative_ids)",
+    )
     creative_assignments: list[dict[str, Any]] | None = Field(
         None, description="Creative assets assigned to this package"
     )
@@ -2178,14 +2182,21 @@ class Package(BaseModel):
         description="Format IDs that creative assets will be provided for this package (array of FormatId objects per AdCP v2.4)",
     )
 
-    # NEW: Pricing model selection (AdCP PR #88)
-    pricing_model: PricingModel | None = Field(
-        None, description="Selected pricing model for this package (from product's pricing_options)"
+    # NEW: Pricing option selection (AdCP v2.2.0 spec - REQUIRED in package-request.json)
+    pricing_option_id: str | None = Field(
+        None,
+        description="ID of the selected pricing option from the product's pricing_options array (REQUIRED in requests)",
     )
     bid_price: float | None = Field(
         None, ge=0, description="Bid price for auction-based pricing (required if pricing option is auction-based)"
     )
     pacing: Literal["even", "asap", "front_loaded"] | None = Field(None, description="Pacing strategy for this package")
+
+    # Legacy field (deprecated - use pricing_option_id instead)
+    pricing_model: PricingModel | None = Field(
+        None,
+        description="DEPRECATED: Use pricing_option_id instead. Selected pricing model for backward compatibility.",
+    )
 
     # Internal fields (not in AdCP spec)
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy")
@@ -2433,7 +2444,7 @@ class CreateMediaBuyRequest(AdCPBaseModel):
                         if isinstance(budget, dict):
                             # Legacy dict format (for backward compatibility)
                             total += budget.get("total", 0.0)
-                        elif isinstance(budget, int | float):
+                        elif isinstance(budget, (int, float)):
                             total += float(budget)
                         else:
                             # Legacy Budget object (for backward compatibility)
@@ -2448,7 +2459,7 @@ class CreateMediaBuyRequest(AdCPBaseModel):
         # Legacy fallback: Use top-level budget fields if packages have no budgets
         # NOTE: This is NOT part of AdCP spec - for backward compatibility only
         if self.budget:
-            if isinstance(self.budget, int | float):
+            if isinstance(self.budget, (int, float)):
                 return float(self.budget)
             return self.budget.total
         return self.total_budget or 0.0
@@ -2703,6 +2714,7 @@ class MediaPackage(BaseModel):
     buyer_ref: str | None = None  # Optional buyer reference from request package
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
+    creative_ids: list[str] | None = None  # Creative IDs to assign to this package
 
 
 class PackagePerformance(BaseModel):

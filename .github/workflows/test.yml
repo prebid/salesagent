@@ -84,6 +84,7 @@ jobs:
 
     - name: Install dependencies
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv sync --extra dev
 
     - name: Run smoke tests
@@ -92,6 +93,7 @@ jobs:
         PYTEST_CURRENT_TEST: true
         ADCP_TESTING: true
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv run pytest tests/smoke/ -v --tb=short
 
     - name: Check for skipped tests
@@ -132,6 +134,7 @@ jobs:
 
     - name: Install dependencies
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv sync --extra dev
 
     - name: Run unit tests
@@ -142,6 +145,7 @@ jobs:
         SUPER_ADMIN_EMAILS: test@example.com
         ADCP_TESTING: true
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv run pytest tests/unit/ -v --tb=short --cov=. --cov-report=term-missing
 
   integration-tests:
@@ -189,6 +193,7 @@ jobs:
 
     - name: Install dependencies
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv sync --extra dev
         # Clear Python bytecode cache to prevent stale imports
         find . -type d -name __pycache__ -exec rm -rf {} + || true
@@ -198,6 +203,7 @@ jobs:
       env:
         DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv run python scripts/ops/migrate.py
 
     - name: Run integration tests
@@ -209,6 +215,7 @@ jobs:
         SUPER_ADMIN_EMAILS: test@example.com
         ADCP_TESTING: true
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv run pytest tests/integration/ -v --tb=short --cov=. --cov-report=term-missing -m "not requires_server and not skip_ci" \
           --ignore=tests/integration/test_a2a_error_responses.py \
           --ignore=tests/integration/test_a2a_skill_invocation.py \
@@ -259,6 +266,7 @@ jobs:
 
     - name: Install dependencies
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv sync --extra dev
         # Clear Python bytecode cache to prevent stale imports
         find . -type d -name __pycache__ -exec rm -rf {} + || true
@@ -268,6 +276,7 @@ jobs:
       env:
         DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test_v2
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv run python scripts/ops/migrate.py
 
     - name: Run integration V2 tests
@@ -279,6 +288,7 @@ jobs:
         SUPER_ADMIN_EMAILS: test@example.com
         ADCP_TESTING: true
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv run pytest tests/integration_v2/ -v --tb=short --cov=. --cov-report=term-missing -m "not skip_ci"
 
   e2e-tests:
@@ -376,15 +386,18 @@ jobs:
 
     - name: Install dependencies
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv sync --extra dev
 
     - name: Run Ruff linter
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv run ruff check . --config pyproject.toml || true
       continue-on-error: true
 
     - name: Run Ruff formatter
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv run ruff format . --check --config pyproject.toml || true
       continue-on-error: true
 

@@ -26,11 +26,12 @@ class TestDateTimeStringParsing:
                     "buyer_ref": "pkg_1",
                     "products": ["prod_1"],
                     "status": "draft",
+                "budget": 5000.0,
                 }
             ],
             start_time="2025-02-15T00:00:00Z",  # String, not datetime object!
             end_time="2025-02-28T23:59:59Z",
-            budget={"total": 5000.0, "currency": "USD"},
+            # budget moved to package level per AdCP v2.2.0
         )
 
         # Should parse successfully
@@ -53,11 +54,12 @@ class TestDateTimeStringParsing:
                     "buyer_ref": "pkg_1",
                     "products": ["prod_1"],
                     "status": "draft",
+                "budget": 5000.0,
                 }
             ],
             start_time="2025-02-15T00:00:00+00:00",
             end_time="2025-02-28T23:59:59+00:00",
-            budget={"total": 5000.0, "currency": "USD"},
+            # budget moved to package level per AdCP v2.2.0
         )
 
         assert req.start_time is not None
@@ -75,11 +77,12 @@ class TestDateTimeStringParsing:
                     "buyer_ref": "pkg_1",
                     "products": ["prod_1"],
                     "status": "draft",
+                "budget": 5000.0,
                 }
             ],
             start_time="2025-02-15T00:00:00-08:00",
             end_time="2025-02-28T23:59:59-08:00",
-            budget={"total": 5000.0, "currency": "USD"},
+            # budget moved to package level per AdCP v2.2.0
         )
 
         assert req.start_time is not None
@@ -94,7 +97,7 @@ class TestDateTimeStringParsing:
             product_ids=["prod_1"],
             start_date="2025-02-15",  # String date (no time)
             end_date="2025-02-28",
-            total_budget=5000.0,
+            # total_budget is legacy field, using packages with budgets per AdCP v2.2.0
         )
 
         # Should convert to datetime with UTC timezone
@@ -113,7 +116,7 @@ class TestDateTimeStringParsing:
             product_ids=["prod_1"],
             start_date="2025-02-15",  # Legacy: date string
             end_time="2025-02-28T23:59:59Z",  # New: datetime string
-            total_budget=5000.0,
+            # total_budget is legacy field, using packages with budgets per AdCP v2.2.0
         )
 
         assert req.start_time is not None
@@ -149,11 +152,12 @@ class TestDateTimeStringParsing:
                         "buyer_ref": "pkg_1",
                         "products": ["prod_1"],
                         "status": "draft",
-                    }
+                    "budget": 5000.0,
+                }
                 ],
                 start_time="2025-02-15T00:00:00",  # No timezone!
                 end_time="2025-02-28T23:59:59",
-                budget={"total": 5000.0, "currency": "USD"},
+                # budget moved to package level per AdCP v2.2.0
             )
 
     def test_invalid_datetime_format_rejected(self):
@@ -171,11 +175,12 @@ class TestDateTimeStringParsing:
                         "buyer_ref": "pkg_1",
                         "products": ["prod_1"],
                         "status": "draft",
-                    }
+                    "budget": 5000.0,
+                }
                 ],
                 start_time="02/15/2025",  # Wrong format!
                 end_time="02/28/2025",
-                budget={"total": 5000.0, "currency": "USD"},
+                # budget moved to package level per AdCP v2.2.0
             )
 
     def test_create_media_buy_roundtrip_serialization(self):
@@ -190,11 +195,12 @@ class TestDateTimeStringParsing:
                     "buyer_ref": "pkg_1",
                     "products": ["prod_1"],
                     "status": "draft",
+                "budget": 5000.0,
                 }
             ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
-            budget={"total": 5000.0, "currency": "USD"},
+            # budget moved to package level per AdCP v2.2.0
         )
 
         # Serialize back to dict
@@ -222,11 +228,12 @@ class TestDateTimeParsingEdgeCases:
                     "buyer_ref": "pkg_1",
                     "products": ["prod_1"],
                     "status": "draft",
+                "budget": 5000.0,
                 }
             ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
-            budget={"total": 5000.0, "currency": "USD"},
+            # budget moved to package level per AdCP v2.2.0
         )
 
         # Should have timezone info
@@ -244,7 +251,7 @@ class TestDateTimeParsingEdgeCases:
             product_ids=["prod_1"],
             start_date="2025-02-15",
             end_date="2025-02-28",
-            total_budget=5000.0,
+            # total_budget is legacy field, using packages with budgets per AdCP v2.2.0
         )
 
         # Should convert legacy dates to datetimes
@@ -262,7 +269,7 @@ class TestDateTimeParsingEdgeCases:
             product_ids=["prod_1"],
             start_date="2025-02-15",
             end_date="2025-02-28",  # end_date is now required
-            total_budget=5000.0,
+            # total_budget is legacy field, using packages with budgets per AdCP v2.2.0
         )
 
         assert req.start_time is not None

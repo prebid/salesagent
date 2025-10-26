@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.adapters.mock_ad_server import MockAdServer
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, Principal
+from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, Package, Principal
 
 pytestmark = pytest.mark.unit
 
@@ -26,6 +26,7 @@ def sample_packages():
             delivery_type="guaranteed",
             cpm=15.0,
             impressions=333333,  # 5000 budget / 15 CPM * 1000
+            budget=5000.0,  # Budget as float in MediaPackage (internal adapter format)
             format_ids=[
                 make_format_id("display_300x250"),
                 make_format_id("display_728x90"),
@@ -50,17 +51,28 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
     mocker.patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"})
 
     adapter = MockAdServer({}, principal)
-    start_time = datetime.now()
+    start_time = datetime.now(UTC)
     end_time = start_time + timedelta(days=30)
 
-    # CreateMediaBuyRequest now uses product_ids, not selected_packages
+    # Per AdCP v2.2.0: packages with budget are required
+    packages = [
+        Package(
+            buyer_ref="pkg_ref_1",
+            products=["pkg_1"],
+            budget=5000.0,
+            format_ids=[
+                make_format_id("display_300x250"),
+                make_format_id("display_728x90"),
+            ],
+        )
+    ]
+
     request = CreateMediaBuyRequest(
         brand_manifest={"name": "Premium basketball shoes for sports enthusiasts"},
         buyer_ref="ref_12345",  # Required per AdCP spec
-        product_ids=["pkg_1"],
-        start_date=start_time.date(),
-        end_date=end_time.date(),
-        total_budget=5000.0,  # Legacy format uses total_budget
+        packages=packages,  # AdCP v2.2.0: packages required
+        start_time=start_time,
+        end_time=end_time,
         targeting_overlay={},  # Empty targeting
         po_number="PO-12345",
     )

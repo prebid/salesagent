@@ -159,16 +159,20 @@
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Assign to Product</h5>
+                <h5 class="modal-title">Assign to Products</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
+                <p class="text-muted mb-3">
+                    <i class="bi bi-info-circle"></i>
+                    Select multiple products to assign this inventory item to. Uncheck to remove existing assignments.
+                </p>
                 <div id="productList"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-primary" onclick="saveProductAssignment()">
-                    Save Assignment
+                    Save Changes
                 </button>
             </div>
         </div>
@@ -590,48 +594,154 @@ function showSearchResults(results) {
     resultsDiv.style.display = 'block';
 }
 
-function assignToProduct() {
+async function assignToProduct() {
     if (!selectedInventory) return;
 
-    // Load products
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/products`)
-        .then(response => response.json())
-        .then(data => {
-            const productList = document.getElementById('productList');
-            let html = '<div class="list-group">';
+    try {
+        // Load products and check for existing assignments
+        const [productsResponse, ...assignmentResponses] = await Promise.all([
+            fetch(`{{ script_name }}/api/tenant/${tenantId}/products`).then(r => r.json()),
+            // Fetch assignments for all products to find which one has this inventory
+            fetch(`{{ script_name }}/api/tenant/${tenantId}/products`).then(r => r.json())
+                .then(data => {
+                    // For each product, check if it has this inventory assigned
+                    return Promise.all(
+                        data.products.map(p =>
+                            fetch(`{{ script_name }}/tenant/${tenantId}/products/${p.product_id}/inventory`)
+                                .then(r => r.json())
+                                .then(inv => ({ product_id: p.product_id, inventory: inv.inventory || [] }))
+                                .catch(() => ({ product_id: p.product_id, inventory: [] }))
+                        )
+                    );
+                })
+        ]);
 
-            data.products.forEach(product => {
-                html += `
-                    <label class="list-group-item">
-                        <input class="form-check-input me-1" type="radio"
-                               name="productSelection" value="${product.product_id}">
-                        <strong>${product.name}</strong>
-                        <small class="text-muted d-block">${product.description || 'No description'}</small>
-                    </label>
-                `;
-            });
+        const products = productsResponse.products;
+        const assignments = assignmentResponses[0] || [];
 
-            html += '</div>';
-            productList.innerHTML = html;
+        // Find which products have this inventory assigned
+        const inventoryId = selectedInventory.item.id;
+        const assignedProductIds = assignments
+            .filter(a => a.inventory.some(inv => inv.inventory_id === inventoryId))
+            .map(a => a.product_id);
 
-            new bootstrap.Modal(document.getElementById('assignProductModal')).show();
-        })
-        .catch(error => {
-            console.error('Error loading products:', error);
-            alert('Failed to load products');
+        // Store mapping IDs for potential deletion
+        const mappingsByProduct = {};
+        assignments.forEach(a => {
+            const mapping = a.inventory.find(inv => inv.inventory_id === inventoryId);
+            if (mapping) {
+                mappingsByProduct[a.product_id] = mapping.mapping_id;
+            }
         });
+
+        const productList = document.getElementById('productList');
+        let html = '<div class="list-group">';
+
+        products.forEach(product => {
+            const isAssigned = assignedProductIds.includes(product.product_id);
+            html += `
+                <label class="list-group-item">
+                    <input class="form-check-input me-1" type="checkbox"
+                           name="productSelection" value="${product.product_id}"
+                           data-mapping-id="${mappingsByProduct[product.product_id] || ''}"
+                           ${isAssigned ? 'checked' : ''}>
+                    <strong>${product.name}</strong>
+                    ${isAssigned ? '<span class="badge bg-success ms-2">Currently Assigned</span>' : ''}
+                    <small class="text-muted d-block">${product.description || 'No description'}</small>
+                </label>
+            `;
+        });
+
+        html += '</div>';
+        productList.innerHTML = html;
+
+        new bootstrap.Modal(document.getElementById('assignProductModal')).show();
+    } catch (error) {
+        console.error('Error loading products:', error);
+        alert('Failed to load products');
+    }
 }
 
-function saveProductAssignment() {
-    const selectedProduct = document.querySelector('input[name="productSelection"]:checked');
-    if (!selectedProduct || !selectedInventory) return;
+async function saveProductAssignment() {
+    if (!selectedInventory) return;
 
-    const productId = selectedProduct.value;
+    const inventoryItem = selectedInventory.item;
+    const inventoryType = selectedInventory.type;
 
-    // For now, just alert - in production, this would update the product configuration
-    alert(`Would assign ${selectedInventory.item.name} to product ${productId}`);
+    // Get all checkboxes and their current state
+    const allCheckboxes = document.querySelectorAll('input[name="productSelection"]');
 
-    bootstrap.Modal.getInstance(document.getElementById('assignProductModal')).hide();
+    // Determine adds and removes based on checkbox state
+    const toAdd = [];
+    const toRemove = [];
+
+    allCheckboxes.forEach(cb => {
+        const productId = cb.value;
+        const mappingId = cb.dataset.mappingId;
+        const wasAssigned = !!mappingId; // Had a mapping ID means it was previously assigned
+        const isNowChecked = cb.checked;
+
+        if (!wasAssigned && isNowChecked) {
+            // New assignment
+            toAdd.push(productId);
+        } else if (wasAssigned && !isNowChecked) {
+            // Remove assignment
+            toRemove.push({ productId, mappingId });
+        }
+    });
+
+    if (toAdd.length === 0 && toRemove.length === 0) {
+        alert('No changes to save');
+        return;
+    }
+
+    try {
+        const results = [];
+
+        // Add new assignments
+        for (const productId of toAdd) {
+            const response = await fetch(`/tenant/{{ tenant_id }}/products/${productId}/inventory`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    inventory_id: inventoryItem.id,
+                    inventory_type: inventoryType,
+                    is_primary: false
+                })
+            });
+            const data = await response.json();
+            if (data.error) {
+                results.push(`❌ Failed to add: ${data.error}`);
+            } else {
+                results.push(`✓ Added to 1 product`);
+            }
+        }
+
+        // Remove old assignments
+        for (const { productId, mappingId } of toRemove) {
+            const response = await fetch(`/tenant/{{ tenant_id }}/products/${productId}/inventory/${mappingId}`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await response.json();
+            if (!data.success) {
+                results.push(`❌ Failed to remove: ${data.message || 'Unknown error'}`);
+            } else {
+                results.push(`✓ Removed from 1 product`);
+            }
+        }
+
+        const summary = `Changes saved:\n• ${toAdd.length} product(s) added\n• ${toRemove.length} product(s) removed`;
+        alert(summary);
+
+        bootstrap.Modal.getInstance(document.getElementById('assignProductModal')).hide();
+
+        // Refresh the display
+        showInventoryDetail(inventoryItem, inventoryType);
+    } catch (error) {
+        console.error('Error saving assignments:', error);
+        alert('Failed to save assignments');
+    }
 }
 
 function copyInventoryId(id) {

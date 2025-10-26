@@ -75,9 +75,30 @@
             padding: 1rem;
             margin-bottom: 1rem;
             border-radius: 4px;
+            position: relative;
+            animation: slideInDown 0.3s ease-out;
         }
         .alert-error { background: #fee; color: #c33; border: 1px solid #fcc; }
-        .alert-success { background: #efe; color: #3c3; border: 1px solid #cfc; }
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 2px solid #28a745;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+        .alert-info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .alert-warning { background: #fff3cd; color: #856404; border: 1px solid #ffc107; }
+
+        @keyframes slideInDown {
+            from {
+                transform: translateY(-100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
         .tabs {
             display: flex;
             border-bottom: 2px solid #ddd;
@@ -180,6 +201,22 @@
                     document.getElementById(target).classList.add('active');
                 });
             });
+
+            // Auto-scroll to flash messages and highlight them
+            const flashMessages = document.querySelector('.flash-messages');
+            if (flashMessages) {
+                flashMessages.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+                // Auto-dismiss success messages after 10 seconds
+                const successAlerts = flashMessages.querySelectorAll('.alert-success');
+                successAlerts.forEach(alert => {
+                    setTimeout(() => {
+                        alert.style.transition = 'opacity 0.5s ease-out';
+                        alert.style.opacity = '0';
+                        setTimeout(() => alert.remove(), 500);
+                    }, 10000);
+                });
+            }
         });
     </script>
     <script src="{{ script_name }}/static/validation.js"></script>

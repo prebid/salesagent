@@ -87,8 +87,8 @@ def _sync_creatives_impl(
         tenant = get_current_tenant()
         if not tenant or tenant.get("tenant_id") != context.tenant_id:
             # Tenant context wasn't set properly - this shouldn't happen but handle it
-            console.print(
-                f"[yellow]Warning: Tenant context mismatch, setting from ToolContext: {context.tenant_id}[/yellow]"
+            logger.warning(
+                f"Warning: Tenant context mismatch, setting from ToolContext: {context.tenant_id}"
             )
             # We need to load the tenant properly - for now use the ID from context
             tenant = {"tenant_id": context.tenant_id}
@@ -159,7 +159,32 @@ def _sync_creatives_impl(
                     # Handle assets vs media content
                     if creative.get("assets"):
                         # Asset-based creative (new AdCP format)
-                        schema_data["content_uri"] = creative.get("url") or f"asset://{creative.get('creative_id')}"
+                        # Extract URL from assets in priority order:
+                        # 1. Top-level url (backward compat)
+                        # 2. assets.main.url (common convention)
+                        # 3. Common asset_ids (image, video, creative, content)
+                        # 4. First asset with a URL (any asset_id)
+                        url = creative.get("url")
+                        if not url and creative.get("assets"):
+                            assets = creative["assets"]
+
+                            # Priority 1: Try common asset_ids that typically have the primary creative
+                            for priority_key in ["main", "image", "video", "creative", "content"]:
+                                if priority_key in assets and isinstance(assets[priority_key], dict):
+                                    url = assets[priority_key].get("url")
+                                    if url:
+                                        logger.debug(f"[sync_creatives] Extracted URL from assets.{priority_key}.url")
+                                        break
+
+                            # Priority 2: If still no URL, take first available asset's URL
+                            if not url:
+                                for asset_id, asset_data in assets.items():
+                                    if isinstance(asset_data, dict) and asset_data.get("url"):
+                                        url = asset_data["url"]
+                                        logger.debug(f"[sync_creatives] Extracted URL from assets.{asset_id}.url (fallback)")
+                                        break
+
+                        schema_data["content_uri"] = url or f"asset://{creative.get('creative_id')}"
                     else:
                         # Media-based creative (legacy)
                         schema_data["content_uri"] = (
@@ -344,8 +369,30 @@ def _sync_creatives_impl(
                                 changes.append("template_variables")
                         else:
                             # Full upsert mode: replace all data
+                            # Extract URL from assets if not provided at top level
+                            # Use same priority logic as schema_data above
+                            url = creative.get("url")
+                            if not url and creative.get("assets"):
+                                assets = creative["assets"]
+
+                                # Priority 1: Try common asset_ids
+                                for priority_key in ["main", "image", "video", "creative", "content"]:
+                                    if priority_key in assets and isinstance(assets[priority_key], dict):
+                                        url = assets[priority_key].get("url")
+                                        if url:
+                                            logger.debug(f"[sync_creatives] Extracted URL from assets.{priority_key}.url for data storage")
+                                            break
+
+                                # Priority 2: First available asset URL
+                                if not url:
+                                    for asset_id, asset_data in assets.items():
+                                        if isinstance(asset_data, dict) and asset_data.get("url"):
+                                            url = asset_data["url"]
+                                            logger.debug(f"[sync_creatives] Extracted URL from assets.{asset_id}.url for data storage (fallback)")
+                                            break
+
                             data = {
-                                "url": creative.get("url"),
+                                "url": url,
                                 "click_url": creative.get("click_url"),
                                 "width": creative.get("width"),
                                 "height": creative.get("height"),
@@ -1134,7 +1181,7 @@ def _sync_creatives_impl(
     if assignments and isinstance(assignments, dict):
         with get_db_session() as session:
             from src.core.database.models import CreativeAssignment as DBAssignment
-            from src.core.database.models import MediaBuy
+            from src.core.database.models import MediaBuy, MediaPackage
             from src.core.schemas import CreativeAssignment
 
             for creative_id, package_ids in assignments.items():
@@ -1145,25 +1192,26 @@ def _sync_creatives_impl(
                     assignment_errors_by_creative[creative_id] = {}
 
                 for package_id in package_ids:
-                    # Find which media buy this package belongs to
-                    # Packages are stored in media_buy.raw_request["packages"]
-                    # Note: package_id can be either the server-generated package_id OR buyer_ref
-                    stmt = select(MediaBuy).filter_by(tenant_id=tenant["tenant_id"])
-                    media_buys = session.scalars(stmt).all()
+                    # Find which media buy this package belongs to by querying MediaPackage table
+                    # Note: We need to join with MediaBuy to verify tenant_id
+                    from sqlalchemy import join
+
+                    stmt = (
+                        select(MediaPackage, MediaBuy)
+                        .select_from(
+                            join(MediaPackage, MediaBuy, MediaPackage.media_buy_id == MediaBuy.media_buy_id)
+                        )
+                        .where(MediaPackage.package_id == package_id)
+                        .where(MediaBuy.tenant_id == tenant["tenant_id"])
+                    )
+                    result = session.execute(stmt).first()
 
                     media_buy_id = None
                     actual_package_id = None
-                    for mb in media_buys:
-                        packages = mb.raw_request.get("packages", [])
-                        # Check both package_id (server-generated) and buyer_ref (client-provided)
-                        for pkg in packages:
-                            if pkg.get("package_id") == package_id or pkg.get("buyer_ref") == package_id:
-                                media_buy_id = mb.media_buy_id
-                                # Use the server-generated package_id for storage
-                                actual_package_id = pkg.get("package_id", package_id)
-                                break
-                        if media_buy_id:
-                            break
+                    if result:
+                        db_package, db_media_buy = result
+                        media_buy_id = db_package.media_buy_id
+                        actual_package_id = db_package.package_id
 
                     if not media_buy_id:
                         # Package not found - record error
@@ -1177,18 +1225,41 @@ def _sync_creatives_impl(
                             logger.warning(f"Package not found during assignment: {package_id}, skipping")
                             continue
 
-                    # Create assignment in creative_assignments table
-                    assignment = DBAssignment(
+                    # Check if assignment already exists (idempotent operation)
+                    stmt_existing = select(DBAssignment).filter_by(
                         tenant_id=tenant["tenant_id"],
-                        assignment_id=str(uuid.uuid4()),
                         media_buy_id=media_buy_id,
-                        package_id=actual_package_id,  # Use resolved package_id
+                        package_id=actual_package_id,
                         creative_id=creative_id,
-                        weight=100,
-                        created_at=datetime.now(UTC),
                     )
+                    existing_assignment = session.scalars(stmt_existing).first()
 
-                    session.add(assignment)
+                    if existing_assignment:
+                        # Assignment already exists - update weight if needed
+                        if existing_assignment.weight != 100:
+                            existing_assignment.weight = 100
+                            logger.info(
+                                f"Updated existing assignment: creative={creative_id}, "
+                                f"package={actual_package_id}, media_buy={media_buy_id}"
+                            )
+                        assignment = existing_assignment
+                    else:
+                        # Create new assignment in creative_assignments table
+                        assignment = DBAssignment(
+                            tenant_id=tenant["tenant_id"],
+                            assignment_id=str(uuid.uuid4()),
+                            media_buy_id=media_buy_id,
+                            package_id=actual_package_id,  # Use resolved package_id
+                            creative_id=creative_id,
+                            weight=100,
+                            created_at=datetime.now(UTC),
+                        )
+                        session.add(assignment)
+                        logger.info(
+                            f"Created new assignment: creative={creative_id}, "
+                            f"package={actual_package_id}, media_buy={media_buy_id}"
+                        )
+
                     assignment_list.append(
                         CreativeAssignment(
                             assignment_id=assignment.assignment_id,
@@ -1276,8 +1347,8 @@ def _sync_creatives_impl(
                 session.add(mapping)
 
             session.commit()
-            console.print(
-                f"[blue]📋 Created {len(creatives_needing_approval)} workflow steps for creative approval[/blue]"
+            logger.info(
+                f"📋 Created {len(creatives_needing_approval)} workflow steps for creative approval"
             )
 
         # Send Slack notification for pending/rejected creative reviews

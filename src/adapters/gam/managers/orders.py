@@ -79,6 +79,7 @@ class GAMOrdersManager:
             "name": order_name,
             "advertiserId": self.advertiser_id,
             "traffickerId": self.trafficker_id,
+            "status": "DRAFT",  # Start as DRAFT - will approve after line items are created
             "totalBudget": {"currencyCode": "USD", "microAmount": int(total_budget * 1_000_000)},
             "startDateTime": {
                 "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
@@ -189,6 +190,88 @@ class GAMOrdersManager:
             logger.error(f"Failed to archive GAM Order {order_id}: {str(e)}")
             return False
 
+    @timeout(seconds=620)  # 10+ minutes timeout for approving order (with retries)
+    def approve_order(self, order_id: str, max_retries: int = 40, poll_interval: int = 15) -> bool:
+        """Approve a GAM order after line items have been created.
+
+        GAM requires time to run inventory forecasting on line items before an order
+        can be approved. This method will retry if it receives a NO_FORECAST_YET error.
+
+        Per GAM documentation, forecasting can take up to 60 minutes after creating
+        new line items. We poll every 15 seconds for up to 10 minutes (40 attempts).
+
+        Args:
+            order_id: The GAM order ID to approve
+            max_retries: Maximum number of retry attempts for NO_FORECAST_YET errors (default 40)
+            poll_interval: Time in seconds between polling attempts (default 15s)
+
+        Returns:
+            True if approval succeeded, False otherwise
+        """
+        import time
+
+        logger.info(f"[APPROVAL] Approving GAM Order {order_id} (dry_run={self.dry_run})")
+
+        if self.dry_run:
+            logger.info(f"[APPROVAL] DRY-RUN MODE: Would call order_service.performOrderAction(ApproveOrders, {order_id})")
+            return True
+
+        # Retry logic for NO_FORECAST_YET errors
+        for attempt in range(max_retries):
+            try:
+                order_service = self.client_manager.get_service("OrderService")
+
+                # Try ApproveAndOverbookOrders - allows approval even if forecast shows insufficient inventory
+                # This can sometimes work when ApproveOrders fails with NO_FORECAST_YET
+                approve_action = {"xsi_type": "ApproveAndOverbookOrders"}
+
+                statement_builder = ad_manager.StatementBuilder()
+                statement_builder.Where("id = :orderId")
+                statement_builder.WithBindVariable("orderId", int(order_id))
+                statement = statement_builder.ToStatement()
+
+                logger.info(f"[APPROVAL] Attempting ApproveAndOverbookOrders for Order {order_id}")
+                result = order_service.performOrderAction(approve_action, statement)
+
+                # Result is a Zeep object (UpdateResult), use getattr instead of .get()
+                num_changes = getattr(result, "numChanges", 0) if result else 0
+                if num_changes > 0:
+                    logger.info(f"✓ Successfully approved GAM Order {order_id} ({num_changes} changes)")
+                    return True
+                else:
+                    logger.warning(f"No changes made when approving Order {order_id} (may already be approved)")
+                    return True  # Consider this successful if already approved
+
+            except Exception as e:
+                error_str = str(e)
+
+                # Check if this is a NO_FORECAST_YET error (GAM needs time to run forecasting)
+                if "NO_FORECAST_YET" in error_str or "ForecastingError" in error_str:
+                    if attempt < max_retries - 1:
+                        elapsed_time = (attempt + 1) * poll_interval
+                        total_time = max_retries * poll_interval
+                        logger.warning(
+                            f"[APPROVAL] GAM forecasting not ready for Order {order_id}, "
+                            f"retrying in {poll_interval}s (attempt {attempt + 1}/{max_retries}, "
+                            f"elapsed: {elapsed_time}s, max: {total_time}s)"
+                        )
+                        time.sleep(poll_interval)
+                        continue  # Retry
+                    else:
+                        logger.error(
+                            f"[APPROVAL] Failed to approve Order {order_id} after {max_retries} attempts "
+                            f"({max_retries * poll_interval}s total): "
+                            f"GAM forecasting still not ready. Order remains in DRAFT status."
+                        )
+                        return False
+                else:
+                    # Other errors - don't retry
+                    logger.error(f"Failed to approve GAM Order {order_id}: {error_str}")
+                    return False
+
+        # Should not reach here, but just in case
+        return False
+
     @timeout(seconds=120)  # 2 minutes timeout for fetching line items
     def get_order_line_items(self, order_id: str) -> list[dict]:
         """Get all line items associated with an order.
@@ -211,7 +294,7 @@ class GAMOrdersManager:
             statement = statement_builder.ToStatement()
 
             result = lineitem_service.getLineItemsByStatement(statement)
-            return result.get("results", [])
+            return result.get("results", []) if isinstance(result, dict) else getattr(result, "results", [])
         except Exception as e:
             logger.error(f"Error getting line items for order {order_id}: {e}")
             return []
@@ -229,7 +312,12 @@ class GAMOrdersManager:
         guaranteed_types = []
 
         for line_item in line_items:
-            line_item_type = line_item.get("lineItemType")
+            # Handle both dict and Zeep object formats
+            line_item_type = (
+                line_item.get("lineItemType")
+                if isinstance(line_item, dict)
+                else getattr(line_item, "lineItemType", None)
+            )
             if line_item_type in GUARANTEED_LINE_ITEM_TYPES:
                 guaranteed_types.append(line_item_type)
 
@@ -393,19 +481,27 @@ class GAMOrdersManager:
                 # Validate format types against product supported types
                 supported_format_types = impl_config.get("supported_format_types", ["display", "video", "native"])
 
-                for format_id in package.format_ids:
+                for format_id_obj in package.format_ids:
+                    # format_id_obj is a FormatId object with agent_url and id fields
+                    # Extract the ID string and agent_url for format lookup
+                    format_id_str = format_id_obj.id
+                    agent_url = format_id_obj.agent_url
+
                     # Use format resolver to support custom formats and product overrides
+                    # Include agent_url in format strings for clarity (different agents may have same format IDs)
+                    format_display = f"{agent_url}/{format_id_str}" if agent_url else format_id_str
+
                     try:
-                        format_obj = get_format(format_id, tenant_id=tenant_id, product_id=package.package_id)
+                        format_obj = get_format(format_id_str, agent_url=agent_url, tenant_id=tenant_id, product_id=package.package_id)
                     except ValueError as e:
-                        error_msg = f"Format lookup failed for '{format_id}': {e}"
+                        error_msg = f"Format lookup failed for '{format_display}': {e}"
                         log(f"[red]Error: {error_msg}[/red]")
                         raise ValueError(error_msg)
 
                     # Check if format type is supported by product
                     if format_obj.type not in supported_format_types:
                         error_msg = (
-                            f"Format '{format_id}' (type: {format_obj.type}) is not supported by product {package.package_id}. "
+                            f"Format '{format_display}' (type: {format_obj.type}) is not supported by product {package.package_id}. "
                             f"Product supports: {', '.join(supported_format_types)}. "
                             f"Configure 'supported_format_types' in product implementation_config if this should be supported."
                         )
@@ -415,7 +511,7 @@ class GAMOrdersManager:
                     # Audio formats are not supported in GAM (no creative placeholders)
                     if format_obj.type == "audio":
                         error_msg = (
-                            f"Audio format '{format_id}' is not supported. "
+                            f"Audio format '{format_display}' is not supported. "
                             f"GAM does not support standalone audio line items. "
                             f"Audio can only be used as companion creatives to video ads. "
                             f"To deliver audio ads, use a different ad server (e.g., Triton, Kevel) that supports audio."
@@ -459,6 +555,15 @@ class GAMOrdersManager:
                             height = requirements.get("height")
                             creative_size_type = "NATIVE" if format_obj.type == "native" else "PIXEL"
 
+                        # Last resort: Try to extract dimensions from format_id (e.g., "display_970x250_image")
+                        if not (width and height):
+                            import re
+                            match = re.search(r'(\d+)x(\d+)', format_id_str)
+                            if match:
+                                width = int(match.group(1))
+                                height = int(match.group(2))
+                                log(f"  [yellow]Extracted dimensions from format ID: {width}x{height}[/yellow]")
+
                         if width and height:
                             placeholder["size"] = {"width": width, "height": height}
                             placeholder["creativeSizeType"] = creative_size_type
@@ -474,7 +579,7 @@ class GAMOrdersManager:
                         else:
                             # For formats without dimensions
                             error_msg = (
-                                f"Format '{format_id}' has no width/height configuration for GAM. "
+                                f"Format '{format_display}' has no width/height configuration for GAM. "
                                 f"Add 'platform_config.gam.creative_placeholder' to format definition or "
                                 f"ensure format has width/height in requirements."
                             )
@@ -555,32 +660,65 @@ class GAMOrdersManager:
                 # Map AdCP pricing model to GAM cost type
                 gam_cost_type = PricingCompatibility.get_gam_cost_type(pricing_model)
 
-                # For FLAT_RATE, calculate CPD rate (total budget / days)
+                # Handle FLAT_RATE → CPD conversion
+                # AdCP FLAT_RATE rate = total campaign cost (e.g., $100 for entire campaign)
+                # GAM CPD = cost per day (e.g., $10/day for 10-day campaign)
                 if pricing_model == "flat_rate":
-                    rate_per_day = rate / max(flight_duration_days, 1)
-                    log(f"  FLAT_RATE pricing: ${rate:,.2f} total → ${rate_per_day:,.2f} per day (CPD)")
+                    campaign_days = (end_time - start_time).days
+                    if campaign_days < 1:
+                        campaign_days = 1  # Minimum 1 day for same-day campaigns
+
+                    cpd_rate = rate / campaign_days
+                    log(f"  FLAT_RATE: ${rate:,.2f} total cost / {campaign_days} days → ${cpd_rate:,.2f} CPD")
                     cost_type = "CPD"
-                    cost_per_unit_micro = int(rate_per_day * 1_000_000)
+                    cost_per_unit_micro = int(cpd_rate * 1_000_000)
                 else:
+                    # For other pricing models, use rate directly (CPM, CPC, VCPM)
                     cost_type = gam_cost_type
                     cost_per_unit_micro = int(rate * 1_000_000)
+                    log(f"  Pricing: {pricing_model.upper()} @ ${rate:,.2f} {currency} → GAM {cost_type}")
 
                 # Select appropriate line item type based on pricing + guarantees
                 line_item_type = PricingCompatibility.select_line_item_type(pricing_model, is_guaranteed)
                 priority = PricingCompatibility.get_default_priority(line_item_type)
 
-                # Update goal units based on pricing model
-                if pricing_model == "cpc":
-                    # CPC: goal should be in clicks, not impressions
-                    goal_unit_type = "CLICKS"
-                    # Keep goal_units as-is (package.impressions serves as click goal)
-                elif pricing_model == "vcpm":
-                    # VCPM: goal should be in viewable impressions
-                    goal_unit_type = "VIEWABLE_IMPRESSIONS"
-                    # Keep goal_units as-is (package.impressions serves as viewable impression goal)
+                # Set goal type based on line item type (per GAM API v202411 documentation)
+                # SPONSORSHIP: Only supports DAILY goal type (percentage-based)
+                # NETWORK: Only supports DAILY goal type (percentage-based)
+                # STANDARD: Supports LIFETIME goal type (impression-based)
+                # PRICE_PRIORITY: Supports NONE, LIFETIME, DAILY goal types (impression-based)
+                if line_item_type == "SPONSORSHIP":
+                    # SPONSORSHIP line items require DAILY goals with percentage-based units
+                    goal_type = "DAILY"
+
+                    # For FLAT_RATE (CPD pricing), use 100% impression share
+                    # This means: serve on 100% of matching ad requests
+                    if pricing_model == "flat_rate":
+                        goal_unit_type = "IMPRESSIONS"
+                        goal_units = 100  # 100% impression share for flat rate sponsorships
+                        log("  SPONSORSHIP (FLAT_RATE): DAILY goal with 100% impression share (serves on all matching requests)")
+                    else:
+                        log(f"  {line_item_type} line item: Using DAILY goal type (required by GAM API)")
+                elif line_item_type == "STANDARD":
+                    # STANDARD line items use LIFETIME goals for guaranteed delivery
+                    goal_type = "LIFETIME"
                 else:
-                    # CPM, FLAT_RATE: use impressions (already set above)
-                    pass
+                    # PRICE_PRIORITY, BULK, HOUSE can use configured goal type or default to LIFETIME
+                    pass  # Keep goal_type from impl_config (set earlier)
+
+                # Update goal units based on pricing model (for non-SPONSORSHIP or non-FLAT_RATE)
+                if pricing_model != "flat_rate":
+                    if pricing_model == "cpc":
+                        # CPC: goal should be in clicks, not impressions
+                        goal_unit_type = "CLICKS"
+                        # Keep goal_units as-is (package.impressions serves as click goal)
+                    elif pricing_model == "vcpm":
+                        # VCPM: goal should be in viewable impressions
+                        goal_unit_type = "VIEWABLE_IMPRESSIONS"
+                        # Keep goal_units as-is (package.impressions serves as viewable impression goal)
+                    else:
+                        # CPM: use impressions (already set above)
+                        pass
 
                 log(
                     f"  Package pricing: {pricing_model.upper()} @ ${rate:,.2f} {currency} "

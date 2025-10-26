@@ -197,11 +197,11 @@ class AuditLogger:
 
             # Check for high-value operations
             if details and isinstance(details, dict):
-                if "budget" in details and isinstance(details["budget"], int | float) and details["budget"] > 10000:
+                if "budget" in details and isinstance(details["budget"], (int, float)) and details["budget"] > 10000:
                     should_notify = True
                 if (
                     "total_budget" in details
-                    and isinstance(details["total_budget"], int | float)
+                    and isinstance(details["total_budget"], (int, float))
                     and details["total_budget"] > 10000
                 ):
                     should_notify = True

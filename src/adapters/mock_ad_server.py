@@ -476,10 +476,10 @@ class MockAdServer(AdServerAdapter):
         if operation_mode == "async":
             return self._create_media_buy_async(request, packages, start_time, end_time)
         elif operation_mode == "sync":
-            return self._create_media_buy_sync_with_delay(request, packages, start_time, end_time)
+            return self._create_media_buy_sync_with_delay(request, packages, start_time, end_time, package_pricing_info)
 
         # Continue with immediate processing (default behavior)
-        return self._create_media_buy_immediate(request, packages, start_time, end_time, scenario)
+        return self._create_media_buy_immediate(request, packages, start_time, end_time, scenario, package_pricing_info)
 
     def _create_media_buy_async(
         self,
@@ -527,6 +527,7 @@ class MockAdServer(AdServerAdapter):
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
     ) -> CreateMediaBuyResponse:
         """Create media buy in sync HITL mode with configurable delay."""
         self.log(f"🤖 Processing create_media_buy in SYNC mode ({self.sync_delay_ms}ms delay)")
@@ -554,7 +555,7 @@ class MockAdServer(AdServerAdapter):
 
         # Continue with immediate processing
         self.log("✅ SYNC delay completed, proceeding with creation")
-        return self._create_media_buy_immediate(request, packages, start_time, end_time)
+        return self._create_media_buy_immediate(request, packages, start_time, end_time, package_pricing_info=package_pricing_info)
 
     def _create_media_buy_immediate(
         self,
@@ -563,8 +564,14 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         scenario=None,
+        package_pricing_info: dict[str, dict] | None = None,
     ) -> CreateMediaBuyResponse:
         """Create media buy immediately (original behavior)."""
+        # DEBUG: Log packages received
+        self.log(f"[DEBUG] MockAdapter._create_media_buy_immediate called with {len(packages)} packages")
+        for idx, pkg in enumerate(packages):
+            self.log(f"[DEBUG] Package {idx} input: package_id={pkg.package_id}, product_id={pkg.product_id}")
+
         # Generate a unique media_buy_id
         import uuid
 
@@ -638,10 +645,27 @@ class MockAdServer(AdServerAdapter):
             },
         )
 
-        # Calculate total budget from packages (CPM * impressions / 1000)
-        total_budget = sum((p.cpm * p.impressions / 1000) for p in packages if p.delivery_type == "guaranteed")
-        # Use the request's budget if available, otherwise use calculated
-        total_budget = request.get_total_budget() if hasattr(request, "get_total_budget") else total_budget
+        # Calculate total budget from packages using pricing_info if available
+        # Per AdCP v2.2.0: budget is at package level
+        from src.core.schemas import extract_budget_amount
+
+        total_budget = 0
+        for p in packages:
+            # First try to get budget from package (AdCP v2.2.0)
+            if p.budget:
+                budget_amount, _ = extract_budget_amount(p.budget)
+                total_budget += budget_amount
+            elif p.delivery_type == "guaranteed":
+                # Fallback: calculate from CPM * impressions (legacy)
+                # Use pricing_info if available (pricing_option_id flow), else fallback to package.cpm
+                pricing_info = package_pricing_info.get(p.package_id) if package_pricing_info else None
+                if pricing_info:
+                    # Use rate from pricing option (fixed) or bid_price (auction)
+                    rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", p.cpm)
+                else:
+                    # Fallback to legacy package.cpm
+                    rate = p.cpm
+                total_budget += (rate * p.impressions / 1000)
 
         # Apply strategy-based bid adjustment
         if self.strategy_context and hasattr(self.strategy_context, "get_bid_adjustment"):
@@ -716,7 +740,8 @@ class MockAdServer(AdServerAdapter):
         # Build packages response with buyer_ref from original request
         response_packages = []
         for idx, pkg in enumerate(packages):
-            pkg_dict = pkg.model_dump()
+            # Use mode="python" to ensure all fields are included
+            pkg_dict = pkg.model_dump(mode="python", exclude_none=False)
             self.log(f"[DEBUG] MockAdapter: Package {idx} model_dump() = {pkg_dict}")
             self.log(f"[DEBUG] MockAdapter: Package {idx} has package_id = {pkg_dict.get('package_id')}")
             # Add buyer_ref from original request package if available

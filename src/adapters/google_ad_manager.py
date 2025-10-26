@@ -13,6 +13,7 @@ __all__ = [
 ]
 
 import logging
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -334,25 +335,86 @@ class GoogleAdManager(AdServerAdapter):
         # Get products to access implementation_config
 
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import Product
+        from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
 
         products_map = {}
         with get_db_session() as db_session:
             for package in packages:
                 from sqlalchemy import select
 
+                # Extract product_id from package (not package_id!)
+                # package.package_id is like "pkg_prod_610fbb8b_08dec6ae_1"
+                # package.product_id is like "prod_610fbb8b"
+                product_id = package.product_id
+                logger.info(f"Looking up product for package {package.package_id}: product_id={product_id}")
+
                 stmt = select(Product).filter_by(
                     tenant_id=self.tenant_id,
-                    product_id=package.package_id,  # package_id is actually product_id
+                    product_id=product_id,
                 )
                 product = db_session.scalars(stmt).first()
                 if product:
+                    logger.info(f"Found product: {product.product_id} (name={product.name})")
+                    # Start with product's implementation_config
+                    impl_config = product.implementation_config.copy() if product.implementation_config else {}
+                    logger.info(f"Product implementation_config: {impl_config}")
+
+                    # Load inventory mappings from ProductInventoryMapping table
+                    inventory_stmt = select(ProductInventoryMapping).filter_by(
+                        product_id=product.product_id,  # Use product_id string, not integer id
+                        tenant_id=self.tenant_id
+                    )
+                    inventory_mappings = db_session.scalars(inventory_stmt).all()
+                    logger.info(f"Found {len(inventory_mappings)} inventory mappings for product {product.product_id}")
+
+                    if inventory_mappings:
+                        # Get GAM ad unit IDs from the mappings
+                        ad_unit_ids = []
+                        placement_ids = []
+                        for mapping in inventory_mappings:
+                            logger.info(f"Processing mapping: type={mapping.inventory_type}, inventory_id={mapping.inventory_id}")
+                            if mapping.inventory_type == "ad_unit":
+                                # Load the actual GAM inventory record
+                                gam_inv_stmt = select(GAMInventory).filter_by(
+                                    inventory_id=mapping.inventory_id,  # Match by inventory_id string
+                                    inventory_type="ad_unit",
+                                    tenant_id=self.tenant_id
+                                )
+                                gam_inv = db_session.scalars(gam_inv_stmt).first()
+                                if gam_inv:
+                                    logger.info(f"Found GAM ad unit: {gam_inv.inventory_id}")
+                                    ad_unit_ids.append(str(gam_inv.inventory_id))
+                                else:
+                                    logger.warning(f"GAM ad unit not found for inventory_id={mapping.inventory_id}")
+                            elif mapping.inventory_type == "placement":
+                                # Load the actual GAM placement record
+                                gam_inv_stmt = select(GAMInventory).filter_by(
+                                    inventory_id=mapping.inventory_id,
+                                    inventory_type="placement",
+                                    tenant_id=self.tenant_id
+                                )
+                                gam_inv = db_session.scalars(gam_inv_stmt).first()
+                                if gam_inv:
+                                    logger.info(f"Found GAM placement: {gam_inv.inventory_id}")
+                                    placement_ids.append(str(gam_inv.inventory_id))
+                                else:
+                                    logger.warning(f"GAM placement not found for inventory_id={mapping.inventory_id}")
+
+                        # Merge inventory mappings into implementation_config
+                        if ad_unit_ids:
+                            impl_config["targeted_ad_unit_ids"] = ad_unit_ids
+                            logger.info(f"Set targeted_ad_unit_ids: {ad_unit_ids}")
+                        if placement_ids:
+                            impl_config["targeted_placement_ids"] = placement_ids
+                            logger.info(f"Set targeted_placement_ids: {placement_ids}")
+
+                    logger.info(f"Final impl_config for {package.package_id}: {impl_config}")
                     products_map[package.package_id] = {
                         "product_id": product.product_id,
-                        "implementation_config": (
-                            product.implementation_config if product.implementation_config else {}
-                        ),
+                        "implementation_config": impl_config,
                     }
+                else:
+                    logger.error(f"Product NOT FOUND for package_id: {package.package_id}")
 
         # Validate targeting
         unsupported_features = self._validate_targeting(request.targeting_overlay)
@@ -369,12 +431,13 @@ class GoogleAdManager(AdServerAdapter):
         base_targeting = self._build_targeting(request.targeting_overlay)
 
         # Check if manual approval is required for media buy creation
-        if self._requires_manual_approval("create_media_buy"):
+        # Skip approval workflow if this media buy was already manually approved
+        # (when called from execute_approved_media_buy, we're in "post-approval execution" mode)
+        already_approved = getattr(request, '_already_approved', False)
+        if self._requires_manual_approval("create_media_buy") and not already_approved:
             self.log("[yellow]Manual approval mode - creating workflow step for human intervention[/yellow]")
 
             # Generate a media buy ID for tracking
-            import uuid
-
             media_buy_id = f"gam_order_{uuid.uuid4().hex[:8]}"
 
             # Create manual order workflow step
@@ -382,14 +445,47 @@ class GoogleAdManager(AdServerAdapter):
                 request, packages, start_time, end_time, media_buy_id
             )
 
-            # Build package responses with package_ids (no line_item_ids yet - order not created)
+            # Build package responses with ALL package data (not just package_id)
+            # This ensures MediaPackage database records can be created properly
             package_responses = []
-            for package in packages:
-                package_responses.append(
-                    {
-                        "package_id": package.package_id,
-                    }
-                )
+            for idx, package in enumerate(packages):
+                # Get matching request package for buyer_ref and other fields
+                matching_req_package = None
+                if request.packages and idx < len(request.packages):
+                    matching_req_package = request.packages[idx]
+
+                package_dict = {
+                    "package_id": package.package_id,
+                    "product_id": package.product_id,
+                    "name": package.name,
+                    "delivery_type": package.delivery_type,
+                    "cpm": package.cpm,
+                    "impressions": package.impressions,
+                }
+
+                # Add buyer_ref from request package if available
+                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
+                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+
+                # Add budget from request package if available (serialize to dict for JSON storage)
+                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
+                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object)
+                    if isinstance(matching_req_package.budget, (int, float)):
+                        package_dict["budget"] = {"total": float(matching_req_package.budget), "currency": "USD"}
+                    elif hasattr(matching_req_package.budget, "model_dump"):
+                        package_dict["budget"] = matching_req_package.budget.model_dump()
+                    else:
+                        package_dict["budget"] = dict(matching_req_package.budget) if isinstance(matching_req_package.budget, dict) else {"total": float(matching_req_package.budget), "currency": "USD"}
+
+                # Add targeting_overlay from package if available
+                if package.targeting_overlay:
+                    package_dict["targeting_overlay"] = package.targeting_overlay
+
+                # Add creative_ids from package if available (from uploaded inline creatives)
+                if package.creative_ids:
+                    package_dict["creative_ids"] = package.creative_ids
+
+                package_responses.append(package_dict)
 
             if step_id:
                 return CreateMediaBuyResponse(
@@ -472,13 +568,78 @@ class GoogleAdManager(AdServerAdapter):
                 package_pricing_info=package_pricing_info,
             )
             self.log(f"✓ Created {len(line_item_ids)} line items")
+
+            # Approve the order now that it has line items
+            # GAM requires line items to exist before an order can be APPROVED
+            # Try once - if forecasting not ready, start background task
+            self.log(f"[cyan]Attempting to approve GAM Order {order_id} (max_retries=1)[/cyan]")
+            try:
+                approval_success = self.orders_manager.approve_order(order_id, max_retries=1)
+                if approval_success:
+                    self.log(f"✓ Approved GAM Order {order_id}")
+                else:
+                    # Approval failed (likely NO_FORECAST_YET) - start background polling
+                    self.log(f"[yellow]Order {order_id} forecasting not ready - starting background approval task[/yellow]")
+
+                    # Get webhook URL from push notification config
+                    webhook_url = None
+                    if request.push_notification_config:
+                        webhook_url = request.push_notification_config.get("url")
+
+                    # Get principal_id from adapter's principal object
+                    principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"
+
+                    # Start background approval polling task
+                    from src.services.order_approval_service import start_order_approval_background
+
+                    try:
+                        approval_id = start_order_approval_background(
+                            order_id=order_id,
+                            media_buy_id=media_buy_id,
+                            tenant_id=self.tenant_id,
+                            principal_id=principal_id,
+                            webhook_url=webhook_url,
+                            max_attempts=12,  # 2 minutes with 10 second intervals
+                            poll_interval_seconds=10,
+                        )
+                        self.log(f"✓ Started background approval polling (job: {approval_id})")
+                    except ValueError as e:
+                        self.log(f"[red]Failed to start background approval: {e}[/red]")
+            except Exception as approval_error:
+                # Non-fatal error - order and line items were created successfully
+                self.log(f"[yellow]Warning: Could not approve order {order_id}: {approval_error}[/yellow]")
+
         except Exception as e:
             error_msg = f"Order created but failed to create line items: {str(e)}"
             self.log(f"[red]Error: {error_msg}[/red]")
+
+            # Build package responses even on error so downstream code can access package data
+            package_responses = []
+            for idx, package in enumerate(packages):
+                matching_req_package = None
+                if request.packages and idx < len(request.packages):
+                    matching_req_package = request.packages[idx]
+
+                package_dict = {
+                    "package_id": package.package_id,
+                    "product_id": package.product_id,
+                    "name": package.name,
+                }
+
+                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
+                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+
+                # Add creative_ids from package if available (from uploaded inline creatives)
+                if package.creative_ids:
+                    package_dict["creative_ids"] = package.creative_ids
+
+                package_responses.append(package_dict)
+
             return CreateMediaBuyResponse(
                 buyer_ref=request.buyer_ref,
                 media_buy_id=order_id,
                 errors=[Error(code="line_item_creation_failed", message=error_msg)],
+                packages=package_responses,
             )
 
         # Check if activation approval is needed (guaranteed line items require human approval)
@@ -488,15 +649,47 @@ class GoogleAdManager(AdServerAdapter):
 
             step_id = self.workflow_manager.create_activation_workflow_step(order_id, packages)
 
-            # Build package responses with line_item_ids for creative association
+            # Build package responses with ALL package data + line_item_ids for creative association
             package_responses = []
-            for package, line_item_id in zip(packages, line_item_ids, strict=False):
-                package_responses.append(
-                    {
-                        "package_id": package.package_id,
-                        "platform_line_item_id": str(line_item_id),  # GAM line item ID for creative association
-                    }
-                )
+            for idx, (package, line_item_id) in enumerate(zip(packages, line_item_ids, strict=False)):
+                # Get matching request package for buyer_ref and other fields
+                matching_req_package = None
+                if request.packages and idx < len(request.packages):
+                    matching_req_package = request.packages[idx]
+
+                package_dict = {
+                    "package_id": package.package_id,
+                    "product_id": package.product_id,
+                    "name": package.name,
+                    "delivery_type": package.delivery_type,
+                    "cpm": package.cpm,
+                    "impressions": package.impressions,
+                    "platform_line_item_id": str(line_item_id),  # GAM line item ID for creative association
+                }
+
+                # Add buyer_ref from request package if available
+                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
+                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+
+                # Add budget from request package if available (serialize to dict for JSON storage)
+                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
+                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object)
+                    if isinstance(matching_req_package.budget, (int, float)):
+                        package_dict["budget"] = {"total": float(matching_req_package.budget), "currency": "USD"}
+                    elif hasattr(matching_req_package.budget, "model_dump"):
+                        package_dict["budget"] = matching_req_package.budget.model_dump()
+                    else:
+                        package_dict["budget"] = dict(matching_req_package.budget) if isinstance(matching_req_package.budget, dict) else {"total": float(matching_req_package.budget), "currency": "USD"}
+
+                # Add targeting_overlay from package if available
+                if package.targeting_overlay:
+                    package_dict["targeting_overlay"] = package.targeting_overlay
+
+                # Add creative_ids from package if available (from uploaded inline creatives)
+                if package.creative_ids:
+                    package_dict["creative_ids"] = package.creative_ids
+
+                package_responses.append(package_dict)
 
             return CreateMediaBuyResponse(
                 buyer_ref=request.buyer_ref,
@@ -505,15 +698,47 @@ class GoogleAdManager(AdServerAdapter):
                 packages=package_responses,
             )
 
-        # Build package responses with line_item_ids for creative association
+        # Build package responses with ALL package data + line_item_ids for creative association
         package_responses = []
-        for package, line_item_id in zip(packages, line_item_ids, strict=False):
-            package_responses.append(
-                {
-                    "package_id": package.package_id,
-                    "platform_line_item_id": str(line_item_id),  # GAM line item ID for creative association
-                }
-            )
+        for idx, (package, line_item_id) in enumerate(zip(packages, line_item_ids, strict=False)):
+            # Get matching request package for buyer_ref and other fields
+            matching_req_package = None
+            if request.packages and idx < len(request.packages):
+                matching_req_package = request.packages[idx]
+
+            package_dict = {
+                "package_id": package.package_id,
+                "product_id": package.product_id,
+                "name": package.name,
+                "delivery_type": package.delivery_type,
+                "cpm": package.cpm,
+                "impressions": package.impressions,
+                "platform_line_item_id": str(line_item_id),  # GAM line item ID for creative association
+            }
+
+            # Add buyer_ref from request package if available
+            if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
+                package_dict["buyer_ref"] = matching_req_package.buyer_ref
+
+            # Add budget from request package if available (serialize to dict for JSON storage)
+            if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
+                # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object)
+                if isinstance(matching_req_package.budget, (int, float)):
+                    package_dict["budget"] = {"total": float(matching_req_package.budget), "currency": "USD"}
+                elif hasattr(matching_req_package.budget, "model_dump"):
+                    package_dict["budget"] = matching_req_package.budget.model_dump()
+                else:
+                    package_dict["budget"] = dict(matching_req_package.budget) if isinstance(matching_req_package.budget, dict) else {"total": float(matching_req_package.budget), "currency": "USD"}
+
+            # Add targeting_overlay from package if available
+            if package.targeting_overlay:
+                package_dict["targeting_overlay"] = package.targeting_overlay
+
+            # Add creative_ids from package if available (from uploaded inline creatives)
+            if package.creative_ids:
+                package_dict["creative_ids"] = package.creative_ids
+
+            package_responses.append(package_dict)
 
         return CreateMediaBuyResponse(
             buyer_ref=request.buyer_ref,

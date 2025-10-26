@@ -1,6 +1,6 @@
 {
   "scripts": {
     "setup": "scripts/setup/setup_conductor_workspace.sh\ncp $CONDUCTOR_ROOT_PATH/.gam-test-config.json .",
-    "archive": "timeout 5 docker compose down 2>/dev/null || true"
+    "archive": "bash scripts/dev/cleanup_conductor_workspace.sh"
   }
 }

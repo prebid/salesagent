@@ -195,7 +195,88 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
             db.commit()
 
-            flash("Workflow step approved successfully", "success")
+            # Check if this is a media buy creation workflow step
+            # If so, execute the adapter creation (order/line items in GAM)
+            from src.core.database.models import MediaBuy, ObjectWorkflowMapping
+
+            stmt_mapping = select(ObjectWorkflowMapping).filter_by(step_id=step_id, object_type="media_buy")
+            mapping = db.scalars(stmt_mapping).first()
+
+            logger.info(f"[APPROVAL] Checking for ObjectWorkflowMapping: step_id={step_id}, found={mapping is not None}")
+            if mapping:
+                logger.info(f"[APPROVAL] Found mapping: object_type={mapping.object_type}, object_id={mapping.object_id}")
+
+            if mapping:
+                media_buy_id = mapping.object_id
+                logger.info(f"[APPROVAL] Workflow step {step_id} approved for media buy {media_buy_id}")
+
+                # Get the media buy
+                stmt_buy = select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant_id)
+                media_buy = db.scalars(stmt_buy).first()
+
+                logger.info(f"[APPROVAL] Media buy lookup: found={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}")
+
+                if media_buy and media_buy.status == "pending_approval":
+                    # Check if all required creatives are approved before executing adapter creation
+                    from src.core.database.models import Creative as CreativeModel
+                    from src.core.database.models import CreativeAssignment
+
+                    stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
+                    assignments = db.scalars(stmt_assignments).all()
+
+                    if assignments:
+                        # Get all creative IDs for this media buy
+                        creative_ids = [a.creative_id for a in assignments]
+                        stmt_creatives = select(CreativeModel).filter(
+                            CreativeModel.creative_id.in_(creative_ids)
+                        )
+                        creatives = db.scalars(stmt_creatives).all()
+
+                        # Check if any required creatives are not approved
+                        unapproved_creatives = [
+                            c.creative_id for c in creatives
+                            if c.status not in ["approved", "active"]
+                        ]
+
+                        if unapproved_creatives:
+                            logger.warning(
+                                f"[APPROVAL] Cannot execute adapter creation yet - "
+                                f"{len(unapproved_creatives)} creatives not approved: {unapproved_creatives}"
+                            )
+                            flash(
+                                f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
+                                "info"
+                            )
+                            # Update status to show it's waiting for creatives
+                            media_buy.status = "pending_creatives"
+                            db.commit()
+                            return jsonify({"success": True}), 200
+
+                    # Execute adapter creation
+                    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
+                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+
+                    if not success:
+                        logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
+                        flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
+                        return jsonify({"success": False, "error": error_msg}), 500
+
+                    # Update media buy status
+                    media_buy.status = "scheduled"
+                    media_buy.approved_at = datetime.now(UTC)
+                    media_buy.approved_by = user_email
+                    db.commit()
+
+                    logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
+                    flash("Workflow step approved and media buy created successfully", "success")
+                else:
+                    logger.warning(f"[APPROVAL] Media buy not executed: media_buy={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}")
+                    flash("Workflow step approved successfully", "success")
+            else:
+                flash("Workflow step approved successfully", "success")
+
             return jsonify({"success": True}), 200
 
     except Exception as e:

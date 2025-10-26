@@ -51,6 +51,7 @@
                 <th>Countries</th>
                 <th>Type</th>
                 <th>Pricing</th>
+                <th>Inventory</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -151,6 +152,18 @@
                         {% endif %}
                     {% else %}
                         <span style="color: #999;">No pricing configured</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if product.inventory_count > 0 %}
+                        <a href="{{ url_for('products.edit_product', tenant_id=tenant_id, product_id=product.product_id) }}#inventory"
+                           class="badge"
+                           style="background: #28a745; color: white; text-decoration: none;"
+                           title="Click to view assigned inventory">
+                            {{ product.inventory_count }} assigned
+                        </a>
+                    {% else %}
+                        <span style="color: #999;">None</span>
                     {% endif %}
                 </td>
                 <td>

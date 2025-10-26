@@ -216,21 +216,22 @@ def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
         if not is_fixed:
             # Floor price is required for auction
             floor_str = form_data.get(f"floor_{index}", "").strip()
-            if floor_str:
-                try:
-                    floor = float(floor_str)
-                    price_guidance = {"floor": floor}
+            if not floor_str:
+                raise ValueError(f"Floor price is required for auction pricing (pricing option {index})")
+            try:
+                floor = float(floor_str)
+                price_guidance = {"floor": floor}
 
-                    # Optional percentiles
-                    for percentile in ["p25", "p50", "p75", "p90"]:
-                        value_str = form_data.get(f"{percentile}_{index}", "").strip()
-                        if value_str:
-                            try:
-                                price_guidance[percentile] = float(value_str)
-                            except ValueError:
-                                pass
-                except ValueError:
-                    pass
+                # Optional percentiles
+                for percentile in ["p25", "p50", "p75", "p90"]:
+                    value_str = form_data.get(f"{percentile}_{index}", "").strip()
+                    if value_str:
+                        try:
+                            price_guidance[percentile] = float(value_str)
+                        except ValueError:
+                            pass
+            except ValueError:
+                raise ValueError(f"Invalid floor price value for pricing option {index}")
 
         # Parse min_spend_per_package
         min_spend = None
@@ -306,6 +307,21 @@ def list_products(tenant_id):
                 .unique()
                 .all()
             )
+
+            # Get inventory counts for all products in one query
+            from src.core.database.models import ProductInventoryMapping
+
+            inventory_counts = {}
+            for product in products:
+                count = db_session.scalar(
+                    select(func.count())
+                    .select_from(ProductInventoryMapping)
+                    .where(
+                        ProductInventoryMapping.tenant_id == tenant_id,
+                        ProductInventoryMapping.product_id == product.product_id,
+                    )
+                )
+                inventory_counts[product.product_id] = count or 0
 
             # Convert products to dict format for template
             products_list = []
@@ -445,6 +461,7 @@ def list_products(tenant_id):
                         else json.loads(product.implementation_config) if product.implementation_config else {}
                     ),
                     "created_at": product.created_at if hasattr(product, "created_at") else None,
+                    "inventory_count": inventory_counts.get(product.product_id, 0),
                 }
                 products_list.append(product_dict)
 
@@ -505,7 +522,47 @@ def add_product(tenant_id):
                 except json.JSONDecodeError:
                     # Fallback to checkbox format: "agent_url|format_id"
                     formats_raw = request.form.getlist("formats")
+
+                    # Validate formats against available formats
+                    import asyncio
+
+                    from src.core.creative_agent_registry import get_creative_agent_registry
+
+                    try:
+                        registry = get_creative_agent_registry()
+                        # Run async list_all_formats
+                        try:
+                            loop = asyncio.get_running_loop()
+                            # Already in async context, run in thread pool
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                future = executor.submit(lambda: asyncio.run(registry.list_all_formats(tenant_id=tenant_id)))
+                                available_formats = future.result()
+                        except RuntimeError:
+                            # No running loop, safe to create one
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                available_formats = loop.run_until_complete(registry.list_all_formats(tenant_id=tenant_id))
+                            finally:
+                                loop.close()
+
+                        # Build set of valid format IDs for quick lookup
+                        # Format objects have format_id (FormatId object with agent_url and id)
+                        valid_format_ids = {
+                            f"{fmt.format_id.agent_url}|{fmt.format_id.id}"
+                            for fmt in available_formats
+                        }
+                        logger.info(f"[DEBUG] Found {len(valid_format_ids)} valid formats for tenant {tenant_id}")
+                        logger.info(f"[DEBUG] Sample valid format IDs: {list(valid_format_ids)[:5]}")
+                        logger.info(f"[DEBUG] Form submitted formats_raw: {formats_raw}")
+                    except Exception as e:
+                        logger.error(f"Failed to fetch available formats: {e}")
+                        flash("Unable to validate formats. Please try again.", "error")
+                        return redirect(url_for("products.add_product", tenant_id=tenant_id))
+
                     formats = []
+                    invalid_formats = []
                     for fmt_str in formats_raw:
                         if "|" not in fmt_str:
                             # Missing agent_url - data format error
@@ -514,7 +571,33 @@ def add_product(tenant_id):
                             continue
 
                         agent_url, format_id = fmt_str.split("|", 1)
+
+                        # Normalize agent_url by ensuring it has a trailing slash
+                        # Form submits without trailing slash, but Format objects have trailing slash
+                        if not agent_url.endswith('/'):
+                            agent_url_normalized = agent_url + '/'
+                        else:
+                            agent_url_normalized = agent_url
+
+                        normalized_fmt_str = f"{agent_url_normalized}|{format_id}"
+
+                        # Validate format exists (using normalized URL)
+                        if normalized_fmt_str not in valid_format_ids:
+                            invalid_formats.append(format_id)
+                            logger.warning(f"Invalid format ID selected: {format_id} from {agent_url} (normalized: {agent_url_normalized})")
+                            logger.warning(f"Looking for: {normalized_fmt_str} in valid_format_ids")
+                            continue
+
+                        # Store with original agent_url (without forcing trailing slash)
                         formats.append({"agent_url": agent_url, "id": format_id})
+
+                    if invalid_formats:
+                        flash(
+                            f"Invalid format IDs: {', '.join(invalid_formats)}. "
+                            f"These formats are not available for this tenant. Please select valid formats.",
+                            "error"
+                        )
+                        return redirect(url_for("products.add_product", tenant_id=tenant_id))
 
                 # Parse countries - from multi-select
                 countries_list = request.form.getlist("countries")
@@ -837,6 +920,84 @@ def edit_product(tenant_id, product_id):
         if not currencies:
             currencies = ["USD"]
 
+    # Pre-validate formats BEFORE opening database session to avoid session conflicts
+    validated_formats = None
+    if request.method == "POST":
+        formats_raw = request.form.getlist("formats")
+        if formats_raw:
+            import asyncio
+
+            from src.core.creative_agent_registry import get_creative_agent_registry
+
+            try:
+                registry = get_creative_agent_registry()
+                # Run async list_all_formats
+                try:
+                    loop = asyncio.get_running_loop()
+                    # Already in async context, run in thread pool
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(lambda: asyncio.run(registry.list_all_formats(tenant_id=tenant_id)))
+                        available_formats = future.result()
+                except RuntimeError:
+                    # No running loop, safe to create one
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        available_formats = loop.run_until_complete(registry.list_all_formats(tenant_id=tenant_id))
+                    finally:
+                        loop.close()
+
+                # Build set of valid format IDs for quick lookup
+                valid_format_ids = {
+                    f"{fmt.format_id.agent_url}|{fmt.format_id.id}"
+                    for fmt in available_formats
+                }
+                logger.info(f"[DEBUG] Found {len(valid_format_ids)} valid formats for tenant {tenant_id}")
+
+                # Validate and convert formats
+                validated_formats = []
+                invalid_formats = []
+                for fmt_str in formats_raw:
+                    if "|" not in fmt_str:
+                        logger.error(f"Invalid format value (missing agent_url): {fmt_str}")
+                        continue
+
+                    agent_url, format_id = fmt_str.split("|", 1)
+
+                    # Normalize agent_url by ensuring it has a trailing slash
+                    if not agent_url.endswith('/'):
+                        agent_url_normalized = agent_url + '/'
+                    else:
+                        agent_url_normalized = agent_url
+
+                    normalized_fmt_str = f"{agent_url_normalized}|{format_id}"
+
+                    # Validate format exists (using normalized URL)
+                    if normalized_fmt_str not in valid_format_ids:
+                        invalid_formats.append(format_id)
+                        logger.warning(f"Invalid format ID: {format_id} from {agent_url}")
+                        continue
+
+                    validated_formats.append({"agent_url": agent_url, "id": format_id})
+
+                if invalid_formats:
+                    flash(
+                        f"Invalid format IDs: {', '.join(invalid_formats)}. "
+                        f"These formats are not available for this tenant.",
+                        "error"
+                    )
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+                if not validated_formats:
+                    flash("No valid formats selected", "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+            except Exception as e:
+                logger.error(f"Failed to fetch available formats: {e}")
+                flash("Unable to validate formats. Please try again.", "error")
+                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
     try:
         with get_db_session() as db_session:
             product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
@@ -848,42 +1009,14 @@ def edit_product(tenant_id, product_id):
                 # Sanitize form data
                 form_data = sanitize_form_data(request.form.to_dict())
 
-                # Debug: Log pricing-related form fields
-                pricing_fields = {k: v for k, v in form_data.items() if "pricing" in k or "rate_" in k or "floor_" in k}
-                logger.info(f"[DEBUG] Pricing form fields for product {product_id}: {pricing_fields}")
-
-                # Debug: Log ALL form keys to diagnose format submission
-                logger.info(f"[DEBUG] ALL form keys: {list(request.form.keys())}")
-                logger.info(f"[DEBUG] Form data dict keys: {list(form_data.keys())}")
-
                 # Update basic fields
                 product.name = form_data.get("name", product.name)
                 product.description = form_data.get("description", product.description)
 
-                # Parse formats - expecting multiple checkbox values in format "agent_url|format_id"
-                formats_raw = request.form.getlist("formats")
-                logger.info(f"[DEBUG] Edit product {product_id}: formats_raw from form = {formats_raw}")
-                logger.info(f"[DEBUG] formats_raw length: {len(formats_raw)}")
-                logger.info(f"[DEBUG] formats_raw bool: {bool(formats_raw)}")
-                if formats_raw:
-                    # Convert from "agent_url|format_id" to FormatId dict structure
-                    formats = []
-                    for fmt_str in formats_raw:
-                        if "|" not in fmt_str:
-                            # Missing agent_url - data format error
-                            logger.error(f"Invalid format value (missing agent_url): {fmt_str}")
-                            flash(f"Invalid format data: {fmt_str}. Please contact support.", "error")
-                            continue
-
-                        agent_url, format_id = fmt_str.split("|", 1)
-                        formats.append({"agent_url": agent_url, "id": format_id})
-
-                    if not formats:
-                        flash("No valid formats selected", "error")
-                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-
-                    product.formats = formats
-                    logger.info(f"[DEBUG] Updated product.formats to: {formats}")
+                # Apply validated formats (already validated above, outside session)
+                if validated_formats is not None:
+                    product.formats = validated_formats
+                    logger.info(f"[DEBUG] Updated product.formats to: {validated_formats}")
                     # Flag JSONB column as modified so SQLAlchemy generates UPDATE
                     from sqlalchemy.orm import attributes
 
@@ -1150,6 +1283,35 @@ def edit_product(tenant_id, product_id):
 
                 logger.info(f"[DEBUG] Final selected_format_ids set: {selected_format_ids}")
 
+                # Fetch assigned inventory for this product
+                from src.core.database.models import ProductInventoryMapping
+
+                assigned_inventory_query = (
+                    select(ProductInventoryMapping, GAMInventory)
+                    .join(
+                        GAMInventory,
+                        (ProductInventoryMapping.tenant_id == GAMInventory.tenant_id)
+                        & (ProductInventoryMapping.inventory_type == GAMInventory.inventory_type)
+                        & (ProductInventoryMapping.inventory_id == GAMInventory.inventory_id),
+                    )
+                    .where(
+                        ProductInventoryMapping.tenant_id == tenant_id,
+                        ProductInventoryMapping.product_id == product_id,
+                    )
+                )
+                assigned_inventory_results = db_session.execute(assigned_inventory_query).all()
+                assigned_inventory = [
+                    {
+                        "mapping_id": mapping.id,
+                        "inventory_id": inventory.inventory_id,
+                        "inventory_type": inventory.inventory_type,
+                        "name": inventory.name,
+                        "path": inventory.path,
+                        "is_primary": mapping.is_primary,
+                    }
+                    for mapping, inventory in assigned_inventory_results
+                ]
+
                 return render_template(
                     "add_product_gam.html",
                     tenant_id=tenant_id,
@@ -1158,6 +1320,7 @@ def edit_product(tenant_id, product_id):
                     inventory_synced=inventory_synced,
                     formats=get_creative_formats(tenant_id=tenant_id),
                     currencies=currencies,
+                    assigned_inventory=assigned_inventory,
                 )
             else:
                 return render_template(
@@ -1259,3 +1422,284 @@ def delete_product(tenant_id, product_id):
         # Generic error
         logger.error(f"Product deletion failed for {product_id}: {error_message}")
         return jsonify({"error": f"Failed to delete product: {error_message}"}), 500
+
+
+@products_bp.route("/<product_id>/inventory", methods=["POST"])
+@log_admin_action("assign_inventory_to_product")
+@require_tenant_access(api_mode=True)
+def assign_inventory_to_product(tenant_id, product_id):
+    """Assign inventory items to a product.
+
+    Request body:
+    {
+        "inventory_id": "123",
+        "inventory_type": "ad_unit",  # or "placement"
+        "is_primary": false  # optional, default false
+    }
+    """
+    try:
+        from src.core.database.models import GAMInventory, ProductInventoryMapping
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body required"}), 400
+
+        inventory_id = data.get("inventory_id")
+        inventory_type = data.get("inventory_type")
+        is_primary = data.get("is_primary", False)
+
+        if not inventory_id or not inventory_type:
+            return jsonify({"error": "inventory_id and inventory_type are required"}), 400
+
+        with get_db_session() as db_session:
+            # Verify product exists
+            product = db_session.scalars(
+                select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
+            ).first()
+
+            if not product:
+                return jsonify({"error": "Product not found"}), 404
+
+            # Verify inventory exists
+            inventory = db_session.scalars(
+                select(GAMInventory).filter_by(
+                    tenant_id=tenant_id,
+                    inventory_id=inventory_id,
+                    inventory_type=inventory_type
+                )
+            ).first()
+
+            if not inventory:
+                return jsonify({"error": "Inventory item not found"}), 404
+
+            # Check if mapping already exists
+            existing = db_session.scalars(
+                select(ProductInventoryMapping).filter_by(
+                    tenant_id=tenant_id,
+                    product_id=product_id,
+                    inventory_id=inventory_id,
+                    inventory_type=inventory_type
+                )
+            ).first()
+
+            if existing:
+                # Update existing mapping
+                existing.is_primary = is_primary
+                db_session.commit()
+            else:
+                # Create new mapping
+                mapping = ProductInventoryMapping(
+                    tenant_id=tenant_id,
+                    product_id=product_id,
+                    inventory_id=inventory_id,
+                    inventory_type=inventory_type,
+                    is_primary=is_primary
+                )
+                db_session.add(mapping)
+                db_session.commit()
+
+            # CRITICAL: Update product's implementation_config with inventory targeting
+            # GAM adapter requires this to create line items
+            from sqlalchemy.orm import attributes
+
+            if not product.implementation_config:
+                product.implementation_config = {}
+
+            # Get all inventory mappings for this product
+            all_mappings = db_session.scalars(
+                select(ProductInventoryMapping).filter_by(
+                    tenant_id=tenant_id,
+                    product_id=product_id
+                )
+            ).all()
+
+            # Build targeted_ad_unit_ids and targeted_placement_ids from mappings
+            ad_unit_ids = []
+            placement_ids = []
+
+            for m in all_mappings:
+                inv = db_session.scalars(
+                    select(GAMInventory).filter_by(
+                        tenant_id=tenant_id,
+                        inventory_id=m.inventory_id,
+                        inventory_type=m.inventory_type
+                    )
+                ).first()
+
+                if inv:
+                    if m.inventory_type == "ad_unit":
+                        ad_unit_ids.append(inv.inventory_id)
+                    elif m.inventory_type == "placement":
+                        placement_ids.append(inv.inventory_id)
+
+            # Update implementation_config
+            if ad_unit_ids:
+                product.implementation_config["targeted_ad_unit_ids"] = ad_unit_ids
+            if placement_ids:
+                product.implementation_config["targeted_placement_ids"] = placement_ids
+
+            # Mark as modified for SQLAlchemy to detect JSONB change
+            attributes.flag_modified(product, "implementation_config")
+            db_session.commit()
+
+            if existing:
+                return jsonify({
+                    "message": "Inventory assignment updated",
+                    "mapping_id": existing.id,
+                    "inventory_name": inventory.name
+                })
+            else:
+                return jsonify({
+                    "message": "Inventory assigned to product successfully",
+                    "mapping_id": mapping.id,
+                    "inventory_name": inventory.name
+                }), 201
+
+    except Exception as e:
+        logger.error(f"Error assigning inventory to product: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@products_bp.route("/<product_id>/inventory", methods=["GET"])
+@require_tenant_access(api_mode=True)
+def get_product_inventory(tenant_id, product_id):
+    """Get all inventory items assigned to a product."""
+    try:
+        from src.core.database.models import GAMInventory, ProductInventoryMapping
+
+        with get_db_session() as db_session:
+            # Verify product exists
+            product = db_session.scalars(
+                select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
+            ).first()
+
+            if not product:
+                return jsonify({"error": "Product not found"}), 404
+
+            # Get all mappings for this product
+            mappings = db_session.scalars(
+                select(ProductInventoryMapping).filter_by(
+                    tenant_id=tenant_id,
+                    product_id=product_id
+                )
+            ).all()
+
+            # Fetch inventory details for each mapping
+            result = []
+            for mapping in mappings:
+                inventory = db_session.scalars(
+                    select(GAMInventory).filter_by(
+                        tenant_id=tenant_id,
+                        inventory_id=mapping.inventory_id,
+                        inventory_type=mapping.inventory_type
+                    )
+                ).first()
+
+                if inventory:
+                    result.append({
+                        "mapping_id": mapping.id,
+                        "inventory_id": inventory.inventory_id,
+                        "inventory_name": inventory.name,
+                        "inventory_type": mapping.inventory_type,
+                        "is_primary": mapping.is_primary,
+                        "status": inventory.status,
+                        "path": inventory.path
+                    })
+
+            return jsonify({"inventory": result, "count": len(result)})
+
+    except Exception as e:
+        logger.error(f"Error fetching product inventory: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@products_bp.route("/<product_id>/inventory/<int:mapping_id>", methods=["DELETE"])
+@log_admin_action("unassign_inventory_from_product")
+@require_tenant_access(api_mode=True)
+def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
+    """Remove an inventory assignment from a product (API endpoint)."""
+    try:
+        from src.core.database.models import ProductInventoryMapping
+
+        with get_db_session() as db_session:
+            # Find the mapping
+            stmt = select(ProductInventoryMapping).filter_by(
+                id=mapping_id, tenant_id=tenant_id, product_id=product_id
+            )
+            mapping = db_session.scalars(stmt).first()
+
+            if not mapping:
+                return jsonify({"success": False, "message": "Inventory assignment not found"}), 404
+
+            # Store details for logging
+            inventory_name = f"{mapping.inventory_type}:{mapping.inventory_id}"
+            inventory_id_to_remove = mapping.inventory_id
+            inventory_type_to_remove = mapping.inventory_type
+
+            # Delete the mapping
+            db_session.delete(mapping)
+            db_session.commit()
+
+            # Update product's implementation_config to remove the inventory ID
+            from sqlalchemy.orm import attributes
+
+            from src.core.database.models import GAMInventory
+
+            product = db_session.scalars(
+                select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
+            ).first()
+
+            if product and product.implementation_config:
+                # Get remaining inventory mappings
+                remaining_mappings = db_session.scalars(
+                    select(ProductInventoryMapping).filter_by(
+                        tenant_id=tenant_id,
+                        product_id=product_id
+                    )
+                ).all()
+
+                # Rebuild targeted IDs from remaining mappings
+                ad_unit_ids = []
+                placement_ids = []
+
+                for m in remaining_mappings:
+                    inv = db_session.scalars(
+                        select(GAMInventory).filter_by(
+                            tenant_id=tenant_id,
+                            inventory_id=m.inventory_id,
+                            inventory_type=m.inventory_type
+                        )
+                    ).first()
+
+                    if inv:
+                        if m.inventory_type == "ad_unit":
+                            ad_unit_ids.append(inv.inventory_id)
+                        elif m.inventory_type == "placement":
+                            placement_ids.append(inv.inventory_id)
+
+                # Update implementation_config
+                if ad_unit_ids:
+                    product.implementation_config["targeted_ad_unit_ids"] = ad_unit_ids
+                else:
+                    # Remove key if no ad units remain
+                    product.implementation_config.pop("targeted_ad_unit_ids", None)
+
+                if placement_ids:
+                    product.implementation_config["targeted_placement_ids"] = placement_ids
+                else:
+                    # Remove key if no placements remain
+                    product.implementation_config.pop("targeted_placement_ids", None)
+
+                # Mark as modified for SQLAlchemy
+                attributes.flag_modified(product, "implementation_config")
+                db_session.commit()
+
+            logger.info(
+                f"Removed inventory assignment: product={product_id}, inventory={inventory_name}, mapping_id={mapping_id}"
+            )
+
+            return jsonify({"success": True, "message": "Inventory assignment removed successfully"})
+
+    except Exception as e:
+        logger.error(f"Error removing inventory assignment: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500

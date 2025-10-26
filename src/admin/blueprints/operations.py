@@ -195,7 +195,12 @@ def media_buy_detail(tenant_id, media_buy_id):
                 product_id = media_pkg.package_config.get("product_id")
                 product = None
                 if product_id:
-                    stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
+                    from sqlalchemy.orm import selectinload
+
+                    # Eagerly load pricing_options to avoid DetachedInstanceError in template
+                    stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id).options(
+                        selectinload(Product.pricing_options)
+                    )
                     product = db_session.scalars(stmt).first()
 
                 packages.append(
@@ -377,6 +382,28 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     media_buy.approved_by = user_email
                     db_session.commit()
 
+                    # Execute adapter creation for approved media buy
+                    # This creates the order/line items in GAM (or other adapter)
+                    # Uses the same logic as auto-approved media buys
+                    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
+                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+
+                    if not success:
+                        # Adapter creation failed - update status and show error
+                        with get_db_session() as error_session:
+                            stmt_error = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
+                            error_buy = error_session.scalars(stmt_error).first()
+                            if error_buy:
+                                error_buy.status = "failed"
+                                error_session.commit()
+
+                        flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
+                        return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+
+                    logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
+
                     # Send webhook notification to buyer
                     stmt_webhook = (
                         select(PushNotificationConfig)
@@ -402,7 +429,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         except Exception as webhook_err:
                             logger.warning(f"Failed to send webhook notification: {webhook_err}")
 
-                    flash("Media buy approved and scheduled successfully", "success")
+                    flash("Media buy approved and order created successfully", "success")
                 else:
                     db_session.commit()
                     flash("Media buy approved successfully", "success")

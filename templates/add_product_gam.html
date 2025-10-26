@@ -173,6 +173,120 @@
     </form>
 </div>
 
+<!-- Assigned Inventory Section (Edit Mode Only) -->
+{% if product %}
+<div class="card" id="inventory" style="margin-top: 2rem;">
+    <h3 style="margin-top: 0; border-bottom: 2px solid #28a745; padding-bottom: 0.5rem;">📦 Assigned Inventory</h3>
+    <p style="color: #666; margin-bottom: 1.5rem;">
+        Inventory items from the Inventory Browser that have been assigned to this product.
+        <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}" style="color: #007bff; text-decoration: none;">
+            Browse Inventory →
+        </a>
+    </p>
+
+    {% if assigned_inventory and assigned_inventory|length > 0 %}
+    <table style="width: 100%; margin-top: 1rem;">
+        <thead>
+            <tr>
+                <th>Type</th>
+                <th>Name</th>
+                <th>Path</th>
+                <th>Inventory ID</th>
+                <th>Primary</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in assigned_inventory %}
+            <tr id="inventory-row-{{ item.mapping_id }}">
+                <td>
+                    <span class="badge" style="background: {% if item.inventory_type == 'ad_unit' %}#007bff{% else %}#28a745{% endif %};">
+                        {{ item.inventory_type|replace('_', ' ')|title }}
+                    </span>
+                </td>
+                <td><strong>{{ item.name }}</strong></td>
+                <td>
+                    {% if item.path %}
+                        <code style="font-size: 0.85rem; color: #666;">{{ ' > '.join(item.path) }}</code>
+                    {% else %}
+                        <span style="color: #999;">-</span>
+                    {% endif %}
+                </td>
+                <td><code style="font-size: 0.85rem;">{{ item.inventory_id }}</code></td>
+                <td>
+                    {% if item.is_primary %}
+                        <span class="badge" style="background: #ffc107; color: #333;">Primary</span>
+                    {% else %}
+                        <span style="color: #999;">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <button onclick="unassignInventory({{ item.mapping_id }}, '{{ item.name }}')"
+                            class="btn btn-sm"
+                            style="background: #dc3545; color: white; border: none; padding: 0.25rem 0.75rem;">
+                        Remove
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="padding: 2rem; background: #f8f9fa; border: 2px dashed #ddd; border-radius: 4px; text-align: center; color: #666;">
+        <p style="margin: 0; font-size: 1.1rem;">No inventory assigned to this product yet</p>
+        <p style="margin: 0.5rem 0 0 0;">
+            Use the
+            <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}" style="color: #007bff; text-decoration: none; font-weight: 600;">
+                Inventory Browser
+            </a>
+            to assign ad units or placements to this product
+        </p>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+async function unassignInventory(mappingId, itemName) {
+    if (!confirm(`Remove "${itemName}" from this product?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/tenant/{{ tenant_id }}/products/{{ product.product_id }}/inventory/${mappingId}`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+            // Remove the row from the table
+            const row = document.getElementById(`inventory-row-${mappingId}`);
+            if (row) {
+                row.remove();
+            }
+
+            // Check if table is now empty
+            const tbody = document.querySelector('#inventory tbody');
+            if (tbody && tbody.children.length === 0) {
+                // Reload page to show "no inventory" message
+                window.location.reload();
+            }
+
+            alert('Inventory removed successfully');
+        } else {
+            alert(`Failed to remove inventory: ${result.message || 'Unknown error'}`);
+        }
+    } catch (error) {
+        console.error('Error removing inventory:', error);
+        alert('An error occurred while removing inventory');
+    }
+}
+</script>
+{% endif %}
+
 <style>
 .format-card input[type="checkbox"]:checked + strong {
     color: #007bff;

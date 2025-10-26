@@ -8,6 +8,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
+
 from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -444,6 +445,81 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 },
                 tenant_id=tenant_id,
             )
+
+            # Check if this creative approval unblocks any media buys
+            # If a media buy was waiting for creatives (status="pending_creatives"),
+            # check if all its creatives are now approved
+            from src.core.database.models import CreativeAssignment, MediaBuy
+
+            stmt_assignments = select(CreativeAssignment).filter_by(
+                tenant_id=tenant_id, creative_id=creative_id
+            )
+            assignments = db_session.scalars(stmt_assignments).all()
+
+            logger.info(f"[CREATIVE APPROVAL] Creative {creative_id} approved, checking {len(assignments)} media buy assignments")
+
+            for assignment in assignments:
+                media_buy_id = assignment.media_buy_id
+
+                # Get the media buy
+                stmt_buy = select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant_id)
+                media_buy = db_session.scalars(stmt_buy).first()
+
+                if not media_buy:
+                    continue
+
+                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
+
+                # Only check if media buy is waiting for creatives
+                if media_buy.status == "pending_creatives":
+                    # Get all creative assignments for this media buy
+                    stmt_all_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
+                    all_assignments = db_session.scalars(stmt_all_assignments).all()
+
+                    # Get all creatives for this media buy
+                    creative_ids = [a.creative_id for a in all_assignments]
+                    stmt_creatives = select(Creative).filter(
+                        Creative.creative_id.in_(creative_ids)
+                    )
+                    all_creatives = db_session.scalars(stmt_creatives).all()
+
+                    # Check if all creatives are approved
+                    unapproved_creatives = [
+                        c.creative_id for c in all_creatives
+                        if c.status not in ["approved", "active"]
+                    ]
+
+                    logger.info(
+                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} has {len(unapproved_creatives)} unapproved creatives remaining"
+                    )
+
+                    if not unapproved_creatives:
+                        # All creatives approved! Execute adapter creation
+                        logger.info(
+                            f"[CREATIVE APPROVAL] All creatives approved for media buy {media_buy_id}, executing adapter creation"
+                        )
+
+                        from src.core.tools.media_buy_create import execute_approved_media_buy
+
+                        success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+
+                        if success:
+                            # Update media buy status
+                            media_buy.status = "scheduled"
+                            media_buy.approved_at = datetime.now(UTC)
+                            media_buy.approved_by = "system"
+                            db_session.commit()
+
+                            logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} successfully created in adapter")
+                        else:
+                            logger.error(
+                                f"[CREATIVE APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}"
+                            )
+                            # Leave status as pending_creatives so admin can retry
+                    else:
+                        logger.info(
+                            f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for {len(unapproved_creatives)} creatives: {unapproved_creatives}"
+                        )
 
             return jsonify({"success": True, "status": "approved"})
 

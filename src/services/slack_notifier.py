@@ -468,7 +468,7 @@ class SlackNotifier:
         for field in highlight_fields:
             if field in details:
                 value = details[field]
-                if "budget" in field and isinstance(value, int | float):
+                if "budget" in field and isinstance(value, (int, float)):
                     value = f"${value:,.2f}"
                 elif "date" in field:
                     value = str(value)
@@ -497,7 +497,7 @@ class SlackNotifier:
         for field in important_fields:
             if field in details:
                 value = details[field]
-                if "budget" in field and isinstance(value, int | float):
+                if "budget" in field and isinstance(value, (int, float)):
                     value = f"${value:,.2f}"
                 field_name = field.replace("_", " ").title()
                 formatted_parts.append(f"• {field_name}: `{value}`")

@@ -153,8 +153,18 @@ class TritonDigital(AdServerAdapter):
             f"triton_{request.po_number}" if request.po_number else f"triton_{int(datetime.now().timestamp())}"
         )
 
-        # Calculate total budget
-        total_budget = sum((p.cpm * p.impressions / 1000) for p in packages)
+        # Calculate total budget using pricing_info if available
+        total_budget = 0
+        for p in packages:
+            # Use pricing_info if available (pricing_option_id flow), else fallback to package.cpm
+            pricing_info = package_pricing_info.get(p.package_id) if package_pricing_info else None
+            if pricing_info:
+                # Use rate from pricing option (fixed) or bid_price (auction)
+                rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", p.cpm)
+            else:
+                # Fallback to legacy package.cpm
+                rate = p.cpm
+            total_budget += (rate * p.impressions / 1000)
 
         if self.dry_run:
             self.log(f"Would call: POST {self.base_url}/campaigns")
@@ -169,6 +179,13 @@ class TritonDigital(AdServerAdapter):
 
             # Log flight creation for each package
             for package in packages:
+                # Get pricing for this package
+                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
+                if pricing_info:
+                    rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
+                else:
+                    rate = package.cpm
+
                 self.log(f"Would call: POST {self.base_url}/flights")
                 self.log("  Flight Payload: {")
                 self.log(f"    'name': '{package.name}',")
@@ -178,7 +195,7 @@ class TritonDigital(AdServerAdapter):
                 self.log("      'type': 'IMPRESSIONS',")
                 self.log(f"      'value': {package.impressions}")
                 self.log("    },")
-                self.log(f"    'rate': {package.cpm},")
+                self.log(f"    'rate': {rate},")
                 self.log("    'rateType': 'CPM',")
                 self.log(f"    'startDate': '{start_time.date().isoformat()}',")
                 self.log(f"    'endDate': '{end_time.date().isoformat()}'")
@@ -209,12 +226,19 @@ class TritonDigital(AdServerAdapter):
             # Create flights for each package and track flight IDs
             package_responses = []
             for package in packages:
+                # Get pricing for this package
+                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
+                if pricing_info:
+                    rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
+                else:
+                    rate = package.cpm
+
                 flight_payload = {
                     "name": package.name,
                     "campaignId": campaign_id,
                     "type": "STANDARD",
                     "goal": {"type": "IMPRESSIONS", "value": package.impressions},
-                    "rate": package.cpm,
+                    "rate": rate,  # Use pricing from pricing option or fallback
                     "rateType": "CPM",
                     "startDate": start_time.date().isoformat(),
                     "endDate": end_time.date().isoformat(),
@@ -233,26 +257,91 @@ class TritonDigital(AdServerAdapter):
                 flight_data = flight_response.json()
                 flight_id = flight_data.get("id")
 
-                # Build package response with package_id and platform_flight_id
-                package_responses.append(
-                    {
-                        "package_id": package.package_id,
-                        "platform_line_item_id": str(flight_id) if flight_id else None,
-                    }
-                )
+                # Get matching request package for buyer_ref and other fields
+                matching_req_package = None
+                package_idx = packages.index(package)
+                if request.packages and package_idx < len(request.packages):
+                    matching_req_package = request.packages[package_idx]
+
+                # Build package response with ALL package data
+                package_dict = {
+                    "package_id": package.package_id,
+                    "product_id": package.product_id,
+                    "name": package.name,
+                    "delivery_type": package.delivery_type,
+                    "cpm": package.cpm,
+                    "impressions": package.impressions,
+                    "platform_line_item_id": str(flight_id) if flight_id else None,
+                }
+
+                # Add buyer_ref from request package if available
+                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
+                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+
+                # Add budget from request package if available (serialize to dict for JSON storage)
+                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
+                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object)
+                    if isinstance(matching_req_package.budget, (int, float)):
+                        package_dict["budget"] = {"total": float(matching_req_package.budget), "currency": "USD"}
+                    elif hasattr(matching_req_package.budget, "model_dump"):
+                        package_dict["budget"] = matching_req_package.budget.model_dump()
+                    else:
+                        package_dict["budget"] = dict(matching_req_package.budget) if isinstance(matching_req_package.budget, dict) else {"total": float(matching_req_package.budget), "currency": "USD"}
+
+                # Add targeting_overlay from package if available
+                if package.targeting_overlay:
+                    package_dict["targeting_overlay"] = package.targeting_overlay
+
+                # Add creative_ids from package if available (from uploaded inline creatives)
+                if package.creative_ids:
+                    package_dict["creative_ids"] = package.creative_ids
+
+                package_responses.append(package_dict)
 
             # Use the actual campaign ID from Triton
             media_buy_id = f"triton_{campaign_id}"
 
-        # For dry_run, build package responses without flight IDs
+        # For dry_run, build package responses with ALL package data (no flight IDs)
         if self.dry_run:
             package_responses = []
-            for package in packages:
-                package_responses.append(
-                    {
-                        "package_id": package.package_id,
-                    }
-                )
+            for idx, package in enumerate(packages):
+                # Get matching request package for buyer_ref and other fields
+                matching_req_package = None
+                if request.packages and idx < len(request.packages):
+                    matching_req_package = request.packages[idx]
+
+                package_dict = {
+                    "package_id": package.package_id,
+                    "product_id": package.product_id,
+                    "name": package.name,
+                    "delivery_type": package.delivery_type,
+                    "cpm": package.cpm,
+                    "impressions": package.impressions,
+                }
+
+                # Add buyer_ref from request package if available
+                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
+                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+
+                # Add budget from request package if available (serialize to dict for JSON storage)
+                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
+                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object)
+                    if isinstance(matching_req_package.budget, (int, float)):
+                        package_dict["budget"] = {"total": float(matching_req_package.budget), "currency": "USD"}
+                    elif hasattr(matching_req_package.budget, "model_dump"):
+                        package_dict["budget"] = matching_req_package.budget.model_dump()
+                    else:
+                        package_dict["budget"] = dict(matching_req_package.budget) if isinstance(matching_req_package.budget, dict) else {"total": float(matching_req_package.budget), "currency": "USD"}
+
+                # Add targeting_overlay from package if available
+                if package.targeting_overlay:
+                    package_dict["targeting_overlay"] = package.targeting_overlay
+
+                # Add creative_ids from package if available (from uploaded inline creatives)
+                if package.creative_ids:
+                    package_dict["creative_ids"] = package.creative_ids
+
+                package_responses.append(package_dict)
 
         return CreateMediaBuyResponse(
             buyer_ref=request.buyer_ref or "unknown",

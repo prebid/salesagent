@@ -1,6 +1,12 @@
 """Creative format parsing and asset conversion helpers."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fastmcp import Context
+
+    from src.core.schemas import Creative, Package
+    from src.core.testing_context import TestingContext
 
 from src.core.schemas import Creative
 
@@ -173,3 +179,149 @@ def _detect_snippet_type(snippet: str) -> str:
         return "javascript"
     else:
         return "html"  # Default
+
+
+def process_and_upload_package_creatives(
+    packages: list["Package"],
+    context: "Context",
+    testing_ctx: "TestingContext | None" = None,
+) -> tuple[list["Package"], dict[str, list[str]]]:
+    """Upload creatives from package.creatives arrays and return updated packages.
+
+    For each package with a non-empty `creatives` array:
+    1. Converts Creative objects to dicts
+    2. Uploads them via _sync_creatives_impl
+    3. Extracts uploaded creative IDs
+    4. Creates updated package with merged creative_ids
+
+    This function is immutable - it returns new Package instances instead of
+    modifying the input packages.
+
+    Args:
+        packages: List of Package objects to process
+        context: FastMCP context (for principal_id extraction)
+        testing_ctx: Optional testing context for dry_run mode
+
+    Returns:
+        Tuple of (updated_packages, uploaded_ids_by_product):
+        - updated_packages: New Package instances with creative_ids merged
+        - uploaded_ids_by_product: Mapping of product_id -> uploaded creative IDs
+
+    Raises:
+        ToolError: If creative upload fails for any package (CREATIVES_UPLOAD_FAILED)
+
+    Example:
+        >>> packages = [Package(product_id="p1", creatives=[creative1, creative2])]
+        >>> updated_pkgs, uploaded_ids = process_and_upload_package_creatives(packages, ctx)
+        >>> # updated_pkgs[0].creative_ids contains uploaded IDs
+        >>> assert uploaded_ids["p1"] == ["c1", "c2"]
+    """
+    import logging
+
+    # Lazy import to avoid circular dependency
+    from fastmcp.exceptions import ToolError
+
+    from src.core.tools.creatives import _sync_creatives_impl
+
+    logger = logging.getLogger(__name__)
+    uploaded_by_product: dict[str, list[str]] = {}
+    updated_packages: list[Package] = []
+
+    for pkg_idx, pkg in enumerate(packages):
+        # Skip packages without creatives (type system guarantees this attribute exists)
+        if not pkg.creatives:
+            updated_packages.append(pkg)  # No changes needed
+            continue
+
+        product_id = pkg.product_id or f"package_{pkg_idx}"
+        logger.info(f"Processing {len(pkg.creatives)} creatives for package with product_id {product_id}")
+
+        # Convert creatives to dicts with better error handling
+        creative_dicts = []
+        for creative_idx, creative in enumerate(pkg.creatives):
+            try:
+                if isinstance(creative, dict):
+                    creative_dicts.append(creative)
+                elif hasattr(creative, "model_dump"):
+                    creative_dicts.append(creative.model_dump(exclude_none=True))
+                else:
+                    # Fail fast instead of risky conversion
+                    raise TypeError(
+                        f"Invalid creative type at index {creative_idx}: {type(creative).__name__}. "
+                        f"Expected Creative model or dict."
+                    )
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to serialize creative at index {creative_idx} for package {product_id}: {e}"
+                ) from e
+
+        try:
+            # Step 1: Upload creatives to database via sync_creatives
+            sync_response = _sync_creatives_impl(
+                creatives=creative_dicts,
+                patch=False,  # Full upsert for new creatives
+                assignments=None,  # Assign separately after creation
+                dry_run=testing_ctx.dry_run if testing_ctx else False,
+                validation_mode="strict",
+                push_notification_config=None,
+                context=context,  # For principal_id extraction
+            )
+
+            # Extract creative IDs from response
+            uploaded_ids = [
+                result.creative_id
+                for result in sync_response.creatives
+                if result.creative_id
+            ]
+
+            logger.info(
+                f"Synced {len(uploaded_ids)} creatives to database for package "
+                f"with product_id {product_id}: {uploaded_ids}"
+            )
+
+            # Step 2: Upload creatives to ad server (GAM) to get platform_creative_id
+            # This is critical - without platform_creative_id, creatives can't be associated with line items
+            from src.core.helpers.adapter_helpers import get_adapter
+            from src.core.helpers.principal_helpers import get_principal_from_context
+
+            principal = get_principal_from_context(context)
+            adapter = get_adapter(principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx)
+
+            # Convert Creative schema objects to adapter asset format
+            assets = []
+            for creative in pkg.creatives:
+                try:
+                    asset = _convert_creative_to_adapter_asset(creative, package_assignments=[product_id])
+                    assets.append(asset)
+                except Exception as conv_error:
+                    logger.error(f"Failed to convert creative {creative.creative_id} to adapter format: {conv_error}")
+                    # Continue with other creatives
+                    continue
+
+            # Upload to ad server
+            if assets:
+                logger.info(f"Uploading {len(assets)} creatives to ad server (GAM) for package {product_id}")
+                try:
+                    upload_result = adapter.add_creative_assets(assets)
+                    logger.info(f"Successfully uploaded {len(assets)} creatives to GAM: {upload_result}")
+                except Exception as upload_error:
+                    logger.error(f"Failed to upload creatives to GAM: {upload_error}")
+                    # Don't fail the entire operation - creatives are in database and can be uploaded later
+                    logger.warning("Creatives saved to database but not uploaded to GAM yet. They will need manual upload.")
+
+            # Create updated package with merged creative_ids (immutable)
+            existing_ids = pkg.creative_ids or []
+            merged_ids = [*existing_ids, *uploaded_ids]
+            updated_pkg = pkg.model_copy(update={"creative_ids": merged_ids})
+            updated_packages.append(updated_pkg)
+
+            # Track uploads for return value
+            uploaded_by_product[product_id] = uploaded_ids
+
+        except Exception as e:
+            error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"
+            logger.error(error_msg)
+            # Re-raise as ToolError for consistent error handling
+            raise ToolError("CREATIVES_UPLOAD_FAILED", error_msg) from e
+
+    return updated_packages, uploaded_by_product
