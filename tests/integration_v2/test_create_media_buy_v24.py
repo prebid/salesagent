@@ -19,14 +19,13 @@ or with Docker Compose running for PostgreSQL.
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.schemas import Budget, Package, Targeting
 from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
 
-# TODO: Fix failing tests and remove skip_ci (see GitHub issue #XXX)
-pytestmark = [pytest.mark.integration, pytest.mark.skip_ci, pytest.mark.requires_db]
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
 
 
 @pytest.mark.integration
@@ -54,8 +53,11 @@ class TestCreateMediaBuyV24Format:
                 is_active=True,
                 created_at=now,
                 updated_at=now,
+                # Required: Access control configuration (will be updated by add_required_setup_data)
+                authorized_emails=[],
             )
             session.add(tenant)
+            session.flush()  # Flush so add_required_setup_data can find the tenant
 
             # Create principal
             principal = ModelPrincipal(
@@ -70,19 +72,51 @@ class TestCreateMediaBuyV24Format:
             # Add required setup data (access control, currency limits, property tags)
             add_required_setup_data(session, "test_tenant_v24")
 
-            # Create product with new pricing model
-            product = create_test_product_with_pricing(
+            # Create products for different currencies (for multi-package test)
+            product_usd = create_test_product_with_pricing(
                 session=session,
                 tenant_id="test_tenant_v24",
-                product_id="prod_test_v24",
-                name="Test Product V24",
-                description="Test product for v2.4 format",
+                product_id="prod_test_v24_usd",
+                name="Test Product V24 USD",
+                description="Test product for v2.4 format (USD)",
                 formats=[{"agent_url": "https://test.com", "id": "display_300x250"}],
                 delivery_type="guaranteed",
                 pricing_model="CPM",
                 rate="10.0",
                 is_fixed=True,
                 currency="USD",
+                min_spend_per_package="1000.0",
+                targeting_template={},
+            )
+
+            product_eur = create_test_product_with_pricing(
+                session=session,
+                tenant_id="test_tenant_v24",
+                product_id="prod_test_v24_eur",
+                name="Test Product V24 EUR",
+                description="Test product for v2.4 format (EUR)",
+                formats=[{"agent_url": "https://test.com", "id": "display_300x250"}],
+                delivery_type="guaranteed",
+                pricing_model="CPM",
+                rate="10.0",
+                is_fixed=True,
+                currency="EUR",
+                min_spend_per_package="1000.0",
+                targeting_template={},
+            )
+
+            product_gbp = create_test_product_with_pricing(
+                session=session,
+                tenant_id="test_tenant_v24",
+                product_id="prod_test_v24_gbp",
+                name="Test Product V24 GBP",
+                description="Test product for v2.4 format (GBP)",
+                formats=[{"agent_url": "https://test.com", "id": "display_300x250"}],
+                delivery_type="guaranteed",
+                pricing_model="CPM",
+                rate="10.0",
+                is_fixed=True,
+                currency="GBP",
                 min_spend_per_package="1000.0",
                 targeting_template={},
             )
@@ -120,64 +154,85 @@ class TestCreateMediaBuyV24Format:
             yield {
                 "tenant_id": "test_tenant_v24",
                 "principal_id": "test_principal_v24",
-                "product_id": "prod_test_v24",
+                "product_id_usd": "prod_test_v24_usd",
+                "product_id_eur": "prod_test_v24_eur",
+                "product_id_gbp": "prod_test_v24_gbp",
             }
 
-            # Cleanup
+            # Cleanup - IMPORTANT: Delete in reverse dependency order
             from src.core.database.models import (
                 AuthorizedProperty,
+                MediaBuy,
+                MediaPackage,
                 PricingOption,
                 Product,
                 PropertyTag,
             )
 
+            # Delete media_packages first (depends on media_buys)
+            session.execute(
+                delete(MediaPackage).where(
+                    MediaPackage.media_buy_id.in_(
+                        select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == "test_tenant_v24")
+                    )
+                )
+            )
+            # Delete media_buys (depends on principals/products)
+            session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == "test_tenant_v24"))
+            # Delete pricing options (depends on products)
             session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_tenant_v24"))
+            # Delete products
             session.execute(delete(Product).where(Product.tenant_id == "test_tenant_v24"))
+            # Delete principals
             session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == "test_tenant_v24"))
+            # Delete currency limits
             session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_tenant_v24"))
+            # Delete property tags
             session.execute(delete(PropertyTag).where(PropertyTag.tenant_id == "test_tenant_v24"))
+            # Delete authorized properties
             session.execute(delete(AuthorizedProperty).where(AuthorizedProperty.tenant_id == "test_tenant_v24"))
+            # Finally delete tenant
             session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == "test_tenant_v24"))
             session.commit()
 
             # Clear global tenant context to avoid polluting other tests
             set_current_tenant(None)
 
-    def test_create_media_buy_with_package_budget_mcp(self, setup_test_tenant):
+    async def test_create_media_buy_with_package_budget_mcp(self, setup_test_tenant):
         """Test MCP path with packages containing Budget objects.
 
         This test specifically exercises the bug fix for 'dict' object has no attribute 'model_dump'.
         Before the fix, this would fail when building response_packages because Budget objects
         weren't being serialized to dicts properly.
         """
-        from src.core.tool_context import ToolContext
+        from unittest.mock import MagicMock
+
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         # Create Package with nested Budget object
         packages = [
             Package(
                 buyer_ref="pkg_budget_test",
-                products=[setup_test_tenant["product_id"]],
+                product_id=setup_test_tenant["product_id_usd"],  # Use USD product
                 budget=Budget(total=5000.0, currency="USD", pacing="even"),
             )
         ]
 
-        context = ToolContext(
-            context_id="test_ctx_v24_budget",
-            tenant_id=setup_test_tenant["tenant_id"],
-            principal_id=setup_test_tenant["principal_id"],
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
-        )
+        # Create mock context with headers
+        context = MagicMock()
+        context.headers = {"x-adcp-auth": "test_token_v24"}
 
         # Call _impl with individual parameters (not a request object)
         # This exercises the FULL serialization path including response_packages construction
-        response = _create_media_buy_impl(
+        # NOTE: _create_media_buy_impl now requires buyer_ref and budget as REQUIRED arguments per AdCP v2.2.0 spec
+        response = await _create_media_buy_impl(
+            buyer_ref="test_buyer_v24",  # REQUIRED per AdCP v2.2.0
             brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
-            po_number="TEST-V24-001",
             packages=[p.model_dump_internal() for p in packages],  # Use internal to skip package_id validation
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
+            budget=Budget(total=5000.0, currency="USD"),  # REQUIRED per AdCP v2.2.0
+            po_number="TEST-V24-001",
             context=context,
         )
 
@@ -194,19 +249,20 @@ class TestCreateMediaBuyV24Format:
         # Verify nested budget was serialized correctly
         assert "budget" in package or "products" in package  # Either field structure is fine
 
-    def test_create_media_buy_with_targeting_overlay_mcp(self, setup_test_tenant):
+    async def test_create_media_buy_with_targeting_overlay_mcp(self, setup_test_tenant):
         """Test MCP path with packages containing Targeting objects.
 
         This tests another potential serialization issue with nested Pydantic objects.
         """
-        from src.core.tool_context import ToolContext
+        from unittest.mock import MagicMock
+
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         # Create Package with nested Targeting object
         packages = [
             Package(
                 buyer_ref="pkg_targeting_test",
-                products=[setup_test_tenant["product_id"]],
+                product_id=setup_test_tenant["product_id_eur"],  # Use EUR product
                 budget=Budget(total=8000.0, currency="EUR"),
                 targeting_overlay=Targeting(
                     geo_country_any_of=["US", "CA"],
@@ -215,20 +271,18 @@ class TestCreateMediaBuyV24Format:
             )
         ]
 
-        context = ToolContext(
-            context_id="test_ctx_v24_targeting",
-            tenant_id=setup_test_tenant["tenant_id"],
-            principal_id=setup_test_tenant["principal_id"],
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
-        )
+        # Create mock context with headers
+        context = MagicMock()
+        context.headers = {"x-adcp-auth": "test_token_v24"}
 
-        response = _create_media_buy_impl(
+        response = await _create_media_buy_impl(
+            buyer_ref="test_buyer_v24_targeting",  # REQUIRED per AdCP v2.2.0
             brand_manifest={"name": "Adidas UltraBoost 2025 running shoes"},
-            po_number="TEST-V24-002",
             packages=[p.model_dump_internal() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
+            budget=Budget(total=8000.0, currency="EUR"),  # REQUIRED per AdCP v2.2.0
+            po_number="TEST-V24-002",
             context=context,
         )
 
@@ -244,46 +298,48 @@ class TestCreateMediaBuyV24Format:
         # Verify nested targeting was serialized (if present in response)
         # Note: targeting_overlay may or may not be included in response depending on impl
 
-    def test_create_media_buy_multiple_packages_with_budgets_mcp(self, setup_test_tenant):
+    async def test_create_media_buy_multiple_packages_with_budgets_mcp(self, setup_test_tenant):
         """Test MCP path with multiple packages, each with different budgets.
 
         This tests the iteration over packages in response construction.
         """
-        from src.core.tool_context import ToolContext
+        from unittest.mock import MagicMock
+
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         packages = [
             Package(
                 buyer_ref="pkg_usd",
-                products=[setup_test_tenant["product_id"]],
+                product_id=setup_test_tenant["product_id_usd"],  # Use USD product
                 budget=Budget(total=3000.0, currency="USD"),
             ),
             Package(
                 buyer_ref="pkg_eur",
-                products=[setup_test_tenant["product_id"]],
+                product_id=setup_test_tenant["product_id_eur"],  # Use EUR product
                 budget=Budget(total=2500.0, currency="EUR"),
             ),
             Package(
                 buyer_ref="pkg_gbp",
-                products=[setup_test_tenant["product_id"]],
+                product_id=setup_test_tenant["product_id_gbp"],  # Use GBP product
                 budget=Budget(total=2000.0, currency="GBP"),
             ),
         ]
 
-        context = ToolContext(
-            context_id="test_ctx_v24_multi",
-            tenant_id=setup_test_tenant["tenant_id"],
-            principal_id=setup_test_tenant["principal_id"],
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
-        )
+        # Create mock context with headers
+        context = MagicMock()
+        context.headers = {"x-adcp-auth": "test_token_v24"}
 
-        response = _create_media_buy_impl(
+        # Total budget is sum of all package budgets
+        total_budget_value = sum(pkg.budget.total for pkg in packages)
+
+        response = await _create_media_buy_impl(
+            buyer_ref="test_buyer_v24_multi",  # REQUIRED per AdCP v2.2.0
             brand_manifest={"name": "Puma RS-X 2025 training shoes"},
-            po_number="TEST-V24-003",
             packages=[p.model_dump_internal() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
+            budget=Budget(total=total_budget_value, currency="USD"),  # REQUIRED per AdCP v2.2.0
+            po_number="TEST-V24-003",
             context=context,
         )
 
@@ -296,38 +352,36 @@ class TestCreateMediaBuyV24Format:
         assert "pkg_eur" in buyer_refs
         assert "pkg_gbp" in buyer_refs
 
-    def test_create_media_buy_with_package_budget_a2a(self, setup_test_tenant):
+    async def test_create_media_buy_with_package_budget_a2a(self, setup_test_tenant):
         """Test A2A path with packages containing Budget objects.
 
         This verifies the A2A → tools.py → _impl path also handles nested objects correctly.
         """
-        from src.core.tool_context import ToolContext
+        from unittest.mock import MagicMock
+
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         # Create Package with nested Budget object
         packages = [
             Package(
                 buyer_ref="pkg_a2a_test",
-                products=[setup_test_tenant["product_id"]],
+                product_id=setup_test_tenant["product_id_usd"],  # Use USD product
                 budget=Budget(total=6000.0, currency="USD"),
             )
         ]
 
-        # A2A path also goes through _impl with ToolContext
-        context = ToolContext(
-            context_id="test_ctx_v24_a2a",
-            tenant_id=setup_test_tenant["tenant_id"],
-            principal_id=setup_test_tenant["principal_id"],
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
-        )
+        # Create mock context with headers
+        context = MagicMock()
+        context.headers = {"x-adcp-auth": "test_token_v24"}
 
-        response = _create_media_buy_impl(
+        response = await _create_media_buy_impl(
+            buyer_ref="test_buyer_v24_a2a",  # REQUIRED per AdCP v2.2.0
             brand_manifest={"name": "Reebok Nano 2025 cross-training shoes"},
-            po_number="TEST-V24-A2A-001",
             packages=[p.model_dump_internal() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
+            budget=Budget(total=6000.0, currency="USD"),  # REQUIRED per AdCP v2.2.0
+            po_number="TEST-V24-A2A-001",
             context=context,
         )
 
@@ -340,30 +394,34 @@ class TestCreateMediaBuyV24Format:
         assert isinstance(package, dict), "Package must be serialized to dict"
         assert package["buyer_ref"] == "pkg_a2a_test"
 
-    def test_create_media_buy_legacy_format_still_works(self, setup_test_tenant):
+    async def test_create_media_buy_legacy_format_still_works(self, setup_test_tenant):
         """Verify legacy format (product_ids + total_budget) still works.
 
         This ensures backward compatibility wasn't broken by v2.4 changes.
         """
-        from src.core.tool_context import ToolContext
+        from unittest.mock import MagicMock
+
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        context = ToolContext(
-            context_id="test_ctx_v24_legacy",
-            tenant_id=setup_test_tenant["tenant_id"],
-            principal_id=setup_test_tenant["principal_id"],
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
-        )
+        # Create mock context with headers
+        context = MagicMock()
+        context.headers = {"x-adcp-auth": "test_token_v24"}
 
         # Legacy format using individual parameters
-        response = _create_media_buy_impl(
+        # NOTE: Even legacy format now requires buyer_ref, packages, start_time, end_time, budget per AdCP v2.2.0
+        # The legacy parameters (product_ids, total_budget, start_date, end_date) are converted internally
+        response = await _create_media_buy_impl(
+            buyer_ref="test_buyer_v24_legacy",  # REQUIRED per AdCP v2.2.0
             brand_manifest={"name": "Under Armour HOVR 2025 running shoes"},
+            packages=[],  # Empty packages - will be auto-created from product_ids
+            start_time=datetime.now(UTC) + timedelta(days=1),
+            end_time=datetime.now(UTC) + timedelta(days=31),
+            budget=Budget(total=4000.0, currency="USD"),  # REQUIRED per AdCP v2.2.0
             po_number="TEST-LEGACY-001",
-            product_ids=[setup_test_tenant["product_id"]],
-            total_budget=4000.0,
-            start_date=(datetime.now(UTC) + timedelta(days=1)).date(),
-            end_date=(datetime.now(UTC) + timedelta(days=31)).date(),
+            product_ids=[setup_test_tenant["product_id_usd"]],  # Legacy parameter - Use USD product
+            total_budget=4000.0,  # Legacy parameter
+            start_date=(datetime.now(UTC) + timedelta(days=1)).date(),  # Legacy parameter
+            end_date=(datetime.now(UTC) + timedelta(days=31)).date(),  # Legacy parameter
             context=context,
         )
 

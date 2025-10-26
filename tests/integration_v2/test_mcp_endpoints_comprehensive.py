@@ -37,6 +37,8 @@ class TestMCPEndpointsComprehensive:
 
         This runs BEFORE mcp_server starts (due to autouse=True and fixture ordering).
         """
+        from tests.integration_v2.conftest import add_required_setup_data
+
         # Write test data to the database
         with get_db_session() as session:
             # Create test tenant
@@ -47,13 +49,17 @@ class TestMCPEndpointsComprehensive:
                 is_active=True,
                 ad_server="mock",
                 enable_axe_signals=True,
-                authorized_emails=[],
+                authorized_emails=["test@example.com"],  # Required for setup validation
                 authorized_domains=[],
                 auto_approve_formats=["display_300x250"],
                 human_review_required=False,
                 admin_token="test_admin_token",
             )
             session.add(tenant)
+            session.flush()  # Ensure tenant is persisted before adding related data
+
+            # Add required setup data (CurrencyLimit, AuthorizedProperty, PropertyTag, etc.)
+            add_required_setup_data(session, "test_mcp")
 
             # Create test principal with proper platform_mappings
             principal = Principal(
@@ -158,7 +164,7 @@ class TestMCPEndpointsComprehensive:
                 assert "product_id" in product
                 assert "name" in product
                 assert "description" in product
-                assert "formats" in product
+                assert "format_ids" in product
                 assert "delivery_type" in product
                 assert product["delivery_type"] in ["guaranteed", "non_guaranteed"]
                 # Pricing options should be included
@@ -191,16 +197,17 @@ class TestMCPEndpointsComprehensive:
 
     @pytest.mark.requires_server
     async def test_get_products_missing_required_field(self, mcp_client):
-        """Test that get_products fails without promoted_offering."""
+        """Test that get_products fails without brand_manifest."""
         async with mcp_client as client:
             with pytest.raises(Exception) as exc_info:
                 await client.call_tool(
                     "get_products",
-                    {"brief": "display ads"},  # Missing promoted_offering
+                    {"brief": "display ads"},  # Missing brand_manifest
                 )
 
-            # Should fail with validation error
-            assert "promoted_offering" in str(exc_info.value).lower()
+            # Should fail with validation error mentioning brand_manifest (or BrandManifest in some error messages)
+            error_msg = str(exc_info.value).lower()
+            assert "brand" in error_msg or "manifest" in error_msg
 
     def test_schema_backward_compatibility(self):
         """Test that AdCP v2.4 schema maintains backward compatibility."""
@@ -337,18 +344,25 @@ class TestMCPEndpointsComprehensive:
 
             # 2. Create media buy
             product = products_content["products"][0]
-            start_date = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-            end_date = (datetime.now() + timedelta(days=37)).strftime("%Y-%m-%d")
+            start_time = (datetime.now(UTC) + timedelta(days=7)).isoformat()
+            end_time = (datetime.now(UTC) + timedelta(days=37)).isoformat()
 
             buy_result = await client.call_tool(
                 "create_media_buy",
                 {
                     "brand_manifest": {"name": "Enterprise SaaS platform for data analytics"},
+                    "buyer_ref": "test_workflow_buy_001",  # Required per AdCP spec
+                    "packages": [
+                        {
+                            "buyer_ref": "pkg_001",
+                            "product_id": product["product_id"],
+                            "budget": {"total": 10000.0, "currency": "USD"},
+                        }
+                    ],
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "budget": {"total": 10000.0, "currency": "USD"},
                     "po_number": "PO-TEST-12345",  # Required per AdCP spec
-                    "product_ids": [product["product_id"]],
-                    "total_budget": 10000.0,
-                    "start_date": start_date,
-                    "end_date": end_date,
                 },
             )
 
@@ -363,10 +377,10 @@ class TestMCPEndpointsComprehensive:
             )
 
             status_content = safe_get_content(status_result)
-            # Response contains deliveries array per AdCP spec
-            assert "deliveries" in status_content
+            # Response contains media_buy_deliveries array per AdCP spec
+            assert "media_buy_deliveries" in status_content
             # Newly created media buy might not have delivery data yet
-            assert isinstance(status_content["deliveries"], list)
+            assert isinstance(status_content["media_buy_deliveries"], list)
             # But should have aggregated totals
             assert "aggregated_totals" in status_content
             assert "currency" in status_content

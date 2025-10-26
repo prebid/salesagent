@@ -154,7 +154,7 @@ class TestMCPToolRoundtripValidation:
             )
             loaded_products = session.scalars(stmt).unique().all()
 
-        return loaded_products
+        return list(loaded_products)
 
     def test_get_products_real_object_roundtrip_conversion_isolated(
         self, integration_db, test_tenant_id, real_products_in_db

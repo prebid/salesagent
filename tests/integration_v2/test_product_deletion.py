@@ -136,7 +136,7 @@ def authenticated_session(client):
 
 
 @pytest.fixture
-def setup_super_admin_config():
+def setup_super_admin_config(integration_db):
     """Setup super admin configuration in database."""
     with get_db_session() as session:
         # Clean up existing config

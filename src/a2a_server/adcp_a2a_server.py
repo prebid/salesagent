@@ -31,6 +31,7 @@ from a2a.server.request_handlers.request_handler import RequestHandler
 from a2a.types import (
     AgentCard,
     Artifact,
+    DataPart,
     InternalError,
     InvalidParamsError,
     InvalidRequestError,
@@ -532,7 +533,7 @@ class AdCPRequestHandler(RequestHandler):
                             artifactId=f"skill_result_{i + 1}",
                             name=f"{'error' if not res['success'] else res['skill']}_result",
                             description=description,  # Human-readable message
-                            parts=[Part(type="data", data=artifact_data)],
+                            parts=[Part(root=DataPart(data=artifact_data))],
                         )
                     )
 
@@ -617,7 +618,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
                 task.artifacts = [
                     Artifact(
-                        artifactId="product_catalog_1", name="product_catalog", parts=[Part(type="data", data=result)]
+                        artifactId="product_catalog_1", name="product_catalog", parts=[Part(root=DataPart(data=result))]
                     )
                 ]
             elif any(word in combined_text for word in ["price", "pricing", "cost", "cpm", "budget"]):
@@ -644,7 +645,9 @@ class AdCPRequestHandler(RequestHandler):
                 )
                 task.artifacts = [
                     Artifact(
-                        artifactId="pricing_info_1", name="pricing_information", parts=[Part(type="data", data=result)]
+                        artifactId="pricing_info_1",
+                        name="pricing_information",
+                        parts=[Part(root=DataPart(data=result))],
                     )
                 ]
             elif any(word in combined_text for word in ["target", "audience"]):
@@ -673,7 +676,9 @@ class AdCPRequestHandler(RequestHandler):
                 )
                 task.artifacts = [
                     Artifact(
-                        artifactId="targeting_opts_1", name="targeting_options", parts=[Part(type="data", data=result)]
+                        artifactId="targeting_opts_1",
+                        name="targeting_options",
+                        parts=[Part(root=DataPart(data=result))],
                     )
                 ]
             elif any(word in combined_text for word in ["create", "buy", "campaign", "media"]):
@@ -699,7 +704,7 @@ class AdCPRequestHandler(RequestHandler):
                 if result.get("success"):
                     task.artifacts = [
                         Artifact(
-                            artifactId="media_buy_1", name="media_buy_created", parts=[Part(type="data", data=result)]
+                            artifactId="media_buy_1", name="media_buy_created", parts=[Part(root=DataPart(data=result))]
                         )
                     ]
                 else:
@@ -707,7 +712,7 @@ class AdCPRequestHandler(RequestHandler):
                         Artifact(
                             artifactId="media_buy_error_1",
                             name="media_buy_error",
-                            parts=[Part(type="data", data=result)],
+                            parts=[Part(root=DataPart(data=result))],
                         )
                     ]
             else:
@@ -745,7 +750,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
                 task.artifacts = [
                     Artifact(
-                        artifactId="capabilities_1", name="capabilities", parts=[Part(type="data", data=capabilities)]
+                        artifactId="capabilities_1", name="capabilities", parts=[Part(root=DataPart(data=capabilities))]
                     )
                 ]
 
@@ -1308,7 +1313,16 @@ class AdCPRequestHandler(RequestHandler):
                     "message": f"Missing required AdCP parameters: {missing_params}",
                     "required_parameters": required_params,
                     "received_parameters": list(parameters.keys()),
-                    "error": "This endpoint only accepts AdCP v2.4 spec-compliant format. See https://adcontextprotocol.org/docs/",
+                    "errors": [
+                        {
+                            "code": "validation_error",
+                            "message": f"Missing required AdCP parameters: {missing_params}",
+                            "details": {
+                                "required": required_params,
+                                "received": list(parameters.keys()),
+                            },
+                        }
+                    ],
                 }
 
             # Call core function with AdCP spec-compliant parameters
@@ -1325,16 +1339,43 @@ class AdCPRequestHandler(RequestHandler):
                 context=tool_context,
             )
 
-            # Return spec-compliant response (no extra fields)
-            # Per AdCP spec: all fields from CreateMediaBuyResponse
+            # Convert response to dict and add A2A success wrapper
             if isinstance(response, dict):
-                return response
+                response_data = response
             else:
-                return response.model_dump()
+                response_data = response.model_dump()
+
+            # Check if response contains errors (domain errors from validation/ad server)
+            has_errors = response_data.get("errors") and len(response_data.get("errors", [])) > 0
+
+            # A2A wrapper adds success field and message
+            # Success is False if there are domain errors, even if no exception was raised
+            response_data["success"] = not has_errors
+            if has_errors:
+                response_data["message"] = "Media buy creation failed with validation errors"
+            else:
+                response_data["message"] = "Media buy created successfully"
+
+            return response_data
 
         except Exception as e:
             logger.error(f"Error in create_media_buy skill: {e}")
-            raise ServerError(InternalError(message=f"Failed to create media buy: {str(e)}"))
+            # Return error response instead of raising ServerError
+            # This allows tests to check error structure in artifacts
+            return {
+                "success": False,
+                "message": f"Failed to create media buy: {str(e)}",
+                "errors": [
+                    {
+                        "code": (
+                            "authentication_error"
+                            if "foreign key" in str(e).lower() and "principal" in str(e).lower()
+                            else "internal_error"
+                        ),
+                        "message": str(e),
+                    }
+                ],
+            }
 
     async def _handle_sync_creatives_skill(self, parameters: dict, auth_token: str) -> dict:
         """Handle explicit sync_creatives skill invocation (AdCP spec endpoint)."""

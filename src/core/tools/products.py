@@ -44,16 +44,6 @@ async def _get_products_impl(req: GetProductsRequestGenerated, context: Context)
     Returns:
         GetProductsResponse containing matching products
     """
-    import sys
-
-    print("=" * 80, file=sys.stderr, flush=True)
-    print(
-        f"🔧 _get_products_impl CALLED: brand_manifest={req.brand_manifest}, brief={req.brief[:50] if req.brief else 'N/A'}",
-        file=sys.stderr,
-        flush=True,
-    )
-    print("=" * 80, file=sys.stderr, flush=True)
-
     from src.core.tool_context import ToolContext
 
     start_time = time.time()
@@ -77,26 +67,27 @@ async def _get_products_impl(req: GetProductsRequestGenerated, context: Context)
         # For discovery endpoints, authentication is optional
         # require_valid_token=False means invalid tokens are treated like missing tokens (discovery endpoint behavior)
         logger.info("[GET_PRODUCTS] About to call get_principal_from_context")
-        print("🔍 [GET_PRODUCTS DEBUG] About to call get_principal_from_context", flush=True)
         principal_id, tenant = get_principal_from_context(
             context, require_valid_token=False
         )  # Returns (None, tenant) if no/invalid auth
         logger.info(f"[GET_PRODUCTS] principal_id returned: {principal_id}, tenant: {tenant}")
-        print(f"🔍 [GET_PRODUCTS DEBUG] principal_id returned: {principal_id}, tenant: {tenant}", flush=True)
 
         # Set tenant context explicitly in this async context (ContextVar propagation fix)
         if tenant:
             set_current_tenant(tenant)
             logger.info(f"[GET_PRODUCTS] Set tenant context: {tenant['tenant_id']}")
-            print(f"🔍 [GET_PRODUCTS DEBUG] Set tenant context: {tenant['tenant_id']}", flush=True)
         elif principal_id:
             # If we have principal but no tenant, something went wrong
             logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
-            print("❌ [GET_PRODUCTS DEBUG] Principal found but no tenant context", flush=True)
             raise ToolError(
                 f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}"
             )
-        # else: No auth provided, which is OK for discovery endpoints
+        else:
+            # No tenant context and no principal - cannot determine which tenant's products to return
+            logger.error("[GET_PRODUCTS] No tenant context available - cannot determine which products to return")
+            raise ToolError(
+                "Cannot determine tenant context. Please provide valid authentication or ensure tenant can be identified from request headers."
+            )
 
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id) if principal_id else None
@@ -257,7 +248,7 @@ async def _get_products_impl(req: GetProductsRequestGenerated, context: Context)
     catalog_config = {"provider": "database", "config": {}}  # Default to database provider
 
     # Check if signals discovery is configured for this tenant
-    if hasattr(tenant, "signals_agent_config") and tenant.get("signals_agent_config"):
+    if tenant.get("signals_agent_config"):
         signals_config = tenant["signals_agent_config"]
 
         # Parse signals config if it's a string (SQLite) vs dict (PostgreSQL JSONB)
@@ -285,9 +276,11 @@ async def _get_products_impl(req: GetProductsRequestGenerated, context: Context)
             }
 
     # Get the product catalog provider for this tenant
+    # Factory expects a dict with "product_catalog" key, not the catalog_config directly
+    tenant_config_for_factory = {"product_catalog": catalog_config}
     provider = await get_product_catalog_provider(
         tenant["tenant_id"],
-        catalog_config,
+        tenant_config_for_factory,
     )
 
     # Query products using the brief, including context for signals forwarding
@@ -298,7 +291,6 @@ async def _get_products_impl(req: GetProductsRequestGenerated, context: Context)
     }
 
     logger.info(f"[GET_PRODUCTS] Calling provider.get_products for tenant_id={tenant['tenant_id']}")
-    print(f"🔍 [GET_PRODUCTS DEBUG] Calling provider.get_products for tenant_id={tenant['tenant_id']}", flush=True)
     products = await provider.get_products(
         brief=req.brief,
         tenant_id=tenant["tenant_id"],
@@ -307,7 +299,6 @@ async def _get_products_impl(req: GetProductsRequestGenerated, context: Context)
         context=context_data,
     )
     logger.info(f"[GET_PRODUCTS] Got {len(products)} products from provider")
-    print(f"🔍 [GET_PRODUCTS DEBUG] Got {len(products)} products from provider", flush=True)
 
     # Enrich products with dynamic pricing (AdCP PR #79)
     # Calculate floor_cpm, recommended_cpm, estimated_exposures from cached metrics
@@ -469,9 +460,12 @@ async def _get_products_impl(req: GetProductsRequestGenerated, context: Context)
     # Annotate pricing options with adapter support (AdCP PR #88)
     if principal and modified_products:
         try:
-            from src.adapters import get_adapter
+            # Use correct get_adapter from adapter_helpers (accepts Principal and dry_run)
+            from src.core.helpers.adapter_helpers import get_adapter
 
+            # Get adapter in dry-run mode (no actual ad server calls)
             adapter = get_adapter(principal, dry_run=True)
+
             supported_models = adapter.get_supported_pricing_models()
 
             for product in modified_products:
@@ -531,16 +525,6 @@ async def get_products(
         promoted_offering is deprecated - use brand_manifest instead.
         If you need backward compatibility, use the A2A interface which still supports it.
     """
-    import sys
-
-    print("=" * 80, file=sys.stderr, flush=True)
-    print(
-        f"🚀 MCP get_products CALLED: brand_manifest={brand_manifest}, brief={brief[:50] if brief else 'N/A'}",
-        file=sys.stderr,
-        flush=True,
-    )
-    print("=" * 80, file=sys.stderr, flush=True)
-
     # Build request object for shared implementation using helper
     try:
         req = create_get_products_request(

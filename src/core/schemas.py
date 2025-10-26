@@ -2305,7 +2305,7 @@ class CreateMediaBuyRequest(AdCPBaseModel):
             # Note: AdCP create-media-buy-request only requires products from client
             # Server generates package_id and initial status per AdCP package schema
             # buyer_ref is optional and should only be set by the buyer/client
-            product_ids = values.get("product_ids", [])
+            product_ids = values.get("product_ids") or []  # Handle None
             packages = []
             for i, pid in enumerate(product_ids):
                 package_uuid = uuid.uuid4().hex[:6]

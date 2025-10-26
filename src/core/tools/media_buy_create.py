@@ -393,6 +393,16 @@ async def _create_media_buy_impl(
             )
             raise ToolError(error_msg)
 
+    # Validate principal exists BEFORE creating context (foreign key constraint)
+    principal = get_principal_object(principal_id)
+    if not principal:
+        error_msg = f"Principal {principal_id} not found"
+        # Cannot create context or workflow step without valid principal
+        return CreateMediaBuyResponse(
+            buyer_ref=buyer_ref or "unknown",
+            errors=[Error(code="authentication_error", message=error_msg, details=None)],
+        )
+
     # Context management and workflow step creation - create workflow step FIRST
     ctx_manager = get_context_manager()
     ctx_id = context.headers.get("x-context-id") if hasattr(context, "headers") else None
@@ -405,7 +415,7 @@ async def _create_media_buy_impl(
         if ctx_id:
             persistent_ctx = ctx_manager.get_context(ctx_id)
 
-        # Create new context if needed
+        # Create new context if needed (principal already validated above)
         if not persistent_ctx:
             persistent_ctx = ctx_manager.create_context(tenant_id=tenant["tenant_id"], principal_id=principal_id)
 
@@ -822,15 +832,7 @@ async def _create_media_buy_impl(
             errors=[Error(code="validation_error", message=str(e), details=None)],
         )
 
-    # Get the Principal object (needed for adapter)
-    principal = get_principal_object(principal_id)
-    if not principal:
-        error_msg = f"Principal {principal_id} not found"
-        ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-        return CreateMediaBuyResponse(
-            buyer_ref=buyer_ref or "unknown",
-            errors=[Error(code="authentication_error", message=error_msg, details=None)],
-        )
+    # Principal already validated earlier (before context creation) to avoid foreign key errors
 
     try:
         # Get the appropriate adapter with testing context
@@ -1708,26 +1710,13 @@ async def _create_media_buy_impl(
             else adcp_response.model_dump()
         )
 
-        # Debug: Check if buyer_ref is in response_data before testing hooks
-        if "buyer_ref" not in response_data:
-            logger.error(f"🚨 buyer_ref MISSING after model_dump_internal! Keys: {list(response_data.keys())}")
-        else:
-            logger.info(f"✅ buyer_ref present after model_dump_internal: {response_data['buyer_ref']}")
-
         response_data = apply_testing_hooks(response_data, testing_ctx, "create_media_buy", campaign_info)
-
-        # Debug: Check if buyer_ref is in response_data after testing hooks
-        if "buyer_ref" not in response_data:
-            logger.error(f"🚨 buyer_ref MISSING after apply_testing_hooks! Keys: {list(response_data.keys())}")
-        else:
-            logger.info(f"✅ buyer_ref present after apply_testing_hooks: {response_data['buyer_ref']}")
 
         # Reconstruct response from modified data
         # Filter out testing hook fields that aren't part of CreateMediaBuyResponse schema
+        # Domain fields only (status/adcp_version are protocol fields, added by ProtocolEnvelope)
         valid_fields = {
-            "status",
             "buyer_ref",
-            "task_id",
             "media_buy_id",
             "creative_deadline",
             "packages",
@@ -1735,15 +1724,6 @@ async def _create_media_buy_impl(
             "workflow_step_id",
         }
         filtered_data = {k: v for k, v in response_data.items() if k in valid_fields}
-
-        # Debug: Check if buyer_ref is in filtered_data
-        if "buyer_ref" not in filtered_data:
-            logger.error(f"🚨 buyer_ref MISSING after filtering! filtered_data keys: {list(filtered_data.keys())}")
-            logger.error(f"🚨 response_data keys: {list(response_data.keys())}")
-            # Add buyer_ref back if it's somehow missing
-            filtered_data["buyer_ref"] = buyer_ref_value
-        else:
-            logger.info(f"✅ buyer_ref present in filtered_data: {filtered_data['buyer_ref']}")
 
         # Ensure required fields are present (validator compliance)
         if "status" not in filtered_data:

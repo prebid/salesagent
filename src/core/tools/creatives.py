@@ -126,6 +126,13 @@ def _sync_creatives_impl(
     approval_mode = tenant.get("approval_mode", "require-human")
     logger.info(f"[sync_creatives] Final approval mode: {approval_mode} (from tenant: {tenant.get('tenant_id')})")
 
+    # Fetch creative formats ONCE before processing loop (outside any transaction)
+    # This avoids async HTTP calls inside database savepoints which cause transaction errors
+    from src.core.creative_agent_registry import get_creative_agent_registry
+
+    registry = get_creative_agent_registry()
+    all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
+
     with get_db_session() as session:
         # Process each creative with proper transaction isolation
         for creative in raw_creatives:
@@ -351,16 +358,8 @@ def _sync_creatives_impl(
                             # ALWAYS validate updates with creative agent
                             if creative_format:
                                 try:
-                                    # Get format to find creative agent URL
-
-                                    from src.core.creative_agent_registry import get_creative_agent_registry
-
-                                    registry = get_creative_agent_registry()
-
-                                    # List all formats to find the matching one
-                                    all_formats = run_async_in_sync_context(
-                                        registry.list_all_formats(tenant_id=tenant["tenant_id"])
-                                    )
+                                    # Use pre-fetched formats (fetched outside transaction at function start)
+                                    # This avoids async HTTP calls inside savepoint
 
                                     # Find matching format
                                     format_obj = None
@@ -726,16 +725,8 @@ def _sync_creatives_impl(
                         creative_format = creative.get("format_id") or creative.get("format")
                         if creative_format:
                             try:
-                                # Get format to find creative agent URL
-
-                                from src.core.creative_agent_registry import get_creative_agent_registry
-
-                                registry = get_creative_agent_registry()
-
-                                # List all formats to find the matching one
-                                all_formats = run_async_in_sync_context(
-                                    registry.list_all_formats(tenant_id=tenant["tenant_id"])
-                                )
+                                # Use pre-fetched formats (fetched outside transaction at function start)
+                                # This avoids async HTTP calls inside savepoint
 
                                 # Find matching format
                                 format_obj = None

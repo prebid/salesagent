@@ -46,6 +46,7 @@ from src.core.schemas import (
     CreativeAssignment,
     CreativeGroup,
     CreativeStatus,
+    Error,  # noqa: F401 - Required for MCP protocol error handling (regression test PR #332)
     Product,
 )
 

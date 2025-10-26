@@ -279,7 +279,7 @@ jobs:
         SUPER_ADMIN_EMAILS: test@example.com
         ADCP_TESTING: true
       run: |
-        uv run pytest tests/integration_v2/ -v --tb=short --cov=. --cov-report=term-missing -m "not requires_server and not skip_ci"
+        uv run pytest tests/integration_v2/ -v --tb=short --cov=. --cov-report=term-missing -m "not skip_ci"
 
   e2e-tests:
     name: E2E Tests

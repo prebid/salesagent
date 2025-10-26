@@ -316,6 +316,7 @@ def add_required_setup_data(session, tenant_id: str):
     2. Authorized property (for AdCP verification)
     3. Currency limit (for budget validation)
     4. Property tag (for product configuration)
+    5. Principal (advertiser) (for setup completion validation)
 
     Call this in test fixtures to avoid "Setup incomplete" errors.
     """
@@ -323,13 +324,18 @@ def add_required_setup_data(session, tenant_id: str):
 
     from sqlalchemy import select
 
-    from src.core.database.models import AuthorizedProperty, CurrencyLimit, PropertyTag, Tenant
-
     # Update tenant with access control
+    from sqlalchemy.orm import attributes
+
+    from src.core.database.models import AuthorizedProperty, CurrencyLimit, Principal, PropertyTag, Tenant
+
     stmt = select(Tenant).filter_by(tenant_id=tenant_id)
     tenant = session.scalars(stmt).first()
     if tenant and not tenant.authorized_emails:
         tenant.authorized_emails = ["test@example.com"]
+        # CRITICAL: Mark JSON field as modified so SQLAlchemy persists the change
+        attributes.flag_modified(tenant, "authorized_emails")
+        session.flush()  # Ensure changes are persisted immediately
 
     # Create AuthorizedProperty if not exists
     stmt_property = select(AuthorizedProperty).filter_by(tenant_id=tenant_id)
@@ -366,6 +372,18 @@ def add_required_setup_data(session, tenant_id: str):
             description="All available inventory",
         )
         session.add(property_tag)
+
+    # Create Principal (advertiser) if not exists - CRITICAL for setup validation
+    stmt_principal = select(Principal).filter_by(tenant_id=tenant_id)
+    if not session.scalars(stmt_principal).first():
+        principal = Principal(
+            tenant_id=tenant_id,
+            principal_id=f"{tenant_id}_default_principal",
+            name="Default Test Principal",
+            access_token=f"{tenant_id}_default_token",
+            platform_mappings={"mock": {"advertiser_id": f"mock_adv_{tenant_id}"}},
+        )
+        session.add(principal)
 
 
 # ============================================================================
@@ -591,4 +609,214 @@ def create_flat_rate_product(
 
 # ============================================================================
 # End Pricing Helper Functions
+# ============================================================================
+
+
+# ============================================================================
+# Admin UI Test Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def admin_client(integration_db):
+    """Create a test client for the admin Flask app."""
+    admin_app.config["TESTING"] = True
+    admin_app.config["WTF_CSRF_ENABLED"] = False
+    return admin_app.test_client()
+
+
+@pytest.fixture
+def authenticated_admin_session(admin_client, integration_db):
+    """Create an authenticated session for admin UI testing."""
+    import os
+
+    # Set up super admin configuration in database
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import TenantManagementConfig
+
+    with get_db_session() as db_session:
+        # Add tenant management admin email configuration
+        email_config = TenantManagementConfig(config_key="super_admin_emails", config_value="test@example.com")
+        db_session.add(email_config)
+        db_session.commit()
+
+    # Enable test mode for authentication
+    os.environ["ADCP_AUTH_TEST_MODE"] = "true"
+
+    with admin_client.session_transaction() as sess:
+        sess["authenticated"] = True
+        sess["role"] = "super_admin"
+        sess["email"] = "test@example.com"
+        sess["user"] = {"email": "test@example.com", "role": "super_admin"}  # Required by require_auth decorator
+        sess["is_super_admin"] = True  # Blueprint sets this
+
+    yield admin_client
+
+    # Cleanup: Disable test mode after test
+    if "ADCP_AUTH_TEST_MODE" in os.environ:
+        del os.environ["ADCP_AUTH_TEST_MODE"]
+
+
+@pytest.fixture
+def test_tenant_with_data(integration_db):
+    """Create a test tenant in the database with proper configuration."""
+    from datetime import UTC, datetime
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Tenant
+    from tests.fixtures import TenantFactory
+
+    tenant_data = TenantFactory.create()
+    now = datetime.now(UTC)
+
+    with get_db_session() as db_session:
+        tenant = Tenant(
+            tenant_id=tenant_data["tenant_id"],
+            name=tenant_data["name"],
+            subdomain=tenant_data["subdomain"],
+            is_active=tenant_data["is_active"],
+            ad_server="mock",
+            auto_approve_formats=[],  # JSONType expects list, not json.dumps()
+            human_review_required=False,
+            policy_settings={},  # JSONType expects dict, not json.dumps()
+            created_at=now,
+            updated_at=now,
+        )
+        db_session.add(tenant)
+        db_session.commit()
+
+    return tenant_data
+
+
+# ============================================================================
+# End Admin UI Test Fixtures
+# ============================================================================
+
+
+# ============================================================================
+# MCP Server Test Fixture
+# ============================================================================
+
+
+@pytest.fixture(scope="function")
+def mcp_server(integration_db):
+    """Start a real MCP server for integration testing using the test database."""
+    import socket
+    import subprocess
+    import sys
+    import time
+
+    # Find an available port
+    def get_free_port():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            s.listen(1)
+            port = s.getsockname()[1]
+        return port
+
+    port = get_free_port()
+
+    # Use the integration_db (PostgreSQL database name - returned by integration_db fixture in integration_v2)
+    # Note: integration_v2's integration_db doesn't return db_name, so we need to extract it from DATABASE_URL
+    db_url = os.environ.get("DATABASE_URL", "")
+    if not db_url or not db_url.startswith("postgresql://"):
+        raise RuntimeError("mcp_server fixture requires PostgreSQL DATABASE_URL")
+
+    import re
+
+    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
+    match = re.match(pattern, db_url)
+    if match:
+        user, password, host, port_str, db_name = match.groups()
+        postgres_port = int(port_str)
+        server_db_url = f"postgresql://{user}:{password}@{host}:{postgres_port}/{db_name}"
+    else:
+        raise RuntimeError(f"Failed to parse DATABASE_URL: {db_url}")
+
+    env = os.environ.copy()
+    env["ADCP_SALES_PORT"] = str(port)
+    env["DATABASE_URL"] = server_db_url
+    env["DB_TYPE"] = "postgresql"
+    env["ADCP_TESTING"] = "true"
+    env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for better debugging
+
+    # Start the server process using mcp.run() instead of uvicorn directly
+    server_script = f"""
+import sys
+sys.path.insert(0, '.')
+from src.core.main import mcp
+mcp.run(transport='http', host='0.0.0.0', port={port})
+"""
+
+    process = subprocess.Popen(
+        [sys.executable, "-c", server_script],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=1,  # Line buffered
+    )
+
+    # Wait for server to be ready
+    max_wait = 20  # seconds (increased for server initialization)
+    start_time = time.time()
+    server_ready = False
+
+    while time.time() - start_time < max_wait:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                s.connect(("localhost", port))
+                server_ready = True
+                break
+        except (ConnectionRefusedError, OSError):
+            # Check if process has died
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise RuntimeError(
+                    f"MCP server process died unexpectedly.\n"
+                    f"STDOUT: {stdout.decode() if stdout else 'N/A'}\n"
+                    f"STDERR: {stderr.decode() if stderr else 'N/A'}"
+                )
+            time.sleep(0.3)
+
+    if not server_ready:
+        # Capture output for debugging
+        try:
+            stdout, stderr = process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+
+        process.terminate()
+        process.wait(timeout=5)
+        raise RuntimeError(
+            f"MCP server failed to start on port {port} within {max_wait}s.\n"
+            f"STDOUT: {stdout.decode() if stdout else 'N/A'}\n"
+            f"STDERR: {stderr.decode() if stderr else 'N/A'}"
+        )
+
+    # Return server info
+    class ServerInfo:
+        def __init__(self, port, process, db_name):
+            self.port = port
+            self.process = process
+            self.db_name = db_name
+
+    server = ServerInfo(port, process, db_name)
+
+    yield server
+
+    # Cleanup
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+    # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
+
+
+# ============================================================================
+# End MCP Server Test Fixture
 # ============================================================================

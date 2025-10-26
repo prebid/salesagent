@@ -30,8 +30,7 @@ from src.core.schemas import CreateMediaBuyResponse
 from src.core.testing_hooks import TestingContext, apply_testing_hooks
 from tests.integration_v2.conftest import create_test_product_with_pricing
 
-# TODO: Fix failing tests and remove skip_ci (see GitHub issue #XXX)
-pytestmark = [pytest.mark.integration, pytest.mark.skip_ci, pytest.mark.requires_db]
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.mark.integration
@@ -42,6 +41,8 @@ class TestCreateMediaBuyRoundtrip:
     @pytest.fixture
     def setup_test_tenant(self, integration_db):
         """Set up test tenant with product."""
+        from src.core.database.models import PricingOption
+
         with get_db_session() as session:
             now = datetime.now(UTC)
 
@@ -95,13 +96,16 @@ class TestCreateMediaBuyRoundtrip:
 
             session.commit()
 
-            yield {
-                "tenant_id": "test_roundtrip_tenant",
-                "principal_id": "test_roundtrip_principal",
-                "product_id": "prod_roundtrip",
-            }
+        yield {
+            "tenant_id": "test_roundtrip_tenant",
+            "principal_id": "test_roundtrip_principal",
+            "product_id": "prod_roundtrip",
+        }
 
-            # Cleanup
+        # Cleanup in reverse order of dependencies
+        with get_db_session() as session:
+            # Delete in order: PricingOption -> Product -> Principal -> CurrencyLimit -> Tenant
+            session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_roundtrip_tenant"))
             session.execute(delete(ModelProduct).where(ModelProduct.tenant_id == "test_roundtrip_tenant"))
             session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == "test_roundtrip_tenant"))
             session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_roundtrip_tenant"))
@@ -122,18 +126,17 @@ class TestCreateMediaBuyRoundtrip:
         "1 validation error for CreateMediaBuyResponse: buyer_ref Field required"
         """
         # Step 1: Create a valid CreateMediaBuyResponse (simulates what adapter returns)
+        # NOTE: status and adcp_version are protocol fields (added by ProtocolEnvelope), not domain fields
+        # NOTE: media_buy_id starts with "test_" to prevent testing hooks from adding another "test_" prefix
         original_response = CreateMediaBuyResponse(
-            adcp_version="2.3.0",
-            status="working",
             buyer_ref="test-buyer-ref-123",
-            media_buy_id="mb_test_12345",
+            media_buy_id="test_mb_12345",
             packages=[
                 {
                     "package_id": "pkg_1",
                     "buyer_ref": "pkg_test",
                     "products": [setup_test_tenant["product_id"]],
                     "budget": {"total": 5000.0, "currency": "USD", "pacing": "even"},
-                    "status": "working",
                 }
             ],
         )
@@ -176,11 +179,9 @@ class TestCreateMediaBuyRoundtrip:
 
         # Step 4: Reconstruct response (this is where the bug occurred)
         # The fix at main.py:3747-3760 filters out non-schema fields
+        # Domain fields only (status/adcp_version are protocol fields, not domain fields)
         valid_fields = {
-            "adcp_version",
-            "status",
             "buyer_ref",
-            "task_id",
             "media_buy_id",
             "creative_deadline",
             "packages",
@@ -194,9 +195,7 @@ class TestCreateMediaBuyRoundtrip:
 
         # Step 5: Verify reconstruction succeeded
         assert reconstructed_response.buyer_ref == "test-buyer-ref-123"
-        # Note: dry_run mode prepends "test_" to media_buy_id
-        assert reconstructed_response.media_buy_id == "test_mb_test_12345"
-        assert reconstructed_response.status == "working"
+        assert reconstructed_response.media_buy_id == "test_mb_12345"
         assert len(reconstructed_response.packages) == 1
 
     def test_create_media_buy_response_roundtrip_without_hooks(self, setup_test_tenant):
@@ -206,10 +205,8 @@ class TestCreateMediaBuyRoundtrip:
         This establishes that the schema itself is valid and the issue is specifically
         with the interaction between testing hooks and schema validation.
         """
-        # Create response
+        # Create response (domain fields only - status/adcp_version are protocol fields)
         original_response = CreateMediaBuyResponse(
-            adcp_version="2.3.0",
-            status="completed",
             buyer_ref="baseline-test",
             media_buy_id="mb_baseline",
         )
@@ -221,7 +218,6 @@ class TestCreateMediaBuyRoundtrip:
         # Should work perfectly without testing hooks
         assert reconstructed.buyer_ref == "baseline-test"
         assert reconstructed.media_buy_id == "mb_baseline"
-        assert reconstructed.status == "completed"
 
     def test_testing_hooks_fields_are_excluded_from_reconstruction(self, setup_test_tenant):
         """
@@ -230,10 +226,10 @@ class TestCreateMediaBuyRoundtrip:
         Verifies that extra fields added by testing hooks are properly filtered out
         and don't appear in the final CreateMediaBuyResponse object.
         """
+        # NOTE: media_buy_id starts with "test_" to prevent testing hooks from adding another "test_" prefix
         original_response = CreateMediaBuyResponse(
-            status="working",
             buyer_ref="filter-test",
-            media_buy_id="mb_filter",
+            media_buy_id="test_mb_filter",
         )
 
         response_data = original_response.model_dump_internal()
@@ -247,12 +243,9 @@ class TestCreateMediaBuyRoundtrip:
         assert "dry_run" in modified_data
         assert "is_test" in modified_data
 
-        # Filter and reconstruct
+        # Filter and reconstruct (domain fields only - no protocol fields)
         valid_fields = {
-            "adcp_version",
-            "status",
             "buyer_ref",
-            "task_id",
             "media_buy_id",
             "creative_deadline",
             "packages",

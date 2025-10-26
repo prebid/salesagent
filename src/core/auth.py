@@ -172,94 +172,28 @@ def get_principal_from_context(
     # NOTE: get_http_headers() works via context vars, so it can work even when context=None
     # This allows unauthenticated public discovery endpoints to detect tenant from headers
     # CRITICAL: Use include_all=True to get Host header (excluded by default)
-    import logging as log_module
-    import sys
-
-    # URGENT DEBUG: Use logger.error() to ensure visibility in production logs
-    debug_logger = log_module.getLogger(__name__)
-    debug_logger.error(f"🔍 get_principal_from_context called: context={context}, type={type(context)}")
-    if context:
-        debug_logger.error(f"🔍 context attributes: {dir(context)[:10]}...")  # First 10 attrs
-        if hasattr(context, "meta"):
-            debug_logger.error(f"🔍 context.meta exists: {context.meta}")
-        if hasattr(context, "headers"):
-            try:
-                headers_len = len(context.headers) if context.headers else 0
-                debug_logger.error(f"🔍 context.headers exists: {headers_len} headers")
-            except (TypeError, AttributeError):
-                debug_logger.error(f"🔍 context.headers exists but not iterable: {type(context.headers)}")
-
     headers = None
     try:
         headers = get_http_headers(include_all=True)
-        debug_logger.error(f"🔍 get_http_headers() returned: {len(headers) if headers else 0} headers")
-        if headers:
-            debug_logger.error(f"🔍 Header keys: {list(headers.keys())}")
-        print(
-            f"[PRINCIPAL DEBUG] get_http_headers(include_all=True) returned {len(headers) if headers else 0} headers",
-            file=sys.stderr,
-            flush=True,
-        )
-        console.print(
-            f"[blue]DEBUG: get_http_headers(include_all=True) returned {len(headers) if headers else 0} headers[/blue]"
-        )
-        if headers:
-            print(f"[PRINCIPAL DEBUG] Header keys: {list(headers.keys())}", file=sys.stderr, flush=True)
-            console.print(f"[blue]DEBUG: Header keys: {list(headers.keys())}[/blue]")
-    except Exception as e:
-        debug_logger.error(f"🔍 get_http_headers() exception: {type(e).__name__}: {e}")
-        print(f"[PRINCIPAL DEBUG] get_http_headers() exception: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-        console.print(f"[yellow]DEBUG: get_http_headers() exception: {type(e).__name__}: {e}[/yellow]")
+    except Exception:
         pass  # Will try fallback below
 
     # If get_http_headers() returned empty dict or None, try context.meta fallback
     # This is necessary for sync tools where get_http_headers() may not work
     # CRITICAL: get_http_headers() returns {} for sync tools, so we need fallback even for empty dict
     if not headers:  # Handles both None and {}
-        debug_logger.error(f"🔍 get_http_headers() empty, trying fallback - context is {type(context)}")
-        print("[PRINCIPAL DEBUG] get_http_headers() empty, trying fallback methods", file=sys.stderr, flush=True)
-        print(f"[PRINCIPAL DEBUG] context={context}, type={type(context)}", file=sys.stderr, flush=True)
-        console.print("[yellow]DEBUG: get_http_headers() empty, trying fallback methods[/yellow]")
         # Only try context fallbacks if context is not None
         if context is not None:
-            print(f"[PRINCIPAL DEBUG] hasattr(context, 'meta')={hasattr(context, 'meta')}", file=sys.stderr, flush=True)
-            if hasattr(context, "meta"):
-                print(f"[PRINCIPAL DEBUG] context.meta={context.meta}", file=sys.stderr, flush=True)
-                debug_logger.error(f"🔍 context.meta={context.meta}")
             if hasattr(context, "meta") and context.meta and "headers" in context.meta:
                 headers = context.meta["headers"]
-                debug_logger.error(f"🔍 ✅ Got {len(headers)} headers from context.meta!")
-                print(f"[PRINCIPAL DEBUG] Got {len(headers)} headers from context.meta", file=sys.stderr, flush=True)
-                console.print(f"[blue]DEBUG: Got {len(headers)} headers from context.meta[/blue]")
             # Try other possible attributes
             elif hasattr(context, "headers"):
                 headers = context.headers
-                debug_logger.error(f"🔍 ✅ Got {len(headers)} headers from context.headers!")
-                print(f"[PRINCIPAL DEBUG] Got {len(headers)} headers from context.headers", file=sys.stderr, flush=True)
-                console.print(f"[blue]DEBUG: Got {len(headers)} headers from context.headers[/blue]")
             elif hasattr(context, "_headers"):
                 headers = context._headers
-                debug_logger.error(f"🔍 ✅ Got {len(headers)} headers from context._headers!")
-                print(
-                    f"[PRINCIPAL DEBUG] Got {len(headers)} headers from context._headers", file=sys.stderr, flush=True
-                )
-                console.print(f"[blue]DEBUG: Got {len(headers)} headers from context._headers[/blue]")
-            else:
-                debug_logger.error("🔍 ❌ No fallback attributes (meta/headers/_headers) available on context")
-                print("[PRINCIPAL DEBUG] No fallback attributes available", file=sys.stderr, flush=True)
-                console.print(
-                    "[yellow]DEBUG: No fallback attributes available (context provided but no headers)[/yellow]"
-                )
-        else:
-            debug_logger.error("🔍 ❌ context=None and get_http_headers() failed")
-            print("[PRINCIPAL DEBUG] context=None", file=sys.stderr, flush=True)
-            console.print("[yellow]DEBUG: context=None and get_http_headers() failed - no headers available[/yellow]")
 
     # If still no headers dict available, return None
     if not headers:
-        debug_logger.error("🔍 ❌ FINAL: No headers available - cannot detect tenant - returning (None, None)")
-        print("[PRINCIPAL DEBUG] ❌ CRITICAL: No headers available - cannot detect tenant", file=sys.stderr, flush=True)
-        console.print("[red]❌ CRITICAL: No headers available - cannot detect tenant[/red]")
         return (None, None)
 
     # Log all relevant headers for debugging
@@ -289,13 +223,6 @@ def get_principal_from_context(
     if not requested_tenant_id:
         host = _get_header_case_insensitive(headers, "host") or ""
         apx_host = _get_header_case_insensitive(headers, "apx-incoming-host")
-
-        # Log ALL headers for debugging
-        logger.error("🔍 TENANT DETECTION - Received headers:")
-        for k, v in headers.items():
-            logger.error(f"🔍   {k}: {v}")
-        logger.error(f"🔍 Host header: {host}")
-        logger.error(f"🔍 Apx-Incoming-Host header: {apx_host}")
 
         console.print(f"[blue]Checking Host header: {host}[/blue]")
 

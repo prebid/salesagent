@@ -288,6 +288,11 @@ class Principal(Base, JSONValidatorMixin):
     tenant = relationship("Tenant", back_populates="principals")
     media_buys = relationship("MediaBuy", back_populates="principal", overlaps="media_buys")
     strategies = relationship("Strategy", back_populates="principal", overlaps="strategies")
+    push_notification_configs = relationship(
+        "PushNotificationConfig",
+        back_populates="principal",
+        overlaps="push_notification_configs,tenant",
+    )
 
     __table_args__ = (
         Index("idx_principals_tenant", "tenant_id"),
@@ -1256,7 +1261,10 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
     # Relationships
     tenant = relationship("Tenant", backref="push_notification_configs", overlaps="principal")
     principal = relationship(
-        "Principal", backref="push_notification_configs", overlaps="push_notification_configs,tenant"
+        "Principal",
+        back_populates="push_notification_configs",
+        overlaps="push_notification_configs,tenant",
+        foreign_keys=[tenant_id, principal_id],
     )
 
     __table_args__ = (

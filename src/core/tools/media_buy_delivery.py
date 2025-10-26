@@ -14,8 +14,10 @@ from datetime import date, datetime, timedelta
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from pydantic import ValidationError
+from rich.console import Console
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 from src.core.auth import get_principal_object
 from src.core.helpers import get_principal_id_from_context

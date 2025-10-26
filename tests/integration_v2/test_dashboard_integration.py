@@ -1,29 +1,15 @@
-"""Integration tests for dashboard with real database."""
+"""Integration tests for dashboard with real database.
+
+NOTE: This file uses PostgreSQL-only SQL syntax (INTERVAL, COALESCE, etc.).
+No SQLite support - aligns with codebase PostgreSQL-only architecture.
+"""
 
 import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.core.database.database_session import DatabaseConfig
-
-# TODO: Fix failing tests and remove skip_ci (see GitHub issue #XXX)
-pytestmark = [pytest.mark.integration, pytest.mark.skip_ci]
-
-
-def get_placeholder():
-    """Get the appropriate SQL placeholder for the current database type."""
-    db_config = DatabaseConfig.get_db_config()
-    return "?" if db_config["type"] == "sqlite" else "%s"
-
-
-def get_interval_syntax(days):
-    """Get the appropriate interval syntax for the current database type."""
-    db_config = DatabaseConfig.get_db_config()
-    if db_config["type"] == "sqlite":
-        return f"datetime('now', '-{days} days')"
-    else:
-        return f"CURRENT_TIMESTAMP - INTERVAL '{days} days'"
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
@@ -39,9 +25,6 @@ def test_db(integration_db):
     engine = get_engine()
     conn = engine.connect()
 
-    # Get placeholder for SQL queries
-    ph = get_placeholder()
-
     # First, clean up any existing test data
     try:
         # Tasks table removed - no need to delete
@@ -53,113 +36,65 @@ def test_db(integration_db):
     except:
         pass  # Ignore errors if tables don't exist yet
 
-    # Use INSERT OR IGNORE for SQLite compatibility
-    if DatabaseConfig.get_db_config()["type"] == "sqlite":
-        conn.execute(
-            text(
-                """
-            INSERT OR IGNORE INTO tenants (tenant_id, name, subdomain, is_active, ad_server, billing_plan, created_at, updated_at)
-            VALUES (:tenant_id, :name, :subdomain, :is_active, :ad_server, :billing_plan, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """
-            ),
-            {
-                "tenant_id": "test_dashboard",
-                "name": "Test Dashboard Tenant",
-                "subdomain": "test-dashboard",
-                "is_active": True,
-                "ad_server": "mock",
-                "billing_plan": "standard",
-            },
-        )
-    else:
-        conn.execute(
-            text(
-                """
-            INSERT INTO tenants (tenant_id, name, subdomain, is_active, ad_server, billing_plan, created_at, updated_at)
-            VALUES (:tenant_id, :name, :subdomain, :is_active, :ad_server, :billing_plan, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    # Insert tenant (PostgreSQL ON CONFLICT)
+    conn.execute(
+        text(
+            """
+            INSERT INTO tenants (tenant_id, name, subdomain, is_active, ad_server, billing_plan, enable_axe_signals, human_review_required, approval_mode, created_at, updated_at)
+            VALUES (:tenant_id, :name, :subdomain, :is_active, :ad_server, :billing_plan, :enable_axe_signals, :human_review_required, :approval_mode, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT (tenant_id) DO NOTHING
         """
-            ),
-            {
-                "tenant_id": "test_dashboard",
-                "name": "Test Dashboard Tenant",
-                "subdomain": "test-dashboard",
-                "is_active": True,
-                "ad_server": "mock",
-                "billing_plan": "standard",
-            },
-        )
+        ),
+        {
+            "tenant_id": "test_dashboard",
+            "name": "Test Dashboard Tenant",
+            "subdomain": "test-dashboard",
+            "is_active": True,
+            "ad_server": "mock",
+            "billing_plan": "standard",
+            "enable_axe_signals": False,
+            "human_review_required": False,
+            "approval_mode": "auto",
+        },
+    )
 
     # Commit the tenant first to ensure it exists
     conn.commit()
 
-    # Insert test principals
-    if DatabaseConfig.get_db_config()["type"] == "sqlite":
-        conn.execute(
-            text(
-                """
-            INSERT OR IGNORE INTO principals (tenant_id, principal_id, name, access_token, platform_mappings)
-            VALUES (:tenant_id, :principal_id, :name, :access_token, :platform_mappings)
-        """
-            ),
-            {
-                "tenant_id": "test_dashboard",
-                "principal_id": "principal_1",
-                "name": "Test Advertiser 1",
-                "access_token": "token_1",
-                "platform_mappings": "{}",
-            },
-        )
-
-        conn.execute(
-            text(
-                """
-            INSERT OR IGNORE INTO principals (tenant_id, principal_id, name, access_token, platform_mappings)
-            VALUES (:tenant_id, :principal_id, :name, :access_token, :platform_mappings)
-        """
-            ),
-            {
-                "tenant_id": "test_dashboard",
-                "principal_id": "principal_2",
-                "name": "Test Advertiser 2",
-                "access_token": "token_2",
-                "platform_mappings": "{}",
-            },
-        )
-    else:
-        conn.execute(
-            text(
-                """
+    # Insert test principals (PostgreSQL ON CONFLICT)
+    conn.execute(
+        text(
+            """
             INSERT INTO principals (tenant_id, principal_id, name, access_token, platform_mappings)
             VALUES (:tenant_id, :principal_id, :name, :access_token, :platform_mappings)
             ON CONFLICT (tenant_id, principal_id) DO NOTHING
         """
-            ),
-            {
-                "tenant_id": "test_dashboard",
-                "principal_id": "principal_1",
-                "name": "Test Advertiser 1",
-                "access_token": "token_1",
-                "platform_mappings": "{}",
-            },
-        )
+        ),
+        {
+            "tenant_id": "test_dashboard",
+            "principal_id": "principal_1",
+            "name": "Test Advertiser 1",
+            "access_token": "token_1",
+            "platform_mappings": "{}",
+        },
+    )
 
-        conn.execute(
-            text(
-                """
+    conn.execute(
+        text(
+            """
             INSERT INTO principals (tenant_id, principal_id, name, access_token, platform_mappings)
             VALUES (:tenant_id, :principal_id, :name, :access_token, :platform_mappings)
             ON CONFLICT (tenant_id, principal_id) DO NOTHING
         """
-            ),
-            {
-                "tenant_id": "test_dashboard",
-                "principal_id": "principal_2",
-                "name": "Test Advertiser 2",
-                "access_token": "token_2",
-                "platform_mappings": "{}",
-            },
-        )
+        ),
+        {
+            "tenant_id": "test_dashboard",
+            "principal_id": "principal_2",
+            "name": "Test Advertiser 2",
+            "access_token": "token_2",
+            "platform_mappings": "{}",
+        },
+    )
 
     # Insert test media buys with different statuses and dates
     now = datetime.now(UTC)
@@ -304,16 +239,15 @@ class TestDashboardMetricsIntegration:
         """Test revenue calculation from database."""
         from sqlalchemy import text
 
-        interval_30 = get_interval_syntax(30)
-        # Query for 30-day revenue
+        # Query for 30-day revenue (PostgreSQL INTERVAL syntax)
         cursor = test_db.execute(
             text(
-                f"""
+                """
             SELECT COALESCE(SUM(budget), 0) as total_revenue
             FROM media_buys
             WHERE tenant_id = :tenant_id
             AND status IN ('active', 'completed')
-            AND created_at >= {interval_30}
+            AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
         """
             ),
             {"tenant_id": "test_dashboard"},
@@ -329,18 +263,15 @@ class TestDashboardMetricsIntegration:
         """Test revenue change vs previous period."""
         from sqlalchemy import text
 
-        interval_30 = get_interval_syntax(30)
-        interval_60 = get_interval_syntax(60)
-
         # Current period (last 30 days)
         cursor = test_db.execute(
             text(
-                f"""
+                """
             SELECT COALESCE(SUM(budget), 0)
             FROM media_buys
             WHERE tenant_id = :tenant_id
             AND status IN ('active', 'completed')
-            AND created_at >= {interval_30}
+            AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
         """
             ),
             {"tenant_id": "test_dashboard"},
@@ -350,13 +281,13 @@ class TestDashboardMetricsIntegration:
         # Previous period (30-60 days ago)
         cursor = test_db.execute(
             text(
-                f"""
+                """
             SELECT COALESCE(SUM(budget), 0)
             FROM media_buys
             WHERE tenant_id = :tenant_id
             AND status IN ('active', 'completed')
-            AND created_at >= {interval_60}
-            AND created_at < {interval_30}
+            AND created_at >= CURRENT_TIMESTAMP - INTERVAL '60 days'
+            AND created_at < CURRENT_TIMESTAMP - INTERVAL '30 days'
         """
             ),
             {"tenant_id": "test_dashboard"},
@@ -420,14 +351,13 @@ class TestDashboardMetricsIntegration:
         assert total == 2
 
         # Active advertisers (with activity in last 30 days)
-        interval_30 = get_interval_syntax(30)
         cursor = test_db.execute(
             text(
-                f"""
+                """
             SELECT COUNT(DISTINCT principal_id)
             FROM media_buys
             WHERE tenant_id = :tenant_id
-            AND created_at >= {interval_30}
+            AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
         """
             ),
             {"tenant_id": "test_dashboard"},
@@ -477,16 +407,15 @@ class TestDashboardDataRetrieval:
         """Test data for revenue chart."""
         from sqlalchemy import text
 
-        interval_7 = get_interval_syntax(7)
         cursor = test_db.execute(
             text(
-                f"""
+                """
             SELECT
                 mb.advertiser_name,
                 SUM(mb.budget) as revenue
             FROM media_buys mb
             WHERE mb.tenant_id = :tenant_id
-            AND mb.created_at >= {interval_7}
+            AND mb.created_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
             AND mb.status IN ('active', 'completed')
             GROUP BY mb.advertiser_name
             ORDER BY revenue DESC
@@ -512,44 +441,27 @@ class TestDashboardErrorCases:
         """Test dashboard with tenant that has no data."""
         from sqlalchemy import text
 
-        db_config = DatabaseConfig.get_db_config()
-
-        # Create empty tenant
-        if db_config["type"] == "sqlite":
-            test_db.execute(
-                text(
-                    """
-                INSERT OR IGNORE INTO tenants (tenant_id, name, subdomain, is_active, ad_server, billing_plan, created_at, updated_at)
-                VALUES (:tenant_id, :name, :subdomain, :is_active, :ad_server, :billing_plan, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """
-                ),
-                {
-                    "tenant_id": "empty_tenant",
-                    "name": "Empty Tenant",
-                    "subdomain": "empty",
-                    "is_active": True,
-                    "ad_server": "mock",
-                    "billing_plan": "standard",
-                },
-            )
-        else:
-            test_db.execute(
-                text(
-                    """
-                INSERT INTO tenants (tenant_id, name, subdomain, is_active, ad_server, billing_plan, created_at, updated_at)
-                VALUES (:tenant_id, :name, :subdomain, :is_active, :ad_server, :billing_plan, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        # Create empty tenant (PostgreSQL ON CONFLICT)
+        test_db.execute(
+            text(
+                """
+                INSERT INTO tenants (tenant_id, name, subdomain, is_active, ad_server, billing_plan, enable_axe_signals, human_review_required, approval_mode, created_at, updated_at)
+                VALUES (:tenant_id, :name, :subdomain, :is_active, :ad_server, :billing_plan, :enable_axe_signals, :human_review_required, :approval_mode, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT (tenant_id) DO NOTHING
             """
-                ),
-                {
-                    "tenant_id": "empty_tenant",
-                    "name": "Empty Tenant",
-                    "subdomain": "empty",
-                    "is_active": True,
-                    "ad_server": "mock",
-                    "billing_plan": "standard",
-                },
-            )
+            ),
+            {
+                "tenant_id": "empty_tenant",
+                "name": "Empty Tenant",
+                "subdomain": "empty",
+                "is_active": True,
+                "ad_server": "mock",
+                "billing_plan": "standard",
+                "enable_axe_signals": False,
+                "human_review_required": False,
+                "approval_mode": "auto",
+            },
+        )
         test_db.commit()
 
         # All metrics should return 0 or empty

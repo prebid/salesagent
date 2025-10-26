@@ -25,8 +25,7 @@ class TestDuplicateProductValidation:
 
         # Create a mock context with auth header
         mock_context = MagicMock()
-        mock_context.request_context = MagicMock()
-        mock_context.request_context.http_headers = {"x-adcp-auth": "test_token"}
+        mock_context.headers = {"x-adcp-auth": "test_token"}
 
         # Mock testing context
         mock_testing_ctx = MagicMock()
@@ -44,12 +43,16 @@ class TestDuplicateProductValidation:
         # Mock the dependencies
         with (
             patch(
-                "src.core.auth.get_principal_from_context",
-                return_value=("test_principal", mock_tenant),
+                "src.core.tools.media_buy_create.get_principal_id_from_context",
+                return_value="test_principal",
             ),
             patch(
                 "src.core.tools.media_buy_create.get_current_tenant",
                 return_value=mock_tenant,
+            ),
+            patch(
+                "src.core.tools.media_buy_create.get_principal_object",
+                return_value=MagicMock(principal_id="test_principal", name="Test Principal"),
             ),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_testing_context", return_value=mock_testing_ctx),
@@ -99,8 +102,7 @@ class TestDuplicateProductValidation:
 
         # Create a mock context with auth header
         mock_context = MagicMock()
-        mock_context.request_context = MagicMock()
-        mock_context.request_context.http_headers = {"x-adcp-auth": "test_token"}
+        mock_context.headers = {"x-adcp-auth": "test_token"}
 
         # Mock testing context
         mock_testing_ctx = MagicMock()
@@ -118,12 +120,16 @@ class TestDuplicateProductValidation:
         # Mock the dependencies
         with (
             patch(
-                "src.core.auth.get_principal_from_context",
-                return_value=("test_principal", mock_tenant),
+                "src.core.tools.media_buy_create.get_principal_id_from_context",
+                return_value="test_principal",
             ),
             patch(
                 "src.core.tools.media_buy_create.get_current_tenant",
                 return_value=mock_tenant,
+            ),
+            patch(
+                "src.core.tools.media_buy_create.get_principal_object",
+                return_value=MagicMock(principal_id="test_principal", name="Test Principal"),
             ),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_testing_context", return_value=mock_testing_ctx),

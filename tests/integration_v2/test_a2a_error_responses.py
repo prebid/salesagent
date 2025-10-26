@@ -33,8 +33,7 @@ from tests.integration_v2.conftest import (
 )
 from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
-# TODO: Fix failing tests and remove skip_ci (see GitHub issue #XXX)
-pytestmark = [pytest.mark.integration, pytest.mark.skip_ci]
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 # Configure logging for tests
 logging.basicConfig(level=logging.DEBUG)
@@ -74,11 +73,13 @@ class TestA2AErrorPropagation:
                 updated_at=now,
             )
             session.add(tenant)
+            session.flush()  # Ensure tenant exists in database before add_required_setup_data queries it
 
             # Add required setup data before creating product
             add_required_setup_data(session, "a2a_error_test")
 
             # Create product using new pricing model
+            # NOTE: formats must be structured FormatId objects with agent_url, not strings
             product = create_test_product_with_pricing(
                 session=session,
                 tenant_id="a2a_error_test",
@@ -89,7 +90,7 @@ class TestA2AErrorPropagation:
                 rate="10.0",
                 is_fixed=True,
                 min_spend_per_package="1000.0",
-                formats=["display_300x250"],
+                formats=[{"id": "display_300x250", "agent_url": "https://test.example.com"}],
                 delivery_type="guaranteed",
                 targeting_template={},
             )
@@ -114,7 +115,7 @@ class TestA2AErrorPropagation:
             }
 
     @pytest.fixture
-    def test_principal(self, test_tenant):
+    def test_principal(self, integration_db, test_tenant):
         """Create test principal."""
         with get_db_session() as session:
             principal = ModelPrincipal(
@@ -122,8 +123,6 @@ class TestA2AErrorPropagation:
                 principal_id="a2a_error_principal",
                 name="A2A Error Test Principal",
                 access_token="a2a_error_token_123",
-                advertiser_name="A2A Error Advertiser",
-                is_active=True,
                 platform_mappings={"mock": {"advertiser_id": "mock_adv_123"}},
             )
             session.add(principal)
@@ -174,7 +173,11 @@ class TestA2AErrorPropagation:
 
             # Extract response data
             artifact = result.artifacts[0]
-            artifact_data = artifact.parts[0].data if hasattr(artifact.parts[0], "data") else {}
+            artifact_data = (
+                artifact.parts[0].root.data
+                if hasattr(artifact.parts[0], "root") and hasattr(artifact.parts[0].root, "data")
+                else {}
+            )
 
             # CRITICAL ASSERTIONS: Error propagation
             assert "success" in artifact_data, "Response must include 'success' field"
@@ -209,7 +212,7 @@ class TestA2AErrorPropagation:
                 "packages": [
                     {
                         "buyer_ref": "pkg_1",
-                        "products": ["a2a_error_product"],
+                        "product_id": "a2a_error_product",  # Use product_id (singular) not products (plural)
                         "budget": {"total": 10000.0, "currency": "USD"},
                     }
                 ],
@@ -225,7 +228,11 @@ class TestA2AErrorPropagation:
 
             # Extract response data
             artifact = result.artifacts[0]
-            artifact_data = artifact.parts[0].data if hasattr(artifact.parts[0], "data") else {}
+            artifact_data = (
+                artifact.parts[0].root.data
+                if hasattr(artifact.parts[0], "root") and hasattr(artifact.parts[0].root, "data")
+                else {}
+            )
 
             # CRITICAL ASSERTIONS: Error propagation for auth failures
             assert artifact_data["success"] is False, "success must be False for auth errors"
@@ -258,7 +265,7 @@ class TestA2AErrorPropagation:
                 "packages": [
                     {
                         "buyer_ref": "pkg_1",
-                        "products": ["a2a_error_product"],
+                        "product_id": "a2a_error_product",  # Use product_id (singular) not products (plural)
                         "budget": {"total": 10000.0, "currency": "USD"},
                     }
                 ],
@@ -274,7 +281,11 @@ class TestA2AErrorPropagation:
 
             # Extract response data
             artifact = result.artifacts[0]
-            artifact_data = artifact.parts[0].data if hasattr(artifact.parts[0], "data") else {}
+            artifact_data = (
+                artifact.parts[0].root.data
+                if hasattr(artifact.parts[0], "root") and hasattr(artifact.parts[0].root, "data")
+                else {}
+            )
 
             # CRITICAL ASSERTIONS: Success response
             assert artifact_data["success"] is True, "success must be True for successful operation"
@@ -285,7 +296,16 @@ class TestA2AErrorPropagation:
             assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
     async def test_create_media_buy_response_includes_all_adcp_fields(self, handler, test_tenant, test_principal):
-        """Test that A2A response includes all AdCP response fields (not just cherry-picked ones)."""
+        """Test that A2A response includes all AdCP domain fields (not just cherry-picked ones).
+
+        Per AdCP v2.4 spec and PR #113:
+        - Domain responses contain ONLY domain fields (buyer_ref, media_buy_id, packages, errors)
+        - Protocol fields (status, message, task_id, context_id) are added by ProtocolEnvelope wrapper
+        - adcp_version is NOT included in individual responses (indicated by schema URL path)
+
+        This test verifies that all domain fields from CreateMediaBuyResponse schema are preserved
+        when wrapped by the A2A handler.
+        """
         # Mock authentication
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
 
@@ -305,7 +325,7 @@ class TestA2AErrorPropagation:
                 "packages": [
                     {
                         "buyer_ref": "pkg_1",
-                        "products": ["a2a_error_product"],
+                        "product_id": "a2a_error_product",  # Use product_id (singular) not products (plural)
                         "budget": {"total": 10000.0, "currency": "USD"},
                     }
                 ],
@@ -321,23 +341,31 @@ class TestA2AErrorPropagation:
 
             # Extract response data
             artifact = result.artifacts[0]
-            artifact_data = artifact.parts[0].data if hasattr(artifact.parts[0], "data") else {}
+            artifact_data = (
+                artifact.parts[0].root.data
+                if hasattr(artifact.parts[0], "root") and hasattr(artifact.parts[0].root, "data")
+                else {}
+            )
 
-            # CRITICAL ASSERTIONS: All AdCP fields preserved
-            # Required AdCP fields from CreateMediaBuyResponse schema
-            assert "adcp_version" in artifact_data, "Must include adcp_version (AdCP spec required field)"
-            assert "status" in artifact_data, "Must include status (AdCP spec required field)"
-            assert "buyer_ref" in artifact_data, "Must include buyer_ref (AdCP spec required field)"
+            # CRITICAL ASSERTIONS: All AdCP domain fields from CreateMediaBuyResponse schema
+            # Required AdCP domain field
+            assert "buyer_ref" in artifact_data, "Must include buyer_ref (AdCP spec required domain field)"
 
-            # Optional but important AdCP fields
-            assert "packages" in artifact_data, "Must include packages (AdCP spec field)"
-            assert (
-                "creative_deadline" in artifact_data or artifact_data.get("creative_deadline") is None
-            ), "Must include creative_deadline (AdCP spec field)"
+            # Optional AdCP domain fields
+            assert "media_buy_id" in artifact_data, "Must include media_buy_id (AdCP spec domain field)"
+            assert "packages" in artifact_data, "Must include packages (AdCP spec domain field)"
+            assert "creative_deadline" in artifact_data, "Must include creative_deadline (AdCP spec domain field)"
 
-            # A2A-specific augmentation fields
+            # errors field should be present (None or empty for success, populated for errors)
+            assert "errors" in artifact_data, "Must include errors field (AdCP spec domain field)"
+
+            # A2A-specific augmentation fields (added by wrapper layer)
             assert "success" in artifact_data, "A2A wrapper must add success field"
             assert "message" in artifact_data, "A2A wrapper must add message field"
+
+            # Verify success case
+            assert artifact_data["success"] is True, "Success should be True for successful operation"
+            assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
 
 @pytest.mark.integration
@@ -351,7 +379,7 @@ class TestA2AErrorResponseStructure:
         """Create A2A handler instance."""
         return AdCPRequestHandler()
 
-    async def test_error_response_has_consistent_structure(self, handler):
+    async def test_error_response_has_consistent_structure(self, integration_db, handler):
         """Test that all error responses have consistent field structure."""
         # Mock minimal auth
         handler._get_auth_token = MagicMock(return_value="test_token")
@@ -376,7 +404,7 @@ class TestA2AErrorResponseStructure:
             assert "message" in result, "Error response must have message field"
             assert "required_parameters" in result, "Validation error must list required parameters"
 
-    async def test_errors_field_structure_from_validation_error(self, handler):
+    async def test_errors_field_structure_from_validation_error(self, integration_db, handler):
         """Test that validation errors produce properly structured errors field."""
         handler._get_auth_token = MagicMock(return_value="test_token")
 

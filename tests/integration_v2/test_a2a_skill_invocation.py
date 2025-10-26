@@ -24,8 +24,8 @@ try:
     SCHEMA_VALIDATION_AVAILABLE = True
 except ImportError:
     SCHEMA_VALIDATION_AVAILABLE = False
-    AdCPSchemaValidator = None
-    SchemaValidationError = None
+    AdCPSchemaValidator: type[AdCPSchemaValidator] | None = None  # type: ignore[no-redef]
+    SchemaValidationError: type[SchemaValidationError] | None = None  # type: ignore[no-redef]
 
 # Configure logging for tests
 logging.basicConfig(level=logging.DEBUG)
@@ -82,7 +82,9 @@ class A2AAdCPValidator:
 
         return {}
 
-    async def validate_a2a_skill_response(self, skill_name: str, task_result: Task) -> dict:
+    async def validate_a2a_skill_response(
+        self, skill_name: str, task_result: Task
+    ) -> dict[str, bool | list[str] | str | None]:
         """
         Validate A2A skill response against AdCP schemas.
 
@@ -91,26 +93,34 @@ class A2AAdCPValidator:
             task_result: The A2A Task result containing artifacts
 
         Returns:
-            Dict with validation results: {"valid": bool, "errors": list, "warnings": list}
+            Dict with validation results: {"valid": bool, "errors": list[str], "warnings": list[str], "schema_tested": str | None}
         """
-        result = {"valid": True, "errors": [], "warnings": [], "schema_tested": None}
+        # Initialize with properly typed lists
+        errors: list[str] = []
+        warnings: list[str] = []
+        result: dict[str, bool | list[str] | str | None] = {
+            "valid": True,
+            "errors": errors,
+            "warnings": warnings,
+            "schema_tested": None,
+        }
 
         # Check if schema validation is available
         if not SCHEMA_VALIDATION_AVAILABLE or not self.validator:
-            result["warnings"].append("Schema validation not available - skipping")
+            warnings.append("Schema validation not available - skipping")
             return result
 
         # Check if skill has corresponding AdCP schema
         schema_task = self.SKILL_TO_SCHEMA_MAP.get(skill_name)
         if not schema_task:
-            result["warnings"].append(f"No AdCP schema mapping for skill '{skill_name}' - skipping")
+            warnings.append(f"No AdCP schema mapping for skill '{skill_name}' - skipping")
             return result
 
         result["schema_tested"] = schema_task
 
         # Extract AdCP payload from A2A artifacts
         if not task_result.artifacts:
-            result["errors"].append("No artifacts found in A2A task result")
+            errors.append("No artifacts found in A2A task result")
             result["valid"] = False
             return result
 
@@ -119,18 +129,18 @@ class A2AAdCPValidator:
             try:
                 adcp_payload = self.extract_adcp_payload_from_a2a_artifact(artifact)
                 if not adcp_payload:
-                    result["warnings"].append(f"Artifact {i}: No AdCP payload found")
+                    warnings.append(f"Artifact {i}: No AdCP payload found")
                     continue
 
                 # Validate against AdCP schema
                 await self.validator.validate_response(schema_task, adcp_payload)
-                result["warnings"].append(f"Artifact {i}: AdCP schema validation passed")
+                warnings.append(f"Artifact {i}: AdCP schema validation passed")
 
             except SchemaValidationError as e:
-                result["errors"].append(f"Artifact {i}: AdCP schema validation failed: {e}")
+                errors.append(f"Artifact {i}: AdCP schema validation failed: {e}")
                 result["valid"] = False
             except Exception as e:
-                result["errors"].append(f"Artifact {i}: Validation error: {e}")
+                errors.append(f"Artifact {i}: Validation error: {e}")
                 result["valid"] = False
 
         return result
