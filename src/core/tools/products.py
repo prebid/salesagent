@@ -52,11 +52,11 @@ async def _get_products_impl(req: GetProductsRequestGenerated, context: Context)
     if isinstance(context, ToolContext):
         # New context management - everything is already extracted
         testing_ctx_raw = context.testing_context
-        # Convert dict testing context back to TestingContext object if needed
+        # Convert dict testing context back to TestContext object if needed
         if isinstance(testing_ctx_raw, dict):
-            from src.core.testing_hooks import TestingContext
+            from src.core.testing_hooks import AdCPTestContext
 
-            testing_ctx = TestingContext(**testing_ctx_raw)
+            testing_ctx = AdCPTestContext(**testing_ctx_raw)
         else:
             testing_ctx = testing_ctx_raw
         principal_id = context.principal_id

@@ -5,28 +5,25 @@ import sys
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from rich.console import Console
 from rich.table import Table
 
 console = Console()
 
 
-def test_workflow_architecture():
+@pytest.mark.requires_db
+def test_workflow_architecture(integration_db):
     """Test the new workflow architecture."""
     console.print("\n[bold cyan]Testing New Workflow Architecture[/bold cyan]")
     console.print("=" * 60)
 
     # Import after setting up path
-    from sqlalchemy import create_engine, delete, select
-    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy import delete, select
 
     from src.core.context_manager import ContextManager
-    from src.core.database.db_config import DatabaseConfig
+    from src.core.database.database_session import get_db_session
     from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
-
-    # Create test database session
-    engine = create_engine(DatabaseConfig.get_connection_string())
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     # Initialize context manager
     ctx_mgr = ContextManager()
@@ -38,7 +35,7 @@ def test_workflow_architecture():
     creative_id = f"cr_{uuid.uuid4().hex[:8]}"
 
     # Use proper context manager pattern for session
-    with SessionLocal() as session:
+    with get_db_session() as session:
         try:
             # Clean up any existing test data
             session.execute(
@@ -237,15 +234,12 @@ def test_workflow_architecture():
             console.print("6. Comments array enables collaboration on steps")
             console.print("7. No more tasks table - everything in workflow_steps")
 
-            # If we reach here, all operations succeeded
-            return True
-
         except Exception as e:
             console.print(f"\n[bold red]❌ Test failed: {e}[/bold red]")
             import traceback
 
             traceback.print_exc()
-            return False
+            raise
 
 
 if __name__ == "__main__":

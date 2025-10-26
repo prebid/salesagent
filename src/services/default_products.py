@@ -246,7 +246,7 @@ def get_industry_specific_products(industry: str) -> list[dict[str, Any]]:
     Returns:
         List of product templates for the industry
     """
-    industry_products = {
+    industry_products: dict[str, list[dict[str, Any]]] = {
         "news": [
             {
                 "product_id": "breaking_news_alert",

@@ -9,9 +9,9 @@ from datetime import datetime
 
 from src.core.schemas import PricingOption
 from src.core.testing_hooks import (
+    AdCPTestContext,
     CampaignEvent,
     NextEventCalculator,
-    TestingContext,
     apply_testing_hooks,
     get_session_manager,
 )
@@ -22,7 +22,7 @@ class TestMockServerResponseHeaders:
 
     def test_next_event_calculator_lifecycle_progression(self):
         """Test that NextEventCalculator correctly calculates lifecycle progression."""
-        testing_ctx = TestingContext(dry_run=True)
+        testing_ctx = AdCPTestContext(dry_run=True)
 
         # Test normal lifecycle progression
         test_cases = [
@@ -41,7 +41,7 @@ class TestMockServerResponseHeaders:
 
     def test_next_event_calculator_with_jump_to_event(self):
         """Test NextEventCalculator when jumping to specific events."""
-        testing_ctx = TestingContext(dry_run=True, jump_to_event=CampaignEvent.CAMPAIGN_MIDPOINT)
+        testing_ctx = AdCPTestContext(dry_run=True, jump_to_event=CampaignEvent.CAMPAIGN_MIDPOINT)
 
         # When jumping to midpoint, next should be 75%
         next_event = NextEventCalculator.get_next_event(None, 0.3, testing_ctx)
@@ -64,7 +64,7 @@ class TestMockServerResponseHeaders:
 
     def test_response_headers_with_campaign_info(self):
         """Test that response headers are correctly generated with campaign info."""
-        testing_ctx = TestingContext(
+        testing_ctx = AdCPTestContext(
             dry_run=True, auto_advance=True, mock_time=datetime(2025, 1, 10), test_session_id="test_response_headers"
         )
 
@@ -98,7 +98,7 @@ class TestMockServerResponseHeaders:
         # Clean up any existing session
         session_manager.cleanup_session(session_id)
 
-        testing_ctx = TestingContext(dry_run=True, test_session_id=session_id, simulated_spend=True)
+        testing_ctx = AdCPTestContext(dry_run=True, test_session_id=session_id, simulated_spend=True)
 
         # First request with spending
         response_data1 = {"total_spend": 2500.0}
@@ -125,7 +125,7 @@ class TestMockServerResponseHeaders:
         """Test response headers when no campaign info is available."""
         from src.core.schemas import Product
 
-        testing_ctx = TestingContext(dry_run=True, test_session_id="test_no_campaign")
+        testing_ctx = AdCPTestContext(dry_run=True, test_session_id="test_no_campaign")
 
         # Use real Product object instead of mock dictionary
         test_product = Product(
@@ -174,7 +174,7 @@ class TestMockServerResponseHeaders:
 
     def test_response_headers_in_debug_mode(self):
         """Test that debug mode includes response header information."""
-        testing_ctx = TestingContext(dry_run=True, debug_mode=True, mock_time=datetime(2025, 1, 15), auto_advance=True)
+        testing_ctx = AdCPTestContext(dry_run=True, debug_mode=True, mock_time=datetime(2025, 1, 15), auto_advance=True)
 
         campaign_info = {"start_date": datetime(2025, 1, 1), "end_date": datetime(2025, 1, 31), "total_budget": 10000.0}
 
@@ -193,7 +193,7 @@ class TestMockServerResponseHeaders:
 
     def test_error_event_next_event_calculation(self):
         """Test next event calculation for error scenarios."""
-        testing_ctx = TestingContext(dry_run=True, jump_to_event=CampaignEvent.BUDGET_EXCEEDED)
+        testing_ctx = AdCPTestContext(dry_run=True, jump_to_event=CampaignEvent.BUDGET_EXCEEDED)
 
         # After budget exceeded (error), next event should depend on progress
         next_event = NextEventCalculator.get_next_event(CampaignEvent.BUDGET_EXCEEDED, 0.9, testing_ctx)
@@ -203,7 +203,7 @@ class TestMockServerResponseHeaders:
 
     def test_multiple_testing_headers_integration(self):
         """Test integration with multiple testing headers simultaneously."""
-        testing_ctx = TestingContext(
+        testing_ctx = AdCPTestContext(
             dry_run=True,
             mock_time=datetime(2025, 1, 15),
             jump_to_event=CampaignEvent.CAMPAIGN_MIDPOINT,

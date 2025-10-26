@@ -121,6 +121,8 @@ class ContextManager(DatabaseManager):
             stmt = select(Context).filter_by(context_id=context_id)
             context = self.session.scalars(stmt).first()
             if context:
+                # TODO: Model uses Mapped[DateTime] but accepts datetime objects at runtime
+                # Should update model annotation to Mapped[datetime] for proper typing
                 context.last_activity_at = datetime.now(UTC)  # type: ignore[assignment]
                 self.session.commit()
         finally:
@@ -393,8 +395,8 @@ class ContextManager(DatabaseManager):
                             "status": step.status,
                             "owner": step.owner,
                             "assigned_to": step.assigned_to,
-                            "created_at": step.created_at.isoformat() if step.created_at else None,
-                            "completed_at": step.completed_at.isoformat() if step.completed_at else None,
+                            "created_at": step.created_at.isoformat() if step.created_at else None,  # type: ignore[attr-defined]
+                            "completed_at": step.completed_at.isoformat() if step.completed_at else None,  # type: ignore[attr-defined]
                             "tool_name": step.tool_name,
                             "error_message": step.error_message,
                             "comments": step.comments,
@@ -428,7 +430,7 @@ class ContextManager(DatabaseManager):
                 context.conversation_history.append(
                     {"role": role, "content": content, "timestamp": datetime.now(UTC).isoformat()}
                 )
-                context.last_activity_at = datetime.now(UTC)
+                context.last_activity_at = datetime.now(UTC)  # type: ignore[assignment]
                 session.commit()
         finally:
             session.close()
@@ -511,7 +513,7 @@ class ContextManager(DatabaseManager):
             # Detach all from session
             for context in contexts:
                 session.expunge(context)
-            return contexts
+            return list(contexts)
         finally:
             session.close()
 
@@ -582,8 +584,8 @@ class ContextManager(DatabaseManager):
                 return
 
             # Get context to find tenant_id
-            stmt = select(Context).filter_by(context_id=step.context_id)
-            context = session.scalars(stmt).first()
+            context_stmt = select(Context).filter_by(context_id=step.context_id)
+            context = session.scalars(context_stmt).first()
             if not context:
                 console.print(f"[yellow]No context found for step {step.step_id}[/yellow]")
                 return
@@ -594,12 +596,12 @@ class ContextManager(DatabaseManager):
             # Find registered webhooks for this principal
             # NOTE: PushNotificationConfig doesn't have object_type/object_id columns
             # Those are in ObjectWorkflowMapping which we already have via 'mappings'
-            stmt = select(PushNotificationConfig).filter_by(
+            webhook_stmt = select(PushNotificationConfig).filter_by(
                 tenant_id=tenant_id,
                 principal_id=principal_id,
                 is_active=True,
             )
-            webhooks = session.scalars(stmt).all()
+            webhooks = session.scalars(webhook_stmt).all()
 
             console.print(f"[cyan]🔍 Found {len(webhooks)} active webhook configs for principal {principal_id}[/cyan]")
 

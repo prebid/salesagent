@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -302,9 +302,9 @@ class PropertyVerificationService:
             error: Error message (if any)
         """
         property_obj.verification_status = status
-        property_obj.verification_checked_at = datetime.utcnow()
+        property_obj.verification_checked_at = datetime.now(UTC)
         property_obj.verification_error = error
-        property_obj.updated_at = datetime.utcnow()
+        property_obj.updated_at = datetime.now(UTC)
         session.commit()
 
     def verify_all_properties(self, tenant_id: str, agent_url: str) -> dict[str, Any]:

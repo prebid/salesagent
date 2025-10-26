@@ -102,7 +102,7 @@ def get_ai_review_stats(
     override_rate = (human_overrides / total_reviews * 100) if total_reviews > 0 else 0.0
 
     # Policy breakdown
-    policy_breakdown = {}
+    policy_breakdown: dict[str, int] = {}
     for review in all_reviews:
         if review.policy_triggered:
             policy_breakdown[review.policy_triggered] = policy_breakdown.get(review.policy_triggered, 0) + 1
@@ -168,11 +168,11 @@ def get_creative_with_latest_review(
         return None, None
 
     # Get latest review
-    stmt = (
+    review_stmt = (
         select(CreativeReview).filter_by(creative_id=creative_id).order_by(CreativeReview.reviewed_at.desc()).limit(1)
     )
 
-    latest_review = session.scalars(stmt).first()
+    latest_review = session.scalars(review_stmt).first()
 
     return creative, latest_review
 
@@ -205,7 +205,8 @@ def get_creatives_needing_human_review(
         .limit(limit)
     )
 
-    return list(session.execute(stmt).all())
+    results = session.execute(stmt).all()
+    return [(row[0], row[1]) for row in results]
 
 
 def get_ai_accuracy_metrics(

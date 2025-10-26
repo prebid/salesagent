@@ -47,8 +47,10 @@ class CampaignEvent(str, Enum):
     CREATIVE_REJECTION = "creative-rejection"
 
 
-class TestingContext(BaseModel):
+class AdCPTestContext(BaseModel):
     """Context for test execution with all testing hooks."""
+
+    __test__ = False  # Tell pytest not to collect this as a test class
 
     # Session isolation
     test_session_id: str | None = None
@@ -73,7 +75,7 @@ class TestingContext(BaseModel):
     debug_mode: bool = False
 
     @classmethod
-    def from_context(cls, context: Context) -> "TestingContext":
+    def from_context(cls, context: Context) -> "TestContext":
         """Extract testing context from FastMCP context headers."""
         if not context:
             return cls()
@@ -97,7 +99,7 @@ class TestingContext(BaseModel):
                 headers = context._headers
 
         if not headers:
-            return cls()  # Return default TestingContext if no headers available
+            return cls()  # Return default TestContext if no headers available
 
         # Extract all testing headers
         test_session_id = headers.get("X-Test-Session-ID")
@@ -147,12 +149,18 @@ class TestingContext(BaseModel):
         )
 
 
+# Backwards compatibility aliases
+TestingContext = AdCPTestContext  # Original name
+TestContext = AdCPTestContext  # Intermediate name (was briefly used)
+TestingHookContext = AdCPTestContext  # Another intermediate name
+
+
 class NextEventCalculator:
     """Calculates next events and timing for AdCP response headers."""
 
     @staticmethod
     def get_next_event(
-        current_event: CampaignEvent | None, progress: float, testing_ctx: TestingContext
+        current_event: CampaignEvent | None, progress: float, testing_ctx: TestContext
     ) -> CampaignEvent | None:
         """Calculate the next expected event in the campaign lifecycle."""
 
@@ -345,7 +353,7 @@ class DeliverySimulator:
     """Simulates realistic campaign delivery based on testing context."""
 
     @staticmethod
-    def calculate_simulated_metrics(budget: float, progress: float, testing_ctx: TestingContext) -> dict[str, Any]:
+    def calculate_simulated_metrics(budget: float, progress: float, testing_ctx: TestContext) -> dict[str, Any]:
         """Calculate realistic delivery metrics for a campaign."""
 
         # Base metrics
@@ -470,9 +478,9 @@ class DeliverySimulator:
 _session_manager = TestSessionManager()
 
 
-def get_testing_context(context: Context) -> TestingContext:
+def get_testing_context(context: Context) -> TestContext:
     """Get testing context from FastMCP context."""
-    return TestingContext.from_context(context)
+    return TestContext.from_context(context)
 
 
 def get_session_manager() -> TestSessionManager:
@@ -485,14 +493,14 @@ def get_next_event_calculator() -> NextEventCalculator:
     return NextEventCalculator
 
 
-def is_production_isolated(testing_ctx: TestingContext) -> bool:
+def is_production_isolated(testing_ctx: TestContext) -> bool:
     """Verify that testing context is properly isolated from production."""
     return testing_ctx.dry_run or testing_ctx.test_session_id is not None or testing_ctx.simulated_spend
 
 
 def apply_testing_hooks(
     data: dict[str, Any],
-    testing_ctx: TestingContext,
+    testing_ctx: TestContext,
     operation: str = "unknown",
     campaign_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:

@@ -52,6 +52,7 @@ def retry_on_exception(
                         logger.error(f"All {max_attempts} attempts failed for {func.__name__}")
 
             # Re-raise the last exception if all attempts failed
+            assert last_exception is not None, "last_exception should be set if all attempts failed"
             raise last_exception
 
         return wrapper
@@ -97,6 +98,7 @@ def async_retry_on_exception(
                         logger.error(f"All {max_attempts} attempts failed for {func.__name__}")
 
             # Re-raise the last exception if all attempts failed
+            assert last_exception is not None, "last_exception should be set if all attempts failed"
             raise last_exception
 
         return wrapper

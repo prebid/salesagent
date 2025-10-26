@@ -1,17 +1,19 @@
 """Integration tests for generative creative support.
 
 Tests the flow where sync_creatives detects generative formats (those with output_format_ids)
-and calls build_creative instead of preview_creative, using the Gemini API key.
+and calls build_creative instead of preview_creative, using mocked Gemini API.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.database.database_session import get_db_session
+from src.core.database.models import MediaBuy, Principal
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
-# TODO: Fix failing tests and remove skip_ci (see GitHub issue #XXX)
-pytestmark = [pytest.mark.integration, pytest.mark.skip_ci, pytest.mark.requires_db]
+# TODO: Fix generative creative tests - complex mock setup needs debugging
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.skip_ci]
 
 
 class MockContext:
@@ -37,11 +39,11 @@ class TestGenerativeCreatives:
         with get_db_session() as session:
             # Create test tenant
             tenant = create_tenant_with_timestamps(
-                session,
                 tenant_id="test-tenant-gen",
                 name="Test Tenant Generative",
                 subdomain="test-gen",
             )
+            session.add(tenant)
 
             # Create principal
             principal = Principal(

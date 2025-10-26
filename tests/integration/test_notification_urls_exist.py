@@ -30,8 +30,8 @@ class TestNotificationUrlsExist:
         """Extract all URL patterns from slack_notifier.py."""
         slack_notifier_path = Path(__file__).parent.parent.parent / "src" / "services" / "slack_notifier.py"
 
-        if not slack_notifier_path.exists():
-            pytest.skip(f"slack_notifier.py not found at {slack_notifier_path}")
+        # We control this file - it should always exist
+        assert slack_notifier_path.exists(), f"slack_notifier.py must exist at {slack_notifier_path}"
 
         content = slack_notifier_path.read_text()
 
@@ -72,8 +72,8 @@ class TestNotificationUrlsExist:
         This test prevents bugs where we hardcode URLs that don't exist.
         Example: /tenant/{tenant_id}/operations didn't exist (should be /workflows).
         """
-        if not slack_notifier_urls:
-            pytest.skip("No notification URLs found in slack_notifier.py")
+        # We control this file - it should have URLs
+        assert slack_notifier_urls, "slack_notifier.py should contain notification URLs"
 
         missing_routes = []
 

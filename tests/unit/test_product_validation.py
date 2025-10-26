@@ -71,11 +71,8 @@ def test_ai_provider_bug_reproduction():
         else:
             print("✅ Good: Internal fields were ignored and not included in AdCP response")
 
-        return True  # Product construction succeeded (unexpectedly)
-
     except ValidationError as e:
         print(f"✅ Validation error caught as expected: {e}")
-        return False  # Product construction failed (as expected)
 
 
 def test_correct_product_construction():

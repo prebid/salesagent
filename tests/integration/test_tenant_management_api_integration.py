@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Integration tests for the Tenant Management API - tests with actual database."""
 
+
 import pytest
 from flask import Flask
 from sqlalchemy import delete
@@ -15,9 +16,48 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
-def app(integration_db):
-    """Create test Flask app."""
+def mock_api_key_auth(integration_db):
+    """Mock API key authentication to always pass.
+
+    This fixture bypasses the require_tenant_management_api_key decorator
+    by creating a valid API key in the database that all tests can use.
+
+    We keep separate tests for authentication itself (test_init_api_key).
+    """
+    from datetime import UTC, datetime
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import TenantManagementConfig
+
+    # Create a test API key in the database
+    test_api_key = "sk-test-integration-key"
+
+    with get_db_session() as session:
+        # Check if key already exists
+        from sqlalchemy import select
+
+        stmt = select(TenantManagementConfig).filter_by(config_key="tenant_management_api_key")
+        existing = session.scalars(stmt).first()
+
+        if not existing:
+            config = TenantManagementConfig(
+                config_key="tenant_management_api_key",
+                config_value=test_api_key,
+                description="Test API key for integration tests",
+                updated_at=datetime.now(UTC),
+                updated_by="pytest",
+            )
+            session.add(config)
+            session.commit()
+
+    return test_api_key
+
+
+@pytest.fixture
+def app(integration_db, mock_api_key_auth):
+    """Create test Flask app with auth configured."""
     # integration_db ensures database is properly initialized
+    # mock_api_key_auth ensures API key exists in database
     app = Flask(__name__)
     app.config["TESTING"] = True
     app.register_blueprint(tenant_management_api)
@@ -28,17 +68,6 @@ def app(integration_db):
 def client(app):
     """Create test client."""
     return app.test_client()
-
-
-@pytest.fixture
-def api_key(client):
-    """Initialize and return API key."""
-    response = client.post("/api/v1/tenant-management/init-api-key")
-    if response.status_code == 201:
-        return response.json["api_key"]
-    # If already initialized, we need to get it from the database
-    # For testing, we'll just use a fixed key
-    return "sk-test-key"
 
 
 @pytest.fixture
@@ -85,32 +114,30 @@ class TestTenantManagementAPIIntegration:
             assert "api_key" in data
             assert data["api_key"].startswith("sk-")
 
-    def test_health_check(self, client, api_key):
+    def test_health_check(self, client, mock_api_key_auth):
         """Test health check endpoint."""
-        response = client.get("/api/v1/tenant-management/health", headers={"X-Tenant-Management-API-Key": api_key})
-
-        if response.status_code == 401:
-            # API key mismatch in test, skip
-            pytest.skip("API key not valid for this test run")
+        response = client.get(
+            "/api/v1/tenant-management/health", headers={"X-Tenant-Management-API-Key": mock_api_key_auth}
+        )
 
         assert response.status_code == 200
         assert response.json["status"] == "healthy"
 
-    def test_create_minimal_gam_tenant(self, client, api_key):
+    def test_create_minimal_gam_tenant(self, client, mock_api_key_auth):
         """Test creating a minimal GAM tenant with just refresh token."""
         tenant_data = {
             "name": "Test Sports Publisher",
             "subdomain": "test-sports",
             "ad_server": "google_ad_manager",
             "gam_refresh_token": "1//test-refresh-token",
+            "creator_email": "test@sports.com",  # Required for access control
         }
 
         response = client.post(
-            "/api/v1/tenant-management/tenants", headers={"X-Tenant-Management-API-Key": api_key}, json=tenant_data
+            "/api/v1/tenant-management/tenants",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            json=tenant_data,
         )
-
-        if response.status_code == 401:
-            pytest.skip("API key not valid for this test run")
 
         assert response.status_code == 201
         data = response.json
@@ -126,7 +153,7 @@ class TestTenantManagementAPIIntegration:
         # Store tenant_id for later tests
         return data["tenant_id"]
 
-    def test_create_full_gam_tenant(self, client, api_key):
+    def test_create_full_gam_tenant(self, client, mock_api_key_auth):
         """Test creating a GAM tenant with all fields."""
         tenant_data = {
             "name": "Test News Publisher",
@@ -142,11 +169,10 @@ class TestTenantManagementAPIIntegration:
         # NOTE: gam_company_id removed - advertiser_id is per-principal in platform_mappings
 
         response = client.post(
-            "/api/v1/tenant-management/tenants", headers={"X-Tenant-Management-API-Key": api_key}, json=tenant_data
+            "/api/v1/tenant-management/tenants",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            json=tenant_data,
         )
-
-        if response.status_code == 401:
-            pytest.skip("API key not valid for this test run")
 
         assert response.status_code == 201
         data = response.json
@@ -155,12 +181,11 @@ class TestTenantManagementAPIIntegration:
         assert data["name"] == "Test News Publisher"
         assert data["subdomain"] == "test-news"
 
-    def test_list_tenants(self, client, api_key, test_tenant):
+    def test_list_tenants(self, client, mock_api_key_auth, test_tenant):
         """Test listing all tenants."""
-        response = client.get("/api/v1/tenant-management/tenants", headers={"X-Tenant-Management-API-Key": api_key})
-
-        if response.status_code == 401:
-            pytest.skip("API key not valid for this test run")
+        response = client.get(
+            "/api/v1/tenant-management/tenants", headers={"X-Tenant-Management-API-Key": mock_api_key_auth}
+        )
 
         assert response.status_code == 200
         data = response.json
@@ -172,28 +197,26 @@ class TestTenantManagementAPIIntegration:
         # Should have at least the default tenant plus any we created
         assert data["count"] >= 1
 
-    def test_get_tenant_details(self, client, api_key):
+    def test_get_tenant_details(self, client, mock_api_key_auth):
         """Test getting specific tenant details."""
         # First create a tenant
         create_response = client.post(
             "/api/v1/tenant-management/tenants",
-            headers={"X-Tenant-Management-API-Key": api_key},
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
             json={
                 "name": "Test Detail Publisher",
                 "subdomain": "test-detail",
                 "ad_server": "google_ad_manager",
                 "gam_refresh_token": "1//test-detail-token",
+                "creator_email": "test@detail.com",
             },
         )
-
-        if create_response.status_code == 401:
-            pytest.skip("API key not valid for this test run")
 
         tenant_id = create_response.json["tenant_id"]
 
         # Now get the details
         response = client.get(
-            f"/api/v1/tenant-management/tenants/{tenant_id}", headers={"X-Tenant-Management-API-Key": api_key}
+            f"/api/v1/tenant-management/tenants/{tenant_id}", headers={"X-Tenant-Management-API-Key": mock_api_key_auth}
         )
 
         assert response.status_code == 200
@@ -211,22 +234,20 @@ class TestTenantManagementAPIIntegration:
         assert data["adapter_config"]["adapter_type"] == "google_ad_manager"
         assert data["adapter_config"]["has_refresh_token"] is True
 
-    def test_update_tenant(self, client, api_key, test_tenant):
+    def test_update_tenant(self, client, mock_api_key_auth, test_tenant):
         """Test updating a tenant."""
         # First create a tenant
         create_response = client.post(
             "/api/v1/tenant-management/tenants",
-            headers={"X-Tenant-Management-API-Key": api_key},
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
             json={
                 "name": "Test Update Publisher",
                 "subdomain": "test-update",
                 "ad_server": "google_ad_manager",
                 "gam_refresh_token": "1//test-update-token",
+                "creator_email": "test@update.com",
             },
         )
-
-        if create_response.status_code == 401:
-            pytest.skip("API key not valid for this test run")
 
         tenant_id = create_response.json["tenant_id"]
 
@@ -240,7 +261,7 @@ class TestTenantManagementAPIIntegration:
 
         response = client.put(
             f"/api/v1/tenant-management/tenants/{tenant_id}",
-            headers={"X-Tenant-Management-API-Key": api_key},
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
             json=update_data,
         )
 
@@ -248,7 +269,7 @@ class TestTenantManagementAPIIntegration:
 
         # Verify the update
         get_response = client.get(
-            f"/api/v1/tenant-management/tenants/{tenant_id}", headers={"X-Tenant-Management-API-Key": api_key}
+            f"/api/v1/tenant-management/tenants/{tenant_id}", headers={"X-Tenant-Management-API-Key": mock_api_key_auth}
         )
 
         updated_data = get_response.json
@@ -257,23 +278,25 @@ class TestTenantManagementAPIIntegration:
         assert updated_data["adapter_config"]["gam_network_code"] == "987654321"
         assert updated_data["adapter_config"]["gam_trafficker_id"] == "trafficker_999"
 
-    def test_soft_delete_tenant(self, client, api_key, test_tenant):
+    def test_soft_delete_tenant(self, client, mock_api_key_auth, test_tenant):
         """Test soft deleting a tenant."""
         # First create a tenant
         create_response = client.post(
             "/api/v1/tenant-management/tenants",
-            headers={"X-Tenant-Management-API-Key": api_key},
-            json={"name": "Test Delete Publisher", "subdomain": "test-delete", "ad_server": "mock"},
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            json={
+                "name": "Test Delete Publisher",
+                "subdomain": "test-delete",
+                "ad_server": "mock",
+                "creator_email": "test@delete.com",
+            },
         )
-
-        if create_response.status_code == 401:
-            pytest.skip("API key not valid for this test run")
 
         tenant_id = create_response.json["tenant_id"]
 
         # Soft delete
         response = client.delete(
-            f"/api/v1/tenant-management/tenants/{tenant_id}", headers={"X-Tenant-Management-API-Key": api_key}
+            f"/api/v1/tenant-management/tenants/{tenant_id}", headers={"X-Tenant-Management-API-Key": mock_api_key_auth}
         )
 
         assert response.status_code == 200
@@ -281,7 +304,7 @@ class TestTenantManagementAPIIntegration:
 
         # Verify tenant still exists but is inactive
         get_response = client.get(
-            f"/api/v1/tenant-management/tenants/{tenant_id}", headers={"X-Tenant-Management-API-Key": api_key}
+            f"/api/v1/tenant-management/tenants/{tenant_id}", headers={"X-Tenant-Management-API-Key": mock_api_key_auth}
         )
 
         assert get_response.status_code == 200

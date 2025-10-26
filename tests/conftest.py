@@ -228,6 +228,191 @@ def mock_gemini_env(mock_gemini):
             yield mock_gemini
 
 
+@pytest.fixture
+def mock_gemini_client():
+    """Mock google.generativeai client for AI-powered tests.
+
+    This fixture patches the Gemini API to return deterministic responses
+    without requiring GEMINI_API_KEY. Use this for testing AI orchestration logic.
+    """
+    with patch("google.generativeai.configure") as mock_configure:
+        with patch("google.generativeai.GenerativeModel") as MockModel:
+            # Create mock model instance
+            mock_model = MagicMock()
+
+            # Default response for test scenarios
+            mock_response = MagicMock()
+            mock_response.text = json.dumps(
+                {"delay_seconds": None, "should_accept": True, "should_reject": False, "creative_actions": []}
+            )
+
+            # Sync and async versions
+            mock_model.generate_content.return_value = mock_response
+
+            async def async_generate(*args, **kwargs):
+                return mock_response
+
+            mock_model.generate_content_async = async_generate
+
+            MockModel.return_value = mock_model
+
+            yield mock_model
+
+
+@pytest.fixture
+def mock_gemini_test_scenarios():
+    """Mock Gemini with realistic test scenario responses.
+
+    Returns a fixture that accepts scenario name and returns appropriate JSON response.
+    """
+    scenarios = {
+        "delay_10s": json.dumps({"delay_seconds": 10, "should_accept": True, "should_reject": False}),
+        "reject_budget": json.dumps(
+            {"should_reject": True, "rejection_reason": "Budget too high for this campaign", "should_accept": False}
+        ),
+        "hitl_approve": json.dumps({"simulate_hitl": True, "hitl_delay_minutes": 2, "hitl_outcome": "approve"}),
+        "creative_approve": json.dumps({"creative_actions": [{"creative_index": 0, "action": "approve"}]}),
+        "creative_reject": json.dumps(
+            {"creative_actions": [{"creative_index": 0, "action": "reject", "reason": "Missing click URL"}]}
+        ),
+        "creative_ask_field": json.dumps(
+            {"creative_actions": [{"creative_index": 0, "action": "ask_for_field", "field": "click_tracker"}]}
+        ),
+    }
+
+    with patch("google.generativeai.configure"):
+        with patch("google.generativeai.GenerativeModel") as MockModel:
+            mock_model = MagicMock()
+
+            def generate_content(prompt, **kwargs):
+                # Parse prompt to determine which scenario to return
+                response = MagicMock()
+                prompt_str = str(prompt)
+
+                # Extract just the message part (between quotes after "Their message:")
+                message = ""
+                if 'Their message: "' in prompt_str:
+                    start = prompt_str.find('Their message: "') + len('Their message: "')
+                    end = prompt_str.find('"', start)
+                    message = prompt_str[start:end].lower()
+                else:
+                    message = prompt_str.lower()
+
+                # Priority order matters - check most specific patterns first
+                if "wait" in message and "seconds" in message:
+                    response.text = scenarios["delay_10s"]
+                elif "human in the loop" in message or "hitl" in message or "simulate human" in message:
+                    response.text = scenarios["hitl_approve"]
+                elif "ask for" in message or ("request" in message and "field" in message):
+                    response.text = scenarios["creative_ask_field"]
+                elif "reject" in message:
+                    # Check if it's creative rejection or budget rejection
+                    if "url" in message or "missing" in message:
+                        response.text = scenarios["creative_reject"]
+                    elif "budget" in message:
+                        response.text = scenarios["reject_budget"]
+                    else:
+                        response.text = scenarios["creative_reject"]
+                elif "approve" in message:
+                    response.text = scenarios["creative_approve"]
+                else:
+                    # Default: accept without special instructions
+                    response.text = json.dumps({"should_accept": True, "should_reject": False})
+
+                return response
+
+            mock_model.generate_content = generate_content
+
+            async def async_generate(prompt, **kwargs):
+                return generate_content(prompt, **kwargs)
+
+            mock_model.generate_content_async = async_generate
+
+            MockModel.return_value = mock_model
+
+            yield mock_model
+
+
+@pytest.fixture
+def mock_gemini_product_recommendations():
+    """Mock Gemini for product recommendation testing."""
+    with patch("google.generativeai.configure"):
+        with patch("google.generativeai.GenerativeModel") as MockModel:
+            mock_model = MagicMock()
+            mock_response = MagicMock()
+            mock_response.text = json.dumps(
+                {
+                    "product_id": "ai_generated_product",
+                    "name": "AI-Optimized Display Package",
+                    "formats": ["display_300x250", "display_728x90"],
+                    "delivery_type": "guaranteed",
+                    "cpm": 12.50,
+                    "countries": ["US", "CA"],
+                    "targeting_template": {"device_targets": {"device_types": ["desktop", "mobile"]}},
+                    "implementation_config": {},
+                }
+            )
+
+            mock_model.generate_content.return_value = mock_response
+
+            async def async_generate(*args, **kwargs):
+                return mock_response
+
+            mock_model.generate_content_async = async_generate
+
+            MockModel.return_value = mock_model
+
+            yield mock_model
+
+
+@pytest.fixture
+def mock_gemini_policy_checker():
+    """Mock Gemini for policy checking tests."""
+    with patch("google.generativeai.configure"):
+        with patch("google.generativeai.GenerativeModel") as MockModel:
+            mock_model = MagicMock()
+
+            def generate_policy_response(prompt, **kwargs):
+                response = MagicMock()
+
+                # Parse prompt to determine policy status
+                prompt_lower = prompt.lower() if isinstance(prompt, str) else ""
+
+                if any(word in prompt_lower for word in ["alcohol", "tobacco", "gambling", "predatory"]):
+                    response.text = json.dumps(
+                        {
+                            "status": "restricted",
+                            "reason": "Contains age-restricted content",
+                            "restrictions": ["Requires age verification"],
+                            "warnings": [],
+                        }
+                    )
+                elif any(word in prompt_lower for word in ["prohibited", "illegal", "dangerous"]):
+                    response.text = json.dumps(
+                        {
+                            "status": "blocked",
+                            "reason": "Contains prohibited content",
+                            "restrictions": [],
+                            "warnings": [],
+                        }
+                    )
+                else:
+                    response.text = json.dumps(
+                        {"status": "allowed", "reason": None, "restrictions": [], "warnings": []}
+                    )
+
+                return response
+
+            async def async_policy_response(prompt, **kwargs):
+                return generate_policy_response(prompt, **kwargs)
+
+            mock_model.generate_content_async = async_policy_response
+
+            MockModel.return_value = mock_model
+
+            yield mock_model
+
+
 # ============================================================================
 # Builder Fixtures
 # ============================================================================

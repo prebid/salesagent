@@ -87,8 +87,9 @@ def test_database_queries():
             cursor.execute(
                 """
                 SELECT COUNT(*) as pending_workflow_steps
-                FROM workflow_steps
-                WHERE tenant_id = %s AND status = 'requires_approval'
+                FROM workflow_steps ws
+                JOIN contexts c ON ws.context_id = c.context_id
+                WHERE c.tenant_id = %s AND ws.status = 'requires_approval'
             """,
                 ("default",),
             )
@@ -100,11 +101,10 @@ def test_database_queries():
         cursor.close()
         conn.close()
         print("\n✅ All database queries successful!")
-        return True
 
     except Exception as e:
         print(f"\n❌ Database error: {e}")
-        return False
+        pytest.fail(f"Database error: {e}")
 
 
 @pytest.mark.integration
@@ -164,10 +164,10 @@ def test_settings_page():
             for line in lines:
                 if "error" in line.lower() or "exception" in line.lower():
                     print(f"     {line.strip()[:200]}")
-        return False
+        pytest.fail("Settings page returned 500 error")
     else:
         print(f"   ⚠️  Unexpected status: {response.status_code}")
-        return False
+        pytest.fail(f"Unexpected status: {response.status_code}")
 
     # Test dashboard page
     print("\n3. Testing dashboard page...")
@@ -178,9 +178,7 @@ def test_settings_page():
         print("   ✓ Dashboard loaded successfully")
     elif response.status_code == 500:
         print("   ❌ Dashboard server error (500)")
-        return False
-
-    return True
+        pytest.fail("Dashboard page returned 500 error")
 
 
 def main():

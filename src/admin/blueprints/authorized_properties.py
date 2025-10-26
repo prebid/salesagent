@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
@@ -163,7 +163,7 @@ def _save_properties_batch(properties_data: list[dict[str, Any]], tenant_id: str
                     existing_property.verification_status = "pending"
                     existing_property.verification_checked_at = None
                     existing_property.verification_error = None
-                    existing_property.updated_at = datetime.utcnow()
+                    existing_property.updated_at = datetime.now(UTC)
                 else:
                     # Create new property
                     new_property = AuthorizedProperty(
@@ -175,8 +175,8 @@ def _save_properties_batch(properties_data: list[dict[str, Any]], tenant_id: str
                         tags=prop_data.get("tags", []),
                         publisher_domain=prop_data["publisher_domain"],
                         verification_status="pending",
-                        created_at=datetime.utcnow(),
-                        updated_at=datetime.utcnow(),
+                        created_at=datetime.now(UTC),
+                        updated_at=datetime.now(UTC),
                     )
                     db_session.add(new_property)
 
@@ -445,8 +445,8 @@ def list_property_tags(tenant_id):
                     tenant_id=tenant_id,
                     name="All Inventory",
                     description="Default tag that applies to all properties. Used when no specific targeting is needed.",
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow(),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
                 )
                 db_session.add(all_inventory_tag)
                 db_session.commit()
@@ -506,8 +506,8 @@ def create_property_tag(tenant_id):
                 tenant_id=tenant_id,
                 name=name,
                 description=description,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
 
             db_session.add(new_tag)
@@ -670,8 +670,8 @@ def create_property(tenant_id):
                 tags=tags,
                 publisher_domain=publisher_domain,
                 verification_status="pending",
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
 
             db_session.add(new_property)
@@ -761,7 +761,7 @@ def edit_property(tenant_id, property_id):
             property_obj.verification_status = "pending"  # Reset verification status
             property_obj.verification_checked_at = None
             property_obj.verification_error = None
-            property_obj.updated_at = datetime.utcnow()
+            property_obj.updated_at = datetime.now(UTC)
 
             db_session.commit()
 

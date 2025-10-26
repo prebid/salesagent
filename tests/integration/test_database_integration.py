@@ -123,10 +123,10 @@ def test_settings_queries():
         print("1. PostgreSQL container is running")
         print("2. DATABASE_URL is correct")
         print("3. Port 5479 is the right port for your PostgreSQL")
-        return False
+        pytest.fail(f"Cannot connect to database: {e}")
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
-        return False
+        pytest.fail(f"Unexpected error: {e}")
 
     # Summary
     print(f"\n{'=' * 60}")
@@ -137,11 +137,10 @@ def test_settings_queries():
         print(f"\n❌ {len(errors)} queries failed:")
         for error in errors:
             print(f"   - {error}")
-        return False
+        pytest.fail(f"{len(errors)} queries failed: {errors}")
     else:
         print("\n✅ All queries passed!")
         print("The settings page should work without 500 errors.")
-        return True
 
 
 if __name__ == "__main__":

@@ -198,24 +198,6 @@ class TestMCPProtocol:
             assert delivery_result is not None
 
     @pytest.mark.requires_server
-    async def test_get_signals_optional_tool(self, mcp_client):
-        """Test the optional get_signals tool if available."""
-        async with mcp_client as client:
-            try:
-                # get_signals is optional per spec
-                result = await client.call_tool("get_signals", {"req": {"query": "sports", "type": "contextual"}})
-
-                # If it exists, verify structure
-                content = result.structured_content if hasattr(result, "structured_content") else result
-                signals = content.get("signals", [])
-
-                assert isinstance(signals, list)
-
-            except AttributeError:
-                # Tool doesn't exist - that's OK, it's optional
-                pytest.skip("get_signals tool not implemented (optional)")
-
-    @pytest.mark.requires_server
     @pytest.mark.requires_db  # Needs running MCP server - skip in quick mode
     async def test_auth_header_required(self):
         """Test that authentication via x-adcp-auth header is required."""

@@ -177,20 +177,24 @@ class LinkValidator:
 
             # Some routes don't support HEAD, fallback to GET
             if response.status_code == 405:
+                response.close()  # Close HEAD response before making GET
                 response = self.client.get(url, follow_redirects=True)
 
-            # Consider 200, 302, 304 as valid
-            # 302: Redirect (common for auth flows)
-            # 304: Not Modified (common for cached resources)
-            # 401: Unauthorized (route exists but needs auth)
-            # 403: Forbidden (route exists but user lacks permission)
-            if response.status_code in (200, 302, 304, 401, 403):
-                return True, response.status_code, ""
+            try:
+                # Consider 200, 302, 304 as valid
+                # 302: Redirect (common for auth flows)
+                # 304: Not Modified (common for cached resources)
+                # 401: Unauthorized (route exists but needs auth)
+                # 403: Forbidden (route exists but user lacks permission)
+                if response.status_code in (200, 302, 304, 401, 403):
+                    return True, response.status_code, ""
 
-            # 404: Not Found (broken link!)
-            # 500: Internal Server Error (broken code!)
-            # 501: Not Implemented (expected for some routes)
-            return False, response.status_code, f"Status {response.status_code}"
+                # 404: Not Found (broken link!)
+                # 500: Internal Server Error (broken code!)
+                # 501: Not Implemented (expected for some routes)
+                return False, response.status_code, f"Status {response.status_code}"
+            finally:
+                response.close()  # Ensure response is always closed
 
         except Exception as e:
             return False, 0, f"Exception: {str(e)}"

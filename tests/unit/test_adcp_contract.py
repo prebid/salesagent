@@ -741,9 +741,13 @@ class TestAdCPContract:
         assert "currency" in adcp_response["pricing"], "pricing must have currency field"
         assert len(adcp_response["pricing"]["currency"]) == 3, "currency must be 3-letter code"
 
-        # Test backward compatibility properties
-        assert signal.signal_id == signal.signal_agent_segment_id, "signal_id property should work"
-        assert signal.type == signal.signal_type, "type property should work"
+        # Test backward compatibility properties (suppress deprecation warnings since we're testing them)
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            assert signal.signal_id == signal.signal_agent_segment_id, "signal_id property should work"
+            assert signal.type == signal.signal_type, "type property should work"
 
         # Test internal model_dump includes all fields
         internal_response = signal.model_dump_internal()

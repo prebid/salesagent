@@ -125,7 +125,7 @@ def ensure_user_in_tenant(email: str, tenant_id: str, role: str = "admin", name:
             if not user.is_active:
                 user.is_active = True
                 logger.info(f"Reactivated user {email} in tenant {tenant_id}")
-            user.last_login = datetime.now(UTC)
+            user.last_login = datetime.now(UTC)  # type: ignore[assignment]
             session.commit()
             return user
 
@@ -166,7 +166,7 @@ def get_user_tenant_access(email: str) -> dict:
     """
     email_domain = extract_email_domain(email)
 
-    result = {
+    result: dict[str, Tenant | list[Tenant] | bool | int | None] = {
         "domain_tenant": None,
         "email_tenants": [],
         "is_super_admin": email_domain == "scope3.com",
@@ -174,16 +174,18 @@ def get_user_tenant_access(email: str) -> dict:
     }
 
     # Check domain-based access
+    total_access = 0
     if email_domain and email_domain != "scope3.com":
         domain_tenant = find_tenant_by_authorized_domain(email_domain)
         if domain_tenant:
             result["domain_tenant"] = domain_tenant
-            result["total_access"] += 1
+            total_access += 1
 
     # Check email-based access
     email_tenants = find_tenants_by_authorized_email(email)
     result["email_tenants"] = email_tenants
-    result["total_access"] += len(email_tenants)
+    total_access += len(email_tenants)
+    result["total_access"] = total_access
 
     return result
 
@@ -225,7 +227,7 @@ def add_authorized_domain(tenant_id: str, domain: str) -> bool:
             # Add new domain if not already present
             if domain_lower not in domains:
                 domains.append(domain_lower)
-                tenant.authorized_domains = json.dumps(domains)
+                tenant.authorized_domains = domains
                 session.commit()
                 logger.info(f"Added domain {domain} to tenant {tenant_id}")
 
@@ -268,7 +270,7 @@ def remove_authorized_domain(tenant_id: str, domain: str) -> bool:
             # Remove domain if present
             if domain_lower in domains:
                 domains.remove(domain_lower)
-                tenant.authorized_domains = json.dumps(domains)
+                tenant.authorized_domains = domains
                 session.commit()
                 logger.info(f"Removed domain {domain} from tenant {tenant_id}")
 
@@ -316,7 +318,7 @@ def add_authorized_email(tenant_id: str, email: str) -> bool:
             # Add new email if not already present
             if email_lower not in [e.lower() for e in emails]:
                 emails.append(email_lower)
-                tenant.authorized_emails = json.dumps(emails)
+                tenant.authorized_emails = emails
                 session.commit()
                 logger.info(f"Added email {email} to tenant {tenant_id}")
 
@@ -358,7 +360,7 @@ def remove_authorized_email(tenant_id: str, email: str) -> bool:
 
             # Remove email if present (case-insensitive)
             emails = [e for e in emails if e.lower() != email_lower]
-            tenant.authorized_emails = json.dumps(emails)
+            tenant.authorized_emails = emails
             session.commit()
             logger.info(f"Removed email {email} from tenant {tenant_id}")
 

@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 # Create custom logger for OAuth operations
@@ -26,7 +26,7 @@ class StructuredLogger:
         """Log OAuth operations with structured data."""
 
         log_data = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "operation": operation,
             "success": success,
             "type": "oauth_operation",

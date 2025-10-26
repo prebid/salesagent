@@ -64,7 +64,7 @@ from src.core.schemas import (
     GetSignalsRequest,
     ListAuthorizedPropertiesRequest,
 )
-from src.core.testing_hooks import TestingContext
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.tools import (
     create_media_buy_raw as core_create_media_buy_tool,
@@ -261,7 +261,7 @@ class AdCPRequestHandler(RequestHandler):
             tool_name=tool_name,
             request_timestamp=datetime.now(UTC),
             metadata={"source": "a2a_server", "protocol": "a2a_jsonrpc"},
-            testing_context=TestingContext().model_dump(),  # Default testing context for A2A requests
+            testing_context=AdCPTestContext().model_dump(),  # Default testing context for A2A requests
         )
 
     def _log_a2a_operation(
