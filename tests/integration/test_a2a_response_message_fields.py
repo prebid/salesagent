@@ -42,10 +42,13 @@ class TestA2AMessageFieldValidation:
         def _mock_context(handler):
             # Set up request context with proper headers for tenant resolution
             # This will allow _create_tool_context_from_a2a to resolve the tenant from headers
-            adcp_a2a_server._request_context.request_headers = {
-                "x-adcp-tenant": sample_tenant["tenant_id"],
-                "authorization": f"Bearer {sample_principal['access_token']}",
-            }
+            # Use ContextVars instead of threading.local()
+            adcp_a2a_server._request_headers.set(
+                {
+                    "x-adcp-tenant": sample_tenant["tenant_id"],
+                    "authorization": f"Bearer {sample_principal['access_token']}",
+                }
+            )
 
             handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 

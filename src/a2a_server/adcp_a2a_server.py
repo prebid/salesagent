@@ -4,10 +4,10 @@ AdCP Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
+import contextvars
 import logging
 import os
 import sys
-import threading
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -102,8 +102,9 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Thread-local storage for current request auth token
-_request_context = threading.local()
+# Context variables for current request (works with async code, unlike threading.local())
+_request_auth_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_auth_token", default=None)
+_request_headers: contextvars.ContextVar[dict | None] = contextvars.ContextVar("request_headers", default=None)
 
 
 class AdCPRequestHandler(RequestHandler):
@@ -116,7 +117,7 @@ class AdCPRequestHandler(RequestHandler):
 
     def _get_auth_token(self) -> str | None:
         """Extract Bearer token from current request context."""
-        return getattr(_request_context, "auth_token", None)
+        return _request_auth_token.get()
 
     def _create_tool_context_from_a2a(
         self, auth_token: str | None, tool_name: str, context_id: str | None = None
@@ -143,7 +144,7 @@ class AdCPRequestHandler(RequestHandler):
         )
 
         # Get request headers for debugging (case-insensitive lookup)
-        headers = getattr(_request_context, "request_headers", {})
+        headers = _request_headers.get() or {}
 
         # Helper to get header case-insensitively
         def get_header(header_name: str) -> str | None:
@@ -1757,7 +1758,7 @@ class AdCPRequestHandler(RequestHandler):
             else:
                 # No auth token - create minimal Context-like object with headers for tenant detection
                 # This allows tenant detection via Apx-Incoming-Host, Host, or x-adcp-tenant headers
-                headers = getattr(_request_context, "request_headers", {})
+                headers = _request_headers.get() or {}
 
                 # Create a simple object that quacks like a FastMCP Context
                 # get_principal_from_context() needs: context.meta["headers"] or context.headers
@@ -2505,23 +2506,22 @@ def main():
                     # Don't break - prefer Authorization if both present
 
             if token:
-                _request_context.auth_token = token
-                _request_context.request_headers = dict(request.headers)
+                _request_auth_token.set(token)
+                _request_headers.set(dict(request.headers))
                 logger.info(f"Extracted token from {auth_source} header for A2A request: {token[:10]}...")
             else:
                 logger.warning(
                     f"A2A request to {request.url.path} missing authentication (checked Authorization and x-adcp-auth headers)"
                 )
-                _request_context.auth_token = None
-                _request_context.request_headers = dict(request.headers)
+                _request_auth_token.set(None)
+                _request_headers.set(dict(request.headers))
 
         response = await call_next(request)
 
-        # Clean up thread-local storage
-        if hasattr(_request_context, "auth_token"):
-            delattr(_request_context, "auth_token")
-        if hasattr(_request_context, "request_headers"):
-            delattr(_request_context, "request_headers")
+        # Clean up context variables (ContextVars automatically clean up at context boundary,
+        # but explicit cleanup ensures no leakage between requests)
+        _request_auth_token.set(None)
+        _request_headers.set(None)
 
         return response
 
