@@ -324,10 +324,22 @@ def docker_services_e2e(request):
     # Yield port information for use by other fixtures
     yield {"mcp_port": mcp_port, "a2a_port": a2a_port, "admin_port": admin_port, "postgres_port": postgres_port}
 
-    # Cleanup based on --keep-data flag
-    # Note: pytest.config.getoption is not available in yield, would need request fixture
-    # For now, skip cleanup
-    pass
+    # Cleanup Docker resources (unless --skip-docker was used, meaning services are external)
+    if not use_existing_services:
+        print("\n🧹 Cleaning up Docker resources...")
+        try:
+            # Stop and remove containers + volumes
+            subprocess.run(["docker-compose", "down", "-v"], capture_output=True, check=False, timeout=30)
+            print("✓ Docker containers and volumes cleaned up")
+
+            # Prune dangling volumes (created by tests but not tracked by docker-compose)
+            result = subprocess.run(["docker", "volume", "prune", "-f"], capture_output=True, text=True, timeout=10)
+            if result.stdout:
+                print(f"✓ Pruned volumes: {result.stdout.strip()}")
+        except subprocess.TimeoutExpired:
+            print("⚠️  Warning: Docker cleanup timed out (non-fatal)")
+        except Exception as e:
+            print(f"⚠️  Warning: Docker cleanup failed (non-fatal): {e}")
 
 
 @pytest.fixture

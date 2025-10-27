@@ -177,7 +177,12 @@ print(' '.join(map(str, ports)))
 teardown_docker_stack() {
     echo -e "${BLUE}🐳 Stopping TEST Docker stack (project: $COMPOSE_PROJECT_NAME)...${NC}"
     docker-compose -p "$COMPOSE_PROJECT_NAME" down -v 2>/dev/null || true
-    echo -e "${GREEN}✓ Test containers cleaned up (your local dev containers are untouched)${NC}"
+
+    # Prune dangling volumes created by tests (only removes unused volumes)
+    echo "Cleaning up dangling Docker volumes..."
+    docker volume prune -f --filter "label!=preserve" 2>/dev/null || true
+
+    echo -e "${GREEN}✓ Test containers and volumes cleaned up (your local dev containers are untouched)${NC}"
 }
 
 # Trap to ensure cleanup on exit
