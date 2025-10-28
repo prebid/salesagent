@@ -403,10 +403,14 @@ class MockAdServer(AdServerAdapter):
 
             # Handle question asking (return pending with question)
             if scenario.should_ask_question:
+                # For question-asking scenario, return response without media_buy_id
+                # The media buy hasn't been created yet - we need input first
+                # The workflow_step_id will track this pending operation
                 return CreateMediaBuyResponse(
-                    media_buy_id=f"pending_question_{id(request)}",
+                    media_buy_id=None,  # No media buy yet - pending user input
                     creative_deadline=None,
                     buyer_ref=request.buyer_ref or "unknown",
+                    packages=[],  # No packages yet - operation not complete
                     errors=[],
                 )
 
@@ -513,11 +517,15 @@ class MockAdServer(AdServerAdapter):
         else:
             self.log("   Manual completion required - use complete_task tool")
 
-        # Return pending response
+        # For async mode, return response without media_buy_id or packages
+        # The media buy hasn't been created yet - it's being processed asynchronously
+        # The workflow_step_id (from step['step_id']) will track this pending operation
+        # Client can poll the step or wait for webhook notification when complete
         return CreateMediaBuyResponse(
             buyer_ref=request.buyer_ref or "unknown",
-            media_buy_id=f"pending_{step['step_id']}",
+            media_buy_id=None,  # No media buy yet - async processing in progress
             creative_deadline=None,
+            packages=[],  # No packages yet - operation not complete
             errors=[],
         )
 
@@ -555,7 +563,9 @@ class MockAdServer(AdServerAdapter):
 
         # Continue with immediate processing
         self.log("✅ SYNC delay completed, proceeding with creation")
-        return self._create_media_buy_immediate(request, packages, start_time, end_time, package_pricing_info=package_pricing_info)
+        return self._create_media_buy_immediate(
+            request, packages, start_time, end_time, package_pricing_info=package_pricing_info
+        )
 
     def _create_media_buy_immediate(
         self,
@@ -665,7 +675,7 @@ class MockAdServer(AdServerAdapter):
                 else:
                     # Fallback to legacy package.cpm
                     rate = p.cpm
-                total_budget += (rate * p.impressions / 1000)
+                total_budget += rate * p.impressions / 1000
 
         # Apply strategy-based bid adjustment
         if self.strategy_context and hasattr(self.strategy_context, "get_bid_adjustment"):
