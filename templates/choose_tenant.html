@@ -6,23 +6,37 @@
 <div class="card" style="max-width: 600px; margin: 4rem auto;">
     <h2>Select Account</h2>
 
+    {% if tenants %}
     <p style="margin-bottom: 2rem;">
-        Your email address has access to multiple accounts. Please select which one you'd like to manage:
+        Your email address has access to the following accounts. Select one to continue, or create a new account:
     </p>
 
     <form method="POST" action="{{ url_for('auth.select_tenant') }}">
         <div style="margin-bottom: 2rem;">
             {% for tenant_id, tenant_name in tenants %}
             <label style="display: block; padding: 1rem; margin-bottom: 0.5rem; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">
-                <input type="radio" name="tenant_id" value="{{ tenant_id }}" required style="margin-right: 0.5rem;">
+                <input type="radio" name="tenant_id" value="{{ tenant_id }}" style="margin-right: 0.5rem;">
                 <strong>{{ tenant_name }}</strong> <span style="color: #666;">({{ tenant_id }})</span>
             </label>
             {% endfor %}
         </div>
 
-        <button type="submit" class="btn">Continue</button>
+        <button type="submit" class="btn">Continue to Selected Account</button>
         <a href="{{ url_for('auth.logout') }}" class="btn btn-secondary" style="margin-left: 0.5rem;">Cancel</a>
     </form>
+
+    <hr style="margin: 2rem 0; border: none; border-top: 1px solid #ddd;">
+    {% else %}
+    <p style="margin-bottom: 2rem; color: #666;">
+        You don't have access to any accounts yet. Create a new account to get started:
+    </p>
+    {% endif %}
+
+    <div style="text-align: center;">
+        <a href="{{ url_for('public.signup_onboarding') }}" class="btn" style="background: #28a745; border-color: #28a745;">
+            Create New Account
+        </a>
+    </div>
 </div>
 
 <style>

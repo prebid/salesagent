@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from src.admin.utils import is_super_admin  # type: ignore[attr-defined]
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant, User
+from src.core.database.models import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -127,76 +127,19 @@ def tenant_login(tenant_id):
 
 @auth_bp.route("/auth/google")
 def google_auth():
-    """Initiate Google OAuth flow with tenant context detection."""
+    """Initiate Google OAuth flow - simplified central login."""
     oauth = current_app.oauth if hasattr(current_app, "oauth") else None
     if not oauth:
         flash("OAuth not configured", "error")
         return redirect(url_for("auth.login"))
 
-    # Capture tenant context from headers or form data
-    host = request.headers.get("Host", "")
-    tenant_context = request.args.get("tenant_context")  # From login form
-
-    # Check for Approximated routing headers first
-    if not tenant_context:
-        approximated_host = request.headers.get("Apx-Incoming-Host")
-        if approximated_host and not approximated_host.startswith("admin."):
-            # Approximated handles all external routing - look up tenant by virtual_host
-            with get_db_session() as db_session:
-                tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=approximated_host)).first()
-                if tenant:
-                    tenant_context = tenant.tenant_id
-                    logger.info(
-                        f"Detected tenant context from Approximated headers: {approximated_host} -> {tenant_context}"
-                    )
-
-    # Fallback to direct domain routing
-    if not tenant_context and ".sales-agent.scope3.com" in host and not host.startswith("admin."):
-        # Extract tenant subdomain from Host header
-        tenant_subdomain = host.split(".")[0]
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
-            if tenant:
-                tenant_context = tenant.tenant_id
-                logger.info(f"Detected tenant context from Host header: {tenant_subdomain} -> {tenant_context}")
-
-    # Always use the registered OAuth redirect URI for Google (no modifications allowed)
-    if os.environ.get("PRODUCTION") == "true":
-        # For production, always use the exact registered redirect URI
-        redirect_uri = "https://sales-agent.scope3.com/admin/auth/google/callback"
-    else:
-        # Development fallback
+    # Use configured redirect URI from environment, fall back to auto-generated
+    redirect_uri = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI")
+    if not redirect_uri:
         redirect_uri = url_for("auth.google_callback", _external=True)
 
-    # Store originating host and tenant context in session for OAuth callback
-    session["oauth_originating_host"] = host
-
-    # Store external domain and tenant context in session for OAuth callback
-    # Note: This works for same-domain OAuth but has limitations for cross-domain scenarios
-    approximated_host = request.headers.get("Apx-Incoming-Host")
-
-    if approximated_host:
-        session["oauth_external_domain"] = approximated_host
-        logger.info(f"Stored external domain for OAuth redirect: {approximated_host}")
-
-    if tenant_context:
-        session["oauth_tenant_context"] = tenant_context
-
-    # Build custom state parameter to handle cross-domain scenarios
-    # For cross-domain OAuth (virtual hosts), session cookies won't work
-    import base64
-
-    state_data = {
-        "signup_flow": session.get("signup_flow", False),
-        "external_domain": approximated_host
-        or (host if host != "sales-agent.scope3.com" and not host.startswith("admin.") else None),
-        "tenant_context": tenant_context,
-    }
-    state_json = json.dumps(state_data)
-    state_encoded = base64.urlsafe_b64encode(state_json.encode()).decode()
-
-    # Let Authlib manage the state parameter for CSRF protection, but pass our custom data
-    return oauth.google.authorize_redirect(redirect_uri, state=state_encoded)
+    # Simple OAuth flow - no tenant context preservation needed
+    return oauth.google.authorize_redirect(redirect_uri)
 
 
 @auth_bp.route("/tenant/<tenant_id>/auth/google")
@@ -236,16 +179,36 @@ def tenant_google_auth(tenant_id):
 
 @auth_bp.route("/auth/google/callback")
 def google_callback():
-    """Handle Google OAuth callback."""
+    """Handle Google OAuth callback - simplified version."""
+    # Log immediately when callback is hit
+    logger.warning("========== GOOGLE OAUTH CALLBACK HIT ==========")
+    logger.warning(f"Request URL: {request.url}")
+    logger.warning(f"Request args: {dict(request.args)}")
+    logger.warning(f"Session keys at start: {list(session.keys())}")
+
     oauth = current_app.oauth if hasattr(current_app, "oauth") else None
     if not oauth:
+        logger.error("OAuth not configured!")
         flash("OAuth not configured", "error")
         return redirect(url_for("auth.login"))
 
     try:
-        token = oauth.google.authorize_access_token()
+        logger.info("Attempting OAuth token exchange...")
+        try:
+            token = oauth.google.authorize_access_token()
+            logger.info(f"Token exchange result: {token is not None}")
+        except Exception as auth_error:
+            logger.error(
+                f"Authlib error during token exchange: {type(auth_error).__name__}: {auth_error}", exc_info=True
+            )
+            flash(f"Authentication error: {str(auth_error)}", "error")
+            return redirect(url_for("auth.login"))
+
         if not token:
-            flash("Authentication failed", "error")
+            logger.error("OAuth token exchange failed - authorize_access_token() returned None")
+            logger.error(f"Request args: {dict(request.args)}")
+            logger.error(f"Session keys: {list(session.keys())}")
+            flash("Authentication failed. Please try again.", "error")
             return redirect(url_for("auth.login"))
 
         # Get user info
@@ -256,7 +219,6 @@ def google_callback():
 
             id_token = token.get("id_token")
             if id_token:
-                # Decode without verification since we trust Google's response
                 user = jwt.decode(id_token, options={"verify_signature": False})
 
         if not user or not user.get("email"):
@@ -268,197 +230,50 @@ def google_callback():
         session["user_name"] = user.get("name", email)
         session["user_picture"] = user.get("picture", "")
 
-        # Try to decode state parameter for cross-domain OAuth context
-        import base64
-
-        state_param = request.args.get("state")
-        state_data = {}
-        if state_param:
-            try:
-                state_json = base64.urlsafe_b64decode(state_param.encode()).decode()
-                state_data = json.loads(state_json)
-                logger.info(f"OAuth callback - decoded state: {state_data}")
-            except Exception as e:
-                logger.warning(f"Could not decode OAuth state parameter: {e}")
-
-        # Check if this is a signup flow (from state or session)
-        is_signup_flow = state_data.get("signup_flow") or session.get("signup_flow")
-        if is_signup_flow:
-            logger.info(f"OAuth callback - signup flow detected for {email}")
-            # Set signup flow in session for onboarding
-            session["signup_flow"] = True
-            # Redirect to onboarding wizard
-            return redirect(url_for("public.signup_onboarding"))
-
-        # Debug session state before popping values
-        logger.info(f"OAuth callback - full session: {dict(session)}")
-
-        # Get originating host and tenant context from state parameter (preferred) or session (fallback)
-        originating_host = session.pop("oauth_originating_host", None)
-        external_domain = state_data.get("external_domain") or session.pop("oauth_external_domain", None)
-        tenant_id = state_data.get("tenant_context") or session.pop("oauth_tenant_context", None)
-
-        # Debug logging for OAuth redirect
-        logger.info(f"OAuth callback debug - originating_host: {originating_host}")
-        logger.info(f"OAuth callback debug - external_domain: {external_domain}")
-        logger.info(f"OAuth callback debug - tenant_id: {tenant_id}")
-        logger.info(f"OAuth callback debug - PRODUCTION env: {os.environ.get('PRODUCTION')}")
-        logger.info(f"OAuth callback debug - user email: {email}")
-        logger.info(f"OAuth callback debug - request headers: {dict(request.headers)}")
-        if tenant_id:
-            # Verify user has access to this tenant
-            with get_db_session() as db_session:
-                tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                if not tenant:
-                    flash("Invalid tenant", "error")
-                    return redirect(url_for("auth.login"))
-
-                # Check if user is super admin or has tenant access
-                if is_super_admin(email):
-                    session["tenant_id"] = tenant_id
-                    session["is_super_admin"] = True
-                    flash(f"Welcome {user.get('name', email)}! (Super Admin)", "success")
-
-                    # Redirect to tenant-specific subdomain if accessed via subdomain
-                    if tenant.subdomain and tenant.subdomain != "localhost":
-                        return redirect(f"https://{tenant.subdomain}.sales-agent.scope3.com/admin/")
-                    else:
-                        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
-
-                # Check if user is authorized (via email list or domain list)
-                from src.admin.domain_access import ensure_user_in_tenant, get_user_tenant_access
-
-                email_domain = email.split("@")[1] if "@" in email else ""
-                tenant_access = get_user_tenant_access(email)
-
-                # Check if user has access to this specific tenant
-                has_tenant_access = False
-                if tenant_access["domain_tenant"] and tenant_access["domain_tenant"].tenant_id == tenant_id:
-                    has_tenant_access = True
-                elif any(t.tenant_id == tenant_id for t in tenant_access["email_tenants"]):
-                    has_tenant_access = True
-
-                if has_tenant_access:
-                    # Ensure user record exists (auto-create if needed)
-                    user_record = ensure_user_in_tenant(email, tenant_id, role="admin", name=user.get("name"))
-
-                    session["tenant_id"] = tenant_id
-                    session["is_tenant_admin"] = user_record.role == "admin"
-                    flash(f"Welcome {user.get('name', email)}!", "success")
-
-                    # Redirect to tenant-specific subdomain if accessed via subdomain
-                    if tenant.subdomain and tenant.subdomain != "localhost":
-                        return redirect(f"https://{tenant.subdomain}.sales-agent.scope3.com/admin/")
-                    else:
-                        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
-                else:
-                    flash("You don't have access to this tenant", "error")
-                    session.clear()
-                    return redirect(url_for("auth.tenant_login", tenant_id=tenant_id))
-
-        # Domain-based access control using email domain extraction
-        # (ensure_user_in_tenant and get_user_tenant_access already imported above)
+        # Unified flow: Always show tenant selector (with option to create new tenant)
+        # No distinction between signup and login - keeps UX simple and consistent
+        from src.admin.domain_access import get_user_tenant_access
 
         email_domain = email.split("@")[1] if "@" in email else ""
 
-        # 1. Scope3 super admin check
+        # Check if user is super admin
         if email_domain == "scope3.com" or is_super_admin(email):
             session["is_super_admin"] = True
-            session["role"] = "super_admin"
-            session["authenticated"] = True
-            session["email"] = email
             flash(f"Welcome {user.get('name', email)}! (Super Admin)", "success")
+            return redirect(url_for("core.index"))
 
-            # Check where the OAuth flow originated from
-            if external_domain and os.environ.get("PRODUCTION") == "true":
-                # OAuth was initiated from external domain routed through Approximated
-                # Important: External domains handle routing via Approximated - just use /admin/
-                redirect_url = f"https://{external_domain}/admin/"
-                logger.info(f"Redirecting super admin back to external domain: {external_domain} -> {redirect_url}")
-                return redirect(redirect_url)
-            elif originating_host and originating_host.startswith("admin.") and os.environ.get("PRODUCTION") == "true":
-                return redirect("https://admin.sales-agent.scope3.com/admin/")
-            elif originating_host and os.environ.get("PRODUCTION") == "true":
-                # Preserve tenant-specific domains for super admins
-                return redirect(f"https://{originating_host}/admin/")
-            elif os.environ.get("PRODUCTION") == "true":
-                return redirect("https://admin.sales-agent.scope3.com/admin/")
-            else:
-                return redirect(url_for("core.index"))
-
-        # 2. Check domain-based and email-based tenant access
+        # Get all accessible tenants
         tenant_access = get_user_tenant_access(email)
 
-        if tenant_access["total_access"] == 0:
-            # No access - check if this was from an external domain (should trigger signup)
-            if external_domain and not external_domain.endswith(".sales-agent.scope3.com"):
-                logger.info(
-                    f"User {email} has no access but came from external domain {external_domain}, redirecting to signup"
-                )
-                session["signup_flow"] = True
-                return redirect(url_for("public.signup_onboarding"))
+        # Build tenant list for selector (empty list is fine - user can create new tenant)
+        session["available_tenants"] = []
 
-            # Regular flow - no access
-            flash("You don't have access to any tenants. Please contact your administrator.", "error")
-            session.clear()
-            return redirect(url_for("auth.login"))
+        if tenant_access["domain_tenant"]:
+            session["available_tenants"].append(
+                {
+                    "tenant_id": tenant_access["domain_tenant"].tenant_id,
+                    "name": tenant_access["domain_tenant"].name,
+                    "subdomain": tenant_access["domain_tenant"].subdomain,
+                }
+            )
 
-        elif tenant_access["total_access"] == 1:
-            # Single tenant - direct access
-            if tenant_access["domain_tenant"]:
-                tenant = tenant_access["domain_tenant"]
-                access_type = "domain"
-            else:
-                tenant = tenant_access["email_tenants"][0]
-                access_type = "email"
+        for tenant in tenant_access["email_tenants"]:
+            session["available_tenants"].append(
+                {
+                    "tenant_id": tenant.tenant_id,
+                    "name": tenant.name,
+                    "subdomain": tenant.subdomain,
+                }
+            )
 
-            # Ensure user record exists (auto-create if needed)
-            user_record = ensure_user_in_tenant(email, tenant.tenant_id, role="admin", name=user.get("name"))
-
-            session["tenant_id"] = tenant.tenant_id
-            session["is_tenant_admin"] = user_record.role == "admin"
-            flash(f"Welcome {user.get('name', email)}! ({access_type.title()} Access)", "success")
-
-            # Redirect to external domain if OAuth was initiated from external domain
-            if external_domain and os.environ.get("PRODUCTION") == "true":
-                logger.info(f"Redirecting tenant user back to external domain: {external_domain}")
-                return redirect(f"https://{external_domain}/admin/")
-            # Redirect to tenant-specific subdomain if accessed via subdomain
-            elif tenant.subdomain and tenant.subdomain != "localhost" and os.environ.get("PRODUCTION") == "true":
-                return redirect(f"https://{tenant.subdomain}.sales-agent.scope3.com/admin/")
-            else:
-                return redirect(url_for("tenants.dashboard", tenant_id=tenant.tenant_id))
-
-        else:
-            # Multiple tenants - let user choose
-            session["available_tenants"] = []
-
-            if tenant_access["domain_tenant"]:
-                session["available_tenants"].append(
-                    {
-                        "tenant_id": tenant_access["domain_tenant"].tenant_id,
-                        "name": tenant_access["domain_tenant"].name,
-                        "access_type": "domain",
-                        "is_admin": True,  # Domain users get admin access
-                    }
-                )
-
-            for tenant in tenant_access["email_tenants"]:
-                # Check existing user record for role, default to admin
-                with get_db_session() as db_session:
-                    existing_user = db_session.scalars(
-                        select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
-                    ).first()
-                    is_admin = existing_user.role == "admin" if existing_user else True
-
-                session["available_tenants"].append(
-                    {"tenant_id": tenant.tenant_id, "name": tenant.name, "access_type": "email", "is_admin": is_admin}
-                )
-
-            return redirect(url_for("auth.select_tenant"))
+        # Always show tenant selector (includes "Create New Tenant" option)
+        flash(f"Welcome {user.get('name', email)}!", "success")
+        return redirect(url_for("auth.select_tenant"))
 
     except Exception as e:
-        logger.error(f"OAuth callback error: {e}", exc_info=True)
+        logger.error(f"[OAUTH_DEBUG] OAuth callback error: {type(e).__name__}: {e}", exc_info=True)
+        logger.error(f"[OAUTH_DEBUG] Request args: {dict(request.args)}")
+        logger.error(f"[OAUTH_DEBUG] Session keys: {list(session.keys())}")
         flash("Authentication failed. Please try again.", "error")
         return redirect(url_for("auth.login"))
 
