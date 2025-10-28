@@ -269,19 +269,23 @@ def google_callback():
         tenant_access = get_user_tenant_access(email)
 
         # Build tenant list for selector (empty list is fine - user can create new tenant)
-        session["available_tenants"] = []
+        # Use a dict to track tenants by tenant_id to avoid duplicates
+        tenant_dict = {}
 
         if tenant_access["domain_tenant"]:
-            session["available_tenants"].append(
-                {
-                    "tenant_id": tenant_access["domain_tenant"].tenant_id,
-                    "name": tenant_access["domain_tenant"].name,
-                    "subdomain": tenant_access["domain_tenant"].subdomain,
-                    "is_admin": True,  # Domain users get admin access
-                }
-            )
+            domain_tenant = tenant_access["domain_tenant"]
+            tenant_dict[domain_tenant.tenant_id] = {
+                "tenant_id": domain_tenant.tenant_id,
+                "name": domain_tenant.name,
+                "subdomain": domain_tenant.subdomain,
+                "is_admin": True,  # Domain users get admin access
+            }
 
         for tenant in tenant_access["email_tenants"]:
+            # Skip if already added via domain access
+            if tenant.tenant_id in tenant_dict:
+                continue
+
             # Check existing user record for role, default to admin
             with get_db_session() as db_session:
                 from sqlalchemy import select
@@ -292,14 +296,15 @@ def google_callback():
                 existing_user = db_session.scalars(stmt).first()
                 is_admin = existing_user.role == "admin" if existing_user else True
 
-            session["available_tenants"].append(
-                {
-                    "tenant_id": tenant.tenant_id,
-                    "name": tenant.name,
-                    "subdomain": tenant.subdomain,
-                    "is_admin": is_admin,
-                }
-            )
+            tenant_dict[tenant.tenant_id] = {
+                "tenant_id": tenant.tenant_id,
+                "name": tenant.name,
+                "subdomain": tenant.subdomain,
+                "is_admin": is_admin,
+            }
+
+        # Convert dict to list for session
+        session["available_tenants"] = list(tenant_dict.values())
 
         # Always show tenant selector (includes "Create New Tenant" option)
         flash(f"Welcome {user.get('name', email)}!", "success")
