@@ -1,0 +1,36 @@
+name: Commitizen Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  commitizen-check:
+    name: Check Conventional Commits
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/0.4.18/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv sync
+
+      - name: Check commits follow conventional commit format
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          # Check all commits in this PR
+          uv run cz check --rev-range origin/main..HEAD
