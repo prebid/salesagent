@@ -34,6 +34,7 @@ dependencies = [
     "a2a-sdk[http-server]>=0.3.10", # Latest available version
     "jinja2>=3.1.0",
     "prometheus-client>=0.23.1",
+    "commitizen>=3.29.0", # Version management and changelog generation
 ]
 
 
@@ -131,3 +132,15 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E722", "F821"]
 "admin_ui.py" = ["E402", "E722"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+version_scheme = "semver"
+version_provider = "pep621"
+update_changelog_on_bump = true
+major_version_zero = true
+tag_format = "v$version"
+changelog_file = "CHANGELOG.md"
+changelog_incremental = true
+changelog_start_rev = "v0.1.0"

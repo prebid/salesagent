@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    name: Bump Version and Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/0.4.18/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv sync
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check if version bump is needed
+        id: check_bump
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          # Check if there are any commits since last tag that warrant a version bump
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
+          echo "Last tag: $LAST_TAG"
+
+          # Check if there are feat/fix/BREAKING commits since last tag
+          if git log $LAST_TAG..HEAD --oneline | grep -qE '^[a-f0-9]+ (feat|fix|perf|refactor|BREAKING CHANGE)'; then
+            echo "needs_bump=true" >> $GITHUB_OUTPUT
+            echo "✅ Found commits that need version bump"
+          else
+            echo "needs_bump=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  No version bump needed (only chore/docs/test commits)"
+          fi
+
+      - name: Bump version and update changelog
+        if: steps.check_bump.outputs.needs_bump == 'true'
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+
+          # Bump version (automatically determines bump type from commits)
+          uv run cz bump --yes --changelog
+
+          # Get the new version
+          NEW_VERSION=$(uv run cz version -p)
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+
+          echo "✅ Bumped to version $NEW_VERSION"
+
+      - name: Push changes
+        if: steps.check_bump.outputs.needs_bump == 'true'
+        run: |
+          git push origin main --tags
+          echo "✅ Pushed version bump and tags to main"
+
+      - name: Create GitHub Release
+        if: steps.check_bump.outputs.needs_bump == 'true'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.NEW_VERSION }}
+          release_name: Release v${{ env.NEW_VERSION }}
+          body: |
+            ## Changes
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          draft: false
+          prerelease: false
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.check_bump.outputs.needs_bump }}" == "true" ]; then
+            echo "✅ Version bumped to ${{ env.NEW_VERSION }}"
+            echo "✅ Changelog updated"
+            echo "✅ Git tag created and pushed"
+            echo "✅ GitHub release created"
+          else
+            echo "ℹ️  No version bump needed - no feat/fix/BREAKING commits found"
+          fi

@@ -236,6 +236,80 @@ We welcome contributions! Please see our [Development Guide](docs/DEVELOPMENT.md
 - Code style guidelines
 - Creating pull requests
 
+### Commitizen for Version Management
+
+This project uses [Commitizen](https://commitizen-tools.github.io/commitizen/) for automated version management and changelog generation.
+
+**Commit Message Format:**
+
+All commits must follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+**Types:**
+- `feat`: New feature (triggers minor version bump: 0.1.0 → 0.2.0)
+- `fix`: Bug fix (triggers patch version bump: 0.1.0 → 0.1.1)
+- `docs`: Documentation changes (no version bump)
+- `test`: Test changes (no version bump)
+- `chore`: Build/tooling changes (no version bump)
+- `refactor`: Code refactoring (no version bump)
+- `perf`: Performance improvements (triggers patch bump)
+- `BREAKING CHANGE`: Breaking change (triggers major version bump: 0.1.0 → 1.0.0)
+
+**Examples:**
+
+```bash
+# Feature (minor bump)
+git commit -m "feat: add OAuth authentication support"
+git commit -m "feat(gam): add support for video creatives"
+
+# Bug fix (patch bump)
+git commit -m "fix: correct schema validation for media buy"
+git commit -m "fix(auth): prevent token refresh race condition"
+
+# Breaking change (major bump)
+git commit -m "feat!: redesign API response format
+
+BREAKING CHANGE: Response format changed from {data} to {result}
+Clients must update to handle new format"
+
+# No version bump
+git commit -m "docs: update README with setup instructions"
+git commit -m "test: add integration tests for A2A protocol"
+git commit -m "chore: update pre-commit hooks"
+```
+
+**Using Commitizen CLI (Optional):**
+
+```bash
+# Interactive commit helper
+uv run cz commit
+
+# Check if commits follow format
+uv run cz check
+
+# Manually bump version (usually done by CI)
+uv run cz bump
+```
+
+**Automated Releases:**
+
+When commits are pushed to `main`:
+1. CI automatically analyzes commit messages
+2. Determines version bump type (major/minor/patch)
+3. Updates version in `pyproject.toml`
+4. Updates `CHANGELOG.md` with changes
+5. Creates git tag and GitHub release
+6. Pushes changes back to `main`
+
+No manual version bumps needed - it's all automated from your commit messages!
+
 ### Important: Database Access Patterns
 
 When contributing, please follow our standardized database patterns:
