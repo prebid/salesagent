@@ -213,11 +213,10 @@ async def create_mcp_client(
                     )
                     break
 
-    # If we reach here, all candidates failed
-    tried_detail = ", then ".join(attempted_urls)
+    # If we reach here, all candidates failed — preserve legacy error format regardless of fallback
     raise MCPConnectionError(
-        f"Failed to connect to MCP agent after retries. Tried: {tried_detail}. "
-        f"Last error: {type(last_exception).__name__ if last_exception else 'UnknownError'}: {last_exception}"
+        f"Failed to connect to MCP agent at {agent_url} after {max_retries} attempts: "
+        f"{type(last_exception).__name__ if last_exception else 'UnknownError'}: {last_exception}"
     ) from last_exception
 
 
