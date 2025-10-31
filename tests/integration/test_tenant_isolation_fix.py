@@ -20,7 +20,14 @@ from src.core.main import get_principal_from_context
 
 @pytest.mark.requires_db
 def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
-    """Test that subdomain-based tenant context is preserved when using a token from a different tenant."""
+    """Test that cross-tenant tokens are rejected for security.
+
+    When accessing a tenant via subdomain (e.g., wonderstruck.sales-agent.scope3.com),
+    tokens from a different tenant should be rejected, not accepted with overridden context.
+    This prevents principals from one tenant accessing another tenant's resources.
+    """
+
+    from fastmcp.exceptions import ToolError
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal as ModelPrincipal
@@ -56,12 +63,13 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
             tenant_id="tenant_test_agent",
             name="Test Agent Principal",
             access_token="test_agent_principal_token",
+            platform_mappings={"mock": {"id": "principal_test_agent"}},
         )
         session.add(principal)
         session.commit()
 
     # Simulate request to wonderstruck.sales-agent.scope3.com with test-agent token
-    # This simulates the bug scenario where token is from test-agent but subdomain is wonderstruck
+    # This should be REJECTED for security reasons
     mock_context = MagicMock()
     mock_context.meta = {
         "headers": {
@@ -74,21 +82,13 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
     with patch("src.core.auth.get_http_headers") as mock_get_headers:
         mock_get_headers.return_value = mock_context.meta["headers"]
 
-        # Call get_principal_from_context
-        principal_id = get_principal_from_context(mock_context)
+        # Verify cross-tenant token is REJECTED
+        with pytest.raises(ToolError) as exc_info:
+            get_principal_from_context(mock_context)
 
-        # Verify principal was found
-        assert principal_id == "principal_test_agent"
-
-        # CRITICAL: Verify tenant context is set to wonderstruck (from subdomain), NOT test-agent (from token)
-        current_tenant = get_current_tenant()
-        assert current_tenant is not None
-        assert current_tenant["tenant_id"] == "tenant_wonderstruck", (
-            f"Expected tenant_id='tenant_wonderstruck' (from subdomain), "
-            f"but got tenant_id='{current_tenant['tenant_id']}'. "
-            f"This indicates the tenant context was overwritten by the principal's tenant."
-        )
-        assert current_tenant["subdomain"] == "wonderstruck"
+        # Verify the error message mentions the tenant
+        assert "INVALID_AUTH_TOKEN" in str(exc_info.value)
+        assert "tenant_wonderstruck" in str(exc_info.value)
 
 
 @pytest.mark.requires_db
@@ -115,6 +115,7 @@ def test_global_token_lookup_sets_tenant_from_principal(integration_db):
             tenant_id="tenant_global",
             name="Global Principal",
             access_token="global_principal_token",
+            platform_mappings={"mock": {"id": "principal_global"}},
         )
         session.add(principal)
         session.commit()
@@ -134,7 +135,7 @@ def test_global_token_lookup_sets_tenant_from_principal(integration_db):
         mock_get_headers.return_value = mock_context.meta["headers"]
 
         # Call get_principal_from_context
-        principal_id = get_principal_from_context(mock_context)
+        principal_id, tenant_ctx = get_principal_from_context(mock_context)
 
         # Verify principal was found
         assert principal_id == "principal_global"
@@ -178,7 +179,7 @@ def test_admin_token_with_subdomain_preserves_tenant_context(integration_db):
         mock_get_headers.return_value = mock_context.meta["headers"]
 
         # Call get_principal_from_context
-        principal_id = get_principal_from_context(mock_context)
+        principal_id, tenant_ctx = get_principal_from_context(mock_context)
 
         # Verify admin token was recognized
         assert principal_id == "tenant_admin_test_admin"

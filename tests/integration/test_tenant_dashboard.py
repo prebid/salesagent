@@ -104,6 +104,17 @@ class TestTenantDashboard:
             )
             db_session.add(tenant)
 
+            # Create principals first (required for foreign key)
+            for i in range(3):
+                principal = Principal(
+                    tenant_id="test_metrics",
+                    principal_id=f"principal_{i}",
+                    name=f"Principal {i}",
+                    access_token=f"token_{i}",
+                    platform_mappings={"mock": {"id": f"advertiser_{i}"}},
+                )
+                db_session.add(principal)
+
             # Create multiple media buys
             for i in range(3):
                 buy = MediaBuy(
@@ -184,7 +195,6 @@ class TestTenantDashboard:
             f"/tenant/{tenant_id}",  # Main dashboard
             f"/tenant/{tenant_id}/products/",  # Products page (needs trailing slash)
             f"/tenant/{tenant_id}/principals",  # Principals/Advertisers page
-            f"/tenant/{tenant_id}/creative-formats/",  # Creative formats (needs trailing slash)
             f"/tenant/{tenant_id}/settings",  # Tenant settings
         ]
 

@@ -183,7 +183,7 @@ def create_tenant():
                 is_active=data.get("is_active", True),
                 billing_plan=data.get("billing_plan", "standard"),
                 billing_contact=data.get("billing_contact"),
-                max_daily_budget=data.get("max_daily_budget", 10000),
+                # Note: max_daily_budget moved to currency_limits table (per models.py line 55)
                 enable_axe_signals=data.get("enable_axe_signals", True),
                 authorized_emails=json.dumps(email_list),
                 authorized_domains=json.dumps(domain_list),
@@ -321,7 +321,7 @@ def get_tenant(tenant_id):
                 "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
                 "updated_at": tenant.updated_at.isoformat() if tenant.updated_at else None,
                 "settings": {
-                    "max_daily_budget": tenant.max_daily_budget,
+                    # Note: max_daily_budget moved to currency_limits table (per models.py line 55)
                     "enable_axe_signals": bool(tenant.enable_axe_signals),
                     "authorized_emails": tenant.authorized_emails if tenant.authorized_emails else [],
                     "authorized_domains": tenant.authorized_domains if tenant.authorized_domains else [],
@@ -419,8 +419,7 @@ def update_tenant(tenant_id):
                 tenant.billing_plan = data["billing_plan"]
             if "billing_contact" in data:
                 tenant.billing_contact = data["billing_contact"]
-            if "max_daily_budget" in data:
-                tenant.max_daily_budget = data["max_daily_budget"]
+            # Note: max_daily_budget moved to currency_limits table (per models.py line 55)
             if "enable_axe_signals" in data:
                 tenant.enable_axe_signals = data["enable_axe_signals"]
             if "authorized_emails" in data:

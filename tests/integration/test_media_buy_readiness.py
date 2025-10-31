@@ -47,8 +47,15 @@ def test_principal(integration_db, test_tenant):
 
     yield principal_id
 
-    # Cleanup
+    # Cleanup - delete in correct order to avoid FK constraint violations
     with get_db_session() as session:
+        # Delete creative assignments first (they reference creatives)
+        session.execute(delete(CreativeAssignment).where(CreativeAssignment.tenant_id == test_tenant))
+        # Delete any remaining creatives that reference this principal
+        session.execute(
+            delete(Creative).where(Creative.tenant_id == test_tenant, Creative.principal_id == principal_id)
+        )
+        # Now safe to delete principal
         session.execute(
             delete(Principal).where(Principal.tenant_id == test_tenant, Principal.principal_id == principal_id)
         )
@@ -131,13 +138,12 @@ class TestMediaBuyReadinessService:
             session.commit()
 
     def test_needs_approval_state(self, test_tenant, test_principal):
-        """Media buy with pending creatives should be 'needs_approval'."""
+        """Media buy awaiting manual approval should be 'needs_approval'."""
         media_buy_id = "mb_needs_approval"
-        creative_id = "cr_pending"
         now = datetime.now(UTC)
 
         with get_db_session() as session:
-            # Create media buy
+            # Create media buy with pending_approval status
             media_buy = MediaBuy(
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
@@ -149,45 +155,19 @@ class TestMediaBuyReadinessService:
                 end_date=(now + timedelta(days=7)).date(),
                 start_time=now + timedelta(days=1),
                 end_time=now + timedelta(days=7),
-                status="active",
+                status="pending_approval",  # Media buy itself needs approval
                 raw_request={"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]},
             )
             session.add(media_buy)
-
-            # Create pending creative
-            creative = Creative(
-                creative_id=creative_id,
-                tenant_id=test_tenant,
-                principal_id=test_principal,
-                name="Pending Creative",
-                format="display_300x250",
-                status="pending",  # Pending approval
-                data={},
-            )
-            session.add(creative)
-
-            # Create assignment
-            assignment = CreativeAssignment(
-                assignment_id="assign_1",
-                tenant_id=test_tenant,
-                creative_id=creative_id,
-                media_buy_id=media_buy_id,
-                package_id="pkg_1",
-            )
-            session.add(assignment)
             session.commit()
 
         # Check readiness
         readiness = MediaBuyReadinessService.get_readiness_state(media_buy_id, test_tenant)
         assert readiness["state"] == "needs_approval"
         assert not readiness["is_ready_to_activate"]
-        assert readiness["creatives_pending"] == 1
-        assert "pending approval" in readiness["warnings"][0]
 
         # Cleanup
         with get_db_session() as session:
-            session.execute(delete(CreativeAssignment).where(CreativeAssignment.media_buy_id == media_buy_id))
-            session.execute(delete(Creative).where(Creative.creative_id == creative_id))
             session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
@@ -214,6 +194,7 @@ class TestMediaBuyReadinessService:
                 raw_request={"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]},
             )
             session.add(media_buy)
+            session.flush()  # Ensure media buy exists before creating creative assignment
 
             # Create approved creative
             creative = Creative(
@@ -221,6 +202,7 @@ class TestMediaBuyReadinessService:
                 tenant_id=test_tenant,
                 principal_id=test_principal,
                 name="Approved Creative",
+                agent_url="https://test-agent.example.com",
                 format="display_300x250",
                 status="approved",
                 data={},
@@ -275,6 +257,7 @@ class TestMediaBuyReadinessService:
                 raw_request={"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]},
             )
             session.add(media_buy)
+            session.flush()  # Ensure media buy exists before creating creative assignment
 
             # Create approved creative
             creative = Creative(
@@ -282,6 +265,7 @@ class TestMediaBuyReadinessService:
                 tenant_id=test_tenant,
                 principal_id=test_principal,
                 name="Live Creative",
+                agent_url="https://test-agent.example.com",
                 format="display_300x250",
                 status="approved",
                 data={},

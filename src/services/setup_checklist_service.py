@@ -288,9 +288,22 @@ class SetupChecklistService:
         )
 
         # 3. Budget Controls
-        # Note: Budget limits are typically set per-currency in CurrencyLimit table
-        # For now, we'll consider this optional/incomplete as there's no tenant-level max_daily_budget field
-        has_budget_limits = False  # Could check CurrencyLimit table for max_daily_package_spend
+        # Check if any currency limit has max_daily_package_spend set
+        stmt = (
+            select(func.count())
+            .select_from(CurrencyLimit)
+            .where(CurrencyLimit.tenant_id == self.tenant_id)
+            .where(CurrencyLimit.max_daily_package_spend.isnot(None))
+        )
+        budget_limit_count = session.scalar(stmt) or 0
+        has_budget_limits = budget_limit_count > 0
+
+        details = (
+            f"{budget_limit_count} currency limit(s) with daily budget controls"
+            if has_budget_limits
+            else "Budget limits can be set per currency"
+        )
+
         tasks.append(
             SetupTask(
                 key="budget_controls",
@@ -298,7 +311,7 @@ class SetupChecklistService:
                 description="Set maximum daily budget limits for safety",
                 is_complete=has_budget_limits,
                 action_url=f"/tenant/{self.tenant_id}/settings#business-rules",
-                details="Budget limits can be set per currency",
+                details=details,
             )
         )
 

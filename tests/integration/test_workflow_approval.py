@@ -26,10 +26,10 @@ class TestWorkflowApproval:
         """Create a context manager instance."""
         return ContextManager()
 
-    def test_create_approval_workflow(self, integration_db, context_manager):
+    def test_create_approval_workflow(self, integration_db, sample_tenant, sample_principal, context_manager):
         """Test creating a workflow that requires approval."""
-        tenant_id = "test_tenant"
-        principal_id = "test_principal"
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
         media_buy_id = "mb_test_123"
 
         with get_db_session() as db_session:
@@ -75,10 +75,10 @@ class TestWorkflowApproval:
             assert mapping is not None
             assert mapping.action == "approve"
 
-    def test_approve_workflow_step(self, integration_db, context_manager):
+    def test_approve_workflow_step(self, integration_db, sample_tenant, sample_principal, context_manager):
         """Test approving a workflow step."""
-        tenant_id = "test_tenant"
-        principal_id = "test_principal"
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
 
         # Create context and approval step
         context = context_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
@@ -113,10 +113,10 @@ class TestWorkflowApproval:
             assert len(updated_step.comments) == 1
             assert updated_step.comments[0]["text"] == "Approved after review"
 
-    def test_reject_workflow_step(self, integration_db, context_manager):
+    def test_reject_workflow_step(self, integration_db, sample_tenant, sample_principal, context_manager):
         """Test rejecting a workflow step."""
-        tenant_id = "test_tenant"
-        principal_id = "test_principal"
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
 
         # Create context and approval step
         context = context_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
@@ -145,9 +145,10 @@ class TestWorkflowApproval:
             assert updated_step.status == "failed"
             assert "Budget exceeds" in updated_step.error_message
 
-    def test_get_pending_approvals(self, integration_db, context_manager):
+    def test_get_pending_approvals(self, integration_db, sample_tenant, sample_principal, context_manager):
         """Test getting pending approval steps."""
-        tenant_id = "test_tenant"
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
 
         with get_db_session() as db_session:
             # Clean up existing data
@@ -158,7 +159,7 @@ class TestWorkflowApproval:
             db_session.commit()
 
         # Create multiple workflow steps with different statuses
-        context = context_manager.create_context(tenant_id=tenant_id, principal_id="test_principal")
+        context = context_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
 
         # Create pending approval step
         step1 = context_manager.create_workflow_step(
@@ -196,9 +197,10 @@ class TestWorkflowApproval:
         assert step3.step_id in pending_ids
         assert step2.step_id not in pending_ids
 
-    def test_workflow_lifecycle_tracking(self, integration_db, context_manager):
+    def test_workflow_lifecycle_tracking(self, integration_db, sample_tenant, sample_principal, context_manager):
         """Test tracking the complete lifecycle of an object through workflows."""
-        tenant_id = "test_tenant"
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
         media_buy_id = "mb_lifecycle_123"
 
         with get_db_session() as db_session:
@@ -206,7 +208,7 @@ class TestWorkflowApproval:
             db_session.execute(delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.object_id == media_buy_id))
             db_session.commit()
 
-        context = context_manager.create_context(tenant_id=tenant_id, principal_id="test_principal")
+        context = context_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
 
         # Step 1: Create
         step1 = context_manager.create_workflow_step(

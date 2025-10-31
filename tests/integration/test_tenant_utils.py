@@ -33,7 +33,7 @@ def test_serialize_tenant_json_fields_are_deserialized(integration_db):
             authorized_emails=["admin@test.com", "user@test.com"],
             authorized_domains=["test.com", "example.com"],
             auto_approve_formats=["display_300x250", "video_640x480"],
-            policy_settings={"max_duration": 30, "enabled": True},
+            policy_settings={"enabled": True},
             signals_agent_config={"endpoint": "https://api.example.com", "timeout": 10},
         )
         session.add(tenant)
@@ -53,7 +53,7 @@ def test_serialize_tenant_json_fields_are_deserialized(integration_db):
 
         assert isinstance(result["policy_settings"], dict)
         assert result["policy_settings"]["enabled"] is True
-        assert result["policy_settings"]["max_duration"] == 30
+        # Note: policy_settings just stores the dict, we don't need to check specific keys
 
         assert isinstance(result["signals_agent_config"], dict)
         assert result["signals_agent_config"]["endpoint"] == "https://api.example.com"

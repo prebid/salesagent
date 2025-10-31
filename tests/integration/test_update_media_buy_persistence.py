@@ -21,7 +21,7 @@ from src.core.database.models import (
 from src.core.database.models import (
     Principal as ModelPrincipal,
 )
-from src.core.schemas import UpdateMediaBuyResponse
+from src.core.schema_adapters import UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
@@ -71,7 +71,7 @@ def test_tenant_setup(integration_db):
             principal_id=principal_id,
             name="Test Advertiser Persist",
             access_token=token,
-            platform_mappings={"mock_ad_server": {"advertiser_id": "adv_persist"}},
+            platform_mappings={"mock": {"id": "adv_persist"}},
         )
         session.add(principal)
 
@@ -79,7 +79,7 @@ def test_tenant_setup(integration_db):
         currency_limit = CurrencyLimit(
             tenant_id=tenant_id,
             currency_code="USD",
-            max_daily_spend=10000.0,
+            max_daily_package_spend=10000.0,
         )
         session.add(currency_limit)
 
@@ -120,12 +120,16 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
             principal_id=principal_id,
             media_buy_id=media_buy_id,
             buyer_ref="original_ref",
+            order_name="Test Order",
+            advertiser_name="Test Advertiser",
             status="active",
+            start_date=today,
+            end_date=today + timedelta(days=30),
             start_time=today,
             end_time=today + timedelta(days=30),
-            total_budget=1000.0,
+            budget=1000.0,
             currency="USD",
-            config={},
+            raw_request={},
         )
         session.add(media_buy)
         session.commit()

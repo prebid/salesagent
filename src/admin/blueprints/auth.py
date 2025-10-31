@@ -259,6 +259,12 @@ def google_callback():
         session["user_name"] = user.get("name", email)
         session["user_picture"] = user.get("picture", "")
 
+        # Check if this is a signup flow
+        if session.get("signup_flow"):
+            # Redirect to onboarding wizard for new tenant signup
+            flash(f"Welcome {user.get('name', email)}!", "success")
+            return redirect(url_for("public.signup_onboarding"))
+
         # Unified flow: Always show tenant selector (with option to create new tenant)
         # No distinction between signup and login - keeps UX simple and consistent
         from src.admin.domain_access import get_user_tenant_access

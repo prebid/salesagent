@@ -254,10 +254,10 @@ class TestTenantManagementAPIIntegration:
         # Update the tenant
         update_data = {
             "billing_plan": "enterprise",
-            "max_daily_budget": 50000,
             "adapter_config": {"gam_network_code": "987654321", "gam_trafficker_id": "trafficker_999"},
         }
         # NOTE: gam_company_id removed - advertiser_id is per-principal in platform_mappings
+        # NOTE: max_daily_budget removed - moved to currency_limits table
 
         response = client.put(
             f"/api/v1/tenant-management/tenants/{tenant_id}",
@@ -274,7 +274,7 @@ class TestTenantManagementAPIIntegration:
 
         updated_data = get_response.json
         assert updated_data["billing_plan"] == "enterprise"
-        assert updated_data["settings"]["max_daily_budget"] == 50000
+        # max_daily_budget moved to currency_limits table, not in tenant settings anymore
         assert updated_data["adapter_config"]["gam_network_code"] == "987654321"
         assert updated_data["adapter_config"]["gam_trafficker_id"] == "trafficker_999"
 

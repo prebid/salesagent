@@ -43,12 +43,14 @@ def test_tenant_isolation_with_valid_subdomain(integration_db):
             tenant_id="tenant_wonderstruck",
             name="Wonderstruck Advertiser",
             access_token="wonderstruck_token_abc123",
+            platform_mappings={"mock": {"id": "adv_wonderstruck"}},
         )
         principal2 = Principal(
             principal_id="adv_test_agent",
             tenant_id="tenant_test_agent",
             name="Test Agent Advertiser",
             access_token="test_agent_token_xyz789",
+            platform_mappings={"mock": {"id": "adv_test_agent"}},
         )
         session.add_all([principal1, principal2])
         session.commit()
@@ -63,7 +65,7 @@ def test_tenant_isolation_with_valid_subdomain(integration_db):
     }
 
     with patch("src.core.auth.get_http_headers", return_value={}):
-        principal_id = get_principal_from_context(context)
+        principal_id, tenant = get_principal_from_context(context)
 
     assert principal_id == "adv_wonderstruck"
 
@@ -85,7 +87,7 @@ def test_tenant_isolation_with_valid_subdomain(integration_db):
     }
 
     with patch("src.core.auth.get_http_headers", return_value={}):
-        principal_id2 = get_principal_from_context(context2)
+        principal_id2, tenant2 = get_principal_from_context(context2)
 
     assert principal_id2 == "adv_test_agent"
 
@@ -129,6 +131,7 @@ def test_cross_tenant_token_rejected(integration_db):
             tenant_id="tenant_wonderstruck",
             name="Wonderstruck Advertiser",
             access_token="wonderstruck_token_abc123",
+            platform_mappings={"mock": {"id": "adv_wonderstruck"}},
         )
         session.add(principal1)
         session.commit()

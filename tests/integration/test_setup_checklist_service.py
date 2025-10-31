@@ -99,16 +99,11 @@ def setup_complete_tenant(integration_db, test_tenant_id):
             name="Complete Tenant",
             subdomain="complete",
             ad_server="google_ad_manager",
-            gam_config={
-                "oauth_refresh_token": "test_refresh_token",
-                "network_code": "12345678",
-            },
-            max_daily_budget=10000.0,
             human_review_required=True,
             auto_approve_formats=["display_300x250"],
-            naming_templates={"order_name_template": "Order-{campaign_id}"},
             slack_webhook_url="https://hooks.slack.com/test",
             enable_axe_signals=True,
+            authorized_emails=["test@example.com"],  # Required for access control
             created_at=now,
             updated_at=now,
             is_active=True,
@@ -134,7 +129,14 @@ def setup_complete_tenant(integration_db, test_tenant_id):
 
         # Add product
         product = Product(
-            tenant_id=test_tenant_id, product_id="prod_1", name="Test Product", description="Test", formats=["display"]
+            tenant_id=test_tenant_id,
+            product_id="prod_1",
+            name="Test Product",
+            description="Test",
+            formats=["display"],
+            targeting_template={},
+            delivery_type="guaranteed",
+            property_tags=["all_inventory"],
         )
         db_session.add(product)
 
@@ -144,7 +146,7 @@ def setup_complete_tenant(integration_db, test_tenant_id):
             principal_id="principal_1",
             name="Test Advertiser",
             access_token="test_token",
-            platform_mappings={},
+            platform_mappings={"google_ad_manager": {"advertiser_id": "12345"}},
         )
         db_session.add(principal)
 

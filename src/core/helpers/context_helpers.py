@@ -20,8 +20,10 @@ def get_principal_id_from_context(context: Context | ToolContext | None) -> str 
     Returns:
         Principal ID string, or None if not authenticated
     """
-    # Handle ToolContext (from A2A server) - it already has principal_id
+    # Handle ToolContext (from A2A server) - it already has principal_id and tenant_id
     if isinstance(context, ToolContext):
+        # Set tenant context from ToolContext
+        set_current_tenant({"tenant_id": context.tenant_id})
         return context.principal_id
 
     # Handle FastMCP Context (from MCP protocol)

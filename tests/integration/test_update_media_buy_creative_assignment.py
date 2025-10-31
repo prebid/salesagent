@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
-from src.core.schemas import UpdateMediaBuyResponse
+from src.core.schema_adapters import UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
 
@@ -15,34 +15,47 @@ from src.core.tools.media_buy_update import _update_media_buy_impl
 def test_update_media_buy_assigns_creatives_to_package(integration_db):
     """Test that update_media_buy can assign creatives to a package."""
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, Principal, Product, Tenant
+    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
         # Create tenant
         tenant = Tenant(
             tenant_id="test_tenant",
-            organization_name="Test Org",
+            name="Test Org",
             subdomain="test",
         )
         session.add(tenant)
 
-        # Create principal
+        # Create property tag (required for products)
+        property_tag = PropertyTag(
+            tenant_id="test_tenant",
+            tag_id="all_inventory",
+            name="All Inventory",
+            description="All available inventory",
+        )
+        session.add(property_tag)
+
+        # Create principal (MUST be flushed before creatives due to FK constraint)
         principal = Principal(
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            type="advertiser",
-            token="test_token",
+            access_token="test_token",
+            platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
+        session.flush()  # Ensure principal exists before creating creatives
 
         # Create product
         product = Product(
             product_id="test_product",
             tenant_id="test_tenant",
             name="Test Product",
-            base_price=10.0,
-            currency="USD",
+            description="Test product for creative assignment",
+            formats=["display_300x250"],
+            targeting_template={},
+            delivery_type="guaranteed",
+            property_tags=["all_inventory"],
         )
         session.add(product)
 
@@ -52,22 +65,26 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             buyer_ref="buyer_ref_123",
-            product_ids=["test_product"],
-            total_budget=1000.0,
-            currency="USD",
+            order_name="Test Order",
+            advertiser_name="Test Advertiser",
+            start_date="2025-11-01",
+            end_date="2025-11-30",
             start_time="2025-11-01T00:00:00Z",
             end_time="2025-11-30T23:59:59Z",
-            packages=[{"package_id": "pkg_default", "impressions": 100000}],
+            raw_request={
+                "packages": [{"package_id": "pkg_default", "impressions": 100000, "products": ["test_product"]}]
+            },
         )
         session.add(media_buy)
 
-        # Create creatives
+        # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
             creative_id="creative_1",
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 1",
-            creative_type="display",
+            agent_url="https://creative.adcontextprotocol.org",
+            format="display",
             status="ready",
             data={"platform_creative_id": "gam_123"},
         )
@@ -76,7 +93,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 2",
-            creative_type="display",
+            agent_url="https://creative.adcontextprotocol.org",
+            format="display",
             status="ready",
             data={"platform_creative_id": "gam_456"},
         )
@@ -88,12 +106,11 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
     mock_context.headers = {"x-adcp-auth": "test_token"}
 
     with (
-        patch("src.core.main._verify_principal"),
-        patch("src.core.main._get_principal_id_from_context", return_value="test_principal"),
-        patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.main.get_principal_object", return_value=principal),
-        patch("src.core.main.get_adapter") as mock_get_adapter,
-        patch("src.core.main.get_context_manager") as mock_ctx_mgr,
+        patch("src.core.helpers.get_principal_id_from_context", return_value="test_principal"),
+        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
+        patch("src.core.auth.get_principal_object", return_value=principal),
+        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
+        patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
         # Mock adapter
         mock_adapter = MagicMock()
@@ -154,34 +171,47 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 def test_update_media_buy_replaces_creatives(integration_db):
     """Test that update_media_buy can replace existing creative assignments."""
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, Principal, Product, Tenant
+    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
         # Create tenant
         tenant = Tenant(
             tenant_id="test_tenant",
-            organization_name="Test Org",
+            name="Test Org",
             subdomain="test",
         )
         session.add(tenant)
 
-        # Create principal
+        # Create property tag (required for products)
+        property_tag = PropertyTag(
+            tenant_id="test_tenant",
+            tag_id="all_inventory",
+            name="All Inventory",
+            description="All available inventory",
+        )
+        session.add(property_tag)
+
+        # Create principal (MUST be flushed before creatives due to FK constraint)
         principal = Principal(
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            type="advertiser",
-            token="test_token",
+            access_token="test_token",
+            platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
+        session.flush()  # Ensure principal exists before creating creatives
 
         # Create product
         product = Product(
             product_id="test_product",
             tenant_id="test_tenant",
             name="Test Product",
-            base_price=10.0,
-            currency="USD",
+            description="Test product for creative assignment",
+            formats=["display_300x250"],
+            targeting_template={},
+            delivery_type="guaranteed",
+            property_tags=["all_inventory"],
         )
         session.add(product)
 
@@ -191,39 +221,49 @@ def test_update_media_buy_replaces_creatives(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             buyer_ref="buyer_ref_456",
-            product_ids=["test_product"],
-            total_budget=1000.0,
-            currency="USD",
+            order_name="Test Order",
+            advertiser_name="Test Advertiser",
+            start_date="2025-11-01",
+            end_date="2025-11-30",
             start_time="2025-11-01T00:00:00Z",
             end_time="2025-11-30T23:59:59Z",
-            packages=[{"package_id": "pkg_default", "impressions": 100000}],
+            raw_request={
+                "packages": [{"package_id": "pkg_default", "impressions": 100000, "products": ["test_product"]}]
+            },
         )
         session.add(media_buy)
+        session.flush()  # Ensure media_buy exists before creating assignments
 
-        # Create creatives
+        # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
             creative_id="creative_1",
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 1",
-            creative_type="display",
+            agent_url="https://creative.adcontextprotocol.org",
+            format="display",
             status="ready",
+            data={},
         )
         creative2 = DBCreative(
             creative_id="creative_2",
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 2",
-            creative_type="display",
+            agent_url="https://creative.adcontextprotocol.org",
+            format="display",
             status="ready",
+            data={},
         )
         creative3 = DBCreative(
             creative_id="creative_3",
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 3",
-            creative_type="display",
+            agent_url="https://creative.adcontextprotocol.org",
+            format="display",
             status="ready",
+            data={},
         )
         session.add_all([creative1, creative2, creative3])
 
@@ -243,12 +283,11 @@ def test_update_media_buy_replaces_creatives(integration_db):
     mock_context.headers = {"x-adcp-auth": "test_token"}
 
     with (
-        patch("src.core.main._verify_principal"),
-        patch("src.core.main._get_principal_id_from_context", return_value="test_principal"),
-        patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.main.get_principal_object", return_value=principal),
-        patch("src.core.main.get_adapter") as mock_get_adapter,
-        patch("src.core.main.get_context_manager") as mock_ctx_mgr,
+        patch("src.core.helpers.get_principal_id_from_context", return_value="test_principal"),
+        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
+        patch("src.core.auth.get_principal_object", return_value=principal),
+        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
+        patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
         # Mock adapter
         mock_adapter = MagicMock()
@@ -303,34 +342,47 @@ def test_update_media_buy_replaces_creatives(integration_db):
 def test_update_media_buy_rejects_missing_creatives(integration_db):
     """Test that update_media_buy rejects requests with non-existent creative IDs."""
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, Principal, Product, Tenant
+    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
         # Create tenant
         tenant = Tenant(
             tenant_id="test_tenant",
-            organization_name="Test Org",
+            name="Test Org",
             subdomain="test",
         )
         session.add(tenant)
 
-        # Create principal
+        # Create property tag (required for products)
+        property_tag = PropertyTag(
+            tenant_id="test_tenant",
+            tag_id="all_inventory",
+            name="All Inventory",
+            description="All available inventory",
+        )
+        session.add(property_tag)
+
+        # Create principal (MUST be flushed before creatives due to FK constraint)
         principal = Principal(
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            type="advertiser",
-            token="test_token",
+            access_token="test_token",
+            platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
+        session.flush()  # Ensure principal exists before creating creatives
 
         # Create product
         product = Product(
             product_id="test_product",
             tenant_id="test_tenant",
             name="Test Product",
-            base_price=10.0,
-            currency="USD",
+            description="Test product for creative assignment",
+            formats=["display_300x250"],
+            targeting_template={},
+            delivery_type="guaranteed",
+            property_tags=["all_inventory"],
         )
         session.add(product)
 
@@ -340,12 +392,15 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             buyer_ref="buyer_ref_789",
-            product_ids=["test_product"],
-            total_budget=1000.0,
-            currency="USD",
+            order_name="Test Order",
+            advertiser_name="Test Advertiser",
+            start_date="2025-11-01",
+            end_date="2025-11-30",
             start_time="2025-11-01T00:00:00Z",
             end_time="2025-11-30T23:59:59Z",
-            packages=[{"package_id": "pkg_default", "impressions": 100000}],
+            raw_request={
+                "packages": [{"package_id": "pkg_default", "impressions": 100000, "products": ["test_product"]}]
+            },
         )
         session.add(media_buy)
         session.commit()
@@ -355,12 +410,11 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
     mock_context.headers = {"x-adcp-auth": "test_token"}
 
     with (
-        patch("src.core.main._verify_principal"),
-        patch("src.core.main._get_principal_id_from_context", return_value="test_principal"),
-        patch("src.core.main.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.main.get_principal_object", return_value=principal),
-        patch("src.core.main.get_adapter") as mock_get_adapter,
-        patch("src.core.main.get_context_manager") as mock_ctx_mgr,
+        patch("src.core.helpers.get_principal_id_from_context", return_value="test_principal"),
+        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
+        patch("src.core.auth.get_principal_object", return_value=principal),
+        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
+        patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
         # Mock adapter
         mock_adapter = MagicMock()

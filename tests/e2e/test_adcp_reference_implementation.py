@@ -230,9 +230,9 @@ class TestAdCPReferenceImplementation:
             sync_result = await client.call_tool("sync_creatives", sync_request)
             sync_data = parse_tool_result(sync_result)
 
-            assert "results" in sync_data, "Response must contain results"
-            assert len(sync_data["results"]) == 2, "Should sync 2 creatives"
-            print(f"   ✓ Synced {len(sync_data['results'])} creatives")
+            assert "creatives" in sync_data, "Response must contain creatives (AdCP spec field name)"
+            assert len(sync_data["creatives"]) == 2, "Should sync 2 creatives"
+            print(f"   ✓ Synced {len(sync_data['creatives'])} creatives")
             print(f"   ✓ Creative IDs: {creative_id_1}, {creative_id_2}")
 
             # ================================================================

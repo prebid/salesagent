@@ -13,7 +13,7 @@ console = Console()
 
 
 @pytest.mark.requires_db
-def test_workflow_architecture(integration_db):
+def test_workflow_architecture(integration_db, sample_tenant, sample_principal):
     """Test the new workflow architecture."""
     console.print("\n[bold cyan]Testing New Workflow Architecture[/bold cyan]")
     console.print("=" * 60)
@@ -29,8 +29,8 @@ def test_workflow_architecture(integration_db):
     ctx_mgr = ContextManager()
 
     # Test parameters
-    tenant_id = "test_tenant"
-    principal_id = "test_principal"
+    tenant_id = sample_tenant["tenant_id"]
+    principal_id = sample_principal["principal_id"]
     media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
     creative_id = f"cr_{uuid.uuid4().hex[:8]}"
 
@@ -153,7 +153,7 @@ def test_workflow_architecture(integration_db):
             if updated_step and updated_step.comments:
                 console.print(f"  Comments: {len(updated_step.comments)}")
                 for comment in updated_step.comments:
-                    console.print(f"    - {comment['user']}: {comment['comment']}")
+                    console.print(f"    - {comment['user']}: {comment['text']}")
 
             console.print("\n[yellow]Test 8: Complete approval step[/yellow]")
             ctx_mgr.update_workflow_step(

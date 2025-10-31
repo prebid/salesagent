@@ -96,10 +96,9 @@ class TestGAMOrderLifecycleIntegration:
             )
             assert is_admin_adapter._is_admin_principal() is True
 
-    @pytest.mark.skip_ci(reason="GAM adapter needs refactoring for AdCP 2.3 - UpdateMediaBuyResponse schema mismatch")
-    @pytest.mark.requires_db  # Skip in quick mode - test is pending GAM refactoring
+    @pytest.mark.requires_db
     def test_lifecycle_workflow_validation(self, test_principals, gam_config):
-        """Test lifecycle action workflows with business validation."""
+        """Test lifecycle action workflows with business validation (AdCP 2.4 compliant)."""
         with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):
             # Test regular user with different actions
             regular_adapter = GoogleAdManager(
@@ -116,16 +115,29 @@ class TestGAMOrderLifecycleIntegration:
             allowed_actions = ["submit_for_approval", "archive_order"]
             for action in allowed_actions:
                 response = regular_adapter.update_media_buy(
-                    media_buy_id="12345", action=action, package_id=None, budget=None, today=datetime.now()
+                    media_buy_id="12345",
+                    buyer_ref="test-buyer-ref",
+                    action=action,
+                    package_id=None,
+                    budget=None,
+                    today=datetime.now(),
                 )
-                assert response.status == "completed"
+                # AdCP 2.4: Success = no errors (or empty errors list)
+                assert response.errors == [] or response.errors is None
                 assert response.buyer_ref  # buyer_ref should be present
 
             # Admin-only action should fail for regular user
             response = regular_adapter.update_media_buy(
-                media_buy_id="12345", action="approve_order", package_id=None, budget=None, today=datetime.now()
+                media_buy_id="12345",
+                buyer_ref="test-buyer-ref",
+                action="approve_order",
+                package_id=None,
+                budget=None,
+                today=datetime.now(),
             )
-            assert response.status == "input-required"
+            # AdCP 2.4: Failure = has errors
+            assert response.errors is not None and len(response.errors) > 0
+            assert response.errors[0].code == "insufficient_privileges"
             assert response.buyer_ref  # buyer_ref should be present
 
             # Admin user should be able to approve
@@ -139,9 +151,15 @@ class TestGAMOrderLifecycleIntegration:
                 tenant_id="test",
             )
             response = admin_adapter.update_media_buy(
-                media_buy_id="12345", action="approve_order", package_id=None, budget=None, today=datetime.now()
+                media_buy_id="12345",
+                buyer_ref="test-buyer-ref",
+                action="approve_order",
+                package_id=None,
+                budget=None,
+                today=datetime.now(),
             )
-            assert response.status == "completed"
+            # AdCP 2.4: Success = no errors
+            assert response.errors == [] or response.errors is None
 
     def test_guaranteed_line_item_classification(self):
         """Test line item type classification logic with real data structures."""
@@ -171,10 +189,9 @@ class TestGAMOrderLifecycleIntegration:
         assert has_guaranteed is True
         assert "STANDARD" in types and "SPONSORSHIP" in types
 
-    @pytest.mark.skip_ci(reason="GAM adapter needs refactoring for AdCP 2.3 - UpdateMediaBuyResponse schema mismatch")
-    @pytest.mark.requires_db  # Skip in quick mode - test is pending GAM refactoring
+    @pytest.mark.requires_db
     def test_activation_validation_with_guaranteed_items(self, test_principals, gam_config):
-        """Test activation validation blocking guaranteed line items."""
+        """Test activation validation blocking guaranteed line items (AdCP 2.4 compliant)."""
         with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):
             adapter = GoogleAdManager(
                 config=gam_config,
@@ -189,12 +206,18 @@ class TestGAMOrderLifecycleIntegration:
             # Test activation with non-guaranteed items (should succeed)
             with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(False, [])):
                 response = adapter.update_media_buy(
-                    media_buy_id="12345", action="activate_order", package_id=None, budget=None, today=datetime.now()
+                    media_buy_id="12345",
+                    buyer_ref="test-buyer-ref",
+                    action="activate_order",
+                    package_id=None,
+                    budget=None,
+                    today=datetime.now(),
                 )
-                assert response.status == "completed"
+                # AdCP 2.4: Success = no errors
+                assert response.errors == [] or response.errors is None
                 assert response.buyer_ref  # buyer_ref should be present
 
-            # Test activation with guaranteed items (should submit for workflow)
+            # Test activation with guaranteed items (should create workflow step)
             with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(True, ["STANDARD"])):
                 # Mock workflow step creation to avoid database foreign key issues
                 with patch.object(
@@ -202,13 +225,14 @@ class TestGAMOrderLifecycleIntegration:
                 ):
                     response = adapter.update_media_buy(
                         media_buy_id="12345",
+                        buyer_ref="test-buyer-ref",
                         action="activate_order",
                         package_id=None,
                         budget=None,
                         today=datetime.now(),
                     )
-                    assert response.status == "submitted"
-                    assert "Cannot auto-activate order with guaranteed line items" in response.reason
+                    # AdCP 2.4: Success with workflow = no errors, workflow_step_id present
+                    assert response.errors == [] or response.errors is None
                     assert response.workflow_step_id == "test_step_id"
 
     # Helper method for line item classification (no external dependencies)

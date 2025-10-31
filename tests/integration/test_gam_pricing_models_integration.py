@@ -4,6 +4,7 @@ Tests end-to-end flow of creating media buys with different pricing models
 and verifying correct GAM line item configuration.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -12,15 +13,20 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
     CurrencyLimit,
+    MediaBuy,
+    MediaPackage,
     PricingOption,
     Principal,
     Product,
     PropertyTag,
+    Tenant,
 )
+from src.core.schemas import CreateMediaBuyRequest, Package, PricingModel
+from src.core.tool_context import ToolContext
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
-# TODO: Fix failing tests and remove skip_ci (see GitHub issue #XXX)
-pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.skip_ci]
+# Tests are now AdCP 2.4 compliant (removed status field, using errors field)
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
@@ -42,9 +48,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
             tenant_id="test_gam_pricing_tenant",
             adapter_type="google_ad_manager",
             gam_network_code="123456",
-            gam_advertiser_id="gam_adv_123",
             gam_trafficker_id="gam_traffic_456",
-            dry_run=True,  # Dry run mode
         )
         session.add(adapter_config)
 
@@ -60,8 +64,8 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         property_tag = PropertyTag(
             tenant_id="test_gam_pricing_tenant",
             tag_id="all_inventory",
-            tag_name="All Inventory",
-            metadata={"description": "All available inventory"},
+            name="All Inventory",
+            description="All available inventory",
         )
         session.add(property_tag)
 
@@ -71,7 +75,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
             principal_id="test_advertiser_pricing",
             name="Test Advertiser - Pricing",
             access_token="test_gam_pricing_token",
-            platform_mappings={"google_ad_manager": {"advertiser_id": "gam_adv_123"}},
+            platform_mappings={"google_ad_manager": {"advertiser_id": "123456789"}},
         )
         session.add(principal)
 
@@ -89,6 +93,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
                 "targeted_ad_unit_ids": ["ad_unit_123"],
                 "line_item_type": "STANDARD",
                 "priority": 8,
+                "creative_placeholders": [{"width": 300, "height": 250}],
             },
         )
         session.add(product_cpm)
@@ -119,6 +124,12 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
             targeting_template={},
             implementation_config={
                 "targeted_ad_unit_ids": ["ad_unit_123"],
+                "line_item_type": "PRICE_PRIORITY",
+                "priority": 12,
+                "creative_placeholders": [
+                    {"width": 300, "height": 250},
+                    {"width": 728, "height": 90},
+                ],
             },
         )
         session.add(product_cpc)
@@ -149,6 +160,9 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
             targeting_template={},
             implementation_config={
                 "targeted_ad_unit_ids": ["ad_unit_123"],
+                "line_item_type": "STANDARD",
+                "priority": 8,
+                "creative_placeholders": [{"width": 300, "height": 250}],
             },
         )
         session.add(product_vcpm)
@@ -179,6 +193,12 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
             targeting_template={},
             implementation_config={
                 "targeted_ad_unit_ids": ["ad_unit_homepage"],
+                "line_item_type": "SPONSORSHIP",
+                "priority": 4,
+                "creative_placeholders": [
+                    {"width": 728, "height": 90},
+                    {"width": 300, "height": 600},
+                ],
             },
         )
         session.add(product_flat)
@@ -203,22 +223,33 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
 
     # Cleanup
     with get_db_session() as session:
-        session.query(PricingOption).filter_by(tenant_id="test_gam_pricing_tenant").delete()
-        session.query(Product).filter_by(tenant_id="test_gam_pricing_tenant").delete()
-        session.query(PropertyTag).filter_by(tenant_id="test_gam_pricing_tenant").delete()
-        session.query(Principal).filter_by(tenant_id="test_gam_pricing_tenant").delete()
-        session.query(AdapterConfig).filter_by(tenant_id="test_gam_pricing_tenant").delete()
-        session.query(CurrencyLimit).filter_by(tenant_id="test_gam_pricing_tenant").delete()
-        session.query(Tenant).filter_by(tenant_id="test_gam_pricing_tenant").delete()
+        from sqlalchemy import delete, select
+
+        # Delete media packages first (join through media_buy to filter by tenant)
+        media_buy_ids_stmt = select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == "test_gam_pricing_tenant")
+        media_buy_ids = [row[0] for row in session.execute(media_buy_ids_stmt)]
+        if media_buy_ids:
+            session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids)))
+
+        # Delete in order of foreign key dependencies
+        session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == "test_gam_pricing_tenant"))
+        session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_gam_pricing_tenant"))
+        session.execute(delete(Product).where(Product.tenant_id == "test_gam_pricing_tenant"))
+        session.execute(delete(PropertyTag).where(PropertyTag.tenant_id == "test_gam_pricing_tenant"))
+        session.execute(delete(Principal).where(Principal.tenant_id == "test_gam_pricing_tenant"))
+        session.execute(delete(AdapterConfig).where(AdapterConfig.tenant_id == "test_gam_pricing_tenant"))
+        session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_gam_pricing_tenant"))
+        session.execute(delete(Tenant).where(Tenant.tenant_id == "test_gam_pricing_tenant"))
         session.commit()
 
 
 @pytest.mark.requires_db
-def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_with_all_pricing_models):
+async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_with_all_pricing_models):
     """Test CPM guaranteed creates STANDARD line item with priority 8."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     request = CreateMediaBuyRequest(
+        buyer_ref="test_buyer_cpm",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
             Package(
@@ -231,29 +262,33 @@ def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_with_all
         ],
         budget={"total": 10000.0, "currency": "USD"},
         currency="USD",
-        flight_start_date="2025-03-01",
-        flight_end_date="2025-03-31",
+        start_time="2026-03-01T00:00:00Z",
+        end_time="2026-03-31T23:59:59Z",
     )
 
-    class MockContext:
-        http_request = type("Request", (), {"headers": {"x-adcp-auth": "test_gam_pricing_token"}})()
+    context = ToolContext(
+        context_id="test_ctx",
+        tenant_id="test_gam_pricing_tenant",
+        principal_id="test_advertiser_pricing",
+        tool_name="create_media_buy",
+        request_timestamp=datetime.now(UTC),
+        testing_context={"dry_run": True, "test_session_id": "test_session"},
+    )
 
-    with get_db_session() as session:
-        tenant_obj = session.query(Tenant).filter_by(tenant_id="test_gam_pricing_tenant").first()
-        tenant = {
-            "tenant_id": tenant_obj.tenant_id,
-            "name": tenant_obj.name,
-            "config": tenant_obj.config,
-            "ad_server": tenant_obj.ad_server,
-        }
-        principal_obj = session.query(Principal).filter_by(tenant_id="test_gam_pricing_tenant").first()
+    response = await _create_media_buy_impl(
+        buyer_ref=request.buyer_ref,
+        brand_manifest=request.brand_manifest,
+        packages=request.packages,
+        start_time=request.start_time,
+        end_time=request.end_time,
+        budget=request.budget,
+        context=context,
+    )
 
-    response = _create_media_buy_impl(request, MockContext(), tenant, principal_obj)
-
-    # Verify response
+    # Verify response (AdCP 2.4 compliant)
     assert response.media_buy_id is not None
-    assert response.status in ["active", "pending"]
-    assert len(response.errors) == 0
+    # Success = no errors (or empty errors list)
+    assert response.errors == [] or response.errors is None
 
     # In dry-run mode, the response should succeed
     # In real mode, we'd verify GAM line item properties:
@@ -264,11 +299,12 @@ def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_with_all
 
 
 @pytest.mark.requires_db
-def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_gam_tenant_with_all_pricing_models):
+async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_gam_tenant_with_all_pricing_models):
     """Test CPC creates PRICE_PRIORITY line item with CLICKS goal unit."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     request = CreateMediaBuyRequest(
+        buyer_ref="test_buyer_cpc",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
             Package(
@@ -281,29 +317,33 @@ def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_gam_ten
         ],
         budget={"total": 5000.0, "currency": "USD"},
         currency="USD",
-        flight_start_date="2025-03-01",
-        flight_end_date="2025-03-31",
+        start_time="2026-03-01T00:00:00Z",
+        end_time="2026-03-31T23:59:59Z",
     )
 
-    class MockContext:
-        http_request = type("Request", (), {"headers": {"x-adcp-auth": "test_gam_pricing_token"}})()
+    context = ToolContext(
+        context_id="test_ctx",
+        tenant_id="test_gam_pricing_tenant",
+        principal_id="test_advertiser_pricing",
+        tool_name="create_media_buy",
+        request_timestamp=datetime.now(UTC),
+        testing_context={"dry_run": True, "test_session_id": "test_session"},
+    )
 
-    with get_db_session() as session:
-        tenant_obj = session.query(Tenant).filter_by(tenant_id="test_gam_pricing_tenant").first()
-        tenant = {
-            "tenant_id": tenant_obj.tenant_id,
-            "name": tenant_obj.name,
-            "config": tenant_obj.config,
-            "ad_server": tenant_obj.ad_server,
-        }
-        principal_obj = session.query(Principal).filter_by(tenant_id="test_gam_pricing_tenant").first()
+    response = await _create_media_buy_impl(
+        buyer_ref=request.buyer_ref,
+        brand_manifest=request.brand_manifest,
+        packages=request.packages,
+        start_time=request.start_time,
+        end_time=request.end_time,
+        budget=request.budget,
+        context=context,
+    )
 
-    response = _create_media_buy_impl(request, MockContext(), tenant, principal_obj)
-
-    # Verify response
+    # Verify response (AdCP 2.4 compliant)
     assert response.media_buy_id is not None
-    assert response.status in ["active", "pending"]
-    assert len(response.errors) == 0
+    # Success = no errors (or empty errors list)
+    assert response.errors == [] or response.errors is None
 
     # In real GAM mode, line item would have:
     # - lineItemType = "PRICE_PRIORITY"
@@ -315,11 +355,12 @@ def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_gam_ten
 
 
 @pytest.mark.requires_db
-def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(setup_gam_tenant_with_all_pricing_models):
+async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(setup_gam_tenant_with_all_pricing_models):
     """Test VCPM creates STANDARD line item with VIEWABLE_IMPRESSIONS goal."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     request = CreateMediaBuyRequest(
+        buyer_ref="test_buyer_vcpm",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
             Package(
@@ -332,29 +373,33 @@ def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(setup_gam
         ],
         budget={"total": 12000.0, "currency": "USD"},
         currency="USD",
-        flight_start_date="2025-03-01",
-        flight_end_date="2025-03-31",
+        start_time="2026-03-01T00:00:00Z",
+        end_time="2026-03-31T23:59:59Z",
     )
 
-    class MockContext:
-        http_request = type("Request", (), {"headers": {"x-adcp-auth": "test_gam_pricing_token"}})()
+    context = ToolContext(
+        context_id="test_ctx",
+        tenant_id="test_gam_pricing_tenant",
+        principal_id="test_advertiser_pricing",
+        tool_name="create_media_buy",
+        request_timestamp=datetime.now(UTC),
+        testing_context={"dry_run": True, "test_session_id": "test_session"},
+    )
 
-    with get_db_session() as session:
-        tenant_obj = session.query(Tenant).filter_by(tenant_id="test_gam_pricing_tenant").first()
-        tenant = {
-            "tenant_id": tenant_obj.tenant_id,
-            "name": tenant_obj.name,
-            "config": tenant_obj.config,
-            "ad_server": tenant_obj.ad_server,
-        }
-        principal_obj = session.query(Principal).filter_by(tenant_id="test_gam_pricing_tenant").first()
+    response = await _create_media_buy_impl(
+        buyer_ref=request.buyer_ref,
+        brand_manifest=request.brand_manifest,
+        packages=request.packages,
+        start_time=request.start_time,
+        end_time=request.end_time,
+        budget=request.budget,
+        context=context,
+    )
 
-    response = _create_media_buy_impl(request, MockContext(), tenant, principal_obj)
-
-    # Verify response
+    # Verify response (AdCP 2.4 compliant)
     assert response.media_buy_id is not None
-    assert response.status in ["active", "pending"]
-    assert len(response.errors) == 0
+    # Success = no errors (or empty errors list)
+    assert response.errors == [] or response.errors is None
 
     # In real GAM mode, line item would have:
     # - lineItemType = "STANDARD" (VCPM only works with STANDARD)
@@ -366,12 +411,13 @@ def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(setup_gam
 
 
 @pytest.mark.requires_db
-def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_pricing_models):
+async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_pricing_models):
     """Test FLAT_RATE converts to CPD (cost per day) correctly."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     # 10 day campaign: $5000 total = $500/day
     request = CreateMediaBuyRequest(
+        buyer_ref="test_buyer_flatrate",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
             Package(
@@ -384,29 +430,33 @@ def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_pricin
         ],
         budget={"total": 5000.0, "currency": "USD"},
         currency="USD",
-        flight_start_date="2025-03-01",
-        flight_end_date="2025-03-10",  # 10 days
+        start_time="2026-03-01T00:00:00Z",
+        end_time="2026-03-10T23:59:59Z",  # 10 days
     )
 
-    class MockContext:
-        http_request = type("Request", (), {"headers": {"x-adcp-auth": "test_gam_pricing_token"}})()
+    context = ToolContext(
+        context_id="test_ctx",
+        tenant_id="test_gam_pricing_tenant",
+        principal_id="test_advertiser_pricing",
+        tool_name="create_media_buy",
+        request_timestamp=datetime.now(UTC),
+        testing_context={"dry_run": True, "test_session_id": "test_session"},
+    )
 
-    with get_db_session() as session:
-        tenant_obj = session.query(Tenant).filter_by(tenant_id="test_gam_pricing_tenant").first()
-        tenant = {
-            "tenant_id": tenant_obj.tenant_id,
-            "name": tenant_obj.name,
-            "config": tenant_obj.config,
-            "ad_server": tenant_obj.ad_server,
-        }
-        principal_obj = session.query(Principal).filter_by(tenant_id="test_gam_pricing_tenant").first()
+    response = await _create_media_buy_impl(
+        buyer_ref=request.buyer_ref,
+        brand_manifest=request.brand_manifest,
+        packages=request.packages,
+        start_time=request.start_time,
+        end_time=request.end_time,
+        budget=request.budget,
+        context=context,
+    )
 
-    response = _create_media_buy_impl(request, MockContext(), tenant, principal_obj)
-
-    # Verify response
+    # Verify response (AdCP 2.4 compliant)
     assert response.media_buy_id is not None
-    assert response.status in ["active", "pending"]
-    assert len(response.errors) == 0
+    # Success = no errors (or empty errors list)
+    assert response.errors == [] or response.errors is None
 
     # In real GAM mode, line item would have:
     # - lineItemType = "SPONSORSHIP" (FLAT_RATE → CPD uses SPONSORSHIP)
@@ -418,11 +468,12 @@ def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_pricin
 
 
 @pytest.mark.requires_db
-def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_pricing_models):
+async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_pricing_models):
     """Test creating media buy with multiple packages using different pricing models."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     request = CreateMediaBuyRequest(
+        buyer_ref="test_buyer_multi",
         brand_manifest={"name": "https://example.com/campaign"},
         packages=[
             Package(
@@ -449,29 +500,33 @@ def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_pricin
         ],
         budget={"total": 20000.0, "currency": "USD"},
         currency="USD",
-        flight_start_date="2025-03-01",
-        flight_end_date="2025-03-31",
+        start_time="2026-03-01T00:00:00Z",
+        end_time="2026-03-31T23:59:59Z",
     )
 
-    class MockContext:
-        http_request = type("Request", (), {"headers": {"x-adcp-auth": "test_gam_pricing_token"}})()
+    context = ToolContext(
+        context_id="test_ctx",
+        tenant_id="test_gam_pricing_tenant",
+        principal_id="test_advertiser_pricing",
+        tool_name="create_media_buy",
+        request_timestamp=datetime.now(UTC),
+        testing_context={"dry_run": True, "test_session_id": "test_session"},
+    )
 
-    with get_db_session() as session:
-        tenant_obj = session.query(Tenant).filter_by(tenant_id="test_gam_pricing_tenant").first()
-        tenant = {
-            "tenant_id": tenant_obj.tenant_id,
-            "name": tenant_obj.name,
-            "config": tenant_obj.config,
-            "ad_server": tenant_obj.ad_server,
-        }
-        principal_obj = session.query(Principal).filter_by(tenant_id="test_gam_pricing_tenant").first()
+    response = await _create_media_buy_impl(
+        buyer_ref=request.buyer_ref,
+        brand_manifest=request.brand_manifest,
+        packages=request.packages,
+        start_time=request.start_time,
+        end_time=request.end_time,
+        budget=request.budget,
+        context=context,
+    )
 
-    response = _create_media_buy_impl(request, MockContext(), tenant, principal_obj)
-
-    # Verify response
+    # Verify response (AdCP 2.4 compliant)
     assert response.media_buy_id is not None
-    assert response.status in ["active", "pending"]
-    assert len(response.errors) == 0
+    # Success = no errors (or empty errors list)
+    assert response.errors == [] or response.errors is None
 
     # Each package should create a line item with correct pricing:
     # - pkg_1: CPM, STANDARD, priority 8
@@ -480,7 +535,7 @@ def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_pricin
 
 
 @pytest.mark.requires_db
-def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_pricing_models):
+async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_pricing_models):
     """Test auction-based CPC (non-fixed) creates PRICE_PRIORITY line item."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -501,6 +556,7 @@ def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_pricin
         session.commit()
 
     request = CreateMediaBuyRequest(
+        buyer_ref="test_buyer_auction",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
             Package(
@@ -514,29 +570,33 @@ def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_pricin
         ],
         budget={"total": 4000.0, "currency": "USD"},
         currency="USD",
-        flight_start_date="2025-03-01",
-        flight_end_date="2025-03-31",
+        start_time="2026-03-01T00:00:00Z",
+        end_time="2026-03-31T23:59:59Z",
     )
 
-    class MockContext:
-        http_request = type("Request", (), {"headers": {"x-adcp-auth": "test_gam_pricing_token"}})()
+    context = ToolContext(
+        context_id="test_ctx",
+        tenant_id="test_gam_pricing_tenant",
+        principal_id="test_advertiser_pricing",
+        tool_name="create_media_buy",
+        request_timestamp=datetime.now(UTC),
+        testing_context={"dry_run": True, "test_session_id": "test_session"},
+    )
 
-    with get_db_session() as session:
-        tenant_obj = session.query(Tenant).filter_by(tenant_id="test_gam_pricing_tenant").first()
-        tenant = {
-            "tenant_id": tenant_obj.tenant_id,
-            "name": tenant_obj.name,
-            "config": tenant_obj.config,
-            "ad_server": tenant_obj.ad_server,
-        }
-        principal_obj = session.query(Principal).filter_by(tenant_id="test_gam_pricing_tenant").first()
+    response = await _create_media_buy_impl(
+        buyer_ref=request.buyer_ref,
+        brand_manifest=request.brand_manifest,
+        packages=request.packages,
+        start_time=request.start_time,
+        end_time=request.end_time,
+        budget=request.budget,
+        context=context,
+    )
 
-    response = _create_media_buy_impl(request, MockContext(), tenant, principal_obj)
-
-    # Verify response
+    # Verify response (AdCP 2.4 compliant)
     assert response.media_buy_id is not None
-    assert response.status in ["active", "pending"]
-    assert len(response.errors) == 0
+    # Success = no errors (or empty errors list)
+    assert response.errors == [] or response.errors is None
 
     # Line item should use bid_price ($2.25) for costPerUnit
     # - lineItemType = "PRICE_PRIORITY" (auction = non-guaranteed)
