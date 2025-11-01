@@ -41,20 +41,20 @@
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1>Targeting Criteria Browser</h1>
         <div>
-            <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant.tenant_id) }}" class="btn btn-primary">
-                <i class="fas fa-sync"></i> Sync Inventory
-            </a>
-            <a href="{{ url_for('inventory.get_inventory_list', tenant_id=tenant.tenant_id) }}" class="btn btn-secondary">
+            <button id="sync-targeting-btn" class="btn btn-primary" onclick="syncTargetingData()">
+                <i class="fas fa-sync"></i> <span id="sync-btn-text">Sync Targeting Data</span>
+            </button>
+            <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}" class="btn btn-secondary">
                 ← Back to Inventory
             </a>
         </div>
     </div>
 
     <!-- Sync Info Alert -->
-    <div class="alert alert-warning">
+    <div class="alert alert-info">
         <i class="fas fa-info-circle"></i>
-        <strong>Note:</strong> To sync inventory data, use the <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant.tenant_id) }}" class="alert-link">Inventory Sync</a> button on the Tenant Settings page.
-        This page displays targeting criteria that have been synced from your ad server.
+        <strong>Note:</strong> This page displays targeting criteria (custom targeting keys, audience segments, and labels) synced from your ad server.
+        To sync ad units and placements, visit the <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}" class="alert-link">Inventory Browser</a>.
     </div>
 
     <!-- Last Sync Info -->
@@ -181,6 +181,57 @@ let targetingData = {
     audiences: [],
     labels: []
 };
+
+// Sync targeting data from ad server
+async function syncTargetingData() {
+    const btn = document.getElementById('sync-targeting-btn');
+    const btnText = document.getElementById('sync-btn-text');
+    const syncMessage = document.getElementById('sync-message');
+
+    // Disable button and show loading state
+    btn.disabled = true;
+    btnText.textContent = 'Syncing...';
+    syncMessage.textContent = 'Starting sync...';
+
+    try {
+        const response = await fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/sync`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                types: ['custom_targeting', 'audience_segments', 'labels'],
+                mode: 'incremental'  // Incremental is faster for targeting data
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Sync failed');
+        }
+
+        const result = await response.json();
+        syncMessage.textContent = `Sync started (ID: ${result.sync_id}). Refreshing data in 3 seconds...`;
+
+        // Wait a bit for sync to complete, then reload data
+        setTimeout(async () => {
+            await loadTargetingData();
+            syncMessage.textContent = 'Sync completed. Data refreshed.';
+            setTimeout(() => {
+                syncMessage.textContent = `Last synced: just now`;
+            }, 2000);
+        }, 3000);
+
+    } catch (error) {
+        console.error('Sync error:', error);
+        syncMessage.textContent = `Sync failed: ${error.message}`;
+    } finally {
+        // Re-enable button
+        btn.disabled = false;
+        btnText.textContent = 'Sync Targeting Data';
+    }
+}
 
 // Load all targeting data
 async function loadTargetingData() {
