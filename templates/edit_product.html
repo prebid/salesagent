@@ -127,7 +127,13 @@
         </div>
 
         {# Simple targeting selector - matches existing UI patterns #}
+        <div style="background: #ffcccc; padding: 1rem; border: 2px solid red; margin: 1rem 0;">
+            <strong>DEBUG: About to include targeting selector widget</strong>
+        </div>
         {% include 'components/targeting_selector_simple.html' %}
+        <div style="background: #ccffcc; padding: 1rem; border: 2px solid green; margin: 1rem 0;">
+            <strong>DEBUG: Finished including targeting selector widget</strong>
+        </div>
         <input type="hidden" id="targeting-data" name="targeting_template" value="{{ product.targeting_template | tojson if product.targeting_template else '{}' }}">
 
         <div style="margin-top: 2rem;">

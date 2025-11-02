@@ -165,6 +165,27 @@
             </ul>
         </div>
 
+        <!-- ============================================================
+             CUSTOM TARGETING (Key-Value Pairs) - WHO SEES THE ADS
+
+             This section configures audience targeting using custom key-value pairs
+             from GAM (e.g., "sport=basketball", "genre=action", "age=18-34").
+
+             This is SEPARATE from inventory targeting (which ad units/placements).
+
+             Example: If you want ads to only show to sports fans watching basketball,
+             you'd use custom targeting here: sport=basketball
+             ============================================================ -->
+        <h3 style="margin-top: 2rem;">🎯 Custom Targeting (Optional)</h3>
+        <div class="alert" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem; margin-bottom: 1rem;">
+            <strong>💡 Who Sees This:</strong> Configure custom targeting (key-value pairs) to define which audience segments will see ads for this product.
+            <br><small style="color: #666;">Example: sport=basketball, genre=action, age=18-34</small>
+        </div>
+
+        {# Simple targeting selector - matches existing UI patterns #}
+        {% include 'components/targeting_selector_simple.html' %}
+        <input type="hidden" id="targeting-data" name="targeting_template" value="{{ product.targeting_template | tojson if product and product.targeting_template else '{}' }}">
+
         <!-- Submit Buttons -->
         <div style="margin-top: 2rem; display: flex; gap: 1rem;">
             <button type="submit" class="btn btn-primary">{{ 'Update Product' if product else 'Create Product' }}</button>
@@ -173,12 +194,26 @@
     </form>
 </div>
 
-<!-- Assigned Inventory Section (Edit Mode Only) -->
+<!-- ============================================================
+     ASSIGNED INVENTORY (Ad Units & Placements) - WHERE ADS APPEAR
+
+     This section shows which ad units and placements from GAM are assigned
+     to this product. This controls WHERE ads will appear on your properties.
+
+     This is SEPARATE from custom targeting (which controls WHO sees the ads).
+
+     Example: If you want ads to appear on your homepage banner and sidebar,
+     you'd assign those ad units here via the Inventory Browser.
+
+     Note: This section only appears in EDIT mode, not when creating a new product.
+     ============================================================ -->
 {% if product %}
 <div class="card" id="inventory" style="margin-top: 2rem;">
     <h3 style="margin-top: 0; border-bottom: 2px solid #28a745; padding-bottom: 0.5rem;">📦 Assigned Inventory</h3>
     <p style="color: #666; margin-bottom: 1.5rem;">
-        Inventory items from the Inventory Browser that have been assigned to this product.
+        <strong>Where Ads Appear:</strong> Ad units and placements from GAM that are assigned to this product.
+        <br><small style="color: #666;">Example: Homepage Banner, Sidebar Ad Unit, Article Page Placement</small>
+        <br>
         <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}" style="color: #007bff; text-decoration: none;">
             Browse Inventory →
         </a>
