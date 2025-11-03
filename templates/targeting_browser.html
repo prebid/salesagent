@@ -277,7 +277,12 @@ async function loadTargetingData() {
         }
 
         const data = await response.json();
-        targetingData = data;
+
+        // Merge data instead of replacing to preserve customValues cache
+        targetingData.customKeys = data.customKeys || [];
+        targetingData.audiences = data.audiences || [];
+        targetingData.labels = data.labels || [];
+        // Don't overwrite customValues - it's populated on-demand by loadCustomValues()
 
         // Update UI
         updateSyncInfo(data.last_sync);
