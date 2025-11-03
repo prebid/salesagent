@@ -130,6 +130,13 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         availableKeys = data.customKeys || [];
 
+        // Sort keys alphabetically by display name
+        availableKeys.sort((a, b) => {
+            const nameA = (a.display_name || a.name).toLowerCase();
+            const nameB = (b.display_name || b.name).toLowerCase();
+            return nameA.localeCompare(nameB);
+        });
+
         // Populate keys dropdown
         const keySelect = document.getElementById('targeting-key-select');
         availableKeys.forEach(key => {
@@ -144,6 +151,21 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (existingData && existingData !== '{}') {
             try {
                 selectedTargeting = JSON.parse(existingData).key_value_pairs || {};
+
+                // Build display names for existing targeting
+                // Note: For existing data, we'll show the internal names until values are loaded
+                // This is acceptable since it's rare and will be corrected on next selection
+                window.targetingDisplayNames = {};
+                for (const keyName of Object.keys(selectedTargeting)) {
+                    const key = availableKeys.find(k => k.name === keyName);
+                    if (key) {
+                        window.targetingDisplayNames[keyName] = {
+                            keyDisplay: key.display_name || key.name,
+                            values: {}
+                        };
+                    }
+                }
+
                 updateDisplay();
             } catch (e) {
                 console.error('Error parsing existing targeting:', e);
@@ -178,15 +200,28 @@ async function loadKeyValues(keyId) {
 
         availableValues[keyId] = data.values || [];
 
+        // Sort values alphabetically by display name
+        const sortedValues = [...data.values].sort((a, b) => {
+            const nameA = (a.display_name || a.name).toLowerCase();
+            const nameB = (b.display_name || b.name).toLowerCase();
+            return nameA.localeCompare(nameB);
+        });
+
+        // Get the key's display name for better display
+        const selectedKey = availableKeys.find(k => k.id === keyId);
+        const keyDisplayName = selectedKey ? (selectedKey.display_name || selectedKey.name) : (data.values[0]?.key_name || '');
+
         // Populate values dropdown
         valuesSelect.innerHTML = '';
-        data.values.forEach(value => {
+        sortedValues.forEach(value => {
             const option = document.createElement('option');
             option.value = value.id;
             option.textContent = value.display_name || value.name;
             option.dataset.keyId = keyId;
             option.dataset.keyName = value.key_name || '';
+            option.dataset.keyDisplayName = keyDisplayName;
             option.dataset.valueName = value.name;
+            option.dataset.valueDisplayName = value.display_name || value.name;
             valuesSelect.appendChild(option);
         });
     } catch (error) {
@@ -203,15 +238,29 @@ function addSelectedValues() {
     selectedOptions.forEach(option => {
         const keyId = option.dataset.keyId;
         const keyName = option.dataset.keyName;
+        const keyDisplayName = option.dataset.keyDisplayName;
         const valueId = option.value;
         const valueName = option.dataset.valueName;
+        const valueDisplayName = option.dataset.valueDisplayName;
 
         // Initialize key array if doesn't exist
         if (!selectedTargeting[keyName]) {
             selectedTargeting[keyName] = [];
         }
 
-        // Add value if not already present
+        // Store display names separately for UI rendering
+        if (!window.targetingDisplayNames) {
+            window.targetingDisplayNames = {};
+        }
+        if (!window.targetingDisplayNames[keyName]) {
+            window.targetingDisplayNames[keyName] = {
+                keyDisplay: keyDisplayName,
+                values: {}
+            };
+        }
+        window.targetingDisplayNames[keyName].values[valueName] = valueDisplayName;
+
+        // Add value if not already present (using internal name for API)
         if (!selectedTargeting[keyName].includes(valueName)) {
             selectedTargeting[keyName].push(valueName);
         }
@@ -232,10 +281,16 @@ function updateDisplay() {
 
     let html = '';
     for (const [key, values] of Object.entries(selectedTargeting)) {
+        // Get display name for key (fallback to internal name if not found)
+        const keyDisplay = window.targetingDisplayNames?.[key]?.keyDisplay || key;
+
         values.forEach(value => {
+            // Get display name for value (fallback to internal name if not found)
+            const valueDisplay = window.targetingDisplayNames?.[key]?.values?.[value] || value;
+
             html += `
                 <span class="selected-item">
-                    ${key}: ${value}
+                    ${keyDisplay}: ${valueDisplay}
                     <button type="button" onclick="removeTargeting('${key}', '${value}')">&times;</button>
                 </span>
             `;

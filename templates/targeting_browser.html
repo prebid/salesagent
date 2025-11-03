@@ -353,6 +353,14 @@ function renderCustomKeys() {
         key.name.toLowerCase().includes(searchTerm) ||
         (key.display_name || '').toLowerCase().includes(searchTerm)
     );
+
+    // Sort keys alphabetically by display name
+    filteredKeys.sort((a, b) => {
+        const nameA = (a.display_name || a.name).toLowerCase();
+        const nameB = (b.display_name || b.name).toLowerCase();
+        return nameA.localeCompare(nameB);
+    });
+
     console.log('filteredKeys count:', filteredKeys.length);
 
     filteredKeys.forEach((key, index) => {
