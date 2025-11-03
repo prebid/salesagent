@@ -373,35 +373,31 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                     # Update status based on creative approval state
                     if all_creatives_approved:
-                        # Compute flight window
-                        if media_buy.start_time:
-                            start_time = (
-                                media_buy.start_time
-                                if media_buy.start_time.tzinfo
-                                else media_buy.start_time.replace(tzinfo=UTC)
-                            )
-                        else:
-                            start_time = (
-                                datetime.combine(media_buy.start_date, datetime.min.time()).replace(tzinfo=UTC)
-                            )
+                        if media_buy.start_time and media_buy.end_time:
+                            # Compute flight window
+                            if media_buy.start_time:
+                                start_time = (
+                                    media_buy.start_time
+                                    if media_buy.start_time.tzinfo
+                                    else media_buy.start_time.replace(tzinfo=UTC)
+                                )
 
-                        if media_buy.end_time:
-                            end_time = (
-                                media_buy.end_time
-                                if media_buy.end_time.tzinfo
-                                else media_buy.end_time.replace(tzinfo=UTC)
-                            )
+                            if media_buy.end_time:
+                                end_time = (
+                                    media_buy.end_time
+                                    if media_buy.end_time.tzinfo
+                                    else media_buy.end_time.replace(tzinfo=UTC)
+                                )
+                            
+                            now = datetime.now(UTC)
+                            if now < start_time:
+                                media_buy.status = "scheduled"
+                            elif now > end_time:
+                                media_buy.status = "completed"
+                            else:
+                                media_buy.status = "active"
                         else:
-                            end_time = (
-                                datetime.combine(media_buy.end_date, datetime.max.time()).replace(tzinfo=UTC)
-                            )
-
-                        now = datetime.now(UTC)
-                        if now < start_time:
-                            media_buy.status = "scheduled"
-                        elif now > end_time:
-                            media_buy.status = "completed"
-                        else:
+                            # No start or end time - set to scheduled
                             media_buy.status = "active"
                     else:
                         # Keep it in a state that shows it needs creative approval
