@@ -648,10 +648,12 @@ async function removeSelectedItem(containerId, idToRemove) {
     const newIds = currentIds.filter(id => id !== idToRemove);
     hiddenInput.value = newIds.join(',');
 
-    // Refresh display
-    const selectedNames = Array.from(document.getElementById(containerId).querySelectorAll('.selected-item'))
-        .map(span => span.textContent.trim().replace('×', '').trim())
-        .filter((_, idx) => currentIds[idx] !== idToRemove);
+    // Refresh display - get names from inventory cache instead of DOM
+    const cache = isAdUnit ? inventoryCache.adUnits : inventoryCache.placements;
+    const selectedNames = newIds.map(id => {
+        const item = cache.get(id);
+        return item ? item.name : id;
+    });
 
     updateSelectedDisplay(containerId, selectedNames, newIds);
 
