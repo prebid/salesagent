@@ -62,11 +62,9 @@ cp .env.secrets.template .env.secrets
 ## Documentation
 
 - **[Setup Guide](docs/SETUP.md)** - Installation and configuration
-- **[API Reference](docs/api.md)** - MCP tools and REST endpoints
 - **[Development Guide](docs/DEVELOPMENT.md)** - Local development and contributing
-- **[Testing Guide](docs/testing.md)** - Running and writing tests
+- **[Testing Guide](docs/testing/README.md)** - Running and writing tests
 - **[Deployment Guide](docs/deployment.md)** - Production deployment options
-- **[Setup Guide](docs/SETUP.md)** - Admin UI and tenant setup
 - **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Monitoring and debugging
 - **[Architecture](docs/ARCHITECTURE.md)** - System design and database schema
 
