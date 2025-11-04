@@ -1426,6 +1426,25 @@ def edit_product(tenant_id, product_id):
                 cpm = first_pricing["rate"]
                 price_guidance = first_pricing["price_guidance"]
 
+            # Parse implementation_config
+            implementation_config = (
+                product.implementation_config
+                if isinstance(product.implementation_config, dict)
+                else json.loads(product.implementation_config) if product.implementation_config else {}
+            )
+
+            # Parse targeting_template - build from implementation_config if not set
+            targeting_template = (
+                product.targeting_template
+                if isinstance(product.targeting_template, dict)
+                else json.loads(product.targeting_template) if product.targeting_template else {}
+            )
+
+            # If targeting_template doesn't have key_value_pairs but implementation_config has custom_targeting_keys,
+            # populate targeting_template from implementation_config for backwards compatibility
+            if not targeting_template.get("key_value_pairs") and implementation_config.get("custom_targeting_keys"):
+                targeting_template["key_value_pairs"] = implementation_config["custom_targeting_keys"]
+
             product_dict = {
                 "product_id": product.product_id,
                 "name": product.name,
@@ -1444,11 +1463,8 @@ def edit_product(tenant_id, product_id):
                     if isinstance(product.countries, list)
                     else json.loads(product.countries) if product.countries else []
                 ),
-                "implementation_config": (
-                    product.implementation_config
-                    if isinstance(product.implementation_config, dict)
-                    else json.loads(product.implementation_config) if product.implementation_config else {}
-                ),
+                "implementation_config": implementation_config,
+                "targeting_template": targeting_template,
             }
 
             product_dict["pricing_options"] = pricing_options_list
