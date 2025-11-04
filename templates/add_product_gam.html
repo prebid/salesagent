@@ -1235,28 +1235,29 @@ async function extractSizesFromInventory() {
     });
 
     // For placements, need to lookup their ad units and get sizes
-    // First, check which ad units need fetching
-    let needsFetch = false;
+    // First, collect which ad units need fetching
+    const missingAdUnitIds = new Set();
     for (const placementId of placementIds) {
         const placement = inventoryCache.placements.get(placementId);
         if (placement && placement.metadata && placement.metadata.ad_unit_ids) {
             for (const adUnitId of placement.metadata.ad_unit_ids) {
                 if (!inventoryCache.adUnits.has(adUnitId)) {
-                    needsFetch = true;
-                    break;
+                    missingAdUnitIds.add(adUnitId);
                 }
             }
-            if (needsFetch) break;
         }
     }
 
-    // Fetch all ad units once if needed (more efficient than per-unit fetches)
-    if (needsFetch) {
+    // Fetch specific missing ad units by ID (bypasses 500-item limit)
+    if (missingAdUnitIds.size > 0) {
         try {
+            const idsParam = Array.from(missingAdUnitIds).join(',');
+            console.log(`[DEBUG] Fetching ${missingAdUnitIds.size} missing ad units for placement size extraction`);
             const response = await fetch(
-                `{{ url_for('inventory.get_inventory_list', tenant_id=tenant_id) }}?type=ad_unit`
+                `{{ url_for('inventory.get_inventory_list', tenant_id=tenant_id) }}?type=ad_unit&ids=${encodeURIComponent(idsParam)}`
             );
             const data = await response.json();
+            console.log(`[DEBUG] Received ${data.items.length} ad units for size extraction`);
             data.items.forEach(item => {
                 inventoryCache.adUnits.set(item.id, item);
             });
