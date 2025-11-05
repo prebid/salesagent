@@ -347,6 +347,22 @@ def select_tenant():
         # Verify user has access to selected tenant
         for tenant in session["available_tenants"]:
             if tenant["tenant_id"] == tenant_id:
+                # Ensure User record exists in the database
+                # This is critical for require_tenant_access decorator to work
+                from src.admin.domain_access import ensure_user_in_tenant
+
+                email = session["user"]
+                user_name = session.get("user_name", email.split("@")[0].title())
+                role = "admin" if tenant["is_admin"] else "viewer"
+
+                try:
+                    ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
+                    logger.info(f"Ensured User record exists for {email} in tenant {tenant_id}")
+                except Exception as e:
+                    logger.error(f"Failed to create User record for {email} in tenant {tenant_id}: {e}")
+                    flash("Error setting up user access. Please contact support.", "error")
+                    return redirect(url_for("auth.select_tenant"))
+
                 session["tenant_id"] = tenant_id
                 session["is_tenant_admin"] = tenant["is_admin"]
                 session.pop("available_tenants", None)  # Clean up
