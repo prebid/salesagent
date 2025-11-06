@@ -171,7 +171,7 @@ def sample_tenant(integration_db):
     from decimal import Decimal
 
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import AuthorizedProperty, CurrencyLimit, PropertyTag, Tenant
+    from src.core.database.models import AuthorizedProperty, CurrencyLimit, GAMInventory, PropertyTag, Tenant
     from tests.fixtures import TenantFactory
 
     tenant_data = TenantFactory.create()
@@ -211,12 +211,36 @@ def sample_tenant(integration_db):
             tenant_id=tenant_data["tenant_id"],
             property_id="test_property_1",
             property_type="website",
-            name="Test Property",
-            identifiers=[{"type": "domain", "value": "example.com"}],
-            publisher_domain="example.com",
+            name="Fixture Default Property",  # Unique name to avoid conflicts with test assertions
+            identifiers=[{"type": "domain", "value": "fixture-default.example.com"}],
+            publisher_domain="fixture-default.example.com",
             verification_status="verified",
         )
         session.add(authorized_property)
+
+        # Create GAMInventory records (required for inventory sync status in setup checklist)
+        inventory_items = [
+            GAMInventory(
+                tenant_id=tenant_data["tenant_id"],
+                inventory_type="ad_unit",
+                inventory_id="test_ad_unit_1",
+                name="Test Ad Unit",
+                path=["root", "test"],
+                status="active",
+                inventory_metadata={"sizes": ["300x250"]},
+            ),
+            GAMInventory(
+                tenant_id=tenant_data["tenant_id"],
+                inventory_type="placement",
+                inventory_id="test_placement_1",
+                name="Test Placement",
+                path=["root"],
+                status="active",
+                inventory_metadata={},
+            ),
+        ]
+        for item in inventory_items:
+            session.add(item)
 
         session.commit()
 
@@ -317,6 +341,7 @@ def add_required_setup_data(session, tenant_id: str):
     3. Currency limit (for budget validation)
     4. Property tag (for product configuration)
     5. Principal (advertiser) (for setup completion validation)
+    6. GAM inventory (for inventory sync status)
 
     Call this in test fixtures to avoid "Setup incomplete" errors.
     """
@@ -327,7 +352,14 @@ def add_required_setup_data(session, tenant_id: str):
     # Update tenant with access control
     from sqlalchemy.orm import attributes
 
-    from src.core.database.models import AuthorizedProperty, CurrencyLimit, Principal, PropertyTag, Tenant
+    from src.core.database.models import (
+        AuthorizedProperty,
+        CurrencyLimit,
+        GAMInventory,
+        Principal,
+        PropertyTag,
+        Tenant,
+    )
 
     stmt = select(Tenant).filter_by(tenant_id=tenant_id)
     tenant = session.scalars(stmt).first()
@@ -344,9 +376,9 @@ def add_required_setup_data(session, tenant_id: str):
             tenant_id=tenant_id,
             property_id=f"{tenant_id}_property_1",
             property_type="website",
-            name="Test Property",
-            identifiers=[{"type": "domain", "value": "example.com"}],
-            publisher_domain="example.com",
+            name="Fixture Default Property",  # Unique name to avoid conflicts with test assertions
+            identifiers=[{"type": "domain", "value": "fixture-default.example.com"}],
+            publisher_domain="fixture-default.example.com",
             verification_status="verified",
         )
         session.add(authorized_property)
@@ -384,6 +416,32 @@ def add_required_setup_data(session, tenant_id: str):
             platform_mappings={"mock": {"advertiser_id": f"mock_adv_{tenant_id}"}},
         )
         session.add(principal)
+
+    # Create GAMInventory if not exists - CRITICAL for inventory sync status validation
+    stmt_inventory = select(GAMInventory).filter_by(tenant_id=tenant_id)
+    if not session.scalars(stmt_inventory).first():
+        inventory_items = [
+            GAMInventory(
+                tenant_id=tenant_id,
+                inventory_type="ad_unit",
+                inventory_id=f"{tenant_id}_ad_unit_1",
+                name="Test Ad Unit",
+                path=["root", "test"],
+                status="active",
+                inventory_metadata={"sizes": ["300x250"]},
+            ),
+            GAMInventory(
+                tenant_id=tenant_id,
+                inventory_type="placement",
+                inventory_id=f"{tenant_id}_placement_1",
+                name="Test Placement",
+                path=["root"],
+                status="active",
+                inventory_metadata={},
+            ),
+        ]
+        for item in inventory_items:
+            session.add(item)
 
 
 # ============================================================================
@@ -659,7 +717,7 @@ def authenticated_admin_session(admin_client, integration_db):
 
 @pytest.fixture
 def test_tenant_with_data(integration_db):
-    """Create a test tenant in the database with proper configuration."""
+    """Create a test tenant in the database with proper configuration and all required setup data."""
     from datetime import UTC, datetime
 
     from src.core.database.database_session import get_db_session
@@ -679,10 +737,16 @@ def test_tenant_with_data(integration_db):
             auto_approve_formats=[],  # JSONType expects list, not json.dumps()
             human_review_required=False,
             policy_settings={},  # JSONType expects dict, not json.dumps()
+            authorized_emails=["test@example.com"],  # Required for access control
             created_at=now,
             updated_at=now,
         )
         db_session.add(tenant)
+        db_session.flush()
+
+        # Add all required setup data using the centralized helper
+        add_required_setup_data(db_session, tenant_data["tenant_id"])
+
         db_session.commit()
 
     return tenant_data

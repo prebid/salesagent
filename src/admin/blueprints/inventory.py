@@ -552,10 +552,10 @@ def analyze_ad_server_inventory(tenant_id):
                 platform_mappings=mappings,
             )
 
-        # Get adapter instance
-        from src.adapters import get_adapter
-
-        adapter = get_adapter(adapter_type, principal, config=config, dry_run=False)
+        # TODO: Get adapter instance and call actual discovery methods
+        # For now, return mock analysis data
+        # from src.adapters import get_adapter
+        # adapter = get_adapter(adapter_type, config, principal)
 
         # Mock analysis (real adapters would implement actual discovery)
         analysis = {

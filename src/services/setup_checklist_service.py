@@ -14,6 +14,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AuthorizedProperty,
     CurrencyLimit,
+    GAMInventory,
     Principal,
     Product,
     Tenant,
@@ -184,13 +185,15 @@ class SetupChecklistService:
         )
 
         # 5. Inventory Synced
-        # Check if tenant has any inventory data (products with inventory mappings)
-        stmt = select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id)
-        product_count = session.scalar(stmt) or 0
+        # Check if tenant has synced inventory from ad server
+        # This checks GAMInventory table which stores actual synced ad units, placements, and targeting options
+        stmt = select(func.count()).select_from(GAMInventory).where(GAMInventory.tenant_id == self.tenant_id)
+        inventory_count = session.scalar(stmt) or 0
 
-        # For now, we consider inventory synced if products exist
-        # In future, could check for specific inventory sync timestamp
-        inventory_synced = product_count > 0
+        inventory_synced = inventory_count > 0
+        inventory_details = (
+            f"{inventory_count:,} inventory items synced" if inventory_synced else "No inventory synced from ad server"
+        )
         tasks.append(
             SetupTask(
                 key="inventory_synced",
@@ -198,11 +201,13 @@ class SetupChecklistService:
                 description="Sync ad units and placements from ad server",
                 is_complete=inventory_synced,
                 action_url=f"/tenant/{self.tenant_id}/settings#inventory",
-                details="Inventory synced" if inventory_synced else "Inventory not synced",
+                details=inventory_details,
             )
         )
 
         # 6. Products Created
+        stmt = select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id)
+        product_count = session.scalar(stmt) or 0
         tasks.append(
             SetupTask(
                 key="products_created",

@@ -23,6 +23,7 @@ def init_db_ci():
         from src.core.database.models import (
             AuthorizedProperty,
             CurrencyLimit,
+            GAMInventory,
             PricingOption,
             Principal,
             Product,
@@ -366,6 +367,59 @@ def init_db_ci():
                 print("  ✓ Created authorized property: example.com")
             else:
                 print("  ℹ️  Authorized property already exists: example.com")
+
+            # Create GAM inventory for setup checklist completion (inventory sync)
+            print("\nCreating GAM inventory for setup checklist...")
+            stmt_check_inventory = select(GAMInventory).filter_by(tenant_id=tenant_id)
+            existing_inventory_count = len(session.scalars(stmt_check_inventory).all())
+
+            if existing_inventory_count == 0:
+                # Create sample inventory items to satisfy setup checklist
+                inventory_items = [
+                    GAMInventory(
+                        tenant_id=tenant_id,
+                        inventory_type="ad_unit",
+                        inventory_id="ci_test_ad_unit_1",
+                        name="CI Test Ad Unit - Homepage",
+                        path=["root", "website", "homepage"],
+                        status="active",
+                        inventory_metadata={"sizes": ["300x250", "728x90"]},
+                    ),
+                    GAMInventory(
+                        tenant_id=tenant_id,
+                        inventory_type="ad_unit",
+                        inventory_id="ci_test_ad_unit_2",
+                        name="CI Test Ad Unit - Article",
+                        path=["root", "website", "article"],
+                        status="active",
+                        inventory_metadata={"sizes": ["300x600", "970x250"]},
+                    ),
+                    GAMInventory(
+                        tenant_id=tenant_id,
+                        inventory_type="placement",
+                        inventory_id="ci_test_placement_1",
+                        name="CI Test Placement - Premium",
+                        path=["root"],
+                        status="active",
+                        inventory_metadata={"description": "Premium placement for CI tests"},
+                    ),
+                    GAMInventory(
+                        tenant_id=tenant_id,
+                        inventory_type="targeting_key",
+                        inventory_id="ci_test_targeting_key_1",
+                        name="CI Test Key - Category",
+                        path=[],
+                        status="active",
+                        inventory_metadata={"type": "predefined", "values": ["news", "sports", "entertainment"]},
+                    ),
+                ]
+                for item in inventory_items:
+                    session.add(item)
+
+                session.commit()
+                print(f"  ✓ Created {len(inventory_items)} inventory items (ad units, placements, targeting)")
+            else:
+                print(f"  ℹ️  Inventory already exists: {existing_inventory_count} items")
 
             # Verify products were actually saved
             stmt_verify = select(Product).filter_by(tenant_id=tenant_id)

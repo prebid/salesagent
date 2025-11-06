@@ -270,7 +270,15 @@ def authenticated_admin_session(admin_client, integration_db):
 
 @pytest.fixture
 def test_tenant_with_data(integration_db):
-    """Create a test tenant in the database with proper configuration."""
+    """Create a test tenant in the database with proper configuration and all required setup data."""
+    from src.core.database.models import (
+        AuthorizedProperty,
+        CurrencyLimit,
+        GAMInventory,
+        Principal,
+        PropertyTag,
+    )
+
     tenant_data = TenantFactory.create()
     now = datetime.now(UTC)
 
@@ -284,10 +292,80 @@ def test_tenant_with_data(integration_db):
             auto_approve_formats=[],  # JSONType expects list, not json.dumps()
             human_review_required=False,
             policy_settings={},  # JSONType expects dict, not json.dumps()
+            authorized_emails=["test@example.com"],  # Required for access control
             created_at=now,
             updated_at=now,
         )
         db_session.add(tenant)
+        db_session.flush()
+
+        # Add all required setup data for tests to pass setup checklist validation
+        tenant_id = tenant_data["tenant_id"]
+
+        # CurrencyLimit (required for budget validation)
+        currency_limit = CurrencyLimit(
+            tenant_id=tenant_id,
+            currency_code="USD",
+            min_package_budget=1.00,
+            max_daily_package_spend=100000.00,
+        )
+        db_session.add(currency_limit)
+
+        # PropertyTag (required for product property_tags)
+        property_tag = PropertyTag(
+            tenant_id=tenant_id,
+            tag_id="all_inventory",
+            name="All Inventory",
+            description="All available inventory",
+        )
+        db_session.add(property_tag)
+
+        # AuthorizedProperty (required for setup validation)
+        auth_property = AuthorizedProperty(
+            tenant_id=tenant_id,
+            property_id=f"{tenant_id}_property_1",
+            property_type="website",
+            name="Fixture Default Property",  # Unique name to avoid conflicts with test assertions
+            identifiers=[{"type": "domain", "value": "fixture-default.example.com"}],
+            publisher_domain="fixture-default.example.com",
+            verification_status="verified",
+        )
+        db_session.add(auth_property)
+
+        # Principal (required for setup completion)
+        principal = Principal(
+            tenant_id=tenant_id,
+            principal_id=f"{tenant_id}_principal",
+            name="Test Principal",
+            access_token=f"{tenant_id}_token",
+            platform_mappings={"mock": {"advertiser_id": f"mock_adv_{tenant_id}"}},
+        )
+        db_session.add(principal)
+
+        # GAMInventory (required for inventory sync status)
+        inventory_items = [
+            GAMInventory(
+                tenant_id=tenant_id,
+                inventory_type="ad_unit",
+                inventory_id=f"{tenant_id}_ad_unit_1",
+                name="Test Ad Unit",
+                path=["root", "test"],
+                status="active",
+                inventory_metadata={"sizes": ["300x250"]},
+            ),
+            GAMInventory(
+                tenant_id=tenant_id,
+                inventory_type="placement",
+                inventory_id=f"{tenant_id}_placement_1",
+                name="Test Placement",
+                path=["root"],
+                status="active",
+                inventory_metadata={},
+            ),
+        ]
+        for item in inventory_items:
+            db_session.add(item)
+
         db_session.commit()
 
     return tenant_data
@@ -310,7 +388,7 @@ def sample_tenant(integration_db):
     from datetime import UTC, datetime
 
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import AuthorizedProperty, CurrencyLimit, PropertyTag, Tenant
+    from src.core.database.models import AuthorizedProperty, CurrencyLimit, GAMInventory, PropertyTag, Tenant
 
     now = datetime.now(UTC)
     with get_db_session() as session:
@@ -361,6 +439,30 @@ def sample_tenant(integration_db):
             verification_status="verified",
         )
         session.add(auth_property)
+
+        # Add GAMInventory records (required for inventory sync status in setup checklist)
+        inventory_items = [
+            GAMInventory(
+                tenant_id=tenant.tenant_id,
+                inventory_type="ad_unit",
+                inventory_id="test_ad_unit_1",
+                name="Test Ad Unit - Homepage",
+                path=["root", "website", "homepage"],
+                status="active",
+                inventory_metadata={"sizes": ["300x250", "728x90"]},
+            ),
+            GAMInventory(
+                tenant_id=tenant.tenant_id,
+                inventory_type="placement",
+                inventory_id="test_placement_1",
+                name="Test Placement - Premium",
+                path=["root"],
+                status="active",
+                inventory_metadata={"description": "Premium placement"},
+            ),
+        ]
+        for item in inventory_items:
+            session.add(item)
 
         session.commit()
 

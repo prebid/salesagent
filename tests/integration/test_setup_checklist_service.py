@@ -8,6 +8,7 @@ import pytest
 from src.core.database.models import (
     AuthorizedProperty,
     CurrencyLimit,
+    GAMInventory,
     Principal,
     Product,
     Tenant,
@@ -150,6 +151,40 @@ def setup_complete_tenant(integration_db, test_tenant_id):
         )
         db_session.add(principal)
 
+        # Add GAM inventory (ad units, placements, targeting)
+        # This simulates that inventory has been synced from the ad server
+        inventory_items = [
+            GAMInventory(
+                tenant_id=test_tenant_id,
+                inventory_type="ad_unit",
+                inventory_id="ad_unit_1",
+                name="Test Ad Unit 1",
+                path=["root", "test"],
+                status="active",
+                inventory_metadata={"size": "300x250"},
+            ),
+            GAMInventory(
+                tenant_id=test_tenant_id,
+                inventory_type="placement",
+                inventory_id="placement_1",
+                name="Test Placement 1",
+                path=["root"],
+                status="active",
+                inventory_metadata={},
+            ),
+            GAMInventory(
+                tenant_id=test_tenant_id,
+                inventory_type="targeting_key",
+                inventory_id="key_1",
+                name="Test Key",
+                path=[],
+                status="active",
+                inventory_metadata={"type": "predefined"},
+            ),
+        ]
+        for item in inventory_items:
+            db_session.add(item)
+
         db_session.commit()
 
     yield tenant
@@ -158,6 +193,7 @@ def setup_complete_tenant(integration_db, test_tenant_id):
     with get_db_session() as db_session:
         db_session.execute(delete(Principal).where(Principal.tenant_id == test_tenant_id))
         db_session.execute(delete(Product).where(Product.tenant_id == test_tenant_id))
+        db_session.execute(delete(GAMInventory).where(GAMInventory.tenant_id == test_tenant_id))
         db_session.execute(delete(AuthorizedProperty).where(AuthorizedProperty.tenant_id == test_tenant_id))
         db_session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == test_tenant_id))
         stmt = select(Tenant).filter_by(tenant_id=test_tenant_id)
@@ -207,6 +243,7 @@ class TestSetupChecklistService:
             assert critical["currency_limits"]["is_complete"]
             assert critical["ad_server_connected"]["is_complete"]
             assert critical["authorized_properties"]["is_complete"]
+            assert critical["inventory_synced"]["is_complete"]
             assert critical["products_created"]["is_complete"]
             assert critical["principals_created"]["is_complete"]
 

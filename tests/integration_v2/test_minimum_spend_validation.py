@@ -24,6 +24,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AuthorizedProperty,
     CurrencyLimit,
+    GAMInventory,
     MediaBuy,
     Principal,
     Product,
@@ -197,6 +198,30 @@ class TestMinimumSpendValidation:
                 targeting_template={},
                 delivery_type="guaranteed",
             )
+
+            # Create GAMInventory records (required for inventory sync status in setup checklist)
+            inventory_items = [
+                GAMInventory(
+                    tenant_id="test_minspend_tenant",
+                    inventory_type="ad_unit",
+                    inventory_id="test_minspend_ad_unit_1",
+                    name="Test Ad Unit",
+                    path=["root", "test"],
+                    status="active",
+                    inventory_metadata={"sizes": ["300x250"]},
+                ),
+                GAMInventory(
+                    tenant_id="test_minspend_tenant",
+                    inventory_type="placement",
+                    inventory_id="test_minspend_placement_1",
+                    name="Test Placement",
+                    path=["root"],
+                    status="active",
+                    inventory_metadata={},
+                ),
+            ]
+            for item in inventory_items:
+                session.add(item)
 
             session.commit()
 
