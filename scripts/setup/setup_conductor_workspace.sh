@@ -18,6 +18,31 @@ echo "Setting up Conductor workspace: $CONDUCTOR_WORKSPACE_NAME"
 echo "Workspace path: $CONDUCTOR_WORKSPACE_PATH"
 echo "Root path: $CONDUCTOR_ROOT_PATH"
 
+# Check and install uv if needed
+echo ""
+echo "Checking for uv package manager..."
+if ! command -v uv &> /dev/null; then
+    echo "✗ uv not found, installing via Homebrew..."
+    if command -v brew &> /dev/null; then
+        brew install uv
+        if command -v uv &> /dev/null; then
+            echo "✓ uv installed successfully"
+        else
+            echo "✗ Warning: uv installation failed"
+            echo "  Schema generation will be skipped"
+            echo "  To install manually: brew install uv"
+        fi
+    else
+        echo "✗ Warning: Homebrew not found, cannot auto-install uv"
+        echo "  To install uv manually:"
+        echo "    macOS: brew install uv"
+        echo "    Linux: curl -LsSf https://astral.sh/uv/install.sh | sh"
+        echo "  Schema generation will be skipped"
+    fi
+else
+    echo "✓ uv is already installed ($(uv --version))"
+fi
+
 # Check for secrets configuration
 echo ""
 echo "Checking secrets configuration..."
