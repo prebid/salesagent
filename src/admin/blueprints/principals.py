@@ -310,9 +310,26 @@ def update_mappings(tenant_id, principal_id):
 @log_admin_action("get_gam_advertisers")
 @require_tenant_access()
 def get_gam_advertisers(tenant_id):
-    """Get list of advertisers from GAM for a tenant."""
+    """Get list of advertisers from GAM for a tenant.
+
+    Request body (JSON):
+        search: Optional search query to filter by name (uses LIKE '%query%')
+        limit: Maximum results to return (default: 500, max: 500)
+        fetch_all: If true, fetches ALL advertisers with pagination (can be slow)
+
+    Performance Notes:
+        - For networks with 1000+ advertisers, use 'search' to filter results
+        - fetch_all=true can take 5-10 seconds for networks with thousands of advertisers
+        - Default behavior (limit=500) is fast but may not return all advertisers
+    """
     try:
         from src.adapters.google_ad_manager import GoogleAdManager
+
+        # Get request parameters
+        data = request.get_json() or {}
+        search_query = data.get("search")
+        limit = data.get("limit", 500)
+        fetch_all = data.get("fetch_all", False)
 
         # Get tenant configuration
         with get_db_session() as db_session:
@@ -335,7 +352,8 @@ def get_gam_advertisers(tenant_id):
                 f"ad_server={tenant.ad_server}, "
                 f"has_adapter_config={tenant.adapter_config is not None}, "
                 f"adapter_type={tenant.adapter_config.adapter_type if tenant.adapter_config else None}, "
-                f"gam_enabled={gam_enabled}"
+                f"gam_enabled={gam_enabled}, "
+                f"search={search_query}, limit={limit}, fetch_all={fetch_all}"
             )
 
             if not gam_enabled:
@@ -379,13 +397,18 @@ def get_gam_advertisers(tenant_id):
                     tenant_id=tenant_id,
                 )
 
-                # Get advertisers (companies) from GAM
-                advertisers = adapter.get_advertisers()
+                # Get advertisers (companies) from GAM with filtering support
+                advertisers = adapter.orders_manager.get_advertisers(
+                    search_query=search_query, limit=limit, fetch_all=fetch_all
+                )
 
                 return jsonify(
                     {
                         "success": True,
                         "advertisers": advertisers,
+                        "count": len(advertisers),
+                        "search": search_query,
+                        "fetch_all": fetch_all,
                     }
                 )
 

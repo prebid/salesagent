@@ -891,13 +891,25 @@ class GAMOrdersManager:
 
         return created_line_item_ids
 
-    def get_advertisers(self) -> list[dict[str, Any]]:
+    def get_advertisers(
+        self, search_query: str | None = None, limit: int = 500, fetch_all: bool = False
+    ) -> list[dict[str, Any]]:
         """Get list of advertisers (companies) from GAM for advertiser selection.
+
+        Args:
+            search_query: Optional search string to filter by name (uses LIKE '%query%')
+            limit: Maximum number of results per page (default: 500, max: 500)
+            fetch_all: If True, fetches ALL advertisers with pagination (can be slow for large networks)
 
         Returns:
             List of advertisers with id, name, and type for dropdown selection
+
+        Performance Notes:
+            - For networks with 1000+ advertisers, use search_query to filter results
+            - fetch_all=True can take 5-10 seconds for networks with thousands of advertisers
+            - Default behavior (limit=500, no search) is fast but may not return all advertisers
         """
-        logger.info("Loading GAM advertisers")
+        logger.info(f"Loading GAM advertisers (search={search_query}, limit={limit}, fetch_all={fetch_all})")
 
         if self.dry_run:
             logger.info("Would call: company_service.getCompaniesByStatement(WHERE type='ADVERTISER')")
@@ -910,23 +922,82 @@ class GAMOrdersManager:
         try:
             company_service = self.client_manager.get_service("CompanyService")
             statement_builder = ad_manager.StatementBuilder()
-            statement_builder.Where("type = :type")
-            statement_builder.WithBindVariable("type", "ADVERTISER")
-            statement = statement_builder.ToStatement()
 
-            result = company_service.getCompaniesByStatement(statement)
-            companies = result.results if result and hasattr(result, "results") else []
+            # Sanitize and validate search query
+            if search_query:
+                # Strip whitespace and limit length to prevent abuse
+                search_query = search_query.strip()[:100]
+                if not search_query:
+                    # If query is empty after stripping, treat as no search
+                    search_query = None
 
-            # Format for UI
+            # Build WHERE clause
+            if search_query:
+                # Use LIKE filter for name search (case-insensitive wildcard matching)
+                # Note: WithBindVariable() properly escapes the search string, preventing SQL injection
+                statement_builder.Where("type = :type AND name LIKE :search")
+                statement_builder.WithBindVariable("type", "ADVERTISER")
+                statement_builder.WithBindVariable("search", f"%{search_query}%")
+                logger.info(f"Filtering advertisers by name LIKE '%{search_query}%'")
+            else:
+                statement_builder.Where("type = :type")
+                statement_builder.WithBindVariable("type", "ADVERTISER")
+
+            # Enforce max limit per page
+            limit = min(limit, 500)
+
             advertisers = []
-            for company in companies:
-                advertisers.append(
-                    {
-                        "id": str(company.id),
-                        "name": company.name,
-                        "type": company.type,
-                    }
-                )
+            total_result_set_size = 0
+
+            if fetch_all:
+                # Fetch ALL advertisers with pagination (can be slow for large networks)
+                logger.info("Fetching all advertisers with pagination...")
+                while True:
+                    result = company_service.getCompaniesByStatement(statement_builder.ToStatement())
+
+                    if result and hasattr(result, "results"):
+                        total_result_set_size = int(getattr(result, "totalResultSetSize", 0))
+                        logger.info(
+                            f"Fetched {len(result.results)} advertisers "
+                            f"(offset: {statement_builder.offset}, total: {total_result_set_size})"
+                        )
+
+                        for company in result.results:
+                            advertisers.append(
+                                {
+                                    "id": str(company.id),
+                                    "name": company.name,
+                                    "type": company.type,
+                                }
+                            )
+
+                        statement_builder.offset += len(result.results)
+
+                        # Check if we've fetched all results
+                        if statement_builder.offset >= total_result_set_size:
+                            break
+                    else:
+                        logger.info("No advertisers found")
+                        break
+            else:
+                # Fetch first page only (fast, but may not return all advertisers)
+                statement_builder.Limit(limit)
+                result = company_service.getCompaniesByStatement(statement_builder.ToStatement())
+
+                if result and hasattr(result, "results"):
+                    total_result_set_size = int(getattr(result, "totalResultSetSize", 0))
+                    logger.info(
+                        f"Fetched {len(result.results)} of {total_result_set_size} total advertisers (limited to {limit})"
+                    )
+
+                    for company in result.results:
+                        advertisers.append(
+                            {
+                                "id": str(company.id),
+                                "name": company.name,
+                                "type": company.type,
+                            }
+                        )
 
             logger.info(f"✓ Loaded {len(advertisers)} advertisers from GAM")
             return sorted(advertisers, key=lambda x: x["name"])

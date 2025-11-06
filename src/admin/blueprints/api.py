@@ -470,37 +470,44 @@ def test_gam_connection():
 
                 client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent-Setup", network_code=network_code)
 
-                # Get company service for advertisers
-                company_service = client.GetService("CompanyService", version="v202505")
+                # Use GoogleAdManager adapter to fetch advertisers (eliminates code duplication)
+                from src.adapters.google_ad_manager import GoogleAdManager
+                from src.core.schemas import Principal
 
-                # Build a statement to get advertisers
-                from googleads import ad_manager as gam_utils
+                # Create mock principal for adapter initialization (not used for get_advertisers)
+                mock_principal = Principal(
+                    principal_id="system",
+                    name="System",
+                    platform_mappings={
+                        "google_ad_manager": {
+                            "advertiser_id": "system_temp",
+                            "advertiser_name": "System (temp)",
+                        }
+                    },
+                )
 
-                statement_builder = gam_utils.StatementBuilder()
-                statement_builder.Where("type = :type")
-                statement_builder.WithBindVariable("type", "ADVERTISER")
-                statement_builder.Limit(100)
+                # Build GAM config from OAuth credentials
+                gam_config = {
+                    "oauth_credentials": {
+                        "client_id": oauth_client_id,
+                        "client_secret": oauth_client_secret,
+                        "refresh_token": refresh_token,
+                    }
+                }
 
-                # Get companies
-                logger.info("Calling getCompaniesByStatement for ADVERTISER companies")
-                response = company_service.getCompaniesByStatement(statement_builder.ToStatement())
-                logger.info(f"getCompaniesByStatement response: {response}")
+                # Initialize adapter
+                adapter = GoogleAdManager(
+                    config=gam_config,
+                    principal=mock_principal,
+                    network_code=network_code,
+                    advertiser_id=None,
+                    trafficker_id=None,
+                    dry_run=False,
+                    tenant_id=tenant_id,
+                )
 
-                companies = []
-                if response and hasattr(response, "results"):
-                    logger.info(f"Found {len(response.results)} companies")
-                    for company in response.results:
-                        logger.info(f"Company: id={company.id}, name={company.name}, type={company.type}")
-                        companies.append(
-                            {
-                                "id": company.id,
-                                "name": company.name,
-                                "type": company.type,
-                            }
-                        )
-                else:
-                    logger.info("No companies found in response")
-
+                # Fetch ALL advertisers using shared implementation (with pagination)
+                companies = adapter.get_advertisers(fetch_all=True)
                 result["companies"] = companies
 
                 # Get current user info

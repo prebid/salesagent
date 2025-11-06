@@ -812,9 +812,20 @@ class GoogleAdManager(AdServerAdapter):
             return False
         return self.orders_manager.archive_order(order_id)
 
-    def get_advertisers(self) -> list[dict[str, Any]]:
-        """Get list of advertisers from GAM (delegated to orders manager)."""
-        return self.orders_manager.get_advertisers()
+    def get_advertisers(
+        self, search_query: str | None = None, limit: int = 500, fetch_all: bool = False
+    ) -> list[dict[str, Any]]:
+        """Get list of advertisers from GAM (delegated to orders manager).
+
+        Args:
+            search_query: Optional search string to filter by name (uses LIKE '%query%')
+            limit: Maximum number of results per page (default: 500, max: 500)
+            fetch_all: If True, fetches ALL advertisers with pagination (can be slow for large networks)
+
+        Returns:
+            List of advertisers with id, name, and type
+        """
+        return self.orders_manager.get_advertisers(search_query=search_query, limit=limit, fetch_all=fetch_all)
 
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime

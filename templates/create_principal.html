@@ -86,90 +86,181 @@ input:invalid {
 </style>
 
 {% if has_gam %}
-<script>
-// Load GAM advertisers when page loads
-document.addEventListener('DOMContentLoaded', function() {
-    loadAdvertisers();
-});
+<!-- Select2 CSS -->
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<!-- Select2 JS (requires jQuery) -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 
-function loadAdvertisers() {
-    const selectElement = document.getElementById('gam_advertiser_id');
+<script>
+// Initialize Select2 with server-side search
+document.addEventListener('DOMContentLoaded', function() {
+    const selectElement = $('#gam_advertiser_id');
     const errorDiv = document.getElementById('advertiser-loading-error');
 
-    // Show loading state
-    selectElement.innerHTML = '<option value="">Loading advertisers...</option>';
-    selectElement.disabled = true;
-    errorDiv.style.display = 'none';
+    selectElement.select2({
+        placeholder: 'Search for a GAM Advertiser...',
+        allowClear: true,
+        minimumInputLength: 0, // Start searching from first character
+        ajax: {
+            url: '{{ script_name }}/tenant/{{ tenant_id }}/api/gam/get-advertisers',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            credentials: 'same-origin',
+            delay: 250, // Debounce search requests
+            data: function(params) {
+                // Build request based on search term
+                return JSON.stringify({
+                    search: params.term || '', // Search query from user typing
+                    limit: 100, // Limit results for dropdown
+                    fetch_all: false // Never fetch all advertisers
+                });
+            },
+            processResults: function(data) {
+                if (data.error) {
+                    errorDiv.textContent = 'Error: ' + data.error;
+                    errorDiv.style.display = 'block';
+                    return { results: [] };
+                }
 
-    // Fetch advertisers from API
+                errorDiv.style.display = 'none';
+
+                // Transform advertiser data for Select2
+                const results = data.advertisers.map(advertiser => ({
+                    id: advertiser.id,
+                    text: advertiser.name
+                }));
+
+                // Add info message if results were limited
+                let pagination = { more: false };
+                if (data.count >= 100) {
+                    pagination = {
+                        more: false // Don't show "load more" since we use search filtering
+                    };
+                }
+
+                return {
+                    results: results,
+                    pagination: pagination
+                };
+            },
+            transport: function(params, success, failure) {
+                // Custom transport to handle POST with JSON body
+                fetch(params.url, {
+                    method: params.method,
+                    headers: params.headers,
+                    body: params.data,
+                    credentials: params.credentials
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.text().then(text => {
+                            throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(success)
+                .catch(failure);
+            },
+            cache: true // Cache results for repeated searches
+        },
+        language: {
+            searching: function() {
+                return 'Searching advertisers...';
+            },
+            noResults: function() {
+                return 'No advertisers found. Try a different search term.';
+            },
+            inputTooShort: function() {
+                return 'Start typing to search...';
+            },
+            errorLoading: function() {
+                return 'Error loading advertisers. Please try again.';
+            }
+        },
+        templateResult: function(advertiser) {
+            if (advertiser.loading) {
+                return advertiser.text;
+            }
+            // Format each result in dropdown
+            return $('<div>').text(advertiser.text);
+        },
+        templateSelection: function(advertiser) {
+            // Format selected value
+            return advertiser.text || 'Select a GAM Advertiser...';
+        }
+    });
+
+    // Load initial results (first 100 advertisers) when dropdown opens
+    selectElement.on('select2:open', function() {
+        // Trigger a search with empty string to load initial results
+        const searchField = document.querySelector('.select2-search__field');
+        if (searchField) {
+            searchField.value = '';
+        }
+    });
+
+    // Restore previous selection if form was reloaded with errors
+    {% if form_data and form_data.gam_advertiser_id %}
+    // Need to fetch the advertiser name to display it
     fetch('{{ script_name }}/tenant/{{ tenant_id }}/api/gam/get-advertisers', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            tenant_id: '{{ tenant_id }}'
+            search: '',
+            limit: 500,
+            fetch_all: false
         }),
         credentials: 'same-origin'
     })
-    .then(response => {
-        if (!response.ok) {
-            return response.text().then(text => {
-                throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
-            });
-        }
-        return response.json();
-    })
+    .then(response => response.json())
     .then(data => {
-        if (data.error) {
-            throw new Error(data.error);
-        }
-
-        // Clear loading state
-        selectElement.innerHTML = '';
-        selectElement.disabled = false;
-
-        // Add advertiser options
-        if (data.advertisers && data.advertisers.length > 0) {
-            // Add a "Select..." prompt option first (disabled)
-            const promptOption = document.createElement('option');
-            promptOption.value = '';
-            promptOption.textContent = '-- Select a GAM Advertiser --';
-            promptOption.disabled = true;
-            promptOption.selected = true;
-            selectElement.appendChild(promptOption);
-
-            data.advertisers.forEach(advertiser => {
-                const option = document.createElement('option');
-                option.value = advertiser.id;
-                option.textContent = advertiser.name;
-                selectElement.appendChild(option);
-            });
-
-            // If we have form_data with a previous selection, restore it
-            {% if form_data and form_data.gam_advertiser_id %}
-            selectElement.value = '{{ form_data.gam_advertiser_id }}';
-            {% endif %}
-        } else {
-            // No advertisers found
-            const noAdvertisersOption = document.createElement('option');
-            noAdvertisersOption.value = '';
-            noAdvertisersOption.textContent = 'No advertisers found in GAM';
-            noAdvertisersOption.disabled = true;
-            selectElement.appendChild(noAdvertisersOption);
-
-            errorDiv.textContent = 'No advertisers found. Please create an advertiser in Google Ad Manager first.';
-            errorDiv.style.display = 'block';
+        const previousAdvertiser = data.advertisers.find(a => a.id === '{{ form_data.gam_advertiser_id }}');
+        if (previousAdvertiser) {
+            const option = new Option(previousAdvertiser.name, previousAdvertiser.id, true, true);
+            selectElement.append(option).trigger('change');
         }
     })
     .catch(error => {
-        console.error('Error loading advertisers:', error);
-        selectElement.innerHTML = '<option value="">Failed to load advertisers</option>';
-        selectElement.disabled = false;
-        errorDiv.textContent = 'Error loading advertisers: ' + error.message;
-        errorDiv.style.display = 'block';
+        console.error('Error restoring previous selection:', error);
     });
-}
+    {% endif %}
+});
 </script>
+
+<style>
+/* Custom Select2 styling to match form theme */
+.select2-container--default .select2-selection--single {
+    height: 38px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.select2-container--default .select2-selection--single .select2-selection__rendered {
+    line-height: 36px;
+    padding-left: 12px;
+}
+
+.select2-container--default .select2-selection--single .select2-selection__arrow {
+    height: 36px;
+}
+
+.select2-dropdown {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.select2-container--default .select2-results__option--highlighted[aria-selected] {
+    background-color: #007bff;
+}
+
+/* Make Select2 match the form width */
+.select2-container {
+    width: 100% !important;
+}
+</style>
 {% endif %}
 {% endblock %}
