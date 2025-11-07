@@ -57,6 +57,14 @@ def _verify_principal(media_buy_id: str, context: Context | ToolContext):
         principal_id: str | None = context.principal_id
     else:
         principal_id = get_principal_id_from_context(context)
+
+    # CRITICAL: principal_id is required for media buy updates
+    if not principal_id:
+        raise ToolError(
+            "Authentication required: Missing or invalid x-adcp-auth header. "
+            "Media buy updates require authentication."
+        )
+
     tenant = get_current_tenant()
 
     # Query database for media buy (try media_buy_id first, then buyer_ref)
@@ -77,9 +85,12 @@ def _verify_principal(media_buy_id: str, context: Context | ToolContext):
             raise ValueError(f"Media buy '{media_buy_id}' not found.")
 
         if media_buy.principal_id != principal_id:
+            # CRITICAL: Verify principal_id is set (security check, not assertion)
+            # Using explicit check instead of assert because asserts are removed with python -O
+            if not principal_id:
+                raise ToolError("Authentication required: principal_id not found in context")
+
             # Log security violation
-            # Note: principal_id guaranteed to be str here (checked by get_principal_id_from_context)
-            assert principal_id is not None, "principal_id should be set at this point"
             security_logger = get_audit_logger("AdCP", tenant["tenant_id"])
             security_logger.log_security_violation(
                 operation="access_media_buy",

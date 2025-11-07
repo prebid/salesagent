@@ -84,6 +84,13 @@ def _sync_creatives_impl(
     # Authentication
     principal_id = get_principal_id_from_context(context)
 
+    # CRITICAL: principal_id is required for creative sync (NOT NULL in database)
+    if not principal_id:
+        raise ToolError(
+            "Authentication required: Missing or invalid x-adcp-auth header. "
+            "Creative sync requires authentication to associate creatives with an advertiser principal."
+        )
+
     # Get tenant information
     # If context is ToolContext (A2A), tenant is already set, but verify it matches
     from src.core.tool_context import ToolContext
