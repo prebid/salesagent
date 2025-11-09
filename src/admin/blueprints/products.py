@@ -11,7 +11,7 @@ from sqlalchemy.orm import joinedload
 from src.admin.utils import require_tenant_access  # type: ignore[attr-defined]
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PricingOption, Product, Tenant
+from src.core.database.models import PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -309,8 +309,6 @@ def list_products(tenant_id):
             )
 
             # Get inventory details for all products (breakdown by type)
-            from src.core.database.models import ProductInventoryMapping
-
             inventory_details = {}
             for product in products:
                 # Get all mappings for this product
@@ -480,9 +478,13 @@ def list_products(tenant_id):
                             "custom_keys": 0,
                         },
                     ),
+                    # Dynamic product fields
+                    "is_dynamic": getattr(product, "is_dynamic", False),
+                    "is_dynamic_variant": getattr(product, "is_dynamic_variant", False),
+                    "activation_key": getattr(product, "activation_key", None),
+                    "product_card": getattr(product, "product_card", None),
                 }
                 products_list.append(product_dict)
-
             return render_template(
                 "products.html",
                 tenant=tenant,
@@ -638,7 +640,7 @@ def add_product(tenant_id):
                 # CRITICAL: Products MUST have at least one pricing option
                 if not pricing_options_data or len(pricing_options_data) == 0:
                     flash("Product must have at least one pricing option", "error")
-                    return redirect(url_for("products.create_product", tenant_id=tenant_id))
+                    return redirect(url_for("products.add_product", tenant_id=tenant_id))
 
                 # Derive delivery_type from first pricing option for implementation_config
                 delivery_type = "guaranteed"  # Default
@@ -776,6 +778,47 @@ def add_product(tenant_id):
                 if countries is not None:
                     product_kwargs["countries"] = countries
 
+                # Handle product detail fields (AdCP compliance)
+                # Delivery measurement (REQUIRED per AdCP spec)
+                delivery_measurement_provider = form_data.get("delivery_measurement_provider", "").strip()
+                delivery_measurement_notes = form_data.get("delivery_measurement_notes", "").strip()
+                if delivery_measurement_provider:
+                    product_kwargs["delivery_measurement"] = {
+                        "provider": delivery_measurement_provider,
+                    }
+                    if delivery_measurement_notes:
+                        product_kwargs["delivery_measurement"]["notes"] = delivery_measurement_notes
+
+                # Product image for card generation (optional)
+                product_image_url = form_data.get("product_image_url", "").strip()
+                if product_image_url:
+                    # Auto-generate product card from image and product data
+                    product_kwargs["product_card"] = {
+                        "format_id": {
+                            "agent_url": "https://creative.adcontextprotocol.org/",
+                            "id": "product_card_standard",
+                        },
+                        "manifest": {
+                            "product_image": product_image_url,
+                            "product_name": form_data["name"],
+                            "product_description": form_data.get("description", ""),
+                            "delivery_type": delivery_type,
+                        },
+                    }
+                    # Add pricing info to manifest if available
+                    if pricing_options_data and len(pricing_options_data) > 0:
+                        first_option = pricing_options_data[0]
+                        product_kwargs["product_card"]["manifest"]["pricing_model"] = first_option.get(
+                            "pricing_model", "CPM"
+                        )
+                        if first_option.get("is_fixed") and first_option.get("fixed_price"):
+                            product_kwargs["product_card"]["manifest"]["pricing_amount"] = str(
+                                first_option["fixed_price"]
+                            )
+                            product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.get(
+                                "currency_code", "USD"
+                            )
+
                 # Handle property authorization (AdCP requirement)
                 # Default to empty property_tags if not specified (satisfies DB constraint)
                 property_mode = form_data.get("property_mode", "tags")
@@ -883,6 +926,58 @@ def add_product(tenant_id):
                 if "properties" not in product_kwargs and "property_tags" not in product_kwargs:
                     # Default to empty property_tags list if neither was set
                     product_kwargs["property_tags"] = []
+
+                # Handle dynamic product fields
+                is_dynamic = form_data.get("is_dynamic") in [True, "true", "on", 1, "1"]
+                if is_dynamic:
+                    product_kwargs["is_dynamic"] = True
+
+                    # Handle signals agent selection (radio buttons: "all" vs "specific")
+                    signals_agent_selection = form_data.get("signals_agent_selection", "all")
+                    if signals_agent_selection == "specific":
+                        # Get specific signals agent IDs (multi-select)
+                        signals_agent_ids = request.form.getlist("signals_agent_ids")
+                        if signals_agent_ids:
+                            product_kwargs["signals_agent_ids"] = signals_agent_ids
+                        else:
+                            # User selected "specific" but didn't choose any agents - error
+                            flash("Please select at least one signals agent", "error")
+                            return redirect(url_for("products.add_product", tenant_id=tenant_id))
+                    else:
+                        # "all" selected - set signals_agent_ids to None or empty list to indicate "use all"
+                        product_kwargs["signals_agent_ids"] = None
+
+                    # Handle variant naming pattern (radio buttons)
+                    variant_name_pattern = form_data.get("variant_name_pattern", "default")
+                    if variant_name_pattern == "signal_only":
+                        product_kwargs["variant_name_template"] = "{{signal.name}}"
+                    elif variant_name_pattern == "custom":
+                        variant_name_template = form_data.get("variant_name_template", "").strip()
+                        if variant_name_template:
+                            product_kwargs["variant_name_template"] = variant_name_template
+                    # else: default pattern (None) - uses "Product Name - Signal Name"
+
+                    # Handle append signal description checkbox
+                    append_signal_description = form_data.get("append_signal_description") == "on"
+                    if not append_signal_description:
+                        # User unchecked - don't append signal description (empty template means no auto-append)
+                        product_kwargs["variant_description_template"] = ""
+                    # else: None (default behavior - auto-append signal description)
+
+                    # Get max signals
+                    max_signals = form_data.get("max_signals", "5")
+                    try:
+                        product_kwargs["max_signals"] = int(max_signals)
+                    except ValueError:
+                        product_kwargs["max_signals"] = 5
+
+                    # Get variant TTL days (optional)
+                    variant_ttl_days = form_data.get("variant_ttl_days", "").strip()
+                    if variant_ttl_days:
+                        try:
+                            product_kwargs["variant_ttl_days"] = int(variant_ttl_days)
+                        except ValueError:
+                            pass  # Leave as None if invalid
 
                 # Create product with correct fields matching the Product model
                 product = Product(**product_kwargs)
@@ -1012,21 +1107,29 @@ def add_product(tenant_id):
             )
             inventory_synced = inventory_count > 0
 
+            # Get signals agents for dynamic products
+            from src.core.database.models import SignalsAgent
+
+            stmt = select(SignalsAgent).filter_by(tenant_id=tenant_id, enabled=True)
+            signals_agents = db_session.scalars(stmt).all()
+
         return render_template(
             "add_product_gam.html",
             tenant_id=tenant_id,
             tenant_name=tenant.name,
+            tenant=tenant,
             inventory_synced=inventory_synced,
             formats=get_creative_formats(tenant_id=tenant_id),
             authorized_properties=properties_list,
             property_tags=property_tags,
             currencies=currencies,
+            signals_agents=signals_agents,
         )
     else:
         # For Mock and other adapters: simple form
         formats = get_creative_formats(tenant_id=tenant_id)
         return render_template(
-            "add_product.html",
+            "add_product_mock.html",
             tenant_id=tenant_id,
             formats=formats,
             authorized_properties=properties_list,
@@ -1375,6 +1478,63 @@ def edit_product(tenant_id, product_id):
                     for po in existing_options[len(pricing_options_data) :]:
                         db_session.delete(po)
 
+                # Handle product detail fields (AdCP compliance)
+                # Delivery measurement (REQUIRED per AdCP spec)
+                delivery_measurement_provider = form_data.get("delivery_measurement_provider", "").strip()
+                delivery_measurement_notes = form_data.get("delivery_measurement_notes", "").strip()
+                if delivery_measurement_provider:
+                    product.delivery_measurement = {
+                        "provider": delivery_measurement_provider,
+                    }
+                    if delivery_measurement_notes:
+                        product.delivery_measurement["notes"] = delivery_measurement_notes
+                    from sqlalchemy.orm import attributes
+
+                    attributes.flag_modified(product, "delivery_measurement")
+                elif product.delivery_measurement:
+                    # Clear if provider was removed
+                    product.delivery_measurement = None
+                    from sqlalchemy.orm import attributes
+
+                    attributes.flag_modified(product, "delivery_measurement")
+
+                # Product image for card generation (optional)
+                product_image_url = form_data.get("product_image_url", "").strip()
+                if product_image_url:
+                    # Update or create product card
+                    if not product.product_card:
+                        product.product_card = {
+                            "format_id": {
+                                "agent_url": "https://creative.adcontextprotocol.org/",
+                                "id": "product_card_standard",
+                            },
+                            "manifest": {},
+                        }
+
+                    # Update manifest
+                    product.product_card["manifest"]["product_image"] = product_image_url
+                    product.product_card["manifest"]["product_name"] = product.name
+                    product.product_card["manifest"]["product_description"] = product.description or ""
+                    product.product_card["manifest"]["delivery_type"] = product.delivery_type
+
+                    # Add pricing info to manifest if available
+                    if pricing_options_data and len(pricing_options_data) > 0:
+                        first_option = pricing_options_data[0]
+                        product.product_card["manifest"]["pricing_model"] = first_option.get("pricing_model", "CPM")
+                        if first_option.get("is_fixed") and first_option.get("rate"):
+                            product.product_card["manifest"]["pricing_amount"] = str(first_option["rate"])
+                            product.product_card["manifest"]["pricing_currency"] = first_option.get("currency", "USD")
+
+                    from sqlalchemy.orm import attributes
+
+                    attributes.flag_modified(product, "product_card")
+                elif product.product_card and product.product_card.get("manifest", {}).get("product_image"):
+                    # If image URL was removed, clear the card
+                    product.product_card = None
+                    from sqlalchemy.orm import attributes
+
+                    attributes.flag_modified(product, "product_card")
+
                 # Debug: Log final state before commit
                 from sqlalchemy import inspect as sa_inspect
 
@@ -1472,6 +1632,12 @@ def edit_product(tenant_id, product_id):
                 ),
                 "implementation_config": implementation_config,
                 "targeting_template": targeting_template,
+                # Product detail fields (AdCP compliance)
+                "delivery_measurement": product.delivery_measurement,
+                "product_card": product.product_card,
+                "product_card_detailed": product.product_card_detailed,
+                "placements": product.placements,
+                "reporting_capabilities": product.reporting_capabilities,
             }
 
             product_dict["pricing_options"] = pricing_options_list
@@ -1556,7 +1722,7 @@ def edit_product(tenant_id, product_id):
                 )
             else:
                 return render_template(
-                    "edit_product.html",
+                    "edit_product_mock.html",
                     tenant_id=tenant_id,
                     product=product_dict,
                     tenant_adapter=adapter_type,

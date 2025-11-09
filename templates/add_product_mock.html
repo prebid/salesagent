@@ -550,6 +550,66 @@
         {% include 'components/targeting_selector_simple.html' %}
         <input type="hidden" id="targeting-data" name="targeting_template" value="">
 
+        <!-- Product Details (AdCP Compliance) -->
+        <h3 style="margin-top: 2rem;">
+            <i class="fas fa-info-circle"></i> Product Details
+        </h3>
+        <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
+            <strong>Required:</strong> Delivery measurement is required per AdCP spec. Other details enhance product visibility for buyers.
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="delivery_measurement_provider">Delivery Measurement Provider *</label>
+                {% set measurement_config = tenant.measurement_providers if tenant else {} %}
+                {% set providers = measurement_config.providers if measurement_config else [] %}
+                {% set default_provider = measurement_config.default if measurement_config else '' %}
+
+                <input type="text" id="delivery_measurement_provider" name="delivery_measurement_provider"
+                       list="measurement_providers_list"
+                       placeholder="e.g., comScore, Nielsen, IAS"
+                       value="{{ default_provider }}" required>
+                <datalist id="measurement_providers_list">
+                    {% if providers %}
+                        {% for provider in providers %}
+                        <option value="{{ provider }}">
+                        {% endfor %}
+                    {% else %}
+                        <option value="comScore">
+                        <option value="Nielsen">
+                        <option value="IAS">
+                    {% endif %}
+                </datalist>
+                <small style="color: #666;">Select from configured providers or enter custom (autocomplete enabled)</small>
+            </div>
+
+            <div class="form-group">
+                <label for="delivery_measurement_notes">Measurement Notes</label>
+                <input type="text" id="delivery_measurement_notes" name="delivery_measurement_notes"
+                       placeholder="e.g., MRC-accredited viewability. 50% in-view for 1s">
+                <small style="color: #666;">Additional methodology details (optional)</small>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="product_image_url">Product Image URL (Optional)</label>
+            <input type="url" id="product_image_url" name="product_image_url"
+                   placeholder="https://example.com/product-image.jpg">
+            <small style="color: #666;">
+                Product image for visual cards (300x400px recommended). Leave blank to auto-generate from product data.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="enable_markdown" name="enable_markdown" value="1">
+                Description supports markdown formatting
+            </label>
+            <small style="display: block; color: #666; margin-left: 1.5rem;">
+                Enable to use **bold**, *italic*, and other markdown formatting in description
+            </small>
+        </div>
+
         <div style="margin-top: 2rem;">
             <button type="submit" class="btn">Create Product</button>
             <a href="{{ url_for('products.list_products', tenant_id=tenant_id) }}" class="btn btn-secondary">Cancel</a>

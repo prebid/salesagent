@@ -1082,6 +1082,53 @@
                     </div>
                 </div>
 
+                <!-- Measurement Providers -->
+                <div class="form-section">
+                    <h3>Measurement Providers</h3>
+                    <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+                        Configure measurement providers that will be available when creating products. The default provider will be pre-selected in product forms.
+                    </p>
+
+                    <div id="measurement-providers-container" style="margin-bottom: 1rem;">
+                        {% set providers = tenant.measurement_providers.providers if tenant.measurement_providers else [] %}
+                        {% set default = tenant.measurement_providers.default if tenant.measurement_providers else '' %}
+                        {% if providers %}
+                            {% for provider in providers %}
+                            <div class="measurement-provider-item" style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;">
+                                <input type="radio" name="default_measurement_provider" value="{{ provider }}"
+                                       {% if provider == default %}checked{% endif %}
+                                       onchange="markDefaultProvider(this)">
+                                <input type="text" value="{{ provider }}" class="provider-name-input"
+                                       style="flex: 1; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px;"
+                                       placeholder="e.g., Google Ad Manager with IAS">
+                                <button type="button" class="btn btn-sm btn-secondary" onclick="removeProvider(this)" title="Remove">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <!-- Empty state with adapter-specific default -->
+                            <div class="measurement-provider-item" style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;">
+                                <input type="radio" name="default_measurement_provider" value="Google Ad Manager" checked onchange="markDefaultProvider(this)">
+                                <input type="text" value="{% if tenant.ad_server == 'google_ad_manager' %}Google Ad Manager{% endif %}" class="provider-name-input"
+                                       style="flex: 1; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px;"
+                                       placeholder="e.g., Google Ad Manager with IAS">
+                                <button type="button" class="btn btn-sm btn-secondary" onclick="removeProvider(this)" title="Remove">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="addMeasurementProvider()">
+                        <i class="fas fa-plus"></i> Add Provider
+                    </button>
+
+                    <small style="display: block; color: #6b7280; margin-top: 0.5rem;">
+                        Click the radio button to set a provider as default. The default provider will be pre-selected when creating products.
+                    </small>
+                </div>
+
                 <!-- Approval Workflow -->
                 <div class="form-section">
                     <h3>Approval Workflow</h3>
@@ -2440,6 +2487,85 @@ async function unregisterDomain() {
         unregisterBtn.textContent = 'Unregister Domain';
     }
 }
+
+// Measurement Providers Functions
+function addMeasurementProvider() {
+    const container = document.getElementById('measurement-providers-container');
+    const providerItem = document.createElement('div');
+    providerItem.className = 'measurement-provider-item';
+    providerItem.style.cssText = 'display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;';
+
+    providerItem.innerHTML = `
+        <input type="radio" name="default_measurement_provider" value="" onchange="markDefaultProvider(this)">
+        <input type="text" value="" class="provider-name-input"
+               style="flex: 1; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px;"
+               placeholder="e.g., Google Ad Manager with IAS">
+        <button type="button" class="btn btn-sm btn-secondary" onclick="removeProvider(this)" title="Remove">
+            <i class="fas fa-times"></i>
+        </button>
+    `;
+
+    container.appendChild(providerItem);
+}
+
+function removeProvider(button) {
+    const providerItem = button.closest('.measurement-provider-item');
+    const container = document.getElementById('measurement-providers-container');
+
+    // Don't allow removing the last provider
+    const items = container.querySelectorAll('.measurement-provider-item');
+    if (items.length <= 1) {
+        alert('You must have at least one measurement provider.');
+        return;
+    }
+
+    providerItem.remove();
+}
+
+function markDefaultProvider(radio) {
+    // Update the radio button value to match the text input
+    const providerItem = radio.closest('.measurement-provider-item');
+    const textInput = providerItem.querySelector('.provider-name-input');
+    radio.value = textInput.value;
+}
+
+// Handle measurement providers form submission
+document.addEventListener('DOMContentLoaded', function() {
+    const businessRulesForm = document.getElementById('business-rules-form');
+    if (businessRulesForm) {
+        businessRulesForm.addEventListener('submit', function(e) {
+            // Collect all measurement providers
+            const container = document.getElementById('measurement-providers-container');
+            const providerItems = container.querySelectorAll('.measurement-provider-item');
+
+            // Remove any existing hidden provider inputs
+            const existingInputs = businessRulesForm.querySelectorAll('input[name^="provider_name_"]');
+            existingInputs.forEach(input => input.remove());
+
+            // Add provider names as hidden inputs
+            providerItems.forEach((item, index) => {
+                const textInput = item.querySelector('.provider-name-input');
+                const providerName = textInput.value.trim();
+
+                if (providerName) {
+                    const hiddenInput = document.createElement('input');
+                    hiddenInput.type = 'hidden';
+                    hiddenInput.name = `provider_name_${index}`;
+                    hiddenInput.value = providerName;
+                    businessRulesForm.appendChild(hiddenInput);
+                }
+            });
+
+            // Update the default provider radio value
+            const checkedRadio = container.querySelector('input[name="default_measurement_provider"]:checked');
+            if (checkedRadio) {
+                const providerItem = checkedRadio.closest('.measurement-provider-item');
+                const textInput = providerItem.querySelector('.provider-name-input');
+                checkedRadio.value = textInput.value;
+            }
+        });
+    }
+});
 </script>
 
 <!-- Edit Principal Mappings Modal -->

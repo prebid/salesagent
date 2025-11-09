@@ -173,6 +173,10 @@ class SignalsAgentRegistry:
         Returns:
             List of signal objects from the agent
         """
+        import time
+
+        start_time = time.time()
+
         try:
             # Build request parameters using new AdCP v2.2.0 schema
             # Map our old 'brief' parameter to 'signal_spec'
@@ -189,22 +193,31 @@ class SignalsAgentRegistry:
                 deliver_to=deliver_to,
             )
 
+            logger.info(f"[TIMING] Calling agent {agent.name} for tenant {tenant_id}, brief: {brief[:50]}...")
+            call_start = time.time()
+
             # Call agent
             result = await client.agent(agent.name).get_signals(request)
+
+            call_duration = time.time() - call_start
+            logger.info(f"[TIMING] Agent call completed in {call_duration:.2f}s, status: {result.status}")
 
             # Handle response based on status
             if result.status == "completed":
                 # Synchronous completion
                 signals = result.data.signals
-                logger.info(f"_get_signals_from_agent: Got {len(signals)} signals synchronously")
+                total_duration = time.time() - start_time
+                logger.info(f"[TIMING] Got {len(signals)} signals synchronously in {total_duration:.2f}s total")
                 # Signals are already dicts (list[dict[str, Any]]) - no conversion needed
                 # This is by design in the AdCP spec - signals are untyped JSON objects
                 return signals
 
             elif result.status == "submitted":
                 # Asynchronous completion - webhook registered
+                total_duration = time.time() - start_time
                 logger.info(
-                    f"_get_signals_from_agent: Async operation submitted, " f"webhook: {result.submitted.webhook_url}"
+                    f"[TIMING] Async operation submitted in {total_duration:.2f}s, "
+                    f"webhook: {result.submitted.webhook_url}"
                 )
                 # For now, return empty list (webhook will deliver results later)
                 return []
@@ -257,28 +270,30 @@ class SignalsAgentRegistry:
         if not agents:
             return all_signals
 
-        # Build AdCP client for all agents
+        # Build AdCP client for all agents and use as async context manager
         client = self._build_adcp_client(agents)
 
-        # Query each agent
-        for agent in agents:
-            logger.info(f"get_signals: Fetching from {agent.agent_url}")
-            try:
-                signals = await self._get_signals_from_agent(
-                    client,
-                    agent,
-                    brief=brief,
-                    tenant_id=tenant_id,
-                    principal_id=principal_id,
-                    context=context,
-                    principal_data=principal_data,
-                )
-                logger.info(f"get_signals: Got {len(signals)} signals from {agent.agent_url}")
-                all_signals.extend(signals)
-            except Exception as e:
-                # Log error but continue with other agents (graceful degradation)
-                logger.error(f"Failed to fetch signals from {agent.agent_url}: {e}", exc_info=True)
-                continue
+        # Use async context manager to ensure proper cleanup
+        async with client:
+            # Query each agent
+            for agent in agents:
+                logger.info(f"get_signals: Fetching from {agent.agent_url}")
+                try:
+                    signals = await self._get_signals_from_agent(
+                        client,
+                        agent,
+                        brief=brief,
+                        tenant_id=tenant_id,
+                        principal_id=principal_id,
+                        context=context,
+                        principal_data=principal_data,
+                    )
+                    logger.info(f"get_signals: Got {len(signals)} signals from {agent.agent_url}")
+                    all_signals.extend(signals)
+                except Exception as e:
+                    # Log error but continue with other agents (graceful degradation)
+                    logger.error(f"Failed to fetch signals from {agent.agent_url}: {e}", exc_info=True)
+                    continue
 
         logger.info(f"get_signals: Returning {len(all_signals)} total signals")
         return all_signals
@@ -307,22 +322,23 @@ class SignalsAgentRegistry:
                 timeout=30,
             )
 
-            # Build AdCP client
+            # Build AdCP client and use as async context manager
             client = self._build_adcp_client([test_agent])
 
-            # Try to fetch signals with minimal query
-            signals = await self._get_signals_from_agent(
-                client,
-                test_agent,
-                brief="test",
-                tenant_id="test_tenant",
-            )
+            async with client:
+                # Try to fetch signals with minimal query
+                signals = await self._get_signals_from_agent(
+                    client,
+                    test_agent,
+                    brief="test",
+                    tenant_id="test_tenant",
+                )
 
-            return {
-                "success": True,
-                "message": "Successfully connected to signals agent",
-                "signal_count": len(signals),
-            }
+                return {
+                    "success": True,
+                    "message": "Successfully connected to signals agent",
+                    "signal_count": len(signals),
+                }
 
         except ADCPAuthenticationError as e:
             logger.error(f"Connection test failed (auth): {e.message}")

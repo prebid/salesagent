@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
+from sqlalchemy.orm import attributes
 
 from src.admin.utils import require_auth, require_tenant_access  # type: ignore[attr-defined]
 from src.admin.utils.audit_decorator import log_admin_action
@@ -730,6 +731,44 @@ def update_business_rules(tenant_id):
                             url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules")
                         )
                     tenant.line_item_name_template = line_item_template
+
+            # Update measurement providers
+            # Collect all provider names and the default from the form
+            providers = []
+            seen_providers = set()  # Track duplicates
+            default_provider = data.get("default_measurement_provider", "").strip()
+
+            # Get all provider text inputs and deduplicate
+            for key in data.keys():
+                if key.startswith("provider_name_"):
+                    provider_name = data.get(key, "").strip()
+                    if provider_name and provider_name not in seen_providers:  # Only add non-empty, unique providers
+                        providers.append(provider_name)
+                        seen_providers.add(provider_name)
+
+            # If we have providers, save them
+            if providers:
+                # Ensure default is in the list
+                if default_provider and default_provider not in providers:
+                    logger.warning(
+                        f"Default provider '{default_provider}' not in list for tenant {tenant_id}, adding it"
+                    )
+                    providers.append(default_provider)
+
+                # Set default to first provider if not specified
+                if not default_provider and providers:
+                    default_provider = providers[0]
+
+                tenant.measurement_providers = {"providers": providers, "default": default_provider}
+                attributes.flag_modified(tenant, "measurement_providers")
+            elif tenant.ad_server == "google_ad_manager":
+                # For GAM tenants without configured providers, set default
+                tenant.measurement_providers = {"providers": ["Google Ad Manager"], "default": "Google Ad Manager"}
+                attributes.flag_modified(tenant, "measurement_providers")
+            else:
+                # Non-GAM tenants must have at least one provider
+                flash("At least one measurement provider is required.", "error")
+                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
 
             # Update approval workflow
             if "human_review_required" in data:

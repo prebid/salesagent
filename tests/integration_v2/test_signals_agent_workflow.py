@@ -170,7 +170,10 @@ class TestSignalsAgentWorkflow:
             mock_agent_client.get_signals = AsyncMock(return_value=mock_result)
 
             # Mock the client - agent() should be callable and return agent_client
-            mock_client = Mock()
+            # Use AsyncMock to support async context manager protocol
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
             mock_client.agent = Mock(return_value=mock_agent_client)  # agent() is a method
             mock_client_class.return_value = mock_client
 
@@ -209,7 +212,10 @@ class TestSignalsAgentWorkflow:
             mock_agent_client = Mock()
             mock_agent_client.get_signals = AsyncMock(side_effect=Exception("Connection timeout"))
 
-            mock_client = Mock()
+            # Use AsyncMock to support async context manager protocol
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
             mock_client.agent = Mock(return_value=mock_agent_client)
             mock_client_class.return_value = mock_client
 
@@ -243,7 +249,10 @@ class TestSignalsAgentWorkflow:
             mock_agent_client = Mock()
             mock_agent_client.get_signals = AsyncMock()
 
-            mock_client = Mock()
+            # Use AsyncMock to support async context manager protocol
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
             mock_client.agent = Mock(return_value=mock_agent_client)
             mock_client_class.return_value = mock_client
 

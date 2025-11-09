@@ -5,8 +5,10 @@ import logging
 import os
 import secrets
 
+import markdown  # type: ignore[import-untyped]
 from flask import Flask, request
 from flask_socketio import SocketIO, join_room
+from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix as WerkzeugProxyFix
 
 from src.admin.blueprints.activity_stream import activity_stream_bp
@@ -133,7 +135,19 @@ def create_app(config=None):
         except (json.JSONDecodeError, TypeError):
             return {}
 
+    def markdown_filter(text):
+        """Convert markdown text to HTML."""
+        if not text:
+            return ""
+        # Convert markdown to HTML with extensions for better formatting
+        html = markdown.markdown(
+            text,
+            extensions=["extra", "nl2br"],  # 'extra' adds tables, fenced code, etc. 'nl2br' converts newlines to <br>
+        )
+        return Markup(html)  # Mark as safe HTML
+
     app.jinja_env.filters["from_json"] = from_json_filter
+    app.jinja_env.filters["markdown"] = markdown_filter
 
     # Trust proxy headers in production
     if os.environ.get("PRODUCTION") == "true":

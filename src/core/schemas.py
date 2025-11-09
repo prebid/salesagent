@@ -701,6 +701,77 @@ class AIReviewPolicy(BaseModel):
     )
 
 
+class DeliveryMeasurement(BaseModel):
+    """Measurement provider and methodology for delivery metrics per AdCP spec.
+
+    The buyer accepts the declared provider as the source of truth for the buy.
+    REQUIRED for all products per AdCP v1 spec.
+    """
+
+    provider: str = Field(
+        ...,
+        description="Measurement provider(s) used for this product",
+        examples=["Google Ad Manager with IAS viewability", "Nielsen DAR", "Geopath for DOOH impressions"],
+    )
+    notes: str | None = Field(
+        None,
+        description="Additional details about measurement methodology in plain language",
+        examples=[
+            "MRC-accredited viewability. 50% in-view for 1s display / 2s video",
+            "Panel-based demographic measurement updated monthly",
+        ],
+    )
+
+
+class ProductCard(BaseModel):
+    """Visual card for displaying products in user interfaces per AdCP spec.
+
+    Can be rendered via preview_creative or pre-generated.
+    Standard card is 300x400px for marketplace display.
+    """
+
+    format_id: "FormatId" = Field(
+        ...,
+        description="Creative format defining the card layout (typically product_card_standard)",
+    )
+    manifest: dict[str, Any] = Field(
+        ...,
+        description="Asset manifest for rendering the card, structure defined by the format",
+    )
+
+
+class ProductCardDetailed(BaseModel):
+    """Detailed card with carousel and full specifications per AdCP spec.
+
+    Provides rich product presentation similar to media kit pages.
+    """
+
+    format_id: "FormatId" = Field(
+        ...,
+        description="Creative format defining the detailed card layout (typically product_card_detailed)",
+    )
+    manifest: dict[str, Any] = Field(
+        ...,
+        description="Asset manifest for rendering the detailed card, structure defined by the format",
+    )
+
+
+class Placement(BaseModel):
+    """Specific placement within a product per AdCP spec.
+
+    When provided, buyers can target specific placements when assigning creatives.
+    """
+
+    placement_id: str = Field(..., description="Unique identifier for the placement")
+    name: str = Field(..., description="Human-readable placement name")
+    description: str = Field(..., description="Detailed description of the placement")
+    format_ids: list["FormatId"] = Field(
+        ...,
+        description="Supported creative formats for this placement",
+        min_length=1,
+    )
+
+
 class Product(BaseModel):
     product_id: str
     name: str
@@ -754,6 +825,29 @@ class Product(BaseModel):
     # AdCP PR #79 fields - populated dynamically from historical reporting data
     # These are NOT stored in database, calculated on-demand from product_performance_metrics
     estimated_exposures: int | None = Field(None, description="Estimated impressions (calculated dynamically)", gt=0)
+
+    # Product detail fields (AdCP v1 spec compliance)
+    delivery_measurement: DeliveryMeasurement | None = Field(
+        None,
+        description="Measurement provider and methodology for delivery metrics. REQUIRED per AdCP spec.",
+    )
+    product_card: ProductCard | None = Field(
+        None,
+        description="Optional standard visual card (300x400px) for displaying this product in user interfaces",
+    )
+    product_card_detailed: ProductCardDetailed | None = Field(
+        None,
+        description="Optional detailed card with carousel and full specifications for rich product presentation",
+    )
+    placements: list[Placement] | None = Field(
+        None,
+        description="Optional array of specific placements within this product",
+        min_length=1,
+    )
+    reporting_capabilities: dict[str, Any] | None = Field(
+        None,
+        description="Available reports and reporting capabilities for this product",
+    )
 
     @model_validator(mode="after")
     def validate_pricing_fields(self) -> "Product":

@@ -189,6 +189,11 @@ class SignalsDiscoveryProvider(ProductCatalogProvider):
             property_tags=["all_inventory"],  # Required per AdCP spec (using property_tags instead of properties)
             properties=None,  # Using property_tags instead
             estimated_exposures=None,  # Optional - signals products don't have exposure estimates
+            delivery_measurement=None,  # Optional - new field from product details
+            product_card=None,  # Optional - new field from product details
+            product_card_detailed=None,  # Optional - new field from product details
+            placements=None,  # Optional - new field from product details
+            reporting_capabilities=None,  # Optional - new field from product details
             pricing_options=[
                 PricingOption(
                     pricing_option_id="cpm_usd_auction",

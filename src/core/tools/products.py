@@ -25,21 +25,73 @@ from src.core.database.database_session import get_db_session
 from src.core.schema_adapters import GetProductsResponse
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import Product
-from src.core.schemas_generated._schemas_v1_media_buy_get_products_request_json import (
-    GetProductsRequest as GetProductsRequestGenerated,
-)
 from src.core.schemas_generated._schemas_v1_core_push_notification_config_json import (
     PushNotificationConfig,
+)
+from src.core.schemas_generated._schemas_v1_media_buy_get_products_request_json import (
+    GetProductsRequest as GetProductsRequestGenerated,
 )
 from src.core.testing_hooks import apply_testing_hooks, get_testing_context
 from src.core.tool_context import ToolContext
 from src.core.validation_helpers import format_validation_error, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
-from src.core.schemas_generated._schemas_v1_core_push_notification_config_json import (
-    PushNotificationConfig,
-)
 
 logger = logging.getLogger(__name__)
+
+
+def convert_product_model_to_schema(product_model) -> Product:
+    """Convert database Product model to Product schema.
+
+    Args:
+        product_model: Product database model
+
+    Returns:
+        Product schema object
+    """
+
+    # Use model_dump_internal() to get all fields
+    product_data = {}
+
+    # Map fields from model to schema
+    product_data["product_id"] = product_model.product_id
+    product_data["name"] = product_model.name
+    product_data["description"] = product_model.description
+    product_data["formats"] = product_model.formats
+    product_data["targeting_template"] = product_model.targeting_template
+    product_data["delivery_type"] = product_model.delivery_type
+
+    # Optional fields
+    if product_model.measurement:
+        product_data["measurement"] = product_model.measurement
+    if product_model.creative_policy:
+        product_data["creative_policy"] = product_model.creative_policy
+    if product_model.price_guidance:
+        product_data["price_guidance"] = product_model.price_guidance
+    if product_model.countries:
+        product_data["countries"] = product_model.countries
+
+    # Property authorization (one is required)
+    if product_model.properties:
+        product_data["properties"] = product_model.properties
+    elif product_model.property_tags:
+        product_data["property_tags"] = product_model.property_tags
+
+    # Product detail fields
+    if product_model.delivery_measurement:
+        product_data["delivery_measurement"] = product_model.delivery_measurement
+    if product_model.product_card:
+        product_data["product_card"] = product_model.product_card
+    if product_model.product_card_detailed:
+        product_data["product_card_detailed"] = product_model.product_card_detailed
+    if product_model.placements:
+        product_data["placements"] = product_model.placements
+    if product_model.reporting_capabilities:
+        product_data["reporting_capabilities"] = product_model.reporting_capabilities
+
+    # Default is_custom to False if not set
+    product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False
+
+    return Product(**product_data)
 
 
 async def _get_products_impl(
@@ -120,10 +172,13 @@ async def _get_products_impl(
         else:
             # brand_manifest is a BrandManifest object or dict
             # Try to access as object first, then as dict
-            if hasattr(req.brand_manifest, "name"):
+            # Per AdCP spec: either name OR url is required
+            if hasattr(req.brand_manifest, "name") and req.brand_manifest.name:
                 offering = req.brand_manifest.name
+            elif hasattr(req.brand_manifest, "url") and req.brand_manifest.url:
+                offering = f"Brand at {req.brand_manifest.url}"
             elif isinstance(req.brand_manifest, dict):
-                offering = req.brand_manifest.get("name", "")
+                offering = req.brand_manifest.get("name") or req.brand_manifest.get("url", "")
 
     if not offering:
         raise ToolError("brand_manifest must provide brand information")
@@ -311,7 +366,29 @@ async def _get_products_impl(
         principal_data=principal_data,
         context=context_data,
     )
-    logger.info(f"[GET_PRODUCTS] Got {len(products)} products from provider")
+    logger.info(f"[GET_PRODUCTS] Got {len(products)} static products from provider")
+
+    # Generate dynamic product variants from signals agents
+    try:
+        from src.services.dynamic_products import generate_variants_for_brief
+
+        # Get our agent URL for deployment specification
+        our_agent_url = tenant.get("virtual_host")  # Our sales agent URL (e.g., https://sales.example.com)
+
+        dynamic_variants = await generate_variants_for_brief(tenant["tenant_id"], brief_text, our_agent_url)
+        if dynamic_variants:
+            # Convert Product models to Product schemas for response
+
+            for variant_model in dynamic_variants:
+                # Convert database model to schema
+                variant_schema = convert_product_model_to_schema(variant_model)
+                products.append(variant_schema)
+
+            logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
+    except Exception as e:
+        logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
+
+    logger.info(f"[GET_PRODUCTS] Total products (static + dynamic): {len(products)}")
 
     # Enrich products with dynamic pricing (AdCP PR #79)
     # Calculate floor_cpm, recommended_cpm, estimated_exposures from cached metrics

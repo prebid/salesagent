@@ -182,7 +182,12 @@ class TestSignalsAgentRegistry:
             patch.object(registry, "_build_adcp_client") as mock_build,
             patch.object(registry, "_get_signals_from_agent") as mock_get_signals,
         ):
-            mock_build.return_value = Mock()  # Mock client
+            # Mock client that supports async context manager
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_build.return_value = mock_client
+
             mock_get_signals.return_value = [{"signal_agent_segment_id": "test"}]  # Mock signals
 
             result = await registry.test_connection(agent_url, auth=auth, auth_header=auth_header)

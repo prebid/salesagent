@@ -35,18 +35,106 @@
     <!-- Has products - show normal list -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
         <h2>Products - {{ tenant_name }}</h2>
-        <div style="display: flex; gap: 0.5rem;">
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <!-- View Mode Toggle -->
+            <div style="display: flex; gap: 0.25rem; background: #f5f5f5; padding: 0.25rem; border-radius: 4px;">
+                <button id="view-list" class="view-toggle active" onclick="switchView('list')" title="List view">
+                    <i class="fas fa-list"></i>
+                </button>
+                <button id="view-card" class="view-toggle" onclick="switchView('card')" title="Card view (buyer preview)">
+                    <i class="fas fa-th-large"></i>
+                </button>
+            </div>
             <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">← Back to Dashboard</a>
             <a href="{{ url_for('products.add_product', tenant_id=tenant_id) }}" class="btn btn-primary">Add Product</a>
         </div>
     </div>
 
-    <table>
+    <!-- Card View (Buyer Preview) -->
+    <div id="card-view" style="display: none;">
+        <div style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1.5rem; border-radius: 4px;">
+            <strong>📱 Buyer Preview Mode</strong>
+            <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;">
+                This is how buyers will see your products in their marketplace. Cards without images show product details only.
+            </p>
+        </div>
+
+        <div class="product-card-grid">
+            {% for product in products %}
+            <div class="product-card">
+                {% if product.product_card and product.product_card.manifest and product.product_card.manifest.product_image %}
+                    <!-- Product with image -->
+                    <div class="product-card-image" style="background-image: url('{{ product.product_card.manifest.product_image }}');"></div>
+                {% else %}
+                    <!-- Product without image - show icon -->
+                    <div class="product-card-image product-card-no-image">
+                        <i class="fas fa-ad" style="font-size: 3rem; color: #ccc;"></i>
+                    </div>
+                {% endif %}
+
+                <div class="product-card-content">
+                    <h3 class="product-card-title">{{ product.name }}</h3>
+
+                    <div class="product-card-description">
+                        {% if product.description %}
+                            {{ (product.description[:120] + '...' if product.description|length > 120 else product.description)|markdown }}
+                        {% else %}
+                            <p style="color: #999; font-style: italic;">No description provided</p>
+                        {% endif %}
+                    </div>
+
+                    <div class="product-card-meta">
+                        <!-- Pricing -->
+                        {% if product.pricing_options and product.pricing_options|length > 0 %}
+                            {% set first_option = product.pricing_options[0] %}
+                            <div class="product-card-price">
+                                <span class="badge" style="background: #28a745;">{{ first_option.pricing_model }}</span>
+                                {% if first_option.is_fixed and first_option.rate %}
+                                    <strong>{{ first_option.currency }} ${{ "%.2f"|format(first_option.rate) }}</strong>
+                                {% elif not first_option.is_fixed and first_option.price_guidance and first_option.price_guidance.floor %}
+                                    <span style="font-size: 0.9rem;">Floor: {{ first_option.currency }} ${{ "%.2f"|format(first_option.price_guidance.floor) }}</span>
+                                {% endif %}
+                            </div>
+                        {% endif %}
+
+                        <!-- Delivery Type -->
+                        {% if product.implementation_config and product.implementation_config.line_item_type %}
+                            <span class="badge badge-secondary">{{ product.implementation_config.line_item_type }}</span>
+                        {% elif product.pricing_options and product.pricing_options|length > 0 and product.pricing_options[0].is_fixed %}
+                            <span class="badge">Guaranteed</span>
+                        {% endif %}
+
+                        <!-- Formats count -->
+                        {% if product.formats %}
+                            <span class="badge badge-secondary">{{ product.formats|length }} format{{ 's' if product.formats|length != 1 else '' }}</span>
+                        {% endif %}
+                    </div>
+
+                    <!-- Delivery Measurement -->
+                    {% if product.delivery_measurement %}
+                    <div class="product-card-measurement">
+                        <small style="color: #666;">
+                            <i class="fas fa-chart-line"></i> {{ product.delivery_measurement.provider }}
+                        </small>
+                    </div>
+                    {% endif %}
+
+                    <div class="product-card-actions">
+                        <a href="{{ url_for('products.edit_product', tenant_id=tenant_id, product_id=product.product_id) }}" class="btn btn-secondary btn-sm" style="flex: 1;">Edit</a>
+                        <button onclick="deleteProduct('{{ product.product_id }}', '{{ product.name }}')" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- List View (Admin Table) -->
+    <table id="list-view">
         <thead>
             <tr>
                 <th>Product ID</th>
                 <th>Name</th>
-                <th>Description</th>
                 <th>Formats</th>
                 <th>Countries</th>
                 <th>Type</th>
@@ -57,10 +145,31 @@
         </thead>
         <tbody>
             {% for product in products %}
-            <tr>
+            <tr {% if product.is_dynamic %}class="dynamic-template"{% elif product.is_dynamic_variant %}class="dynamic-variant"{% endif %}>
                 <td><code>{{ product.product_id }}</code></td>
-                <td>{{ product.name }}</td>
-                <td>{{ product.description or '-' }}</td>
+                <td>
+                    {% if product.is_dynamic %}
+                        <span class="badge" style="background: #9c27b0; color: white;" title="Dynamic product template">
+                            <i class="fas fa-bolt"></i> Template
+                        </span>
+                    {% elif product.is_dynamic_variant %}
+                        <span class="badge" style="background: #4caf50; color: white;" title="Dynamic product variant">
+                            <i class="fas fa-lightning-bolt"></i> Variant
+                        </span>
+                    {% endif %}
+                    {{ product.name }}
+                    {% if product.is_dynamic_variant and product.activation_key %}
+                        <br>
+                        <small style="color: #666;">
+                            <strong>Signal:</strong>
+                            {% if product.activation_key.type == 'key_value' %}
+                                {{ product.activation_key.key }}={{ product.activation_key.value }}
+                            {% elif product.activation_key.type == 'segment_id' %}
+                                Segment {{ product.activation_key.segment_id }}
+                            {% endif %}
+                        </small>
+                    {% endif %}
+                </td>
                 <td>
                     {% for format in product.formats %}
                         {# Format is now resolved with name field from creative agent #}
@@ -247,6 +356,126 @@
     background: #f5f5f5;
     color: #666;
 }
+
+/* View Toggle Buttons */
+.view-toggle {
+    background: transparent;
+    border: none;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    border-radius: 4px;
+    color: #666;
+    transition: all 0.2s;
+}
+
+.view-toggle:hover {
+    background: #e0e0e0;
+    color: #333;
+}
+
+.view-toggle.active {
+    background: #007bff;
+    color: white;
+}
+
+/* Product Card Grid */
+.product-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1.5rem;
+}
+
+/* Individual Product Card */
+.product-card {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: transform 0.2s, box-shadow 0.2s;
+    display: flex;
+    flex-direction: column;
+}
+
+.product-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.product-card-image {
+    width: 100%;
+    height: 200px;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-color: #f5f5f5;
+}
+
+.product-card-no-image {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%);
+}
+
+.product-card-content {
+    padding: 1.25rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.product-card-title {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #333;
+    line-height: 1.3;
+}
+
+.product-card-description {
+    margin: 0;
+    color: #666;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    flex: 1;
+}
+
+.product-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    padding-top: 0.75rem;
+    border-top: 1px solid #f0f0f0;
+}
+
+.product-card-price {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.product-card-measurement {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid #f0f0f0;
+}
+
+.product-card-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #f0f0f0;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .product-card-grid {
+        grid-template-columns: 1fr;
+    }
+}
 </style>
 
 <script>
@@ -287,5 +516,37 @@ function getCsrfToken() {
 
     return '';
 }
+
+// View mode switching
+function switchView(mode) {
+    const listView = document.getElementById('list-view');
+    const cardView = document.getElementById('card-view');
+    const listButton = document.getElementById('view-list');
+    const cardButton = document.getElementById('view-card');
+
+    if (mode === 'card') {
+        // Show card view
+        listView.style.display = 'none';
+        cardView.style.display = 'block';
+        listButton.classList.remove('active');
+        cardButton.classList.add('active');
+        localStorage.setItem('productsViewMode', 'card');
+    } else {
+        // Show list view
+        listView.style.display = 'table';
+        cardView.style.display = 'none';
+        listButton.classList.add('active');
+        cardButton.classList.remove('active');
+        localStorage.setItem('productsViewMode', 'list');
+    }
+}
+
+// Restore view mode from localStorage on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const savedView = localStorage.getItem('productsViewMode');
+    if (savedView === 'card') {
+        switchView('card');
+    }
+});
 </script>
 {% endblock %}

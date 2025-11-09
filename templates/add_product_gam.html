@@ -24,23 +24,194 @@
         <div class="form-group">
             <label for="name">Product Name *</label>
             <input type="text" id="name" name="name" required placeholder="e.g., Premium Homepage Package" value="{{ product.name if product else '' }}">
+            <small style="color: #666;" id="name-product-note" style="display: none;">
+                For dynamic products, this is the base product name. Variants will use your name template pattern.
+            </small>
         </div>
 
         <div class="form-group">
             <label for="description">Description</label>
             <textarea id="description" name="description" rows="3" placeholder="Describe this product for potential buyers">{{ product.description if product else '' }}</textarea>
+            <small style="color: #666;" id="description-product-note" style="display: none;">
+                For dynamic products, this is the base product description. Variants will use your description template pattern.
+            </small>
+        </div>
+
+        <!-- Section 2: Dynamic Products Configuration -->
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
+            <i class="fas fa-lightning-bolt"></i> Dynamic Products (Signals-Based)
+        </h3>
+        <div class="alert" style="background: #d1ecf1; border-left: 4px solid #17a2b8; padding: 1rem; margin-bottom: 1rem;">
+            <strong>Optional:</strong> Make this product dynamic to automatically generate variants from signals agents based on buyer briefs.
+        </div>
+
+        <div class="form-group">
+            <label style="display: flex; align-items: center;">
+                <input type="checkbox" id="is_dynamic" name="is_dynamic" {% if product and product.is_dynamic %}checked{% endif %} style="margin-right: 0.5rem;">
+                <strong>This is a dynamic product</strong>
+            </label>
+            <small style="color: #666; display: block; margin-top: 0.5rem;">
+                When enabled, this product acts as a base. The system will query signals agents and create product variants with targeting based on active signals.
+            </small>
+        </div>
+
+        <div id="dynamic-product-config" style="display: {% if product and product.is_dynamic %}block{% else %}none{% endif %}; margin-left: 1.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px; margin-top: 1rem; margin-bottom: 2rem;">
+            <h4 style="margin-top: 0;">Dynamic Product Settings</h4>
+
+            <!-- Signals Agent Selection -->
+            <div class="form-group">
+                <label><strong>Signals Agents</strong></label>
+
+                {% set selected_agents = product.signals_agent_ids if product and product.signals_agent_ids else [] %}
+                {% set use_all_agents = not product or not product.signals_agent_ids or product.signals_agent_ids|length == 0 %}
+
+                <div style="margin-left: 1rem; margin-top: 0.5rem;">
+                    <label style="display: block; margin-bottom: 1rem; cursor: pointer;">
+                        <input type="radio" name="signals_agent_selection" value="all"
+                               {% if use_all_agents %}checked{% endif %}
+                               style="margin-right: 0.5rem;">
+                        <strong>All Agents</strong> <span style="color: #28a745;">(Recommended)</span>
+                        <div style="margin-left: 1.75rem; color: #666; font-size: 0.9rem; margin-top: 0.25rem;">
+                            Automatically query all configured signals agents. When you add or change agents, products will automatically use them without modification.
+                        </div>
+                    </label>
+
+                    <label style="display: block; margin-bottom: 0.5rem; cursor: pointer;">
+                        <input type="radio" name="signals_agent_selection" value="specific"
+                               {% if not use_all_agents %}checked{% endif %}
+                               style="margin-right: 0.5rem;">
+                        <strong>Specific Agents</strong> <span style="color: #666;">(Advanced)</span>
+                    </label>
+
+                    <div id="specific-agents-selection" style="display: {% if not use_all_agents %}block{% else %}none{% endif %}; margin-left: 1.75rem; margin-top: 0.5rem;">
+                        <select name="signals_agent_ids" id="signals_agent_ids" multiple size="5" style="width: 100%;">
+                            {% if signals_agents %}
+                                {% for agent in signals_agents %}
+                                <option value="{{ agent.agent_id }}"
+                                        {% if agent.agent_id in selected_agents %}selected{% endif %}>
+                                    {{ agent.name }} - {{ agent.agent_url }}
+                                </option>
+                                {% endfor %}
+                            {% else %}
+                                <option disabled>No signals agents configured</option>
+                            {% endif %}
+                        </select>
+                        <small style="color: #666; display: block; margin-top: 0.25rem;">
+                            Select one or more signals agents to query. System will create product variants based on signals returned for buyer's brief.
+                            {% if not signals_agents %}
+                            <br><a href="{{ url_for('signals_agents.list_signals_agents', tenant_id=tenant_id) }}">Configure signals agents first</a>
+                            {% endif %}
+                        </small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Variant Naming Pattern -->
+            <div class="form-group">
+                <label><strong>Variant Naming Pattern</strong></label>
+
+                <div style="margin-left: 1rem; margin-top: 0.5rem;">
+                    <label style="display: block; margin-bottom: 1rem; cursor: pointer;">
+                        <input type="radio" name="variant_name_pattern" value="default"
+                               {% if not product or not product.variant_name_template %}checked{% endif %}
+                               style="margin-right: 0.5rem;">
+                        <strong>Product Name - Signal Name</strong> <span style="color: #28a745;">(Recommended)</span>
+                        <div style="margin-left: 1.75rem; color: #666; font-size: 0.9rem; margin-top: 0.25rem;">
+                            Example: "Run of Site - Weather Targeting"
+                        </div>
+                    </label>
+
+                    <label style="display: block; margin-bottom: 1rem; cursor: pointer;">
+                        <input type="radio" name="variant_name_pattern" value="signal_only"
+                               {% if product and product.variant_name_template == "{{ '{{signal.name}}' }}" %}checked{% endif %}
+                               style="margin-right: 0.5rem;">
+                        <strong>Signal Name Only</strong>
+                        <div style="margin-left: 1.75rem; color: #666; font-size: 0.9rem; margin-top: 0.25rem;">
+                            Example: "Weather Targeting"
+                        </div>
+                    </label>
+
+                    <label style="display: block; margin-bottom: 0.5rem; cursor: pointer;">
+                        <input type="radio" name="variant_name_pattern" value="custom"
+                               {% if product and product.variant_name_template and product.variant_name_template != "{{ '{{signal.name}}' }}" %}checked{% endif %}
+                               style="margin-right: 0.5rem;">
+                        <strong>Custom Pattern</strong> <span style="color: #666;">(Advanced)</span>
+                    </label>
+
+                    <div id="custom-name-pattern" style="display: {% if product and product.variant_name_template and product.variant_name_template != '{{signal.name}}' %}block{% else %}none{% endif %}; margin-left: 1.75rem; margin-top: 0.5rem; margin-bottom: 0.5rem;">
+                        <input type="text" id="variant_name_template" name="variant_name_template"
+                               value="{{ product.variant_name_template if product and product.variant_name_template else '' }}"
+                               placeholder="{{ '{{name}}' }} - {{ '{{signal.name}}' }}" style="width: 100%;">
+                        <small style="color: #666; display: block; margin-top: 0.25rem;">
+                            Available: <code>{{ '{{name}}' }}</code>, <code>{{ '{{signal.name}}' }}</code>,
+                            <code>{{ '{{activation_key.key}}' }}</code>, <code>{{ '{{activation_key.value}}' }}</code>
+                        </small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Variant Description -->
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="append_signal_description" id="append_signal_description"
+                           {% if not product or product.variant_description_template is none or product.variant_description_template == '' %}checked{% endif %}
+                           style="margin-right: 0.5rem;">
+                    <strong>Append signal targeting description</strong>
+                </label>
+                <small style="display: block; margin-left: 1.75rem; color: #666; margin-top: 0.25rem;">
+                    Adds the targeting details to help buyers understand what makes this variant unique
+                </small>
+
+                <div id="signal-description-preview" style="{% if not product or product.variant_description_template is none or product.variant_description_template == '' %}display: block;{% else %}display: none;{% endif %} margin-left: 1.75rem; margin-top: 0.75rem; padding: 0.75rem; background: #f8f9fa; border-radius: 4px; border-left: 3px solid #007bff;">
+                    <strong style="font-size: 0.9rem; color: #495057;">Preview:</strong>
+                    <div style="margin-top: 0.5rem; color: #666; font-size: 0.9rem; white-space: pre-line;">Run of Site inventory with premium placement.
+
+Target users based on local weather conditions for maximum relevance.</div>
+                </div>
+            </div>
+
+            <!-- Max Signals -->
+            <div class="form-group">
+                <label for="max_signals">Maximum Variants</label>
+                <input type="number" id="max_signals" name="max_signals"
+                       value="{{ product.max_signals if product and product.max_signals else 5 }}"
+                       min="1" max="20" style="width: 150px;">
+                <small style="color: #666;">Maximum number of product variants to create from signals (default: 5)</small>
+            </div>
+
+            <!-- Variant TTL -->
+            <div class="form-group">
+                <label for="variant_ttl_days">Variant Expiration (Days)</label>
+                <input type="number" id="variant_ttl_days" name="variant_ttl_days"
+                       value="{{ product.variant_ttl_days if product and product.variant_ttl_days else '' }}"
+                       min="1" max="365" placeholder="30" style="width: 150px;">
+                <small style="color: #666;">How many days until unused variants expire (leave blank for tenant default of 30 days)</small>
+            </div>
+
+            <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-top: 1rem;">
+                <strong>How Dynamic Products Work:</strong>
+                <ul style="margin: 0.5rem 0 0 0; padding-left: 1.5rem;">
+                    <li>This product serves as a base with all settings (formats, pricing, targeting)</li>
+                    <li>When buyers call get_products with a brief, we query your selected signals agents</li>
+                    <li>For each matching signal (up to max variants), we create a product variant</li>
+                    <li>Variants inherit all base product settings and include signal-based targeting</li>
+                    <li>Variant names and descriptions are generated using your templates (or defaults)</li>
+                    <li>Variants are single-use and expire after the configured TTL</li>
+                    <li>Buyers see variants as normal products - the implementation is transparent</li>
+                </ul>
+            </div>
         </div>
 
         <div class="form-group">
             <label for="countries">Countries</label>
             <select id="countries" name="countries" multiple size="5">
-                <option value="ALL">All Countries</option>
-                <option value="United States">United States</option>
-                <option value="Canada">Canada</option>
-                <option value="United Kingdom">United Kingdom</option>
-                <option value="Australia">Australia</option>
+                <option value="ALL" {% if not product or not product.countries or 'ALL' in product.countries %}selected{% endif %}>All Countries</option>
+                <option value="United States" {% if product and product.countries and 'United States' in product.countries %}selected{% endif %}>United States</option>
+                <option value="Canada" {% if product and product.countries and 'Canada' in product.countries %}selected{% endif %}>Canada</option>
+                <option value="United Kingdom" {% if product and product.countries and 'United Kingdom' in product.countries %}selected{% endif %}>United Kingdom</option>
+                <option value="Australia" {% if product and product.countries and 'Australia' in product.countries %}selected{% endif %}>Australia</option>
             </select>
-            <small style="color: #666;">Hold Ctrl/Cmd to select multiple, or select "All Countries"</small>
+            <small style="color: #666;">Hold Ctrl/Cmd to select multiple, or select "All Countries". For dynamic products, these countries are passed to signals agents.</small>
         </div>
 
         <!-- Section 2: GAM Inventory Selection -->
@@ -210,6 +381,64 @@
         {% include 'components/targeting_selector_simple.html' %}
         <input type="hidden" id="targeting-data" name="targeting_template" value='{{ product.targeting_template | tojson if product and product.targeting_template else "{}" }}'>
 
+        <!-- Product Details (AdCP Compliance) -->
+        <h3 style="margin-top: 2rem;">
+            <i class="fas fa-info-circle"></i> Product Details
+        </h3>
+        <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
+            <strong>Required:</strong> Delivery measurement is required per AdCP spec. Other details enhance product visibility for buyers.
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="delivery_measurement_provider">Delivery Measurement Provider *</label>
+                {% set measurement_config = tenant.measurement_providers if tenant else {} %}
+                {% set providers = measurement_config.providers if measurement_config else [] %}
+                {% set default_provider = measurement_config.default if measurement_config else '' %}
+                {% set current_value = product.delivery_measurement.provider if product and product.delivery_measurement else default_provider %}
+
+                <input type="text" id="delivery_measurement_provider" name="delivery_measurement_provider"
+                       list="measurement_providers_list"
+                       placeholder="e.g., Google Ad Manager with IAS viewability"
+                       value="{{ current_value }}" required>
+                <datalist id="measurement_providers_list">
+                    {% if providers %}
+                        {% for provider in providers %}
+                        <option value="{{ provider }}">
+                        {% endfor %}
+                    {% else %}
+                        <option value="Google Ad Manager">
+                        <option value="Google Ad Manager with IAS">
+                        <option value="Google Ad Manager with MOAT">
+                    {% endif %}
+                </datalist>
+                <small style="color: #666;">Select from configured providers or enter custom (autocomplete enabled)</small>
+            </div>
+
+            <div class="form-group">
+                <label for="delivery_measurement_notes">Measurement Notes</label>
+                <input type="text" id="delivery_measurement_notes" name="delivery_measurement_notes"
+                       placeholder="e.g., MRC-accredited viewability. 50% in-view for 1s"
+                       value="{{ product.delivery_measurement.notes if product and product.delivery_measurement and product.delivery_measurement.notes else '' }}">
+                <small style="color: #666;">Additional methodology details (optional)</small>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="product_image_url">Product Image URL (Optional)</label>
+            <input type="url" id="product_image_url" name="product_image_url"
+                   placeholder="https://example.com/product-image.jpg"
+                   value="{{ product.product_card.manifest.product_image if product and product.product_card and product.product_card.manifest else '' }}">
+            <small style="color: #666;">
+                Product image for visual cards (300x400px recommended). Leave blank to auto-generate from product data.
+            </small>
+            {% if product and product.product_card and product.product_card.manifest and product.product_card.manifest.product_image %}
+            <div style="margin-top: 0.5rem;">
+                <img src="{{ product.product_card.manifest.product_image }}" alt="Current product image" style="max-width: 200px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            {% endif %}
+        </div>
+
         <!-- Submit Buttons -->
         <div style="margin-top: 2rem; display: flex; gap: 1rem;">
             <button type="submit" class="btn btn-primary">{{ 'Update Product' if product else 'Create Product' }}</button>
@@ -217,6 +446,63 @@
         </div>
     </form>
 </div>
+
+<script>
+// Show/hide dynamic product configuration and product notes
+document.getElementById('is_dynamic').addEventListener('change', function(e) {
+    const isDynamic = e.target.checked;
+    document.getElementById('dynamic-product-config').style.display = isDynamic ? 'block' : 'none';
+
+    // Show/hide product notes for name and description fields
+    const nameNote = document.getElementById('name-product-note');
+    const descNote = document.getElementById('description-product-note');
+    if (nameNote) nameNote.style.display = isDynamic ? 'block' : 'none';
+    if (descNote) descNote.style.display = isDynamic ? 'block' : 'none';
+});
+
+// Initialize on page load if editing dynamic product
+if (document.getElementById('is_dynamic').checked) {
+    const nameNote = document.getElementById('name-product-note');
+    const descNote = document.getElementById('description-product-note');
+    if (nameNote) nameNote.style.display = 'block';
+    if (descNote) descNote.style.display = 'block';
+}
+
+// Handle signals agent selection radio buttons
+document.querySelectorAll('input[name="signals_agent_selection"]').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+        const specificAgents = document.getElementById('specific-agents-selection');
+        if (this.value === 'specific') {
+            specificAgents.style.display = 'block';
+        } else {
+            specificAgents.style.display = 'none';
+        }
+    });
+});
+
+// Handle variant naming pattern radio buttons
+document.querySelectorAll('input[name="variant_name_pattern"]').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+        const customPattern = document.getElementById('custom-name-pattern');
+        if (this.value === 'custom') {
+            customPattern.style.display = 'block';
+        } else {
+            customPattern.style.display = 'none';
+        }
+    });
+});
+
+// Handle append signal description checkbox
+const appendCheckbox = document.getElementById('append_signal_description');
+if (appendCheckbox) {
+    appendCheckbox.addEventListener('change', function() {
+        const preview = document.getElementById('signal-description-preview');
+        if (preview) {
+            preview.style.display = this.checked ? 'block' : 'none';
+        }
+    });
+}
+</script>
 
 <!-- Include shared hierarchical tree view styles -->
 {% include 'partials/hierarchical_tree_styles.html' %}

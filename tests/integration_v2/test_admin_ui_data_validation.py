@@ -9,7 +9,7 @@ Data tests: "Does it show the right data?" (content validation)
 
 import pytest
 
-from src.core.database.models import PricingOption, Product
+from src.core.database.models import PricingOption
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -32,13 +32,15 @@ class TestProductsDataValidation:
         Bug caught: https://github.com/your-org/repo/issues/XXX
         """
         from src.core.database.database_session import get_db_session
+        from tests.integration_v2.conftest import create_test_product_with_pricing
 
         tenant_id = test_tenant_with_data["tenant_id"]
 
         # Create a product with multiple pricing options
         with get_db_session() as db_session:
-            # Create product (must have either properties OR property_tags per AdCP spec)
-            product = Product(
+            # Create product with first pricing option
+            product = create_test_product_with_pricing(
+                session=db_session,
                 tenant_id=tenant_id,
                 product_id="test_product_duplicate_check",
                 name="Test Product With Multiple Prices",
@@ -47,13 +49,14 @@ class TestProductsDataValidation:
                 countries=["US"],
                 formats=[],
                 targeting_template={},
-                property_tags=["all_inventory"],  # Required: either properties OR property_tags
+                property_tags=["all_inventory"],  # Required per AdCP spec
+                pricing_model="cpm",
+                rate=10.0,
+                is_fixed=True,
             )
-            db_session.add(product)
-            db_session.flush()
 
-            # Add 3 pricing options (this causes 3 joined rows)
-            for i in range(3):
+            # Add 2 more pricing options (total of 3)
+            for i in range(1, 3):
                 pricing = PricingOption(
                     tenant_id=tenant_id,
                     product_id=product.product_id,
@@ -74,12 +77,15 @@ class TestProductsDataValidation:
         html = response.data.decode("utf-8")
 
         # Count table rows (<tr>) in tbody
+        # Use regex to handle <tr> tags with attributes (class, id, etc.)
+        import re
+
         if "<tbody>" in html and "</tbody>" in html:
             tbody_start = html.find("<tbody>")
             tbody_end = html.find("</tbody>")
             tbody = html[tbody_start:tbody_end]
-            # Count <tr> tags (excluding the opening <tbody>)
-            row_count = tbody.count("<tr>")
+            # Count <tr> tags (with or without attributes)
+            row_count = len(re.findall(r"<tr[\s>]", tbody))
         else:
             row_count = 0
 
@@ -93,26 +99,28 @@ class TestProductsDataValidation:
     def test_products_list_shows_all_products(self, authenticated_admin_session, test_tenant_with_data, integration_db):
         """Test that products list shows all tenant's products exactly once."""
         from src.core.database.database_session import get_db_session
+        from tests.integration_v2.conftest import create_test_product_with_pricing
 
         tenant_id = test_tenant_with_data["tenant_id"]
 
-        # Create 5 distinct products
-        product_names = [f"Product {i}" for i in range(5)]
-
+        # Create 5 distinct products with pricing options
         with get_db_session() as db_session:
-            for name in product_names:
-                product = Product(
+            for i in range(5):
+                create_test_product_with_pricing(
+                    session=db_session,
                     tenant_id=tenant_id,
-                    product_id=f"test_product_{name.lower().replace(' ', '_')}",
-                    name=name,
+                    product_id=f"test_product_product_{i}",
+                    name=f"Product {i}",
                     description="Test product",
                     delivery_type="guaranteed",
                     countries=["US"],
                     formats=[],
                     targeting_template={},
                     property_tags=["all_inventory"],  # Required per AdCP spec
+                    pricing_model="cpm",
+                    rate=15.0,
+                    is_fixed=True,
                 )
-                db_session.add(product)
             db_session.commit()
 
         # Request products page
@@ -121,22 +129,24 @@ class TestProductsDataValidation:
 
         html = response.data.decode("utf-8")
 
-        # Count table rows in tbody
+        # Count table rows in tbody using regex to handle attributes
+        import re
+
         if "<tbody>" in html and "</tbody>" in html:
             tbody_start = html.find("<tbody>")
             tbody_end = html.find("</tbody>")
             tbody = html[tbody_start:tbody_end]
-            row_count = tbody.count("<tr>")
+            row_count = len(re.findall(r"<tr[\s>]", tbody))
         else:
             row_count = 0
 
         # Should have exactly 5 rows (one per product)
         assert row_count == 5, f"Product table has {row_count} rows (expected 5)"
 
-    def test_products_list_with_no_pricing_options(
+    def test_products_list_with_single_pricing_option(
         self, authenticated_admin_session, test_tenant_with_data, integration_db
     ):
-        """Test that products without pricing_options still render correctly."""
+        """Test that products with a single pricing option render correctly."""
         from src.core.database.database_session import get_db_session
         from tests.integration_v2.conftest import create_test_product_with_pricing
 
@@ -147,9 +157,9 @@ class TestProductsDataValidation:
             product = create_test_product_with_pricing(
                 session=db_session,
                 tenant_id=tenant_id,
-                product_id="test_product_no_pricing",
-                name="Product Without Pricing Options",
-                description="Product with pricing options",
+                product_id="test_product_single_pricing",
+                name="Product With Single Pricing Option",
+                description="Product with one pricing option",
                 pricing_model="CPM",
                 rate="15.0",
                 is_fixed=True,
@@ -167,12 +177,14 @@ class TestProductsDataValidation:
 
         html = response.data.decode("utf-8")
 
-        # Count table rows in tbody
+        # Count table rows in tbody using regex to handle attributes
+        import re
+
         if "<tbody>" in html and "</tbody>" in html:
             tbody_start = html.find("<tbody>")
             tbody_end = html.find("</tbody>")
             tbody = html[tbody_start:tbody_end]
-            row_count = tbody.count("<tr>")
+            row_count = len(re.findall(r"<tr[\s>]", tbody))
         else:
             row_count = 0
 
