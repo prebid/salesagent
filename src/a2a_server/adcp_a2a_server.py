@@ -1362,12 +1362,12 @@ class AdCPRequestHandler(RequestHandler):
         """Handle explicit create_media_buy skill invocation.
 
         IMPORTANT: This handler ONLY accepts AdCP spec-compliant format:
-        - packages[] (required)
-        - budget{} (required)
+        - packages[] (required) - each package must have budget
+        - brand_manifest (required)
         - start_time (required)
         - end_time (required)
-        - promoted_offering (required)
 
+        Per AdCP v2.2.0 spec, budget is specified at the PACKAGE level, not top level.
         Legacy format (product_ids, total_budget, start_date, end_date) is NOT supported.
         """
         try:
@@ -1377,11 +1377,10 @@ class AdCPRequestHandler(RequestHandler):
                 tool_name="create_media_buy",
             )
 
-            # Validate AdCP spec required parameters
+            # Validate AdCP spec required parameters (per AdCP v2.2.0)
             required_params = [
                 "brand_manifest",
                 "packages",
-                "budget",
                 "start_time",
                 "end_time",
             ]
@@ -1406,6 +1405,7 @@ class AdCPRequestHandler(RequestHandler):
                 }
 
             # Call core function with AdCP spec-compliant parameters
+            # Note: budget is NOT passed at top level per AdCP v2.2.0 - it's in packages
             response = await core_create_media_buy_tool(
                 brand_manifest=parameters["brand_manifest"],
                 po_number=parameters.get("po_number", f"A2A-{uuid.uuid4().hex[:8]}"),
@@ -1413,7 +1413,7 @@ class AdCPRequestHandler(RequestHandler):
                 packages=parameters["packages"],
                 start_time=parameters["start_time"],
                 end_time=parameters["end_time"],
-                budget=parameters["budget"],
+                budget=parameters.get("budget"),  # Optional legacy field - ignored if provided
                 targeting_overlay=parameters.get("custom_targeting", {}),
                 push_notification_config=parameters.get("push_notification_config"),
                 context=self._tool_context_to_mcp_context(tool_context),
@@ -2134,20 +2134,22 @@ class AdCPRequestHandler(RequestHandler):
 
             return {
                 "success": False,
-                "message": f"Authentication successful for {tool_context.principal_id}. To create a media buy, use explicit skill invocation with AdCP v2.4 spec-compliant format.",
-                "required_fields": ["promoted_offering", "packages", "budget", "start_time", "end_time"],
+                "message": f"Authentication successful for {tool_context.principal_id}. To create a media buy, use explicit skill invocation with AdCP v2.2.0 spec-compliant format.",
+                "required_fields": ["brand_manifest", "packages", "start_time", "end_time"],
+                "note": "Per AdCP v2.2.0 spec, budget is specified at the PACKAGE level, not top level",
                 "authenticated_tenant": tool_context.tenant_id,
                 "authenticated_principal": tool_context.principal_id,
                 "example": {
-                    "promoted_offering": "https://example.com/product",
+                    "brand_manifest": "https://example.com/brand-manifest.json",
                     "packages": [
                         {
                             "buyer_ref": "pkg_1",
-                            "products": ["video_premium"],
-                            "budget": {"total": 10000, "currency": "USD"},
+                            "product_id": "video_premium",
+                            "budget": 10000.0,  # Budget is per package (required)
+                            "pricing_option_id": "cpm-fixed",
                         }
                     ],
-                    "budget": {"total": 10000, "currency": "USD"},
+                    # Note: NO top-level budget field per AdCP v2.2.0 spec
                     "start_time": "2025-02-01T00:00:00Z",
                     "end_time": "2025-02-28T23:59:59Z",
                 },
