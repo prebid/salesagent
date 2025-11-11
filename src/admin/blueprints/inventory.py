@@ -233,9 +233,11 @@ def get_targeting_values(tenant_id, key_id):
                     credentials = google_service_account.Credentials.from_service_account_file(
                         temp_key_path, scopes=["https://www.googleapis.com/auth/dfp"]
                     )
+                    # Wrap in GoogleCredentialsClient for AdManagerClient compatibility
+                    oauth2_client = oauth2.GoogleCredentialsClient(credentials)
                     # Create Ad Manager client with service account
                     gam_ad_manager_client = ad_manager.AdManagerClient(
-                        credentials, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
+                        oauth2_client, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
                     )
                 finally:
                     # Clean up temp file
