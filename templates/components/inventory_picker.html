@@ -151,7 +151,14 @@ Then in your template, add browse buttons:
         const url = `/api/tenant/${config.tenantId}/inventory-list?type=placement${search ? '&search=' + encodeURIComponent(search) : ''}`;
 
         fetch(url, { credentials: 'same-origin' })
-            .then(response => response.json())
+            .then(response => {
+                // Handle authentication errors (401) by redirecting to login
+                if (response.status === 401) {
+                    window.location.href = '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                    return Promise.reject(new Error('Session expired'));
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.error) {
                     list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">${data.error}</div>`;
@@ -186,7 +193,10 @@ Then in your template, add browse buttons:
                 `).join('');
             })
             .catch(error => {
-                list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
+                // Don't show error for session expired (we're redirecting)
+                if (error.message !== 'Session expired') {
+                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
+                }
             });
     }
 
@@ -201,7 +211,14 @@ Then in your template, add browse buttons:
         </div>`;
 
         fetch(url, { credentials: 'same-origin' })
-            .then(response => response.json())
+            .then(response => {
+                // Handle authentication errors (401) by redirecting to login
+                if (response.status === 401) {
+                    window.location.href = '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                    return Promise.reject(new Error('Session expired'));
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.error) {
                     list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">${data.error}</div>`;
@@ -226,7 +243,10 @@ Then in your template, add browse buttons:
                     '</div>';
             })
             .catch(error => {
-                list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
+                // Don't show error for session expired (we're redirecting)
+                if (error.message !== 'Session expired') {
+                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
+                }
             });
     }
 
