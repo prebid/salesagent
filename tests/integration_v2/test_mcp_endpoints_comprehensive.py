@@ -198,17 +198,22 @@ class TestMCPEndpointsComprehensive:
 
     @pytest.mark.requires_server
     async def test_get_products_missing_required_field(self, mcp_client):
-        """Test that get_products fails without brand_manifest."""
-        async with mcp_client as client:
-            with pytest.raises(Exception) as exc_info:
-                await client.call_tool(
-                    "get_products",
-                    {"brief": "display ads"},  # Missing brand_manifest
-                )
+        """Test that get_products succeeds without brand_manifest when authenticated.
 
-            # Should fail with validation error mentioning brand_manifest (or BrandManifest in some error messages)
-            error_msg = str(exc_info.value).lower()
-            assert "brand" in error_msg or "manifest" in error_msg
+        With default brand_manifest_policy='require_auth', authenticated requests
+        can omit brand_manifest. A generic offering is used instead.
+        """
+        async with mcp_client as client:
+            # Should succeed - authenticated user with require_auth policy
+            result = await client.call_tool(
+                "get_products",
+                {"brief": "display ads"},  # No brand_manifest - allowed when authenticated
+            )
+
+            # Should return products successfully
+            content = safe_get_content(result)
+            assert "products" in content
+            assert isinstance(content["products"], list)
 
     def test_schema_backward_compatibility(self):
         """Test that AdCP v2.4 schema maintains backward compatibility."""

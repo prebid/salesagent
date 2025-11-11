@@ -186,8 +186,20 @@ async def _get_products_impl(
             elif isinstance(req.brand_manifest, dict):
                 offering = req.brand_manifest.get("name") or req.brand_manifest.get("url", "")
 
+    # Check brand_manifest_policy from tenant settings
+    brand_manifest_policy = tenant.get("brand_manifest_policy", "require_auth")
+
+    # Enforce policy-based validation
+    if brand_manifest_policy == "require_brand" and not offering:
+        raise ToolError("Brand manifest required by tenant policy")
+    elif brand_manifest_policy == "require_auth" and not principal_id:
+        raise ToolError("Authentication required by tenant policy")
+    # public policy allows all requests (no brand_manifest or auth required)
+
+    # For non-public policies, we need offering for policy checks and product matching
+    # Use a generic offering if not provided
     if not offering:
-        raise ToolError("brand_manifest must provide brand information")
+        offering = "Generic product inquiry"
 
     # Skip strict validation in test environments (allow simple test values)
 
