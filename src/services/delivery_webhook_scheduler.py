@@ -107,64 +107,44 @@ class DeliveryWebhookScheduler:
         logger.info("Starting daily delivery report webhook batch")
 
         try:
-            # Step 1: Extract data from database (quick, synchronous)
-            media_buy_data = []
             with get_db_session() as session:
                 # Find all active media buys
                 stmt = select(MediaBuy).where(MediaBuy.status.in_(["active", "approved"]))
                 media_buys = session.scalars(stmt).all()
 
+                reports_sent = 0
+                errors = 0
+
                 for media_buy in media_buys:
-                    # Check if this media buy has a reporting webhook configured
-                    raw_request = media_buy.raw_request or {}
-                    reporting_webhook = raw_request.get("reporting_webhook")
+                    try:
+                        # Check if this media buy has a reporting webhook configured
+                        raw_request = media_buy.raw_request or {}
+                        reporting_webhook = raw_request.get("reporting_webhook")
 
-                    if not reporting_webhook:
-                        continue
+                        if not reporting_webhook:
+                            continue
 
-                    # Extract data needed for webhook (detach from session)
-                    media_buy_data.append(
-                        {
-                            "media_buy_id": media_buy.media_buy_id,
-                            "tenant_id": media_buy.tenant_id,
-                            "principal_id": media_buy.principal_id,
-                            "status": media_buy.status,
-                            "currency": media_buy.currency,
-                            "start_time": media_buy.start_time,
-                            "end_time": media_buy.end_time,
-                            "reporting_webhook": reporting_webhook,
-                        }
-                    )
+                        # Send delivery report
+                        await self._send_report_for_media_buy(media_buy, reporting_webhook, session)
+                        reports_sent += 1
 
-            # Step 2: Send reports asynchronously (DB session already closed)
-            reports_sent = 0
-            errors = 0
+                    except Exception as e:
+                        logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
+                        errors += 1
 
-            for data in media_buy_data:
-                try:
-                    await self._send_report_for_media_buy_data(data)
-                    reports_sent += 1
-
-                except Exception as e:
-                    logger.error(f"Error sending report for media buy {data['media_buy_id']}: {e}", exc_info=True)
-                    errors += 1
-
-            logger.info(f"Daily delivery report batch complete: {reports_sent} sent, {errors} errors")
+                logger.info(f"Daily delivery report batch complete: {reports_sent} sent, {errors} errors")
 
         except Exception as e:
             logger.error(f"Error in daily delivery report batch: {e}", exc_info=True)
 
-    async def _send_report_for_media_buy_data(self, data: dict[str, Any]):
-        """Send a delivery report for a single media buy using extracted data.
+    async def _send_report_for_media_buy(self, media_buy: Any, reporting_webhook: dict, session: Any):
+        """Send a delivery report for a single media buy.
 
         Args:
-            data: Dictionary containing media_buy_id, tenant_id, principal_id, and reporting_webhook
+            media_buy: MediaBuy database model
+            reporting_webhook: Webhook configuration dict
+            session: Database session
         """
-        media_buy_id = data["media_buy_id"]
-        tenant_id = data["tenant_id"]
-        principal_id = data["principal_id"]
-        reporting_webhook = data["reporting_webhook"]
-
         try:
             # Calculate reporting period (yesterday's data)
             yesterday = datetime.now(UTC) - timedelta(days=1)
@@ -179,14 +159,14 @@ class DeliveryWebhookScheduler:
 
             context = ToolContext(
                 context_id=str(uuid.uuid4()),
-                tenant_id=tenant_id,
-                principal_id=principal_id,
+                tenant_id=media_buy.tenant_id,
+                principal_id=media_buy.principal_id,
                 tool_name="get_media_buy_delivery",
                 request_timestamp=datetime.now(UTC),
             )
 
             req = GetMediaBuyDeliveryRequest(  # type: ignore[call-arg]
-                media_buy_ids=[media_buy_id],
+                media_buy_ids=[media_buy.media_buy_id],
                 start_date=start_date.strftime("%Y-%m-%d"),
                 end_date=end_date.strftime("%Y-%m-%d"),
             )
@@ -200,31 +180,30 @@ class DeliveryWebhookScheduler:
                     from src.adapters.gam_data_freshness import validate_and_log_freshness
 
                     is_fresh = validate_and_log_freshness(
-                        delivery_response.reporting_data, media_buy_id, target_date=yesterday
+                        delivery_response.reporting_data, media_buy.media_buy_id, target_date=yesterday
                     )
                     if not is_fresh:
-                        logger.warning(f"Skipping webhook for {media_buy_id} - data not fresh enough")
+                        logger.warning(f"Skipping webhook for {media_buy.media_buy_id} - data not fresh enough")
                         return
                 except Exception as e:
                     # If freshness check fails, log warning but continue (data freshness is optional)
-                    logger.warning(f"Could not validate data freshness for {media_buy_id}: {e}")
+                    logger.warning(f"Could not validate data freshness for {media_buy.media_buy_id}: {e}")
 
-            # Get sequence number for this webhook (requires new DB session)
+            # Get sequence number for this webhook (get max sequence + 1)
+            from sqlalchemy import func, select
+
+            from src.core.database.models import WebhookDeliveryLog
+
             sequence_number = 1
-            with get_db_session() as session:
-                from sqlalchemy import func, select
-
-                from src.core.database.models import WebhookDeliveryLog
-
-                try:
-                    stmt = select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
-                        WebhookDeliveryLog.media_buy_id == media_buy_id,
-                        WebhookDeliveryLog.task_type == "delivery_report",
-                    )
-                    max_seq = session.scalar(stmt)
-                    sequence_number = (max_seq or 0) + 1
-                except Exception as e:
-                    logger.warning(f"Could not get sequence number for media buy {media_buy_id}: {e}")
+            try:
+                stmt = select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
+                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
+                    WebhookDeliveryLog.task_type == "delivery_report",
+                )
+                max_seq = session.scalar(stmt)
+                sequence_number = (max_seq or 0) + 1
+            except Exception as e:
+                logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
 
             # Calculate next_expected_at (24 hours from now at 4 AM PT)
             import pytz
@@ -249,7 +228,7 @@ class DeliveryWebhookScheduler:
             # Extract webhook URL and authentication
             webhook_url = reporting_webhook.get("url")
             if not webhook_url:
-                logger.warning(f"No webhook URL configured for media buy {media_buy_id}")
+                logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
                 return
 
             # Try to find existing push notification config or create a temporary one
@@ -262,59 +241,50 @@ class DeliveryWebhookScheduler:
                 auth_type = schemes[0] if schemes else None
                 auth_token = auth_config.get("credentials")
 
-            # Query for existing push notification config (short-lived session)
-            webhook_config = None
-            with get_db_session() as session:
-                config_stmt = select(DBPushNotificationConfig).where(
-                    DBPushNotificationConfig.principal_id == principal_id,
-                    DBPushNotificationConfig.tenant_id == tenant_id,
-                    DBPushNotificationConfig.url == webhook_url,
-                    DBPushNotificationConfig.is_active,
-                )
-                push_config = session.scalars(config_stmt).first()
+            # Query for existing push notification config for this media buy
+            config_stmt = select(DBPushNotificationConfig).where(
+                DBPushNotificationConfig.principal_id == media_buy.principal_id,
+                DBPushNotificationConfig.tenant_id == media_buy.tenant_id,
+                DBPushNotificationConfig.url == webhook_url,
+                DBPushNotificationConfig.is_active,
+            )
+            push_config = session.scalars(config_stmt).first()
 
-                # Extract webhook config data before session closes
-                if push_config:
-                    # Create a detached config object with the data
-                    webhook_config = DBPushNotificationConfig(
-                        id=push_config.id,
-                        url=push_config.url,
-                        authentication_type=push_config.authentication_type,
-                        authentication_token=push_config.authentication_token,
-                        tenant_id=push_config.tenant_id,
-                        principal_id=push_config.principal_id,
-                        is_active=push_config.is_active,
-                    )
-
-            if not webhook_config:
-                # Create a temporary config (not persisted to database)
+            # Extract webhook config data before session closes
+            if push_config:
+                # Detach from session and extract data
+                session.expunge(push_config)
+                webhook_config = push_config
+            else:
+                # Create a detached temporary config (not attached to session)
                 webhook_config = DBPushNotificationConfig(
-                    id=f"temp_{media_buy_id}",
+                    id=f"temp_{media_buy.media_buy_id}",
+                    tenant_id=media_buy.tenant_id,
+                    principal_id=media_buy.principal_id,
                     url=webhook_url,
                     authentication_type=auth_type,
                     authentication_token=auth_token,
-                    tenant_id=tenant_id,
-                    principal_id=principal_id,
                     is_active=True,
                 )
 
-            # Send webhook (async, no DB session needed)
+            # Send webhook notification OUTSIDE the session context
+            # This ensures the session is closed before async webhook call
             await self.webhook_service.send_notification(
                 task_type="delivery_report",
-                task_id=media_buy_id,
+                task_id=media_buy.media_buy_id,
                 status="completed",
                 push_notification_config=webhook_config,
                 result=response_dict,  # Use modified dict with webhook metadata
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=media_buy_id,
+                tenant_id=media_buy.tenant_id,
+                principal_id=media_buy.principal_id,
+                media_buy_id=media_buy.media_buy_id,
                 notification_type="scheduled",  # Daily scheduled delivery report
             )
 
-            logger.info(f"Sent delivery report webhook for media buy {media_buy_id}")
+            logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
 
         except Exception as e:
-            logger.error(f"Error sending delivery report for media buy {media_buy_id}: {e}", exc_info=True)
+            logger.error(f"Error sending delivery report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
             raise
 
 

@@ -62,12 +62,6 @@ async def test_send_daily_reports_with_media_buys(mock_db_session, scheduler):
     # Setup mock media buys
     mock_media_buy_1 = Mock()
     mock_media_buy_1.media_buy_id = "mb_1"
-    mock_media_buy_1.tenant_id = "tenant_1"
-    mock_media_buy_1.principal_id = "principal_1"
-    mock_media_buy_1.status = "active"
-    mock_media_buy_1.currency = "USD"
-    mock_media_buy_1.start_time = None
-    mock_media_buy_1.end_time = None
     mock_media_buy_1.raw_request = {
         "reporting_webhook": {
             "url": "https://example.com/webhook1",
@@ -76,22 +70,10 @@ async def test_send_daily_reports_with_media_buys(mock_db_session, scheduler):
 
     mock_media_buy_2 = Mock()
     mock_media_buy_2.media_buy_id = "mb_2"
-    mock_media_buy_2.tenant_id = "tenant_1"
-    mock_media_buy_2.principal_id = "principal_1"
-    mock_media_buy_2.status = "active"
-    mock_media_buy_2.currency = "USD"
-    mock_media_buy_2.start_time = None
-    mock_media_buy_2.end_time = None
     mock_media_buy_2.raw_request = {}  # No webhook
 
     mock_media_buy_3 = Mock()
     mock_media_buy_3.media_buy_id = "mb_3"
-    mock_media_buy_3.tenant_id = "tenant_1"
-    mock_media_buy_3.principal_id = "principal_1"
-    mock_media_buy_3.status = "active"
-    mock_media_buy_3.currency = "USD"
-    mock_media_buy_3.start_time = None
-    mock_media_buy_3.end_time = None
     mock_media_buy_3.raw_request = {
         "reporting_webhook": {
             "url": "https://example.com/webhook3",
@@ -107,8 +89,8 @@ async def test_send_daily_reports_with_media_buys(mock_db_session, scheduler):
         mock_media_buy_3,
     ]
 
-    # Mock the send_report_for_media_buy_data method (new method name after refactoring)
-    with patch.object(scheduler, "_send_report_for_media_buy_data", new_callable=AsyncMock) as mock_send:
+    # Mock the send_report_for_media_buy method
+    with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send:
         # Execute
         await scheduler._send_daily_reports()
 
