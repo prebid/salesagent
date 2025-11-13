@@ -31,6 +31,23 @@
                         </button>
                     </form>
                     {% endif %}
+                    <div class="d-inline-flex align-items-center" style="gap: 0.5rem;">
+                        <input type="text" id="publisher-domains" class="form-control"
+                               placeholder="Optional: publisher.com, example.org"
+                               title="Leave empty to sync all domains from existing properties"
+                               style="min-width: 250px;">
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" id="dry-run-mode"
+                                   title="Preview what would be synced without saving">
+                            <label class="form-check-label" for="dry-run-mode" style="font-size: 0.9em;">
+                                Dry Run
+                            </label>
+                        </div>
+                        <button type="button" class="btn btn-primary" onclick="syncFromAdagents()"
+                                title="Discover and cache properties and tags from publisher adagents.json files">
+                            <i class="fas fa-sync"></i> Sync
+                        </button>
+                    </div>
                     {% if not is_production %}
                     <div class="btn-group" role="group">
                         <input type="text" id="dev-agent-url" class="form-control" placeholder="Agent URL for verification (dev only)"
@@ -277,4 +294,52 @@
     });
 </script>
 {% endif %}
+
+<script>
+    const scriptRoot = '{{ request.script_root }}' || '';
+
+    function syncFromAdagents() {
+        const domainsInput = document.getElementById('publisher-domains');
+        const domains = domainsInput.value.trim();
+        const dryRunCheckbox = document.getElementById('dry-run-mode');
+        const dryRun = dryRunCheckbox.checked;
+
+        // Create form and submit
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = scriptRoot + '/tenant/{{ tenant.tenant_id }}/authorized-properties/sync-from-adagents';
+
+        if (domains) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'publisher_domains';
+            input.value = domains;
+            form.appendChild(input);
+        }
+
+        if (dryRun) {
+            const dryRunInput = document.createElement('input');
+            dryRunInput.type = 'hidden';
+            dryRunInput.name = 'dry_run';
+            dryRunInput.value = 'true';
+            form.appendChild(dryRunInput);
+        }
+
+        document.body.appendChild(form);
+        form.submit();
+    }
+
+    // Allow Enter key to trigger sync
+    document.addEventListener('DOMContentLoaded', function() {
+        const domainsInput = document.getElementById('publisher-domains');
+        if (domainsInput) {
+            domainsInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    syncFromAdagents();
+                }
+            });
+        }
+    });
+</script>
 {% endblock %}

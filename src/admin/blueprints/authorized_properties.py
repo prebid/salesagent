@@ -551,18 +551,23 @@ def verify_all_properties(tenant_id: str) -> Response:
         results = verification_service.verify_all_properties(tenant_id, agent_url)
 
         # Display results
-        if results["verified"] > 0:
-            flash(f"Successfully verified {results['verified']} properties", "success")
+        verified_count = results.get("verified", 0)
+        failed_count = results.get("failed", 0)
+        errors_list = results.get("errors", [])
 
-        if results["failed"] > 0:
-            flash(f"Failed to verify {results['failed']} properties", "warning")
+        if isinstance(verified_count, int) and verified_count > 0:
+            flash(f"Successfully verified {verified_count} properties", "success")
+
+        if isinstance(failed_count, int) and failed_count > 0:
+            flash(f"Failed to verify {failed_count} properties", "warning")
 
             # Show first few errors
-            for error in results["errors"][:5]:
-                flash(error, "error")
+            if isinstance(errors_list, list):
+                for error in errors_list[:5]:
+                    flash(error, "error")
 
-            if len(results["errors"]) > 5:
-                flash(f"... and {len(results['errors']) - 5} more errors", "error")
+                if len(errors_list) > 5:
+                    flash(f"... and {len(errors_list) - 5} more errors", "error")
 
         if results["total_checked"] == 0:
             flash("No pending properties to verify", "info")
@@ -570,6 +575,157 @@ def verify_all_properties(tenant_id: str) -> Response:
     except Exception as e:
         logger.error(f"Error in bulk verification: {e}")
         flash(f"Error verifying properties: {str(e)}", "error")
+
+    return redirect(url_for("authorized_properties.list_authorized_properties", tenant_id=tenant_id))
+
+
+@authorized_properties_bp.route("/<tenant_id>/authorized-properties/sync-from-adagents", methods=["POST"])
+@log_admin_action("sync_properties_from_adagents")
+@require_tenant_access()
+def sync_properties_from_adagents(tenant_id: str) -> Response:
+    """Sync properties and tags from publisher adagents.json files.
+
+    Fetches adagents.json from publisher domains and caches discovered
+    properties and tags in the database for use in inventory profiles and products.
+
+    Rate limit: 1 sync per tenant per 60 seconds to prevent abuse.
+    """
+    try:
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Tenant
+        from src.services.property_discovery_service import get_property_discovery_service
+
+        logger.info(f"Starting property sync from adagents.json for tenant {tenant_id}")
+
+        # Rate limiting: Check last sync time
+        with get_db_session() as session:
+            stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
+            tenant = session.scalars(stmt).first()
+
+            if tenant and isinstance(tenant.metadata, dict):
+                last_sync = tenant.metadata.get("last_property_sync")
+                if last_sync:
+                    last_sync_time = datetime.fromisoformat(last_sync)
+                    time_since_sync = datetime.now(UTC) - last_sync_time
+                    if time_since_sync < timedelta(seconds=60):
+                        remaining = 60 - int(time_since_sync.total_seconds())
+                        flash(
+                            f"Please wait {remaining} seconds before syncing again (rate limit)",
+                            "warning",
+                        )
+                        return redirect(
+                            url_for(
+                                "authorized_properties.list_authorized_properties",
+                                tenant_id=tenant_id,
+                            )
+                        )
+
+        # Get optional domain filter from form
+        publisher_domains_str = request.form.get("publisher_domains", "").strip()
+        publisher_domains = None
+        if publisher_domains_str:
+            # Parse comma-separated domains
+            publisher_domains = [d.strip() for d in publisher_domains_str.split(",") if d.strip()]
+            logger.info(f"Syncing specific domains: {publisher_domains}")
+        else:
+            logger.info("Syncing all domains from existing properties")
+
+        # Check for dry-run mode
+        dry_run = request.form.get("dry_run") == "true"
+        if dry_run:
+            logger.info("Running in DRY RUN mode - no changes will be committed")
+
+        # Run sync
+        service = get_property_discovery_service()
+        stats = service.sync_properties_from_adagents_sync(tenant_id, publisher_domains, dry_run)
+
+        # Update last sync timestamp and save sync history
+        with get_db_session() as session:
+            stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
+            tenant = session.scalars(stmt).first()
+            if tenant:
+                from sqlalchemy.orm import attributes
+
+                # Get or create metadata dict
+                if not isinstance(tenant.metadata, dict):
+                    tenant.metadata = {}  # type: ignore[assignment,misc]
+
+                metadata: dict[str, Any] = tenant.metadata  # type: ignore[assignment]
+
+                # Update last sync timestamp (rate limiting)
+                metadata["last_property_sync"] = datetime.now(UTC).isoformat()
+
+                # Save sync history (keep last 10 syncs)
+                if "property_sync_history" not in metadata:
+                    metadata["property_sync_history"] = []
+
+                sync_record = {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "user": session.info.get("user_email", "unknown"),
+                    "domains": publisher_domains or "all",
+                    "dry_run": dry_run,
+                    "stats": {
+                        "domains_synced": stats["domains_synced"],
+                        "properties_found": stats["properties_found"],
+                        "properties_created": stats["properties_created"],
+                        "properties_updated": stats["properties_updated"],
+                        "tags_found": stats["tags_found"],
+                        "tags_created": stats["tags_created"],
+                        "errors": len(stats["errors"]),
+                    },
+                }
+
+                metadata["property_sync_history"].insert(0, sync_record)
+                # Keep only last 10 syncs
+                metadata["property_sync_history"] = metadata["property_sync_history"][:10]
+
+                attributes.flag_modified(tenant, "metadata")
+                session.commit()
+
+        # Display results
+        if stats["domains_synced"] > 0:
+            if dry_run:
+                message = (
+                    f"🔍 DRY RUN: Would sync {stats['properties_found']} properties and {stats['tags_found']} tags "
+                    f"from {stats['domains_synced']} publisher domains. "
+                )
+            else:
+                message = (
+                    f"✅ Synced {stats['properties_found']} properties and {stats['tags_found']} tags "
+                    f"from {stats['domains_synced']} publisher domains. "
+                )
+
+            # Add creation/update stats
+            if stats["properties_created"] > 0:
+                action = "Would create" if dry_run else "Created"
+                message += f"{action} {stats['properties_created']} new properties. "
+            if stats["properties_updated"] > 0:
+                action = "Would update" if dry_run else "Updated"
+                message += f"{action} {stats['properties_updated']} existing properties. "
+            if stats["tags_created"] > 0:
+                action = "Would create" if dry_run else "Created"
+                message += f"{action} {stats['tags_created']} new tags."
+
+            flash(message, "info" if dry_run else "success")
+        else:
+            flash("No properties synced. Check errors below.", "warning")
+
+        # Show errors (first 5)
+        if stats["errors"]:
+            flash(f"⚠️ Encountered {len(stats['errors'])} errors during sync:", "warning")
+            for error in stats["errors"][:5]:
+                flash(f"  • {error}", "error")
+
+            if len(stats["errors"]) > 5:
+                flash(f"  ... and {len(stats['errors']) - 5} more errors", "error")
+
+    except Exception as e:
+        logger.error(f"Error syncing properties from adagents.json: {e}", exc_info=True)
+        flash(f"❌ Error syncing properties: {str(e)}", "error")
 
     return redirect(url_for("authorized_properties.list_authorized_properties", tenant_id=tenant_id))
 
