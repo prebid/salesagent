@@ -29,15 +29,32 @@ class GAMTargetingManager:
     # Supported media types
     SUPPORTED_MEDIA_TYPES = {"video", "display", "native"}
 
-    def __init__(self):
-        """Initialize targeting manager."""
-        self.geo_country_map = {}
-        self.geo_region_map = {}
-        self.geo_metro_map = {}
+    def __init__(self, tenant_id: str, gam_client: Any | None = None):
+        """Initialize targeting manager.
+
+        Args:
+            tenant_id: Tenant ID for loading adapter configuration
+            gam_client: Optional GAM client for syncing custom targeting keys
+        """
+        self.tenant_id = tenant_id
+        self.gam_client = gam_client
+        self.geo_country_map: dict[str, str] = {}
+        self.geo_region_map: dict[str, dict[str, str]] = {}
+        self.geo_metro_map: dict[str, str] = {}
+        self.axe_include_key: str | None = None
+        self.axe_exclude_key: str | None = None
+        self.axe_macro_key: str | None = None
+        self.custom_targeting_key_ids: dict[str, str] = {}  # Maps key names → GAM key IDs
         self._load_geo_mappings()
+        self._load_axe_keys()
+        self._load_custom_targeting_key_ids()
 
     def _load_geo_mappings(self):
-        """Load geo mappings from JSON file."""
+        """Load static geo mappings from JSON file on disk.
+
+        Loads AdCP country codes → GAM geo IDs from gam_geo_mappings.json.
+        This is static data that doesn't change per tenant.
+        """
         try:
             # Look for the geo mappings file relative to the adapters directory
             mapping_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "gam_geo_mappings.json")
@@ -59,6 +76,291 @@ class GAMTargetingManager:
             self.geo_country_map = {}
             self.geo_region_map = {}
             self.geo_metro_map = {}
+
+    def _load_axe_keys(self):
+        """Load tenant-specific AXE configuration from database.
+
+        Per AdCP spec, three separate keys are required:
+        - axe_include_key: For axe_include_segment targeting
+        - axe_exclude_key: For axe_exclude_segment targeting
+        - axe_macro_key: For creative macro substitution
+
+        These are adapter-agnostic and work with all ad server adapters.
+
+        **Why Standalone Function:**
+        This is separate from _load_geo_mappings() because:
+        1. Different data sources: Database (tenant-specific) vs. File (static)
+        2. Different lifecycles: Per-tenant config vs. one-time initialization
+        3. Different loading patterns: SQL query vs. JSON file read
+        4. Clear separation of concerns: Tenant config vs. static mappings
+
+        While this could be part of a generic "load_tenant_config" function,
+        keeping it separate makes it easier to understand, test, and maintain.
+        Each method has a single, clear responsibility.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AdapterConfig
+
+        try:
+            with get_db_session() as session:
+                stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
+                adapter_config = session.scalars(stmt).first()
+
+                if adapter_config:
+                    self.axe_include_key = adapter_config.axe_include_key
+                    self.axe_exclude_key = adapter_config.axe_exclude_key
+                    self.axe_macro_key = adapter_config.axe_macro_key
+
+                    logger.info(
+                        f"Loaded AXE keys for tenant {self.tenant_id}: "
+                        f"include={self.axe_include_key}, "
+                        f"exclude={self.axe_exclude_key}, "
+                        f"macro={self.axe_macro_key}"
+                    )
+                else:
+                    logger.warning(f"No adapter config found for tenant {self.tenant_id}")
+        except Exception as e:
+            logger.warning(f"Failed to load AXE keys from config: {e}")
+
+    def _load_custom_targeting_key_ids(self):
+        """Load custom targeting key ID mappings from database.
+
+        This loads the cached mapping of key names → GAM key IDs from adapter_config.custom_targeting_keys.
+        The mapping must be synced from GAM using sync_custom_targeting_keys() before use.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AdapterConfig
+
+        try:
+            with get_db_session() as session:
+                stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
+                adapter_config = session.scalars(stmt).first()
+
+                if adapter_config and adapter_config.custom_targeting_keys:
+                    self.custom_targeting_key_ids = adapter_config.custom_targeting_keys
+                    logger.info(
+                        f"Loaded {len(self.custom_targeting_key_ids)} custom targeting key ID mappings for tenant {self.tenant_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"No custom targeting key mappings found for tenant {self.tenant_id}. "
+                        "Run sync_custom_targeting_keys() to fetch from GAM."
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to load custom targeting key IDs: {e}")
+
+    def sync_custom_targeting_keys(self) -> dict[str, Any]:
+        """Sync custom targeting keys from GAM and store in database.
+
+        Fetches all custom targeting keys from GAM API and creates a mapping
+        of key names → key IDs. This mapping is stored in adapter_config.custom_targeting_keys.
+
+        Returns:
+            Dict with sync results:
+            {
+                "synced_keys": {"key_name": "key_id", ...},
+                "count": int,
+                "errors": [...]
+            }
+
+        Raises:
+            ValueError: If GAM client not configured
+        """
+        if not self.gam_client:
+            raise ValueError("GAM client required for syncing custom targeting keys")
+
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AdapterConfig
+
+        try:
+            # Fetch all custom targeting keys from GAM
+            custom_targeting_service = self.gam_client.GetService("CustomTargetingService")
+
+            # Create statement to get all keys
+            statement = {"query": ""}  # Empty query gets all keys
+
+            key_name_to_id: dict[str, str] = {}
+
+            # Page through results
+            offset = 0
+            limit = 500
+
+            while True:
+                statement["query"] = f"LIMIT {limit} OFFSET {offset}"
+                response = custom_targeting_service.getCustomTargetingKeysByStatement(statement)
+
+                # GAM API returns zeep objects, not dicts - check for 'results' attribute
+                if hasattr(response, "results") and response.results:
+                    for key in response.results:
+                        key_name_to_id[key.name] = str(key.id)
+
+                    total_results = getattr(response, "totalResultSetSize", 0)
+                    if offset + limit >= total_results:
+                        break
+                    offset += limit
+                else:
+                    break
+
+            # Store mapping in database
+            with get_db_session() as session:
+                stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
+                adapter_config = session.scalars(stmt).first()
+
+                if adapter_config:
+                    adapter_config.custom_targeting_keys = key_name_to_id
+                    session.commit()
+
+                    # Update in-memory cache
+                    self.custom_targeting_key_ids = key_name_to_id
+
+                    logger.info(
+                        f"Synced {len(key_name_to_id)} custom targeting keys from GAM for tenant {self.tenant_id}"
+                    )
+                else:
+                    raise ValueError(f"No adapter config found for tenant {self.tenant_id}")
+
+            return {
+                "synced_keys": key_name_to_id,
+                "count": len(key_name_to_id),
+                "errors": [],
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to sync custom targeting keys from GAM: {e}", exc_info=True)
+            return {
+                "synced_keys": {},
+                "count": 0,
+                "errors": [str(e)],
+            }
+
+    def resolve_custom_targeting_key_id(self, key_name: str) -> str:
+        """Resolve a custom targeting key name to its GAM key ID.
+
+        Args:
+            key_name: The custom targeting key name (e.g., "axe_include_segment")
+
+        Returns:
+            The GAM key ID as a string
+
+        Raises:
+            ValueError: If key name not found in mapping
+        """
+        if key_name not in self.custom_targeting_key_ids:
+            raise ValueError(
+                f"Custom targeting key '{key_name}' not found in GAM key mappings. "
+                f"Available keys: {list(self.custom_targeting_key_ids.keys())}. "
+                "Run sync_custom_targeting_keys() to update the mapping."
+            )
+
+        return self.custom_targeting_key_ids[key_name]
+
+    def _get_or_create_custom_targeting_value(self, key_id: str, value_name: str) -> int:
+        """Get or create a custom targeting value in GAM.
+
+        Args:
+            key_id: The GAM custom targeting key ID
+            value_name: The value name to look up or create
+
+        Returns:
+            The GAM custom targeting value ID
+
+        Raises:
+            ValueError: If GAM API call fails
+        """
+        if not self.gam_client:
+            raise ValueError("GAM client required for custom targeting value operations")
+
+        try:
+            custom_targeting_service = self.gam_client.GetService("CustomTargetingService")
+
+            # First, try to find existing value
+            # SECURITY: Escape single quotes to prevent SQL-style injection in SOAP query
+            escaped_value_name = value_name.replace("'", "\\'")
+            statement = {"query": f"WHERE customTargetingKeyId = {key_id} AND name = '{escaped_value_name}'"}
+            response = custom_targeting_service.getCustomTargetingValuesByStatement(statement)
+
+            if hasattr(response, "results") and response.results:
+                # Found existing value
+                value_id = int(response.results[0].id)
+                logger.info(f"Found existing custom targeting value: {value_name} (ID: {value_id})")
+                return value_id
+
+            # Value doesn't exist, create it
+            value = {
+                "customTargetingKeyId": int(key_id),
+                "name": value_name,
+                "displayName": value_name,
+                "matchType": "EXACT",  # Exact match for AXE segment values
+            }
+
+            created_values = custom_targeting_service.createCustomTargetingValues([value])
+            if created_values:
+                value_id = int(created_values[0]["id"])
+                logger.info(f"Created custom targeting value: {value_name} (ID: {value_id})")
+                return value_id
+
+            raise ValueError(f"Failed to create custom targeting value '{value_name}' for key ID {key_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to get/create custom targeting value '{value_name}': {e}", exc_info=True)
+            raise ValueError(f"Custom targeting value lookup/creation failed for '{value_name}': {e}")
+
+    def _build_custom_targeting_structure(self, custom_targeting_dict: dict[str, str]) -> dict[str, Any]:
+        """Convert simple custom targeting dict to GAM CustomCriteria structure.
+
+        GAM API expects custom targeting in this format:
+        {
+            "logicalOperator": "AND",
+            "children": [
+                {
+                    "keyId": "123456",
+                    "operator": "IS",
+                    "valueIds": [],
+                    "valueNames": ["value_name"]
+                }
+            ]
+        }
+
+        Our input dict format: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
+
+        Args:
+            custom_targeting_dict: Dict mapping GAM key IDs to value names
+                Keys can have "NOT_" prefix for negative targeting
+
+        Returns:
+            GAM CustomCriteria structure
+        """
+        children = []
+
+        for key, value_name in custom_targeting_dict.items():
+            # Check for negative targeting (NOT_ prefix)
+            is_negative = key.startswith("NOT_")
+            key_id = key[4:] if is_negative else key  # Remove NOT_ prefix
+
+            # Build custom criteria object
+            # For custom targeting values, GAM requires value IDs (not names)
+            # We need to create or lookup the value ID for the value name
+            value_id = self._get_or_create_custom_targeting_value(key_id, value_name)
+
+            criteria = {
+                "xsi_type": "CustomCriteria",  # Explicit type for zeep SOAP serialization
+                "keyId": int(key_id),  # GAM expects integer key ID
+                "operator": "IS_NOT" if is_negative else "IS",
+                "valueIds": [value_id],  # Custom targeting value ID
+            }
+            children.append(criteria)
+
+        return {
+            "xsi_type": "CustomCriteriaSet",  # Explicit type for zeep
+            "logicalOperator": "AND",
+            "children": children,
+        }
 
     def _lookup_region_id(self, region_code: str) -> str | None:
         """Look up region ID across all countries.
@@ -271,12 +573,65 @@ class GAMTargetingManager:
         # AEE signal integration via key-value pairs (managed-only)
         if targeting_overlay.key_value_pairs:
             logger.info("Adding AEE signals to GAM key-value targeting")
-            for key, value in targeting_overlay.key_value_pairs.items():
-                custom_targeting[key] = value
-                logger.info(f"  {key}: {value}")
+            for key_name, value in targeting_overlay.key_value_pairs.items():
+                # Resolve key name to GAM key ID
+                try:
+                    key_id = self.resolve_custom_targeting_key_id(key_name)
+                    custom_targeting[key_id] = value
+                    logger.info(f"  {key_name} (ID: {key_id}): {value}")
+                except ValueError as e:
+                    logger.error(f"Failed to resolve custom targeting key '{key_name}': {e}")
+                    raise
+
+        # AXE segment targeting (AdCP 3.0.3 axe_include_segment/axe_exclude_segment)
+        # Per AdCP spec, three separate keys are required for include, exclude, and macro segments
+        if targeting_overlay.axe_include_segment:
+            if not self.axe_include_key:
+                raise ValueError(
+                    "AXE include segment targeting requested but axe_include_key not configured. "
+                    "Configure AXE keys in tenant adapter settings to support this targeting."
+                )
+            # Resolve key name to GAM key ID
+            try:
+                key_id = self.resolve_custom_targeting_key_id(self.axe_include_key)
+                custom_targeting[key_id] = targeting_overlay.axe_include_segment
+                logger.info(
+                    f"Adding AXE include segment targeting: {self.axe_include_key} (ID: {key_id})={targeting_overlay.axe_include_segment}"
+                )
+            except ValueError as e:
+                logger.error(f"Failed to resolve AXE include key '{self.axe_include_key}': {e}")
+                raise ValueError(
+                    f"AXE include key '{self.axe_include_key}' not found in GAM. "
+                    "Create the custom targeting key in GAM UI and sync using 'Sync Custom Targeting Keys' button."
+                ) from e
+
+        if targeting_overlay.axe_exclude_segment:
+            if not self.axe_exclude_key:
+                raise ValueError(
+                    "AXE exclude segment targeting requested but axe_exclude_key not configured. "
+                    "Configure AXE keys in tenant adapter settings to support this targeting."
+                )
+            # Resolve key name to GAM key ID
+            try:
+                key_id = self.resolve_custom_targeting_key_id(self.axe_exclude_key)
+                # GAM supports negative targeting via NOT_ prefix on the KEY ID
+                exclude_key_id = f"NOT_{key_id}"
+                custom_targeting[exclude_key_id] = targeting_overlay.axe_exclude_segment
+                logger.info(
+                    f"Adding AXE exclude segment targeting: {self.axe_exclude_key} (ID: {key_id}, negated)={targeting_overlay.axe_exclude_segment}"
+                )
+            except ValueError as e:
+                logger.error(f"Failed to resolve AXE exclude key '{self.axe_exclude_key}': {e}")
+                raise ValueError(
+                    f"AXE exclude key '{self.axe_exclude_key}' not found in GAM. "
+                    "Create the custom targeting key in GAM UI and sync using 'Sync Custom Targeting Keys' button."
+                ) from e
 
         if custom_targeting:
-            gam_targeting["customTargeting"] = custom_targeting
+            # Convert simple dict to GAM CustomCriteria structure
+            # GAM expects: {logicalOperator, children: [{keyId, operator, valueIds, valueNames}]}
+            # Our dict: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
+            gam_targeting["customTargeting"] = self._build_custom_targeting_structure(custom_targeting)
 
         # Audience segment targeting
         # Map AdCP audiences_any_of and signals to GAM audience segment IDs

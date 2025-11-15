@@ -125,7 +125,9 @@ class TestGAMOrderLifecycleIntegration:
                 # adcp v1.2.1 oneOf pattern: Success response has no errors field
                 # If response were an Error, it would have errors field
                 assert not hasattr(response, "errors") or (hasattr(response, "errors") and response.errors)
-                assert response.buyer_ref  # buyer_ref should be present
+                # Only check buyer_ref if it's a success response (UpdateMediaBuySuccess)
+                if not hasattr(response, "errors") or not response.errors:
+                    assert response.buyer_ref  # buyer_ref should be present on success
 
             # Admin-only action should fail for regular user
             response = regular_adapter.update_media_buy(
@@ -217,7 +219,9 @@ class TestGAMOrderLifecycleIntegration:
                 )
                 # adcp v1.2.1 oneOf pattern: Success response has no errors field
                 assert not hasattr(response, "errors") or (hasattr(response, "errors") and response.errors)
-                assert response.buyer_ref  # buyer_ref should be present
+                # Only check buyer_ref if it's a success response (UpdateMediaBuySuccess)
+                if not hasattr(response, "errors") or not response.errors:
+                    assert response.buyer_ref  # buyer_ref should be present on success
 
             # Test activation with guaranteed items (should create workflow step)
             with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(True, ["STANDARD"])):

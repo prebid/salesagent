@@ -147,7 +147,7 @@ class GAMProductConfigService:
             return False, "implementation_config is required for GAM products"
 
         # Required fields
-        required_fields = ["line_item_type", "priority", "creative_placeholders"]
+        required_fields = ["priority", "creative_placeholders"]
 
         for field in required_fields:
             if field not in config:
@@ -158,10 +158,11 @@ class GAMProductConfigService:
         if not isinstance(priority, int) or priority < 1 or priority > 16:
             return False, "priority must be an integer between 1 and 16"
 
-        # Validate line item type
-        valid_line_item_types = ["STANDARD", "SPONSORSHIP", "NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"]
-        if config.get("line_item_type") not in valid_line_item_types:
-            return False, f"line_item_type must be one of: {', '.join(valid_line_item_types)}"
+        # Validate line item type (optional - if not provided, will be auto-selected based on pricing)
+        if "line_item_type" in config:
+            valid_line_item_types = ["STANDARD", "SPONSORSHIP", "NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"]
+            if config.get("line_item_type") not in valid_line_item_types:
+                return False, f"line_item_type must be one of: {', '.join(valid_line_item_types)}"
 
         # Validate creative placeholders
         placeholders = config.get("creative_placeholders", [])

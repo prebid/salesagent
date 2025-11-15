@@ -768,6 +768,31 @@ class AdapterConfig(Base):
     gam_manual_approval_required: Mapped[bool] = mapped_column(Boolean, default=False)
     gam_order_name_template: Mapped[str | None] = mapped_column(String(500), nullable=True)
     gam_line_item_name_template: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # AXE (Audience Exchange) custom targeting keys (AdCP spec requires separate keys for each purpose)
+    # These are adapter-agnostic and work with GAM, Kevel, Mock, or any other adapter
+    # Note: gam_axe_custom_targeting_key was removed - use the three separate keys below
+    axe_include_key: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Custom targeting key for AXE include segments (axe_include_segment) - works with all adapters",
+    )
+    axe_exclude_key: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Custom targeting key for AXE exclude segments (axe_exclude_segment) - works with all adapters",
+    )
+    axe_macro_key: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Custom targeting key for AXE creative macro segments (enable_creative_macro) - works with all adapters",
+    )
+
+    # Custom targeting key ID mappings for GAM
+    # Maps key names → GAM custom targeting key IDs (e.g., {"axe_include_segment": "123456789"})
+    # This allows the adapter to resolve key names to IDs without additional API calls
+    custom_targeting_keys: Mapped[dict] = mapped_column(JSONType, nullable=False, server_default=text("'{}'::jsonb"))
+
     # NOTE: gam_company_id (advertiser_id) is per-principal, stored in Principal.platform_mappings
 
     # Kevel

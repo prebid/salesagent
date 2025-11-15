@@ -202,7 +202,7 @@ def create_principal(tenant_id):
             db_session.commit()
 
             flash(f"Advertiser '{principal_name}' created successfully", "success")
-            return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
 
     except Exception as e:
         logger.error(f"Error creating principal: {e}", exc_info=True)
@@ -210,10 +210,101 @@ def create_principal(tenant_id):
         return redirect(request.url)
 
 
+@principals_bp.route("/principals/<principal_id>/edit", methods=["GET", "POST"])
+@require_tenant_access()
+@log_admin_action(
+    "edit_principal",
+    extract_details=lambda r, **kw: {"principal_id": kw.get("principal_id")} if request.method == "POST" else {},
+)
+def edit_principal(tenant_id, principal_id):
+    """Edit an existing principal - reuses create_principal.html template."""
+    if request.method == "GET":
+        with get_db_session() as db_session:
+            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if not tenant:
+                flash("Tenant not found", "error")
+                return redirect(url_for("core.index"))
+
+            principal = db_session.scalars(
+                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+            ).first()
+            if not principal:
+                flash("Advertiser not found", "error")
+                return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+
+            # Check if GAM is configured
+            has_gam = False
+            if tenant.ad_server == "google_ad_manager":
+                has_gam = True
+            elif tenant.adapter_config and tenant.adapter_config.adapter_type == "google_ad_manager":
+                has_gam = True
+
+            # Extract existing GAM advertiser ID if present
+            existing_gam_id = None
+            if principal.platform_mappings:
+                mappings = principal.platform_mappings if isinstance(principal.platform_mappings, dict) else {}
+                gam_mapping = mappings.get("google_ad_manager", {})
+                existing_gam_id = gam_mapping.get("advertiser_id")
+
+            return render_template(
+                "create_principal.html",
+                tenant_id=tenant_id,
+                tenant_name=tenant.name,
+                has_gam=has_gam,
+                edit_mode=True,
+                principal=principal,
+                existing_gam_id=existing_gam_id,
+            )
+
+    # POST - Update the principal
+    try:
+        with get_db_session() as db_session:
+            principal = db_session.scalars(
+                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+            ).first()
+            if not principal:
+                flash("Advertiser not found", "error")
+                return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+
+            # Update name if provided
+            principal_name = request.form.get("name", "").strip()
+            if principal_name:
+                principal.name = principal_name
+
+            # Build platform mappings from scratch (don't preserve old mappings)
+            platform_mappings = {}
+
+            # GAM advertiser mapping
+            gam_advertiser_id = request.form.get("gam_advertiser_id", "").strip()
+            if gam_advertiser_id:
+                try:
+                    int(gam_advertiser_id)
+                except (ValueError, TypeError):
+                    flash("GAM Advertiser ID must be numeric", "error")
+                    return redirect(request.url)
+
+                platform_mappings["google_ad_manager"] = {
+                    "advertiser_id": gam_advertiser_id,
+                    "enabled": True,
+                }
+
+            principal.platform_mappings = platform_mappings
+            principal.updated_at = datetime.now(UTC)
+            db_session.commit()
+
+            flash(f"Advertiser '{principal.name}' updated successfully", "success")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
+
+    except Exception as e:
+        logger.error(f"Error updating principal: {e}", exc_info=True)
+        flash("Error updating advertiser", "error")
+        return redirect(request.url)
+
+
 @principals_bp.route("/principal/<principal_id>", methods=["GET"])
 @require_tenant_access()
 def get_principal(tenant_id, principal_id):
-    """Get principal details including platform mappings."""
+    """Get principal details including platform mappings (API endpoint)."""
     try:
         with get_db_session() as db_session:
             principal = db_session.scalars(
@@ -650,4 +741,33 @@ def toggle_webhook(tenant_id, principal_id, config_id):
 
     except Exception as e:
         logger.error(f"Error toggling webhook: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@principals_bp.route("/principals/<principal_id>/delete", methods=["DELETE", "POST"])
+@log_admin_action("delete_principal")
+@require_tenant_access()
+def delete_principal(tenant_id, principal_id):
+    """Delete a principal (advertiser)."""
+    try:
+        with get_db_session() as db_session:
+            # Find the principal
+            stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+            principal = db_session.scalars(stmt).first()
+
+            if not principal:
+                return jsonify({"error": "Principal not found"}), 404
+
+            principal_name = principal.name
+
+            # Delete the principal (cascades to related records)
+            db_session.delete(principal)
+            db_session.commit()
+
+            logger.info(f"Deleted principal {principal_id} ({principal_name}) from tenant {tenant_id}")
+
+            return jsonify({"success": True, "message": f"Principal '{principal_name}' deleted successfully"})
+
+    except Exception as e:
+        logger.error(f"Error deleting principal: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500

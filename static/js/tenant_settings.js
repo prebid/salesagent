@@ -409,9 +409,20 @@ function saveManualToken() {
 
 // Save GAM configuration
 function saveGAMConfig() {
-    const networkCode = document.getElementById('gam_network_code').value;
-    const refreshToken = document.getElementById('gam_refresh_token').value;
-    const traffickerId = document.getElementById('gam_trafficker_id').value;
+    // Check if GAM form fields exist (defensive check for wrong adapter page)
+    const networkCodeField = document.getElementById('gam_network_code');
+    const refreshTokenField = document.getElementById('gam_refresh_token');
+    const traffickerIdField = document.getElementById('gam_trafficker_id');
+
+    if (!networkCodeField || !refreshTokenField) {
+        console.error('GAM configuration fields not found - are you on the GAM adapter page?');
+        alert('Error: GAM configuration fields not available. Please select Google Ad Manager adapter first.');
+        return;
+    }
+
+    const networkCode = networkCodeField.value;
+    const refreshToken = refreshTokenField.value;
+    const traffickerId = traffickerIdField?.value || '';
     const orderNameTemplate = (document.getElementById('gam_order_name_template') || document.getElementById('order_name_template'))?.value || '';
     const lineItemNameTemplate = (document.getElementById('gam_line_item_name_template') || document.getElementById('line_item_name_template'))?.value || '';
 
@@ -559,6 +570,13 @@ function configureGAM() {
 
 // Test GAM connection
 function testGAMConnection() {
+    const networkCodeField = document.getElementById('gam_network_code');
+
+    if (!networkCodeField) {
+        alert('Error: GAM network code field not available. Please select Google Ad Manager adapter first.');
+        return;
+    }
+
     const button = document.querySelector('button[onclick="testGAMConnection()"]');
     const originalText = button.textContent;
     button.disabled = true;
@@ -570,7 +588,7 @@ function testGAMConnection() {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            network_code: document.getElementById('gam_network_code').value
+            network_code: networkCodeField.value
         })
     })
     .then(response => response.json())
@@ -588,6 +606,38 @@ function testGAMConnection() {
         button.disabled = false;
         button.textContent = originalText;
         alert('❌ Error: ' + error.message);
+    });
+}
+
+// Edit GAM configuration (clear existing config to show form)
+function editGAMConfig() {
+    if (!confirm('This will allow you to reconfigure your GAM settings. Continue?')) {
+        return;
+    }
+
+    // Clear network code from database to trigger form display
+    fetch(`${config.scriptName}/tenant/${config.tenantId}/settings/adapter`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            adapter: 'google_ad_manager',
+            gam_network_code: '',  // Clear to trigger reconfiguration
+            action: 'edit_config'
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Reload page to show configuration form
+            location.reload();
+        } else {
+            alert('Error: ' + (data.error || data.message || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        alert('Error: ' + error.message);
     });
 }
 
@@ -1326,11 +1376,12 @@ function displayPrincipalMappingsForm(principal) {
                 </label>
             </div>
             <div id="gam_config" style="${gamMapping.enabled ? '' : 'display: none;'}">
-                <label for="gam_advertiser_id" class="form-label">GAM Advertiser ID</label>
-                <input type="text" class="form-control" id="gam_advertiser_id"
-                       value="${gamMapping.advertiser_id || ''}"
-                       placeholder="Enter GAM advertiser/company ID">
-                <small class="form-text text-muted">The GAM company/advertiser ID (numeric)</small>
+                <label for="gam_advertiser_select" class="form-label">GAM Advertiser</label>
+                <select class="form-select" id="gam_advertiser_select" style="width: 100%;">
+                    ${gamMapping.advertiser_id ? `<option value="${gamMapping.advertiser_id}" selected>${gamMapping.advertiser_id}</option>` : ''}
+                </select>
+                <small class="form-text text-muted">Search for a GAM advertiser by name or ID</small>
+                <input type="hidden" id="gam_advertiser_id" value="${gamMapping.advertiser_id || ''}">
             </div>
         </div>
         <hr>
@@ -1356,6 +1407,57 @@ function displayPrincipalMappingsForm(principal) {
     document.getElementById('gam_enabled').addEventListener('change', function() {
         document.getElementById('gam_config').style.display = this.checked ? 'block' : 'none';
     });
+
+    // Initialize Select2 for GAM advertiser dropdown (same as create_principal.html)
+    const selectElement = $('#gam_advertiser_select');
+    selectElement.select2({
+        placeholder: 'Search for a GAM Advertiser...',
+        allowClear: true,
+        minimumInputLength: 0,
+        ajax: {
+            url: `${config.scriptName}/tenant/${config.tenantId}/api/gam/get-advertisers`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            delay: 250,
+            data: function(params) {
+                return JSON.stringify({
+                    search: params.term || '',
+                    limit: 100,
+                    fetch_all: false
+                });
+            },
+            processResults: function(data) {
+                if (data.error) {
+                    return { results: [] };
+                }
+                const results = data.advertisers.map(advertiser => ({
+                    id: advertiser.id,
+                    text: advertiser.name
+                }));
+                return { results: results };
+            },
+            transport: function(params, success, failure) {
+                const request = fetch(params.url, {
+                    method: params.type,
+                    headers: params.headers,
+                    credentials: 'same-origin',
+                    body: params.data
+                });
+                request.then(response => response.json()).then(success).catch(failure);
+                return request;
+            }
+        }
+    });
+
+    // Update hidden field when selection changes
+    selectElement.on('select2:select', function(e) {
+        document.getElementById('gam_advertiser_id').value = e.params.data.id;
+    });
+    selectElement.on('select2:clear', function() {
+        document.getElementById('gam_advertiser_id').value = '';
+    });
 }
 
 // Save principal platform mappings
@@ -1366,9 +1468,16 @@ function savePrincipalMappings() {
     const platformMappings = {};
 
     // GAM mapping
-    const gamEnabled = document.getElementById('gam_enabled').checked;
-    if (gamEnabled) {
-        const gamAdvertiserId = document.getElementById('gam_advertiser_id').value.trim();
+    const gamEnabledField = document.getElementById('gam_enabled');
+    if (gamEnabledField && gamEnabledField.checked) {
+        const gamAdvertiserIdField = document.getElementById('gam_advertiser_id');
+        if (!gamAdvertiserIdField) {
+            console.error('GAM advertiser ID field not found');
+            alert('Error: GAM configuration fields not available');
+            return;
+        }
+
+        const gamAdvertiserId = gamAdvertiserIdField.value.trim();
         if (gamAdvertiserId) {
             platformMappings.google_ad_manager = {
                 advertiser_id: gamAdvertiserId,

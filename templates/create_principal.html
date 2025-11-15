@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}Add Advertiser - Sales Agent Admin{% endblock %}
+{% block title %}{{ 'Edit' if edit_mode else 'Add' }} Advertiser - Sales Agent Admin{% endblock %}
 
 {% block content %}
 <div class="card" style="max-width: 600px; margin: 0 auto;">
-    <h2>Add New Advertiser</h2>
+    <h2>{{ 'Edit Advertiser' if edit_mode else 'Add New Advertiser' }}</h2>
 
     {% if error %}
     <div class="alert alert-error">{{ error }}</div>
@@ -23,31 +23,29 @@
                    pattern="[a-zA-Z0-9_-]+"
                    placeholder="e.g., nike, coca_cola, ford_motors"
                    title="Only letters, numbers, underscores, and hyphens allowed"
-                   value="{{ form_data.principal_id if form_data else '' }}"
+                   value="{{ principal.principal_id if edit_mode else (form_data.principal_id if form_data else '') }}"
+                   {{ 'readonly' if edit_mode else '' }}
                    class="{{ 'error' if errors and 'principal_id' in errors else '' }}">
-            <small>A unique identifier for this advertiser. Use lowercase with underscores.</small>
+            <small>A unique identifier for this advertiser. Use lowercase with underscores.{% if edit_mode %} (Cannot be changed){% endif %}</small>
         </div>
 
         <div class="form-group">
             <label for="name">Advertiser Name</label>
             <input type="text" id="name" name="name" required
                    placeholder="e.g., Nike Corporation"
-                   value="{{ form_data.name if form_data else '' }}"
+                   value="{{ principal.name if edit_mode else (form_data.name if form_data else '') }}"
                    class="{{ 'error' if errors and 'name' in errors else '' }}">
             <small>The advertiser's company name as it will appear in reports.</small>
         </div>
 
         {% if has_gam %}
-        <div class="alert alert-info" style="margin: 1rem 0;">
-            <strong>ℹ️ Note:</strong> This tenant uses Google Ad Manager. All campaigns will be executed through GAM and will write to your GAM network.
-        </div>
         <div class="form-group">
             <label for="gam_advertiser_id">GAM Advertiser <span style="color: red;">*</span></label>
             <select id="gam_advertiser_id" name="gam_advertiser_id" required
                     class="{{ 'error' if errors and 'gam_advertiser_id' in errors else '' }}">
                 <option value="">Loading advertisers...</option>
             </select>
-            <small>Select which advertiser company this is in Google Ad Manager.</small>
+            <small>All campaigns for this advertiser will be created under this GAM advertiser account.</small>
             <div id="advertiser-loading-error" style="display: none; color: red; margin-top: 0.5rem;"></div>
         </div>
         {% else %}
@@ -61,19 +59,17 @@
             <h4 style="margin-top: 0;">What happens next?</h4>
             <ol style="margin: 0.5rem 0; padding-left: 1.5rem;">
                 <li>A secure API token will be generated for this advertiser</li>
+                <li>Share the API token with the advertiser to enable programmatic campaign access</li>
                 {% if has_gam %}
-                <li>The advertiser will be linked to their GAM account</li>
-                <li><strong>All campaigns will write to your GAM network</strong> - this is not a test environment</li>
+                <li>When they create campaigns via the API, orders and line items will be created in GAM</li>
                 {% else %}
-                <li>This advertiser will use the Mock adapter for testing (no real API calls)</li>
+                <li>Campaigns will use the Mock adapter (no real ad server API calls)</li>
                 {% endif %}
-                <li>Share the API token with the advertiser to access the MCP API</li>
-                <li>The advertiser can create and manage campaigns programmatically</li>
             </ol>
         </div>
 
         <div style="display: flex; gap: 1rem;">
-            <button type="submit" class="btn">Add Advertiser</button>
+            <button type="submit" class="btn">{{ 'Update Advertiser' if edit_mode else 'Add Advertiser' }}</button>
             <a href="/tenant/{{ tenant_id }}" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
@@ -203,9 +199,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Restore previous selection if form was reloaded with errors
-    {% if form_data and form_data.gam_advertiser_id %}
+    // Restore previous selection if form was reloaded with errors OR in edit mode
+    {% if (form_data and form_data.gam_advertiser_id) or (edit_mode and existing_gam_id) %}
     // Need to fetch the advertiser name to display it
+    const advertiserId = '{{ existing_gam_id if edit_mode else form_data.gam_advertiser_id }}';
     fetch('{{ script_name }}/tenant/{{ tenant_id }}/api/gam/get-advertisers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -218,10 +215,13 @@ document.addEventListener('DOMContentLoaded', function() {
     })
     .then(response => response.json())
     .then(data => {
-        const previousAdvertiser = data.advertisers.find(a => a.id === '{{ form_data.gam_advertiser_id }}');
+        // Compare as strings to handle type mismatches (DB stores strings, API might return numbers)
+        const previousAdvertiser = data.advertisers.find(a => String(a.id) === String(advertiserId));
         if (previousAdvertiser) {
             const option = new Option(previousAdvertiser.name, previousAdvertiser.id, true, true);
             selectElement.append(option).trigger('change');
+        } else {
+            console.warn('Could not find advertiser with ID:', advertiserId, 'in', data.advertisers.length, 'results');
         }
     })
     .catch(error => {

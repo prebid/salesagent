@@ -985,8 +985,8 @@ function searchInventory() {
     if (inventoryType) params.append('type', inventoryType);
     if (status) params.append('status', status);
 
-    // Note: inventory search endpoint may not exist yet - keeping as manual URL
-    fetch(`/api/tenant/${tenantId}/inventory/search?${params.toString()}`, {
+    // Use scriptRoot for proxy deployment support
+    fetch(scriptRoot + `/api/tenant/${tenantId}/inventory/search?${params.toString()}`, {
         credentials: 'same-origin'
     })
         .then(response => {
@@ -1098,6 +1098,7 @@ function createProfileFromSelection() {
 }
 
 // Format selection functions are now handled by the inventory_profile_editor.html component
+
 </script>
 
 {% endblock %}

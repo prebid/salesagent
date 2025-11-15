@@ -274,14 +274,9 @@ def update_adapter(tenant_id):
         # Support both JSON (from our frontend) and form data (from tests)
         if request.is_json:
             new_adapter = request.json.get("adapter")
+            logger.info(f"update_adapter received JSON payload: {request.json}")
         else:
             new_adapter = request.form.get("adapter")
-
-        if not new_adapter:
-            if request.is_json:
-                return jsonify({"success": False, "error": "No adapter selected"}), 400
-            flash("No adapter selected", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
 
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -290,6 +285,15 @@ def update_adapter(tenant_id):
                     return jsonify({"success": False, "error": "Tenant not found"}), 404
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
+
+            # If no adapter specified, use current adapter (for updating config only)
+            if not new_adapter:
+                new_adapter = tenant.ad_server
+                if not new_adapter:
+                    if request.is_json:
+                        return jsonify({"success": False, "error": "No adapter configured"}), 400
+                    flash("No adapter configured", "error")
+                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
 
             # Update or create adapter config
             adapter_config_obj = tenant.adapter_config
@@ -302,6 +306,32 @@ def update_adapter(tenant_id):
 
                 adapter_config_obj = AdapterConfig(tenant_id=tenant_id, adapter_type=new_adapter)
                 db_session.add(adapter_config_obj)
+
+            # Extract AXE keys (adapter-agnostic, work for all adapters)
+            if request.is_json:
+                # Three separate AXE keys per AdCP spec
+                axe_include_key = (
+                    request.json.get("axe_include_key", "").strip() if request.json.get("axe_include_key") else None
+                )
+                axe_exclude_key = (
+                    request.json.get("axe_exclude_key", "").strip() if request.json.get("axe_exclude_key") else None
+                )
+                axe_macro_key = (
+                    request.json.get("axe_macro_key", "").strip() if request.json.get("axe_macro_key") else None
+                )
+            else:
+                # Three separate AXE keys per AdCP spec
+                axe_include_key = request.form.get("axe_include_key", "").strip() or None
+                axe_exclude_key = request.form.get("axe_exclude_key", "").strip() or None
+                axe_macro_key = request.form.get("axe_macro_key", "").strip() or None
+
+            # Update AXE keys (adapter-agnostic)
+            if axe_include_key is not None:
+                adapter_config_obj.axe_include_key = axe_include_key
+            if axe_exclude_key is not None:
+                adapter_config_obj.axe_exclude_key = axe_exclude_key
+            if axe_macro_key is not None:
+                adapter_config_obj.axe_macro_key = axe_macro_key
 
             # Handle adapter-specific configuration
             if new_adapter == "google_ad_manager":

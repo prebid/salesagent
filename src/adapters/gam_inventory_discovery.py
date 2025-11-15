@@ -387,20 +387,30 @@ class GAMInventoryDiscovery:
         # 2. There are usually few labels per network
         # 3. The fetch is fast
 
-        while True:
-            response = label_service.getLabelsByStatement(statement_builder.ToStatement())
+        try:
+            while True:
+                response = label_service.getLabelsByStatement(statement_builder.ToStatement())
 
-            if "results" in response and response["results"]:
-                for gam_label in response["results"]:
-                    # Convert SUDS object to dictionary
-                    gam_label_dict = serialize_object(gam_label)
-                    label = Label.from_gam_object(gam_label_dict)
-                    discovered_labels.append(label)
-                    self.labels[label.id] = label
+                if "results" in response and response["results"]:
+                    for gam_label in response["results"]:
+                        # Convert SUDS object to dictionary
+                        gam_label_dict = serialize_object(gam_label)
+                        label = Label.from_gam_object(gam_label_dict)
+                        discovered_labels.append(label)
+                        self.labels[label.id] = label
 
-                statement_builder.offset += len(response["results"])
+                    statement_builder.offset += len(response["results"])
+                else:
+                    break
+        except TypeError as e:
+            # Handle googleads library bug with error parsing when no labels exist
+            # Error: "argument should be integer or bytes-like object, not 'str'"
+            # This happens when GAM returns a SOAP fault and googleads library fails to parse it
+            if "argument should be integer or bytes-like object" in str(e):
+                logger.info("No labels found in GAM account (or empty result set)")
+                return []
             else:
-                break
+                raise
 
         logger.info(f"Discovered {len(discovered_labels)} labels")
         return discovered_labels

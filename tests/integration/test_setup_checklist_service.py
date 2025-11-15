@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from src.core.database.models import (
+    AdapterConfig,
     AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
@@ -429,6 +430,16 @@ class TestSetupChecklistService:
                 tenant_id=tenant_ids[2], currency_code="USD", min_package_budget=0.0, max_daily_package_spend=10000.0
             )
             db_session.add(currency3)
+
+            # Add adapter config with AXE keys for tenant 3 (recommended for complete setup)
+            adapter_config3 = AdapterConfig(
+                tenant_id=tenant_ids[2],
+                adapter_type="mock",
+                axe_include_key="axe_include_segment",
+                axe_exclude_key="axe_exclude_segment",
+                axe_macro_key="axe_macro_segment",
+            )
+            db_session.add(adapter_config3)
 
             property3 = AuthorizedProperty(
                 property_id="prop_bulk_3",

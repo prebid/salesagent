@@ -23,18 +23,32 @@ def targeting_browser(tenant_id):
     """Display targeting browser page."""
 
     with get_db_session() as db_session:
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        row = (tenant.tenant_id, tenant.name) if tenant else None
-        if not row:
+        tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant_obj:
             return "Tenant not found", 404
 
-    tenant = {"tenant_id": row[0], "name": row[1]}
+        # Get adapter config for AXE keys
+        adapter_config_dict = {}
+        if tenant_obj.adapter_config:
+            adapter_config_dict = {
+                "axe_include_key": tenant_obj.adapter_config.axe_include_key or "",
+                "axe_exclude_key": tenant_obj.adapter_config.axe_exclude_key or "",
+                "axe_macro_key": tenant_obj.adapter_config.axe_macro_key or "",
+            }
+
+    # Pass tenant data including ad_server (needed for AXE key save)
+    tenant = {
+        "tenant_id": tenant_obj.tenant_id,
+        "name": tenant_obj.name,
+        "ad_server": tenant_obj.ad_server or "",
+    }
 
     return render_template(
         "targeting_browser.html",
         tenant=tenant,
         tenant_id=tenant_id,
-        tenant_name=row[1],
+        tenant_name=tenant_obj.name,
+        adapter_config=adapter_config_dict,
     )
 
 

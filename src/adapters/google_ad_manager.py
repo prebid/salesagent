@@ -139,7 +139,7 @@ class GoogleAdManager(AdServerAdapter):
                     logger.warning(f"Could not auto-detect trafficker_id: {e}")
 
             # Initialize manager components
-            self.targeting_manager = GAMTargetingManager()
+            self.targeting_manager = GAMTargetingManager(tenant_id or "", gam_client=self.client)
 
             # Initialize orders manager (advertiser_id/trafficker_id optional for query operations)
             self.orders_manager = GAMOrdersManager(self.client_manager, self.advertiser_id, self.trafficker_id, dry_run)
@@ -166,7 +166,7 @@ class GoogleAdManager(AdServerAdapter):
             self.log("[yellow]Running in dry-run mode - GAM client not initialized[/yellow]")
 
             # Initialize managers for dry-run mode (they can work without real client)
-            self.targeting_manager = GAMTargetingManager()
+            self.targeting_manager = GAMTargetingManager(tenant_id or "")
 
             # Initialize orders manager in dry-run mode
             self.orders_manager = GAMOrdersManager(None, self.advertiser_id, self.trafficker_id, dry_run=True)  # type: ignore[arg-type]
@@ -637,6 +637,9 @@ class GoogleAdManager(AdServerAdapter):
             )
             self.log(f"✓ Created {len(line_item_ids)} line items")
 
+            # NOTE: platform_line_item_id persistence is handled by media_buy_create.py
+            # after response object is returned. See CreateMediaBuySuccess._platform_line_item_ids mapping.
+
             # Approve the order now that it has line items
             # GAM requires line items to exist before an order can be APPROVED
             # Try once - if forecasting not ready, start background task
@@ -745,13 +748,31 @@ class GoogleAdManager(AdServerAdapter):
 
                 package_responses.append(guaranteed_package_dict)
 
-            return CreateMediaBuySuccess(
+            # Create response and attach platform_line_item_id mapping for database persistence
+            # This mapping is used by media_buy_create.py to update MediaPackage records
+            response = CreateMediaBuySuccess(
                 buyer_ref=request.buyer_ref or "",
                 media_buy_id=order_id,
                 creative_deadline=None,
                 workflow_step_id=step_id,
                 packages=package_responses,
             )
+
+            # Store platform_line_item_id mapping as a non-standard attribute
+            # This survives Pydantic validation since it's set after construction
+            platform_line_item_ids = {}
+            for pkg_dict in package_responses:
+                if "package_id" in pkg_dict and "platform_line_item_id" in pkg_dict:
+                    platform_line_item_ids[pkg_dict["package_id"]] = pkg_dict["platform_line_item_id"]
+
+            self.log(f"[DEBUG] Guaranteed path: Created platform_line_item_ids mapping: {platform_line_item_ids}")
+
+            # Attach to response object (bypass Pydantic validation)
+            object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
+            self.log("[DEBUG] Attached _platform_line_item_ids to response object")
+            self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
+
+            return response
 
         # Build package responses with ALL package data + line_item_ids for creative association
         package_responses = []
@@ -801,9 +822,27 @@ class GoogleAdManager(AdServerAdapter):
 
             package_responses.append(final_package_dict)
 
-        return CreateMediaBuySuccess(
+        # Create response and store platform_line_item_id mapping for database persistence
+        # This mapping is used by media_buy_create.py to update MediaPackage records
+        response = CreateMediaBuySuccess(
             buyer_ref=request.buyer_ref or "", media_buy_id=order_id, creative_deadline=None, packages=package_responses
         )
+
+        # Store platform_line_item_id mapping as a non-standard attribute
+        # This survives Pydantic validation since it's set after construction
+        platform_line_item_ids = {}
+        for pkg_dict in package_responses:
+            if "package_id" in pkg_dict and "platform_line_item_id" in pkg_dict:
+                platform_line_item_ids[pkg_dict["package_id"]] = pkg_dict["platform_line_item_id"]
+
+        self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
+
+        # Attach to response object (bypass Pydantic validation)
+        object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
+        self.log("[DEBUG] Attached _platform_line_item_ids to response object")
+        self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
+
+        return response
 
     def archive_order(self, order_id: str) -> bool:
         """Archive a GAM order for cleanup purposes (delegated to orders manager)."""
@@ -1069,12 +1108,296 @@ class GoogleAdManager(AdServerAdapter):
                         ],
                     )
 
-        # For allowed actions in automatic mode, return success (no errors)
-        return UpdateMediaBuySuccess(
-            media_buy_id=media_buy_id,
-            buyer_ref=buyer_ref,
-            packages=[],
-            implementation_date=today,  # Required by AdCP spec
+        # Handle package budget updates
+        if action == "update_package_budget" and package_id and budget is not None:
+            from sqlalchemy import select
+            from sqlalchemy.orm import attributes
+
+            from src.core.database.database_session import get_db_session
+            from src.core.database.models import MediaPackage
+
+            # Validate budget is positive (security: prevent negative/zero budgets)
+            if budget <= 0:
+                self.log(f"[red]Invalid budget value: {budget} (must be positive)[/red]")
+                return UpdateMediaBuyError(
+                    errors=[
+                        Error(
+                            code="invalid_budget",
+                            message=f"Budget must be positive, got {budget}",
+                            details={"budget": budget},
+                        )
+                    ],
+                )
+
+            self.log(f"[GAM] Updating package {package_id} budget to {budget} (with delivery validation)")
+
+            with get_db_session() as session:
+                # Security: Join with MediaBuy for tenant isolation
+                from src.core.database.models import MediaBuy as MediaBuyModel
+
+                stmt = (
+                    select(MediaPackage)
+                    .join(MediaBuyModel, MediaPackage.media_buy_id == MediaBuyModel.media_buy_id)
+                    .where(
+                        MediaPackage.package_id == package_id,
+                        MediaPackage.media_buy_id == media_buy_id,
+                        MediaBuyModel.tenant_id == self.tenant_id,
+                    )
+                )
+                media_package = session.scalars(stmt).first()
+
+                if not media_package:
+                    self.log(f"[red]Package {package_id} not found for media buy {media_buy_id}[/red]")
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="package_not_found",
+                                message=f"Package {package_id} not found for media buy {media_buy_id}",
+                                details=None,
+                            )
+                        ],
+                    )
+
+                # Validate budget isn't less than delivery to date
+                delivery_metrics = media_package.package_config.get("delivery_metrics", {})
+                current_spend = float(delivery_metrics.get("spend", 0))
+
+                if budget < current_spend:
+                    self.log(
+                        f"[red]Cannot set budget ${budget} below current spend ${current_spend} "
+                        f"for package {package_id}[/red]"
+                    )
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="budget_below_delivery",
+                                message=f"Cannot set budget ${budget} below current spend ${current_spend}",
+                                details={
+                                    "requested_budget": budget,
+                                    "current_spend": current_spend,
+                                    "package_id": package_id,
+                                },
+                            )
+                        ],
+                    )
+
+                # Get platform line item ID from package config
+                platform_line_item_id = media_package.package_config.get("platform_line_item_id")
+                if not platform_line_item_id:
+                    self.log(f"[red]Package {package_id} has no platform_line_item_id - cannot sync to GAM[/red]")
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="missing_platform_id",
+                                message=f"Package {package_id} has no GAM line item ID",
+                                details={"package_id": package_id},
+                            )
+                        ],
+                    )
+
+                # Get pricing model from package config for budget calculation
+                pricing_info = media_package.package_config.get("pricing", {})
+                pricing_model = pricing_info.get("model", "cpm").lower()
+                currency = pricing_info.get("currency", "USD")
+
+                # Sync budget change to GAM line item
+                self.log(f"[GAM] Syncing budget change to GAM line item {platform_line_item_id}")
+                success = self.orders_manager.update_line_item_budget(
+                    line_item_id=platform_line_item_id,
+                    new_budget=float(budget),
+                    pricing_model=pricing_model,
+                    currency=currency,
+                )
+
+                if not success:
+                    self.log(f"[red]Failed to update GAM line item {platform_line_item_id} budget[/red]")
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="gam_update_failed",
+                                message="Failed to update budget in Google Ad Manager",
+                                details={
+                                    "package_id": package_id,
+                                    "line_item_id": platform_line_item_id,
+                                },
+                            )
+                        ],
+                    )
+
+                # Update budget in package_config JSON after successful GAM sync
+                media_package.package_config["budget"] = float(budget)
+                # Flag the JSON field as modified so SQLAlchemy persists it
+                attributes.flag_modified(media_package, "package_config")
+                session.commit()
+                self.log(f"✓ Updated package {package_id} budget to ${budget} in both GAM and database")
+
+            return UpdateMediaBuySuccess(
+                media_buy_id=media_buy_id,
+                buyer_ref=buyer_ref,
+                packages=[],  # Required by AdCP spec
+                implementation_date=today,
+            )
+
+        # Handle pause/resume actions
+        if action in ["pause_package", "resume_package", "pause_media_buy", "resume_media_buy"]:
+            from sqlalchemy import select
+
+            from src.core.database.database_session import get_db_session
+            from src.core.database.models import MediaPackage
+
+            # Determine if we're pausing or resuming
+            is_pause = action.startswith("pause_")
+            new_status = "PAUSED" if is_pause else "READY"
+            action_verb = "Pausing" if is_pause else "Resuming"
+
+            # Package-level actions
+            if action in ["pause_package", "resume_package"]:
+                if not package_id:
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="missing_package_id",
+                                message=f"package_id required for {action}",
+                                details={"action": action},
+                            )
+                        ],
+                    )
+
+                with get_db_session() as session:
+                    # Security: Join with MediaBuy for tenant isolation
+                    from src.core.database.models import MediaBuy as MediaBuyModel
+
+                    stmt = (
+                        select(MediaPackage)
+                        .join(MediaBuyModel, MediaPackage.media_buy_id == MediaBuyModel.media_buy_id)
+                        .where(
+                            MediaPackage.package_id == package_id,
+                            MediaPackage.media_buy_id == media_buy_id,
+                            MediaBuyModel.tenant_id == self.tenant_id,
+                        )
+                    )
+                    media_package = session.scalars(stmt).first()
+
+                    if not media_package:
+                        return UpdateMediaBuyError(
+                            errors=[
+                                Error(
+                                    code="package_not_found",
+                                    message=f"Package {package_id} not found",
+                                    details={"package_id": package_id},
+                                )
+                            ],
+                        )
+
+                    # Get platform line item ID
+                    platform_line_item_id = media_package.package_config.get("platform_line_item_id")
+                    if not platform_line_item_id:
+                        return UpdateMediaBuyError(
+                            errors=[
+                                Error(
+                                    code="missing_platform_id",
+                                    message=f"Package {package_id} has no GAM line item ID",
+                                    details={"package_id": package_id},
+                                )
+                            ],
+                        )
+
+                    # Update status in GAM
+                    self.log(f"[GAM] {action_verb} line item {platform_line_item_id}")
+                    if is_pause:
+                        success = self.orders_manager.pause_line_item(platform_line_item_id)
+                    else:
+                        success = self.orders_manager.resume_line_item(platform_line_item_id)
+
+                    if not success:
+                        return UpdateMediaBuyError(
+                            errors=[
+                                Error(
+                                    code="gam_update_failed",
+                                    message=f"Failed to {action_verb.lower()} line item in GAM",
+                                    details={"package_id": package_id, "line_item_id": platform_line_item_id},
+                                )
+                            ],
+                        )
+
+                    self.log(f"✓ {action_verb} package {package_id} in GAM")
+
+            # Media buy-level actions (pause/resume all packages)
+            elif action in ["pause_media_buy", "resume_media_buy"]:
+                with get_db_session() as session:
+                    # Security: Join with MediaBuy for tenant isolation
+                    from src.core.database.models import MediaBuy as MediaBuyModel
+
+                    stmt = (
+                        select(MediaPackage)
+                        .join(MediaBuyModel, MediaPackage.media_buy_id == MediaBuyModel.media_buy_id)
+                        .where(MediaPackage.media_buy_id == media_buy_id, MediaBuyModel.tenant_id == self.tenant_id)
+                    )
+                    packages = session.scalars(stmt).all()
+
+                    if not packages:
+                        return UpdateMediaBuyError(
+                            errors=[
+                                Error(
+                                    code="no_packages_found",
+                                    message=f"No packages found for media buy {media_buy_id}",
+                                    details={"media_buy_id": media_buy_id},
+                                )
+                            ],
+                        )
+
+                    # Pause/resume each package's line item
+                    failed_packages = []
+                    for pkg in packages:
+                        platform_line_item_id = pkg.package_config.get("platform_line_item_id")
+                        if not platform_line_item_id:
+                            failed_packages.append({"package_id": pkg.package_id, "reason": "No GAM line item ID"})
+                            continue
+
+                        self.log(f"[GAM] {action_verb} line item {platform_line_item_id} (package {pkg.package_id})")
+                        if is_pause:
+                            success = self.orders_manager.pause_line_item(platform_line_item_id)
+                        else:
+                            success = self.orders_manager.resume_line_item(platform_line_item_id)
+
+                        if not success:
+                            failed_packages.append(
+                                {"package_id": pkg.package_id, "line_item_id": platform_line_item_id}
+                            )
+
+                    if failed_packages:
+                        return UpdateMediaBuyError(
+                            errors=[
+                                Error(
+                                    code="partial_failure",
+                                    message=f"Failed to {action_verb.lower()} some packages in GAM",
+                                    details={"failed_packages": failed_packages},
+                                )
+                            ],
+                        )
+
+                    self.log(f"✓ {action_verb} all {len(packages)} packages in media buy {media_buy_id}")
+
+            return UpdateMediaBuySuccess(
+                media_buy_id=media_buy_id,
+                buyer_ref=buyer_ref,
+                packages=[],  # Required by AdCP spec
+                implementation_date=today,
+            )
+
+        # Explicit failure for unsupported actions (no silent success)
+        self.log(f"[red]Unsupported action '{action}' for GAM adapter[/red]")
+        return UpdateMediaBuyError(
+            errors=[
+                Error(
+                    code="unsupported_action",
+                    message=f"Action '{action}' is not supported by the Google Ad Manager adapter",
+                    details={
+                        "action": action,
+                        "supported_actions": ["approve_order", "activate_order", "update_package_budget"],
+                    },
+                )
+            ],
         )
 
     def update_media_buy_performance_index(self, media_buy_id: str, package_performance: list) -> bool:

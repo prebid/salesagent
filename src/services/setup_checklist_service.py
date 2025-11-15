@@ -562,7 +562,40 @@ class SetupChecklistService:
             )
         )
 
-        # 4. Slack Integration
+        # 4. AXE Segment Keys Configuration (RECOMMENDED - part of AdCP spec)
+        # AXE (Audience Exchange) targeting is part of the AdCP protocol specification
+        # This is recommended but not required - media buys can be created without AXE targeting
+        adapter_config = tenant.adapter_config
+        has_axe_include = bool(adapter_config and adapter_config.axe_include_key)
+        has_axe_exclude = bool(adapter_config and adapter_config.axe_exclude_key)
+        has_axe_macro = bool(adapter_config and adapter_config.axe_macro_key)
+        # All three keys should be configured for full AdCP compliance
+        axe_keys_configured = has_axe_include and has_axe_exclude and has_axe_macro
+
+        axe_details = []
+        if has_axe_include:
+            axe_details.append(f"Include: {adapter_config.axe_include_key}")
+        if has_axe_exclude:
+            axe_details.append(f"Exclude: {adapter_config.axe_exclude_key}")
+        if has_axe_macro:
+            axe_details.append(f"Macro: {adapter_config.axe_macro_key}")
+
+        tasks.append(
+            SetupTask(
+                key="axe_segment_keys",
+                name="AXE Segment Keys",
+                description="Configure custom targeting keys for AXE audience segments (recommended for AdCP compliance)",
+                is_complete=axe_keys_configured,
+                action_url=f"/tenant/{self.tenant_id}/targeting",
+                details=(
+                    ", ".join(axe_details)
+                    if axe_keys_configured
+                    else f"Configure all three keys: include, exclude, macro ({len(axe_details)}/3 configured)"
+                ),
+            )
+        )
+
+        # 5. Slack Integration
         slack_webhook = tenant.slack_webhook_url
         slack_configured = bool(slack_webhook)
         tasks.append(
@@ -576,7 +609,7 @@ class SetupChecklistService:
             )
         )
 
-        # 5. Tenant CNAME (Virtual Host)
+        # 6. Tenant CNAME (Virtual Host)
         virtual_host = tenant.virtual_host
         has_custom_domain = bool(virtual_host)
         tasks.append(
@@ -859,7 +892,40 @@ class SetupChecklistService:
             )
         )
 
-        # 4. Slack Integration
+        # 4. AXE Segment Keys Configuration (RECOMMENDED - part of AdCP spec)
+        # AXE (Audience Exchange) targeting is part of the AdCP protocol specification
+        # This is recommended but not required - media buys can be created without AXE targeting
+        adapter_config = tenant.adapter_config
+        has_axe_include = bool(adapter_config and adapter_config.axe_include_key)
+        has_axe_exclude = bool(adapter_config and adapter_config.axe_exclude_key)
+        has_axe_macro = bool(adapter_config and adapter_config.axe_macro_key)
+        # All three keys should be configured for full AdCP compliance
+        axe_keys_configured = has_axe_include and has_axe_exclude and has_axe_macro
+
+        axe_details = []
+        if has_axe_include:
+            axe_details.append(f"Include: {adapter_config.axe_include_key}")
+        if has_axe_exclude:
+            axe_details.append(f"Exclude: {adapter_config.axe_exclude_key}")
+        if has_axe_macro:
+            axe_details.append(f"Macro: {adapter_config.axe_macro_key}")
+
+        tasks.append(
+            SetupTask(
+                key="axe_segment_keys",
+                name="AXE Segment Keys",
+                description="Configure custom targeting keys for AXE audience segments (recommended for AdCP compliance)",
+                is_complete=axe_keys_configured,
+                action_url=f"/tenant/{self.tenant_id}/targeting",
+                details=(
+                    ", ".join(axe_details)
+                    if axe_keys_configured
+                    else f"Configure all three keys: include, exclude, macro ({len(axe_details)}/3 configured)"
+                ),
+            )
+        )
+
+        # 5. Slack Integration
         slack_configured = bool(tenant.slack_webhook_url)
         tasks.append(
             SetupTask(
@@ -872,7 +938,7 @@ class SetupChecklistService:
             )
         )
 
-        # 5. Custom Domain
+        # 6. Custom Domain
         has_custom_domain = bool(tenant.virtual_host)
         tasks.append(
             SetupTask(

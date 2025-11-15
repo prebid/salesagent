@@ -186,6 +186,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
             data.pop("workflow_step_id", None)
 
         # Auto-handle nested Pydantic models
+        # For packages array, exclude internal platform_line_item_id from AdCP responses
         for field_name in self.__class__.model_fields:
             field_value = getattr(self, field_name, None)
             if field_value is None:
@@ -193,7 +194,11 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
 
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    # Exclude internal fields from Package objects in AdCP responses
+                    if field_name == "packages":
+                        data[field_name] = [item.model_dump(exclude={"platform_line_item_id"}) for item in field_value]
+                    else:
+                        data[field_name] = [item.model_dump() for item in field_value]
             elif isinstance(field_value, BaseModel):
                 data[field_name] = field_value.model_dump()
 
@@ -761,6 +766,10 @@ class Targeting(BaseModel):
 
     # Frequency control
     frequency_cap: FrequencyCap | None = None  # Impression limits per user/period
+
+    # AXE segment targeting (AdCP 3.0.3)
+    axe_include_segment: str | None = None  # AXE segment ID to include for targeting
+    axe_exclude_segment: str | None = None  # AXE segment ID to exclude from targeting
 
     # Connection type targeting
     connection_type_any_of: list[int] | None = None  # OpenRTB connection types
@@ -2403,6 +2412,11 @@ class Package(BaseModel):
         description="Format IDs that creative assets will be provided for this package (array of FormatId objects per AdCP v2.4)",
     )
 
+    # Internal field (NOT part of AdCP spec) - platform line item ID for update operations
+    # This is stored internally to enable budget updates, pause/resume, etc.
+    # Must be excluded from AdCP responses via model_dump(exclude={'platform_line_item_id'})
+    platform_line_item_id: str | None = Field(None, description="Internal: Platform-specific line item ID")
+
     # NEW: Pricing option selection (AdCP v2.2.0 spec - REQUIRED in package-request.json)
     pricing_option_id: str | None = Field(
         None,
@@ -2422,9 +2436,7 @@ class Package(BaseModel):
     # Internal fields (not in AdCP spec)
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy")
     media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID")
-    platform_line_item_id: str | None = Field(
-        None, description="Internal: Platform-specific line item ID for creative association"
-    )
+    # NOTE: platform_line_item_id already defined above (line 2443) - don't duplicate here
     created_at: datetime | None = Field(None, description="Internal: Creation timestamp")
     updated_at: datetime | None = Field(None, description="Internal: Last update timestamp")
     metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata")
@@ -2452,7 +2464,11 @@ class Package(BaseModel):
         return values
 
     def model_dump(self, **kwargs):
-        """Override to provide AdCP-compliant responses while preserving internal fields."""
+        """Override to provide AdCP-compliant responses while excluding internal fields.
+
+        Internal fields (platform_line_item_id, tenant_id, etc.) are excluded from AdCP responses
+        to maintain spec compliance. These fields are only used internally within the system.
+        """
         # Default to excluding internal fields for AdCP compliance
         exclude = kwargs.get("exclude", set())
         if isinstance(exclude, set):
@@ -2462,7 +2478,7 @@ class Package(BaseModel):
                 {
                     "tenant_id",
                     "media_buy_id",
-                    "platform_line_item_id",
+                    "platform_line_item_id",  # Internal field - not part of AdCP spec
                     "created_at",
                     "updated_at",
                     "metadata",
