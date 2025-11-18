@@ -4,35 +4,38 @@ Delivery Webhook Scheduler
 Sends daily delivery reports via webhooks for media buys that have configured reporting_webhook.
 This runs as a background task and sends reports when GAM data is fresh (after 4 AM PT daily).
 """
-
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+import uuid
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytz
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy
-from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+from src.core.database.models import MediaBuy, WebhookDeliveryLog, PushNotificationConfig as DBPushNotificationConfig
 from src.core.schemas import GetMediaBuyDeliveryRequest
+from src.core.tool_context import ToolContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
+# 1 hour because AdCP protocol has frequency options hourly, daily and monthly
+SLEEP_INTERVAL_SECONDS = 3600
+
 
 class DeliveryWebhookScheduler:
-    """Scheduler for sending daily delivery reports via webhooks."""
+    """Scheduler for sending delivery reports via webhooks."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.webhook_service = get_protocol_webhook_service()
         self.is_running = False
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
-    async def start(self):
+    async def start(self) -> None:
         """Start the scheduler background task."""
         async with self._lock:
             if self.is_running:
@@ -43,7 +46,7 @@ class DeliveryWebhookScheduler:
             self._task = asyncio.create_task(self._run_scheduler())
             logger.info("Delivery webhook scheduler started")
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop the scheduler background task."""
         async with self._lock:
             if not self.is_running:
@@ -58,53 +61,22 @@ class DeliveryWebhookScheduler:
                     pass
             logger.info("Delivery webhook scheduler stopped")
 
-    async def _run_scheduler(self):
-        """Main scheduler loop - runs daily after GAM data is fresh.
-
-        GAM data freezes at 3 AM PT. We run at 4 AM PT to ensure:
-        - Previous day's data is finalized (3 AM PT freeze)
-        - 1 hour buffer for processing
-        - Still early enough for morning reports
-        - Handles PST/PDT transitions automatically
-        """
+    async def _run_scheduler(self) -> None:
+        """Main scheduler loop - runs on a fixed hourly cadence."""
         while self.is_running:
             try:
-                # Calculate next run time using Pacific timezone (handles PST/PDT automatically)
-                pt_tz = pytz.timezone("America/Los_Angeles")
-                now_pt = datetime.now(pt_tz)
-
-                # Schedule for 4 AM PT (1 hour after 3 AM PT GAM freeze)
-                next_run_pt = now_pt.replace(hour=4, minute=0, second=0, microsecond=0)
-
-                # If we've passed today's run time, schedule for tomorrow
-                if now_pt >= next_run_pt:
-                    next_run_pt += timedelta(days=1)
-
-                # Convert to UTC for sleep calculation
-                next_run = next_run_pt.astimezone(pytz.UTC)
-                now = datetime.now(pytz.UTC)
-
-                # Wait until next run time
-                wait_seconds = (next_run - now).total_seconds()
-                logger.info(
-                    f"Next delivery webhook run scheduled for {next_run} UTC (in {wait_seconds/3600:.1f} hours)"
-                )
-
-                await asyncio.sleep(wait_seconds)
-
-                # Send reports for all active media buys with webhooks
-                await self._send_daily_reports()
-
+                await self._send_reports()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Error in delivery webhook scheduler: {e}", exc_info=True)
-                # Wait 1 hour before retrying on error
-                await asyncio.sleep(3600)
+            finally:
+                # Wait 1 hour before next batch, even if there was an error
+                await asyncio.sleep(SLEEP_INTERVAL_SECONDS)
 
-    async def _send_daily_reports(self):
-        """Send delivery reports for all active media buys with configured webhooks."""
-        logger.info("Starting daily delivery report webhook batch")
+    async def _send_reports(self) -> None:
+        """Send reports for all active media buys with configured webhooks."""
+        logger.info("Starting scheduled delivery report webhook batch")
 
         try:
             with get_db_session() as session:
@@ -137,7 +109,7 @@ class DeliveryWebhookScheduler:
         except Exception as e:
             logger.error(f"Error in daily delivery report batch: {e}", exc_info=True)
 
-    async def _send_report_for_media_buy(self, media_buy: Any, reporting_webhook: dict, session: Any):
+    async def _send_report_for_media_buy(self, media_buy: Any, reporting_webhook: dict, session: Any) -> None:
         """Send a delivery report for a single media buy.
 
         Args:
@@ -146,16 +118,48 @@ class DeliveryWebhookScheduler:
             session: Database session
         """
         try:
-            # Calculate reporting period (yesterday's data)
-            yesterday = datetime.now(UTC) - timedelta(days=1)
-            start_date = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date = yesterday.replace(hour=23, minute=59, second=59, microsecond=0)
+            # Determine reporting frequency from AdCP config (hourly, daily, monthly)
+            now_utc = datetime.now(UTC)
+            raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
+
+            if raw_freq != "daily":
+                logger.warning(
+                    "Skipping reporting webhook with frequency '%s' for media buy %s – "
+                    "only 'daily' frequency is supported for delivery webhooks at this time",
+                    raw_freq,
+                    media_buy.media_buy_id,
+                )
+                return
+
+            # Calculate reporting period for daily frequency: yesterday (full day)
+            yesterday = now_utc.date() - timedelta(days=1)
+            start_date_obj = yesterday
+            end_date_obj = yesterday
+
+            # Check if we've already sent a scheduled delivery_report webhook for this media buy
+            # and reporting date. We use created_at::date as the period key.
+            existing_stmt = (
+                select(WebhookDeliveryLog)
+                .where(
+                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
+                    WebhookDeliveryLog.task_type == "delivery_report",
+                    WebhookDeliveryLog.notification_type == "scheduled",
+                    WebhookDeliveryLog.status == "success",
+                    func.date(WebhookDeliveryLog.created_at) == end_date_obj,
+                )
+            )
+            existing_log = session.scalars(existing_stmt).first()
+            if existing_log:
+                logger.info(
+                    "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
+                    media_buy.media_buy_id,
+                    end_date_obj,
+                    existing_log.id,
+                )
+                return
 
             # Fetch delivery metrics
             # Create a minimal context object for the delivery call
-            import uuid
-
-            from src.core.tool_context import ToolContext
 
             context = ToolContext(
                 context_id=str(uuid.uuid4()),
@@ -167,8 +171,8 @@ class DeliveryWebhookScheduler:
 
             req = GetMediaBuyDeliveryRequest(  # type: ignore[call-arg]
                 media_buy_ids=[media_buy.media_buy_id],
-                start_date=start_date.strftime("%Y-%m-%d"),
-                end_date=end_date.strftime("%Y-%m-%d"),
+                start_date=start_date_obj.strftime("%Y-%m-%d"),
+                end_date=end_date_obj.strftime("%Y-%m-%d"),
             )
 
             delivery_response = _get_media_buy_delivery_impl(req, context)
@@ -180,7 +184,9 @@ class DeliveryWebhookScheduler:
                     from src.adapters.gam_data_freshness import validate_and_log_freshness
 
                     is_fresh = validate_and_log_freshness(
-                        delivery_response.reporting_data, media_buy.media_buy_id, target_date=yesterday
+                        delivery_response.reporting_data,
+                        media_buy.media_buy_id,
+                        target_date=datetime.combine(end_date_obj, datetime.min.time(), tzinfo=UTC),
                     )
                     if not is_fresh:
                         logger.warning(f"Skipping webhook for {media_buy.media_buy_id} - data not fresh enough")
@@ -190,10 +196,6 @@ class DeliveryWebhookScheduler:
                     logger.warning(f"Could not validate data freshness for {media_buy.media_buy_id}: {e}")
 
             # Get sequence number for this webhook (get max sequence + 1)
-            from sqlalchemy import func, select
-
-            from src.core.database.models import WebhookDeliveryLog
-
             sequence_number = 1
             try:
                 stmt = select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
@@ -205,13 +207,9 @@ class DeliveryWebhookScheduler:
             except Exception as e:
                 logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
 
-            # Calculate next_expected_at (24 hours from now at 4 AM PT)
-            import pytz
-
-            pt_tz = pytz.timezone("America/Los_Angeles")
-            now_pt = datetime.now(pt_tz)
-            next_run_pt = now_pt.replace(hour=4, minute=0, second=0, microsecond=0) + timedelta(days=1)
-            next_expected_at = next_run_pt.astimezone(pytz.UTC).isoformat()
+            # Calculate next_expected_at for daily frequency: start of next day (UTC)
+            next_day = now_utc.date() + timedelta(days=1)
+            next_expected_at = datetime.combine(next_day, datetime.min.time(), tzinfo=UTC).isoformat()
 
             # Add webhook-specific metadata to the response
             response_dict = delivery_response.model_dump()
@@ -220,6 +218,7 @@ class DeliveryWebhookScheduler:
                     "notification_type": "scheduled",
                     "sequence_number": sequence_number,
                     "next_expected_at": next_expected_at,
+                    "frequency": raw_freq,
                     "partial_data": False,  # TODO: Check for reporting_delayed status in media_buy_deliveries
                     "unavailable_count": 0,  # TODO: Count reporting_delayed/failed deliveries
                 }

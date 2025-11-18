@@ -1237,6 +1237,18 @@ async def _create_media_buy_impl(
     """
     request_start_time = time.time()
 
+    # Warn if unsupported reporting_webhook frequency is requested
+    if reporting_webhook and isinstance(reporting_webhook, dict):
+        raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
+        if raw_freq != "daily":
+            logger.warning(
+                "CreateMediaBuy requested reporting webhook frequency '%s' for buyer_ref '%s', "
+                "but only 'daily' frequency is currently supported. "
+                "Hourly and monthly reporting will be ignored until implemented.",
+                raw_freq,
+                buyer_ref,
+            )
+
     # Create request object from individual parameters (MCP-compliant)
     # Validate early with helpful error messages
 
