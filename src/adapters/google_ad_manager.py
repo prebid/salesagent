@@ -509,53 +509,27 @@ class GoogleAdManager(AdServerAdapter):
                 request, packages, start_time, end_time, media_buy_id
             )
 
-            # Build package responses with ALL package data (not just package_id)
-            # This ensures MediaPackage database records can be created properly
+            # Build package responses - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
+            # - buyer_ref (required)
+            # - package_id (required)
             package_responses = []
             for idx, package in enumerate(packages):
-                # Get matching request package for buyer_ref and other fields
+                # Get matching request package for buyer_ref
                 matching_req_package = None
                 if request.packages and idx < len(request.packages):
                     matching_req_package = request.packages[idx]
 
-                package_dict: dict[str, Any] = {
-                    "package_id": package.package_id,
-                    "product_id": package.product_id,
-                    "name": package.name,
-                    "delivery_type": package.delivery_type,
-                    "cpm": package.cpm,
-                    "impressions": package.impressions,
-                    "status": "active",  # Required by AdCP spec
-                }
-
-                # Add buyer_ref from request package if available
+                buyer_ref = "unknown"  # Default fallback
                 if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
-                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+                    buyer_ref = matching_req_package.buyer_ref or buyer_ref
 
-                # Add budget from request package if available (AdCP v1.2.1: budget is float | None)
-                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
-                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object) - convert to float
-                    if isinstance(matching_req_package.budget, (int, float)):
-                        package_dict["budget"] = float(matching_req_package.budget)
-                    elif hasattr(matching_req_package.budget, "total"):
-                        # Budget object with .total attribute
-                        package_dict["budget"] = float(matching_req_package.budget.total)
-                    elif isinstance(matching_req_package.budget, dict) and "total" in matching_req_package.budget:
-                        # Budget dict with 'total' key
-                        package_dict["budget"] = float(matching_req_package.budget["total"])
-                    else:
-                        # Fallback: assume it's a number
-                        package_dict["budget"] = float(matching_req_package.budget)
-
-                # Add targeting_overlay from package if available
-                if package.targeting_overlay:
-                    package_dict["targeting_overlay"] = dict(package.targeting_overlay)
-
-                # Add creative_ids from package if available (from uploaded inline creatives)
-                if package.creative_ids:
-                    package_dict["creative_ids"] = list(package.creative_ids)
-
-                package_responses.append(package_dict)
+                # Create minimal AdCP-compliant Package response
+                package_responses.append(
+                    {
+                        "buyer_ref": buyer_ref,
+                        "package_id": package.package_id,
+                    }
+                )
 
             if step_id:
                 return CreateMediaBuySuccess(
@@ -563,7 +537,7 @@ class GoogleAdManager(AdServerAdapter):
                     media_buy_id=media_buy_id,
                     creative_deadline=None,
                     workflow_step_id=step_id,
-                    packages=package_responses,
+                    packages=package_responses,  # type: ignore[arg-type]
                 )
             else:
                 error_msg = "Failed to create manual order workflow step"
@@ -700,53 +674,27 @@ class GoogleAdManager(AdServerAdapter):
 
             step_id = self.workflow_manager.create_activation_workflow_step(order_id, packages)
 
-            # Build package responses with ALL package data + line_item_ids for creative association
+            # Build package responses - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
+            # - buyer_ref (required)
+            # - package_id (required)
             package_responses = []
-            for idx, (package, line_item_id) in enumerate(zip(packages, line_item_ids, strict=False)):
-                # Get matching request package for buyer_ref and other fields
+            for idx, (package, _line_item_id) in enumerate(zip(packages, line_item_ids, strict=False)):
+                # Get matching request package for buyer_ref
                 matching_req_package = None
                 if request.packages and idx < len(request.packages):
                     matching_req_package = request.packages[idx]
 
-                guaranteed_package_dict: dict[str, Any] = {
-                    "package_id": package.package_id,
-                    "product_id": package.product_id,
-                    "name": package.name,
-                    "delivery_type": package.delivery_type,
-                    "cpm": package.cpm,
-                    "impressions": package.impressions,
-                    "platform_line_item_id": str(line_item_id),  # GAM line item ID for creative association
-                    "status": "active",  # Required by AdCP spec
-                }
-
-                # Add buyer_ref from request package if available
+                buyer_ref = "unknown"  # Default fallback
                 if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
-                    guaranteed_package_dict["buyer_ref"] = matching_req_package.buyer_ref
+                    buyer_ref = matching_req_package.buyer_ref or buyer_ref
 
-                # Add budget from request package if available (AdCP v1.2.1: budget is float | None)
-                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
-                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object) - convert to float
-                    if isinstance(matching_req_package.budget, (int, float)):
-                        guaranteed_package_dict["budget"] = float(matching_req_package.budget)
-                    elif hasattr(matching_req_package.budget, "total"):
-                        # Budget object with .total attribute
-                        guaranteed_package_dict["budget"] = float(matching_req_package.budget.total)
-                    elif isinstance(matching_req_package.budget, dict) and "total" in matching_req_package.budget:
-                        # Budget dict with 'total' key
-                        guaranteed_package_dict["budget"] = float(matching_req_package.budget["total"])
-                    else:
-                        # Fallback: assume it's a number
-                        guaranteed_package_dict["budget"] = float(matching_req_package.budget)
-
-                # Add targeting_overlay from package if available
-                if package.targeting_overlay:
-                    guaranteed_package_dict["targeting_overlay"] = dict(package.targeting_overlay)
-
-                # Add creative_ids from package if available (from uploaded inline creatives)
-                if package.creative_ids:
-                    guaranteed_package_dict["creative_ids"] = list(package.creative_ids)
-
-                package_responses.append(guaranteed_package_dict)
+                # Create minimal AdCP-compliant Package response
+                package_responses.append(
+                    {
+                        "buyer_ref": buyer_ref,
+                        "package_id": package.package_id,
+                    }
+                )
 
             # Create response and attach platform_line_item_id mapping for database persistence
             # This mapping is used by media_buy_create.py to update MediaPackage records
@@ -755,15 +703,15 @@ class GoogleAdManager(AdServerAdapter):
                 media_buy_id=order_id,
                 creative_deadline=None,
                 workflow_step_id=step_id,
-                packages=package_responses,
+                packages=package_responses,  # type: ignore[arg-type]
             )
 
             # Store platform_line_item_id mapping as a non-standard attribute
             # This survives Pydantic validation since it's set after construction
+            # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
             platform_line_item_ids = {}
-            for pkg_dict in package_responses:
-                if "package_id" in pkg_dict and "platform_line_item_id" in pkg_dict:
-                    platform_line_item_ids[pkg_dict["package_id"]] = pkg_dict["platform_line_item_id"]
+            for package, line_item_id in zip(packages, line_item_ids, strict=False):
+                platform_line_item_ids[package.package_id] = line_item_id
 
             self.log(f"[DEBUG] Guaranteed path: Created platform_line_item_ids mapping: {platform_line_item_ids}")
 
@@ -774,66 +722,43 @@ class GoogleAdManager(AdServerAdapter):
 
             return response
 
-        # Build package responses with ALL package data + line_item_ids for creative association
+        # Build package responses - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
+        # - buyer_ref (required)
+        # - package_id (required)
         package_responses = []
-        for idx, (package, line_item_id) in enumerate(zip(packages, line_item_ids, strict=False)):
-            # Get matching request package for buyer_ref and other fields
+        for idx, (package, _line_item_id) in enumerate(zip(packages, line_item_ids, strict=False)):
+            # Get matching request package for buyer_ref
             matching_req_package = None
             if request.packages and idx < len(request.packages):
                 matching_req_package = request.packages[idx]
 
-            final_package_dict: dict[str, Any] = {
-                "package_id": package.package_id,
-                "product_id": package.product_id,
-                "name": package.name,
-                "delivery_type": package.delivery_type,
-                "cpm": package.cpm,
-                "impressions": package.impressions,
-                "status": "active",  # Required by AdCP spec
-                "platform_line_item_id": str(line_item_id),  # GAM line item ID for creative association
-            }
-
-            # Add buyer_ref from request package if available
+            buyer_ref = "unknown"  # Default fallback
             if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
-                final_package_dict["buyer_ref"] = matching_req_package.buyer_ref
+                buyer_ref = matching_req_package.buyer_ref or buyer_ref
 
-            # Add budget from request package if available (AdCP v1.2.1: budget is float | None)
-            if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
-                # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object) - convert to float
-                if isinstance(matching_req_package.budget, (int, float)):
-                    final_package_dict["budget"] = float(matching_req_package.budget)
-                elif hasattr(matching_req_package.budget, "total"):
-                    # Budget object with .total attribute
-                    final_package_dict["budget"] = float(matching_req_package.budget.total)
-                elif isinstance(matching_req_package.budget, dict) and "total" in matching_req_package.budget:
-                    # Budget dict with 'total' key
-                    final_package_dict["budget"] = float(matching_req_package.budget["total"])
-                else:
-                    # Fallback: assume it's a number
-                    final_package_dict["budget"] = float(matching_req_package.budget)
-
-            # Add targeting_overlay from package if available
-            if package.targeting_overlay:
-                final_package_dict["targeting_overlay"] = dict(package.targeting_overlay)
-
-            # Add creative_ids from package if available (from uploaded inline creatives)
-            if package.creative_ids:
-                final_package_dict["creative_ids"] = list(package.creative_ids)
-
-            package_responses.append(final_package_dict)
+            # Create minimal AdCP-compliant Package response
+            package_responses.append(
+                {
+                    "buyer_ref": buyer_ref,
+                    "package_id": package.package_id,
+                }
+            )
 
         # Create response and store platform_line_item_id mapping for database persistence
         # This mapping is used by media_buy_create.py to update MediaPackage records
         response = CreateMediaBuySuccess(
-            buyer_ref=request.buyer_ref or "", media_buy_id=order_id, creative_deadline=None, packages=package_responses
+            buyer_ref=request.buyer_ref or "",
+            media_buy_id=order_id,
+            creative_deadline=None,
+            packages=package_responses,  # type: ignore[arg-type]
         )
 
         # Store platform_line_item_id mapping as a non-standard attribute
         # This survives Pydantic validation since it's set after construction
+        # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
         platform_line_item_ids = {}
-        for pkg_dict in package_responses:
-            if "package_id" in pkg_dict and "platform_line_item_id" in pkg_dict:
-                platform_line_item_ids[pkg_dict["package_id"]] = pkg_dict["platform_line_item_id"]
+        for package, line_item_id in zip(packages, line_item_ids, strict=False):
+            platform_line_item_ids[package.package_id] = line_item_id
 
         self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
 
@@ -1064,7 +989,7 @@ class GoogleAdManager(AdServerAdapter):
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
                     buyer_ref=buyer_ref,
-                    packages=[],  # Required by AdCP spec
+                    affected_packages=[],  # List of package_ids affected by update
                     implementation_date=today,
                 )
             else:
@@ -1093,7 +1018,7 @@ class GoogleAdManager(AdServerAdapter):
                     return UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
                         buyer_ref=buyer_ref,
-                        packages=[],  # Required by AdCP spec
+                        affected_packages=[],  # type: ignore[arg-type]
                         implementation_date=today,
                         workflow_step_id=step_id,
                     )
@@ -1234,7 +1159,7 @@ class GoogleAdManager(AdServerAdapter):
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
                 buyer_ref=buyer_ref,
-                packages=[],  # Required by AdCP spec
+                affected_packages=[],  # Required by AdCP spec
                 implementation_date=today,
             )
 
@@ -1381,7 +1306,7 @@ class GoogleAdManager(AdServerAdapter):
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
                 buyer_ref=buyer_ref,
-                packages=[],  # Required by AdCP spec
+                affected_packages=[],  # Required by AdCP spec
                 implementation_date=today,
             )
 

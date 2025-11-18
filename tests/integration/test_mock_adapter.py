@@ -129,8 +129,6 @@ mock_response = {
             }
         ],
         "delivery_type": "guaranteed",
-        "is_fixed_price": True,
-        "cpm": 15.0,
         "targeting_overlay": {
             "geo_country_any_of": ["United States", "Canada"],
             "device_type_any_of": ["desktop", "tablet"],

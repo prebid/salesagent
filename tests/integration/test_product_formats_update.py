@@ -8,11 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.core.database.models import Product
+from tests.helpers.adcp_factories import create_test_product
 
 
 @pytest.fixture
 def sample_product(integration_db):
-    """Create a sample product for testing."""
+    """Create a sample product for testing using factory."""
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Tenant
 
@@ -26,18 +27,27 @@ def sample_product(integration_db):
         session.add(tenant)
         session.flush()
 
-        # Create product with initial formats
-        product = Product(
-            tenant_id="test_tenant",
+        # Use factory to create product with proper ADCP format_ids
+        product_data = create_test_product(
             product_id="test_product",
             name="Test Product",
             description="Test Description",
-            format_ids=[
-                {"agent_url": "http://localhost:8888", "id": "old_format_1"},
-                {"agent_url": "http://localhost:8888", "id": "old_format_2"},
-            ],
+            format_ids=["old_format_1", "old_format_2"],
+        )
+
+        # Convert to database model
+        product = Product(
+            tenant_id="test_tenant",
+            product_id=product_data.product_id,
+            name=product_data.name,
+            description=product_data.description,
+            format_ids=[fmt.model_dump(mode="json") for fmt in product_data.format_ids],
             targeting_template={},
-            delivery_type="guaranteed",
+            delivery_type=(
+                product_data.delivery_type.value
+                if hasattr(product_data.delivery_type, "value")
+                else product_data.delivery_type
+            ),
             property_tags=["all_inventory"],
         )
         session.add(product)
@@ -57,11 +67,11 @@ def test_product_formats_update_with_flag_modified(integration_db, sample_produc
         product = session.scalars(stmt).first()
         assert product is not None
 
-        # Update formats
+        # Update formats (using proper ADCP agent URL)
         product.format_ids = [
-            {"agent_url": "http://localhost:8888", "id": "new_format_1"},
-            {"agent_url": "http://localhost:8888", "id": "new_format_2"},
-            {"agent_url": "http://localhost:8888", "id": "new_format_3"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "new_format_1"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "new_format_2"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "new_format_3"},
         ]
 
         # Flag as modified (this is the fix)
@@ -95,10 +105,10 @@ def test_product_formats_update_without_flag_modified_fails(integration_db, samp
         product = session.scalars(stmt).first()
         assert product is not None
 
-        # Reassign formats (this IS detected by SQLAlchemy)
+        # Reassign formats (this IS detected by SQLAlchemy, using proper ADCP agent URL)
         product.format_ids = [
-            {"agent_url": "http://localhost:8888", "id": "should_save_1"},
-            {"agent_url": "http://localhost:8888", "id": "should_save_2"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "should_save_1"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "should_save_2"},
         ]
 
         # NOTE: NOT calling flag_modified, but reassignment is detected

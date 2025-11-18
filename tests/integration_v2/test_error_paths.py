@@ -35,6 +35,7 @@ from src.core.database.models import Tenant as ModelTenant
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuyResponse, Error
 from src.core.tool_context import ToolContext
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
+from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -165,11 +166,12 @@ class TestCreateMediaBuyErrorPaths:
             buyer_ref="test_buyer",
             context={"trace_id": "auth-missing-principal"},
             packages=[
-                {
-                    "package_id": "pkg1",
-                    "products": ["error_test_product"],
-                    "budget": 5000.0,  # Float only per AdCP v2.2.0, currency from pricing_option
-                }
+                create_test_package_request_dict(
+                    buyer_ref="pkg1",
+                    product_id="error_test_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=5000.0,
+                )
             ],
             start_time=future_start.isoformat(),
             end_time=future_end.isoformat(),
@@ -216,11 +218,12 @@ class TestCreateMediaBuyErrorPaths:
             buyer_ref="test_buyer",
             context={"trace_id": "past-start"},
             packages=[
-                {
-                    "package_id": "pkg1",
-                    "products": ["error_test_product"],
-                    "budget": 5000.0,  # Float only per AdCP v2.2.0, currency from pricing_option
-                }
+                create_test_package_request_dict(
+                    buyer_ref="pkg1",
+                    product_id="error_test_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=5000.0,
+                )
             ],
             start_time=past_start.isoformat(),
             end_time=past_end.isoformat(),
@@ -260,11 +263,12 @@ class TestCreateMediaBuyErrorPaths:
             brand_manifest={"name": "Test campaign"},
             buyer_ref="test_buyer",
             packages=[
-                {
-                    "package_id": "pkg1",
-                    "products": ["error_test_product"],
-                    "budget": 5000.0,  # Float only per AdCP v2.2.0, currency from pricing_option
-                }
+                create_test_package_request_dict(
+                    buyer_ref="pkg1",
+                    product_id="error_test_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=5000.0,
+                )
             ],
             start_time=start.isoformat(),
             end_time=end.isoformat(),
@@ -307,11 +311,12 @@ class TestCreateMediaBuyErrorPaths:
                 brand_manifest={"name": "Test campaign"},
                 buyer_ref="test_buyer",
                 packages=[
-                    {
-                        "package_id": "pkg1",
-                        "products": ["error_test_product"],
-                        "budget": -1000.0,  # Negative budget (will fail validation), currency from pricing_option
-                    }
+                    create_test_package_request_dict(
+                        buyer_ref="pkg1",
+                        product_id="error_test_product",
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=-1000.0,  # Negative budget (will fail validation)
+                    )
                 ],
                 start_time=future_start.isoformat(),
                 end_time=future_end.isoformat(),

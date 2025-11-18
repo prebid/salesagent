@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 import requests
 
@@ -350,52 +350,25 @@ class Kevel(AdServerAdapter):
                 flight_data = flight_response.json()
                 flight_id = flight_data.get("Id")
 
-                # Get matching request package for buyer_ref and other fields
+                # Get matching request package for buyer_ref
                 matching_req_package = None
                 package_idx = packages.index(package)
                 if request.packages and package_idx < len(request.packages):
                     matching_req_package = request.packages[package_idx]
 
-                # Build package response with ALL package data
-                package_dict: dict[str, object] = {
-                    "package_id": package.package_id,
-                    "product_id": package.product_id,
-                    "name": package.name,
-                    "delivery_type": package.delivery_type,
-                    "cpm": package.cpm,
-                    "impressions": package.impressions,
-                    "platform_line_item_id": str(flight_id) if flight_id else None,
-                    "status": "active",  # Required by AdCP spec
-                }
-
-                # Add buyer_ref from request package if available
+                buyer_ref = "unknown"  # Default fallback
                 if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
-                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+                    buyer_ref = matching_req_package.buyer_ref or buyer_ref
 
-                # Add budget from request package if available (AdCP v1.2.1: budget is float | None)
-                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
-                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object) - convert to float
-                    if isinstance(matching_req_package.budget, (int, float)):
-                        package_dict["budget"] = float(matching_req_package.budget)
-                    elif hasattr(matching_req_package.budget, "total"):
-                        # Budget object with .total attribute
-                        package_dict["budget"] = float(matching_req_package.budget.total)
-                    elif isinstance(matching_req_package.budget, dict) and "total" in matching_req_package.budget:
-                        # Budget dict with 'total' key
-                        package_dict["budget"] = float(matching_req_package.budget["total"])
-                    else:
-                        # Fallback: assume it's a number
-                        package_dict["budget"] = float(matching_req_package.budget)
-
-                # Add targeting_overlay from package if available
-                if package.targeting_overlay:
-                    package_dict["targeting_overlay"] = package.targeting_overlay
-
-                # Add creative_ids from package if available (from uploaded inline creatives)
-                if package.creative_ids:
-                    package_dict["creative_ids"] = package.creative_ids
-
-                package_responses.append(package_dict)
+                # Build package response - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
+                # - buyer_ref (required)
+                # - package_id (required)
+                package_responses.append(
+                    {
+                        "buyer_ref": buyer_ref,
+                        "package_id": package.package_id,
+                    }
+                )
 
             # Use the actual campaign ID from Kevel
             media_buy_id = f"kevel_{campaign_id}"
@@ -409,53 +382,25 @@ class Kevel(AdServerAdapter):
                 if request.packages and idx < len(request.packages):
                     matching_req_package = request.packages[idx]
 
-                package_dict = cast(
-                    dict[str, object],
-                    {
-                        "package_id": package.package_id,
-                        "product_id": package.product_id,
-                        "name": package.name,
-                        "delivery_type": package.delivery_type,
-                        "cpm": package.cpm,
-                        "impressions": package.impressions,
-                        "status": "active",  # Required by AdCP spec
-                    },
-                )
-
-                # Add buyer_ref from request package if available
+                buyer_ref = "unknown"  # Default fallback
                 if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
-                    package_dict["buyer_ref"] = matching_req_package.buyer_ref
+                    buyer_ref = matching_req_package.buyer_ref or buyer_ref
 
-                # Add budget from request package if available (AdCP v1.2.1: budget is float | None)
-                if matching_req_package and hasattr(matching_req_package, "budget") and matching_req_package.budget:
-                    # Handle both ADCP 2.5.0 (float) and 2.3 (Budget object) - convert to float
-                    if isinstance(matching_req_package.budget, (int, float)):
-                        package_dict["budget"] = float(matching_req_package.budget)
-                    elif hasattr(matching_req_package.budget, "total"):
-                        # Budget object with .total attribute
-                        package_dict["budget"] = float(matching_req_package.budget.total)
-                    elif isinstance(matching_req_package.budget, dict) and "total" in matching_req_package.budget:
-                        # Budget dict with 'total' key
-                        package_dict["budget"] = float(matching_req_package.budget["total"])
-                    else:
-                        # Fallback: assume it's a number
-                        package_dict["budget"] = float(matching_req_package.budget)
-
-                # Add targeting_overlay from package if available
-                if package.targeting_overlay:
-                    package_dict["targeting_overlay"] = package.targeting_overlay
-
-                # Add creative_ids from package if available (from uploaded inline creatives)
-                if package.creative_ids:
-                    package_dict["creative_ids"] = package.creative_ids
-
-                package_responses.append(package_dict)
+                # Build package response - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
+                # - buyer_ref (required)
+                # - package_id (required)
+                package_responses.append(
+                    {
+                        "buyer_ref": buyer_ref,
+                        "package_id": package.package_id,
+                    }
+                )
 
         return CreateMediaBuySuccess(
             buyer_ref=request.buyer_ref or "unknown",
             media_buy_id=media_buy_id,
-            creative_deadline=(datetime.now() + timedelta(days=2)).isoformat(),
-            packages=package_responses,
+            creative_deadline=(datetime.now(UTC) + timedelta(days=2)).isoformat(),  # type: ignore[arg-type]
+            packages=package_responses,  # type: ignore[arg-type]
         )
 
     def add_creative_assets(
@@ -761,7 +706,7 @@ class Kevel(AdServerAdapter):
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
                 buyer_ref=buyer_ref,
-                packages=[],  # Required by AdCP spec
+                affected_packages=[],  # List of package_ids affected by update
                 implementation_date=today,
             )
         else:
@@ -838,7 +783,7 @@ class Kevel(AdServerAdapter):
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
                     buyer_ref=buyer_ref,
-                    packages=[],  # Required by AdCP spec
+                    affected_packages=[],  # type: ignore[arg-type]
                     implementation_date=today,
                 )
 

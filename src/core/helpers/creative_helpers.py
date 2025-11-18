@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from fastmcp import Context
 
-    from src.core.schemas import Creative, Package
+    from src.core.schemas import Creative, PackageRequest
     from src.core.testing_context import TestingContext
     from src.core.tool_context import ToolContext
 
@@ -19,19 +19,26 @@ def _extract_format_namespace(format_value: Any) -> tuple[str, str]:
         format_value: FormatId dict/object with agent_url+id fields
 
     Returns:
-        Tuple of (agent_url, format_id)
+        Tuple of (agent_url, format_id) - both as strings
 
     Raises:
         ValueError: If format_value doesn't have required agent_url and id fields
+
+    Note:
+        Converts Pydantic AnyUrl types to strings for database compatibility.
+        The adcp library's FormatId.agent_url is typed as AnyUrl, but PostgreSQL
+        needs strings.
     """
     if isinstance(format_value, dict):
         agent_url = format_value.get("agent_url")
         format_id = format_value.get("id")
         if not agent_url or not format_id:
             raise ValueError(f"format_id must have both 'agent_url' and 'id' fields. Got: {format_value}")
-        return agent_url, format_id
+        # Convert to string in case agent_url is AnyUrl from Pydantic model
+        return str(agent_url), format_id
     if hasattr(format_value, "agent_url") and hasattr(format_value, "id"):
-        return format_value.agent_url, format_value.id
+        # Convert AnyUrl to string for database compatibility
+        return str(format_value.agent_url), format_value.id
     if isinstance(format_value, str):
         raise ValueError(
             f"format_id must be an object with 'agent_url' and 'id' fields (AdCP v2.4). "
@@ -264,10 +271,10 @@ def _detect_snippet_type(snippet: str) -> str:
 
 
 def process_and_upload_package_creatives(
-    packages: list["Package"],
+    packages: list["PackageRequest"],
     context: "Context | ToolContext",
     testing_ctx: "TestingContext | None" = None,
-) -> tuple[list["Package"], dict[str, list[str]]]:
+) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
 
     For each package with a non-empty `creatives` array:
@@ -293,7 +300,7 @@ def process_and_upload_package_creatives(
         ToolError: If creative upload fails for any package (CREATIVES_UPLOAD_FAILED)
 
     Example:
-        >>> packages = [Package(product_id="p1", creatives=[creative1, creative2])]
+        >>> packages = [PackageRequest(product_id="p1", creatives=[creative1, creative2])]
         >>> updated_pkgs, uploaded_ids = process_and_upload_package_creatives(packages, ctx)
         >>> # updated_pkgs[0].creative_ids contains uploaded IDs
         >>> assert uploaded_ids["p1"] == ["c1", "c2"]
@@ -307,7 +314,7 @@ def process_and_upload_package_creatives(
 
     logger = logging.getLogger(__name__)
     uploaded_by_product: dict[str, list[str]] = {}
-    updated_packages: list[Package] = []
+    updated_packages: list[PackageRequest] = []
 
     for pkg_idx, pkg in enumerate(packages):
         # Skip packages without creatives (type system guarantees this attribute exists)

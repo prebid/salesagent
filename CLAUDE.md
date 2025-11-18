@@ -2,46 +2,50 @@
 
 ## 🚨 CRITICAL ARCHITECTURE PATTERNS
 
-### AdCP Schema Source of Truth
-**🚨 MANDATORY**: The official AdCP specification at https://adcontextprotocol.org/schemas/v1/ is the **SINGLE SOURCE OF TRUTH** for all API schemas.
+### AdCP Schema Source of Truth & Inheritance Pattern
+**🚨 MANDATORY**: Use adcp library schemas via **inheritance**, not duplication or conversion.
 
-**Schema Hierarchy:**
-1. **Official Spec** (https://adcontextprotocol.org/schemas/v1/) - Primary source of truth
-2. **Cached Schemas** (`schemas/v1/`) - Checked into git for offline validation
-3. **Pydantic Schemas** (`src/core/schemas.py`) - MUST match official spec exactly
+**Current Library Version:** `adcp==2.1.0` (from GitHub)
 
-**Rules:**
-- ✅ Always verify against official AdCP spec when adding/modifying schemas
-- ✅ Use `tests/e2e/adcp_schema_validator.py` to validate responses
-- ✅ Run `pytest tests/unit/test_adcp_contract.py` to check Pydantic schema compliance
-- ❌ NEVER add fields not in the official spec
-- ❌ NEVER make required fields optional (or vice versa) without spec verification
-- ❌ NEVER bypass AdCP contract tests with `--no-verify`
+**Pattern: Extend Library Schemas**
+```python
+# ✅ CORRECT - Extend library Product with internal fields
+from adcp.types.generated_poc.product import Product as LibraryProduct
 
-**When schemas don't match:**
-1. Check official spec: `https://adcontextprotocol.org/schemas/v1/media-buy/[operation].json`
-2. Update Pydantic schema in `src/core/schemas.py` to match
-3. Update cached schemas if official spec changed: Re-run schema validator
-4. If spec is wrong, file issue with AdCP maintainers, don't work around it locally
-
-**Schema Update Process:**
-```bash
-# Check official schemas (they auto-download and cache)
-pytest tests/e2e/test_adcp_compliance.py -v
-
-# Validate all Pydantic schemas match spec
-pytest tests/unit/test_adcp_contract.py -v
-
-# If schemas are out of date, cached files are auto-updated on next run
-# Commit any schema file changes that appear in schemas/v1/
+class Product(LibraryProduct):
+    """Extends library Product with internal-only fields."""
+    implementation_config: dict[str, Any] | None = Field(default=None, exclude=True)
 ```
 
-**Current Schema Version:**
-- AdCP Version: 2.2.0 (official spec version)
-- Schema Version: v1
-- Last Verified: 2025-10-22
-- Source: https://adcontextprotocol.org/schemas/v1/index.json
-- Note: Internal "v2.4" references in codebase refer to feature evolution, not official spec versions
+**Benefits:**
+- ✅ Library is single source of truth - no duplication
+- ✅ Automatic updates when library changes
+- ✅ Type-safe: `isinstance(our_product, LibraryProduct)` → True
+- ✅ No conversion functions - inheritance handles it
+- ✅ Internal fields auto-excluded via `exclude=True`
+
+**When to Extend vs Use Directly:**
+- **Use library directly**: Request/response schemas (no internal fields needed)
+- **Extend library schema**: Domain objects needing internal fields (Product, etc.)
+
+**Ergonomic Aliases (adcp 2.1.0+):**
+```python
+# ✅ Use ergonomic aliases for responses
+from adcp.types.aliases import (
+    CreateMediaBuySuccessResponse,
+    CreateMediaBuyErrorResponse,
+    UpdateMediaBuySuccessResponse,
+    UpdateMediaBuyErrorResponse,
+)
+```
+
+**Rules:**
+- ✅ Always extend library schemas, never duplicate
+- ✅ Mark internal fields with `exclude=True`
+- ✅ Run `pytest tests/unit/test_adcp_contract.py` to check compliance
+- ❌ NEVER create conversion functions between our schemas and library schemas
+- ❌ NEVER duplicate library schema fields
+- ❌ NEVER bypass AdCP contract tests with `--no-verify`
 
 ---
 

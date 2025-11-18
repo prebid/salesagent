@@ -49,14 +49,41 @@ def setup_test_data(integration_db):
 
 
 @pytest.fixture
-async def mcp_client(mcp_server, setup_test_data):
-    """Create MCP client with test authentication."""
+async def mcp_client(mcp_server, setup_test_data, monkeypatch):
+    """Create MCP client with test authentication and mock external services."""
+    # Mock creative agent registry to avoid external calls to creative.adcontextprotocol.org
+
+    from src.core.schemas import Format, FormatId
+
+    async def mock_list_all_formats(*args, **kwargs):
+        """Return fake formats without calling external service."""
+        return [
+            Format(
+                format_id=FormatId(id="display_300x250", agent_url="mock"),
+                name="Medium Rectangle",
+                type="display",
+                is_standard=True,
+            ),
+            Format(
+                format_id=FormatId(id="display_728x90", agent_url="mock"),
+                name="Leaderboard",
+                type="display",
+                is_standard=True,
+            ),
+        ]
+
+    # Patch the registry's list_all_formats method
+    from src.core import creative_agent_registry
+
+    monkeypatch.setattr(creative_agent_registry.CreativeAgentRegistry, "list_all_formats", mock_list_all_formats)
+
     headers = {"x-adcp-auth": setup_test_data}  # Use the token from setup_test_data
     transport = StreamableHttpTransport(url=f"http://localhost:{mcp_server.port}/mcp/", headers=headers)
     client = Client(transport=transport)
     return client
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.requires_server
 @pytest.mark.asyncio
 async def test_get_products_returns_tool_result(mcp_client):
@@ -87,6 +114,7 @@ async def test_get_products_returns_tool_result(mcp_client):
         assert isinstance(result.structured_content["products"], list), "Products should be a list"
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.requires_server
 @pytest.mark.asyncio
 async def test_list_creative_formats_returns_tool_result(mcp_client):
@@ -110,6 +138,7 @@ async def test_list_creative_formats_returns_tool_result(mcp_client):
         assert "formats" in result.structured_content, "Structured content should have formats field"
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.requires_server
 @pytest.mark.asyncio
 async def test_list_authorized_properties_returns_tool_result(mcp_client):
@@ -132,6 +161,7 @@ async def test_list_authorized_properties_returns_tool_result(mcp_client):
         assert "publisher_domains" in result.structured_content, "Should have publisher_domains field"
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.requires_server
 @pytest.mark.asyncio
 async def test_tool_result_content_differs_from_structured(mcp_client):

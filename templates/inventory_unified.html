@@ -21,7 +21,7 @@
                     <h2>Inventory & Profiles</h2>
                     <p class="text-muted">Browse GAM inventory and manage reusable inventory profiles</p>
                 </div>
-                <div>
+                <div id="create-profile-button-container">
                     <button class="btn btn-primary" onclick="window.inventoryProfileEditor.open()">
                         <i class="fas fa-plus"></i> Create Profile
                     </button>
@@ -40,6 +40,11 @@
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="browser-tab" data-bs-toggle="tab" data-bs-target="#browser-pane" type="button" role="tab">
                 <i class="fas fa-th"></i> Browse Inventory
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="publishers-tab" data-bs-toggle="tab" data-bs-target="#publishers-pane" type="button" role="tab">
+                <i class="fas fa-globe"></i> Publishers & Properties
             </button>
         </li>
     </ul>
@@ -206,6 +211,64 @@
                             <div id="inventoryDetail">
                                 <p class="text-muted">Select an inventory item to view details, or use checkboxes to build a selection for creating profiles</p>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Publishers & Properties Tab -->
+        <div class="tab-pane fade" id="publishers-pane" role="tabpanel">
+            <div class="row mb-4">
+                <div class="col-12">
+                    <div class="alert alert-info">
+                        <h5><i class="fas fa-info-circle"></i> Publisher Partnerships</h5>
+                        <p class="mb-0">
+                            Manage your publisher partnerships and discover which properties you're authorized to represent.
+                            Properties are fetched fresh from each publisher's <code>adagents.json</code> file.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h3 class="text-primary" id="totalPublishers">0</h3>
+                            <p class="card-text">Total Publishers</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h3 class="text-success" id="verifiedPublishers">0</h3>
+                            <p class="card-text">Verified</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h3 class="text-warning" id="pendingPublishers">0</h3>
+                            <p class="card-text">Pending</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Publisher Partners</h5>
+                    <button class="btn btn-primary btn-sm" onclick="addPublisher()">
+                        <i class="fas fa-plus"></i> Add Publisher
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div id="publishersList">
+                        <div class="text-center text-muted py-4">
+                            <p>Loading publishers...</p>
                         </div>
                     </div>
                 </div>
@@ -400,7 +463,13 @@ const API_URLS = {
     inventoryTree: scriptRoot + '/api/tenant/{{ tenant_id }}/inventory/tree',
     inventorySync: scriptRoot + '/api/tenant/{{ tenant_id }}/inventory/sync',
     // GAM sync status uses manual URL construction (dynamic sync_id parameter)
-    gamSyncStatus: scriptRoot + '/tenant/{{ tenant_id }}/gam/sync-status/{id}'
+    gamSyncStatus: scriptRoot + '/tenant/{{ tenant_id }}/gam/sync-status/{id}',
+    // Publisher partners endpoints
+    publishersList: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners',
+    publishersAdd: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners',
+    publishersDelete: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/{id}',
+    publishersSync: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/sync',
+    publisherProperties: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/{id}/properties'
 };
 
 let selectedInventory = null;
@@ -408,10 +477,81 @@ let inventoryTree = null;
 let selectedAdUnitsMap = new Map();  // id -> {id, name, path}
 let selectedPlacementsMap = new Map();  // id -> {id, name}
 
+// Show/hide Create Profile button based on active tab
+function updateCreateProfileButtonVisibility() {
+    const activeTab = document.querySelector('#inventoryTabs .nav-link.active');
+    const buttonContainer = document.getElementById('create-profile-button-container');
+
+    if (activeTab && buttonContainer) {
+        // Only show button on Profiles tab
+        if (activeTab.id === 'profiles-tab') {
+            buttonContainer.style.display = 'block';
+        } else {
+            buttonContainer.style.display = 'none';
+        }
+    }
+}
+
+// Save active tab to localStorage
+function saveActiveTab(tabId) {
+    localStorage.setItem('inventoryActiveTab', tabId);
+}
+
+// Load active tab from localStorage or URL hash
+function loadActiveTab() {
+    // Check URL hash first (for deep linking)
+    const hash = window.location.hash;
+    if (hash) {
+        const tabId = hash.substring(1).replace('-pane', '-tab');
+        const tabButton = document.getElementById(tabId);
+        if (tabButton) {
+            const tab = new bootstrap.Tab(tabButton);
+            tab.show();
+            return;
+        }
+    }
+
+    // Fall back to localStorage
+    const savedTab = localStorage.getItem('inventoryActiveTab');
+    if (savedTab) {
+        const tabButton = document.getElementById(savedTab);
+        if (tabButton) {
+            const tab = new bootstrap.Tab(tabButton);
+            tab.show();
+        }
+    }
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
+    // Load initial data
     loadProfiles();
     loadInventoryStatus();
+
+    // Restore active tab from localStorage or URL hash
+    loadActiveTab();
+
+    // Update button visibility on initial load
+    updateCreateProfileButtonVisibility();
+
+    // Listen for all tab changes
+    const tabButtons = document.querySelectorAll('#inventoryTabs .nav-link');
+    tabButtons.forEach(button => {
+        button.addEventListener('shown.bs.tab', function(e) {
+            const tabId = e.target.id;
+
+            // Save active tab
+            saveActiveTab(tabId);
+
+            // Update button visibility
+            updateCreateProfileButtonVisibility();
+
+            // Load data for specific tabs
+            if (tabId === 'publishers-tab') {
+                loadPublishers();
+            }
+        });
+    });
 
     // Add enter key support for search
     document.getElementById('searchQuery').addEventListener('keypress', function(e) {
@@ -986,6 +1126,7 @@ function searchInventory() {
     if (status) params.append('status', status);
 
     // Use scriptRoot for proxy deployment support
+    const scriptRoot = '{{ request.script_root }}' || '';
     fetch(scriptRoot + `/api/tenant/${tenantId}/inventory/search?${params.toString()}`, {
         credentials: 'same-origin'
     })
@@ -1098,6 +1239,244 @@ function createProfileFromSelection() {
 }
 
 // Format selection functions are now handled by the inventory_profile_editor.html component
+
+// ========================================
+// Publishers & Properties Tab Functions
+// ========================================
+
+async function loadPublishers() {
+    try {
+        const response = await fetch(API_URLS.publishersList, {
+            credentials: 'same-origin'
+        });
+
+        if (!response.ok) throw new Error('Failed to load publishers');
+
+        const data = await response.json();
+
+        // Update stats
+        document.getElementById('totalPublishers').textContent = data.total || 0;
+        document.getElementById('verifiedPublishers').textContent = data.verified || 0;
+        document.getElementById('pendingPublishers').textContent = data.pending || 0;
+
+        // Render publishers list
+        renderPublishers(data.partners || []);
+    } catch (error) {
+        console.error('Error loading publishers:', error);
+        document.getElementById('publishersList').innerHTML = `
+            <div class="alert alert-danger">
+                Error loading publishers: ${error.message}
+            </div>
+        `;
+    }
+}
+
+function renderPublishers(publishers) {
+    const container = document.getElementById('publishersList');
+
+    if (publishers.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-muted py-4">
+                <i class="fas fa-globe fa-3x mb-3"></i>
+                <p>No publishers added yet.</p>
+                <p class="small">Click "Add Publisher" to start discovering properties.</p>
+            </div>
+        `;
+        return;
+    }
+
+    let html = '<div class="list-group">';
+
+    publishers.forEach(pub => {
+        const statusIcon = pub.sync_status === 'success' ?
+            (pub.is_verified ? '<i class="fas fa-check-circle text-success"></i>' : '<i class="fas fa-times-circle text-warning"></i>') :
+            pub.sync_status === 'error' ? '<i class="fas fa-exclamation-circle text-danger"></i>' :
+            '<i class="fas fa-clock text-muted"></i>';
+
+        const statusText = pub.sync_status === 'success' ?
+            (pub.is_verified ? 'Verified' : 'Not Authorized') :
+            pub.sync_status === 'error' ? 'Error' : 'Pending';
+
+        html += `
+            <div class="list-group-item">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div class="flex-grow-1">
+                        <div class="d-flex align-items-center mb-2">
+                            ${statusIcon}
+                            <h6 class="mb-0 ms-2">${pub.display_name || pub.publisher_domain}</h6>
+                            <span class="badge bg-${pub.is_verified ? 'success' : 'secondary'} ms-2">${statusText}</span>
+                        </div>
+                        <div class="small text-muted">
+                            <div><strong>Domain:</strong> ${pub.publisher_domain}</div>
+                            ${pub.last_synced_at ? `<div><strong>Last Synced:</strong> ${new Date(pub.last_synced_at).toLocaleString()}</div>` : ''}
+                            ${pub.sync_error ? `<div class="text-danger"><strong>Error:</strong> ${pub.sync_error}</div>` : ''}
+                        </div>
+                    </div>
+                    <div class="btn-group btn-group-sm">
+                        ${pub.is_verified ? `
+                            <button class="btn btn-outline-primary" onclick="viewPublisherProperties(${pub.id}, '${pub.publisher_domain}')" title="View Properties">
+                                <i class="fas fa-list"></i>
+                            </button>
+                        ` : ''}
+                        <button class="btn btn-outline-danger" onclick="deletePublisher(${pub.id}, '${pub.publisher_domain}')" title="Delete">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    html += '</div>';
+
+    // Add sync all button at the end
+    html += `
+        <div class="mt-3 text-center">
+            <button class="btn btn-primary" onclick="syncAllPublishers()">
+                <i class="fas fa-sync"></i> Sync All Publishers
+            </button>
+        </div>
+    `;
+
+    container.innerHTML = html;
+}
+
+async function addPublisher() {
+    const domain = prompt('Enter publisher domain (e.g., nytimes.com):');
+    if (!domain) return;
+
+    try {
+        const response = await fetch(API_URLS.publishersAdd, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                publisher_domain: domain.trim(),
+                display_name: domain.trim()
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to add publisher');
+        }
+
+        alert('Publisher added successfully');
+        loadPublishers();
+    } catch (error) {
+        alert('Error adding publisher: ' + error.message);
+    }
+}
+
+async function deletePublisher(id, domain) {
+    if (!confirm(`Delete publisher ${domain}?`)) return;
+
+    try {
+        const url = API_URLS.publishersDelete.replace('{id}', id);
+        const response = await fetch(url, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+        });
+
+        if (!response.ok) throw new Error('Failed to delete publisher');
+
+        loadPublishers();
+    } catch (error) {
+        alert('Error deleting publisher: ' + error.message);
+    }
+}
+
+async function syncAllPublishers() {
+    const btn = event.target.closest('button');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
+
+    try {
+        const response = await fetch(API_URLS.publishersSync, {
+            method: 'POST',
+            credentials: 'same-origin'
+        });
+
+        if (!response.ok) throw new Error('Sync failed');
+
+        const data = await response.json();
+        alert(`Sync completed!\nSynced: ${data.synced}\nVerified: ${data.verified}\nErrors: ${data.errors}`);
+        loadPublishers();
+    } catch (error) {
+        alert('Error syncing publishers: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+}
+
+async function viewPublisherProperties(id, domain) {
+    const modal = document.createElement('div');
+    modal.className = 'modal fade';
+    modal.id = 'publisherPropertiesModal';
+    modal.innerHTML = `
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Properties for ${domain}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="propertiesContent">
+                    <div class="text-center"><i class="fas fa-spinner fa-spin fa-2x"></i></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+    const bsModal = new bootstrap.Modal(modal);
+    bsModal.show();
+
+    modal.addEventListener('hidden.bs.modal', () => modal.remove());
+
+    try {
+        const url = API_URLS.publisherProperties.replace('{id}', id);
+        const response = await fetch(url, { credentials: 'same-origin' });
+
+        if (!response.ok) throw new Error('Failed to load properties');
+
+        const data = await response.json();
+
+        let html = '';
+
+        if (data.error) {
+            html = `<div class="alert alert-danger">${data.error}</div>`;
+        } else if (!data.is_authorized) {
+            html = `<div class="alert alert-warning">Not authorized for this publisher.</div>`;
+        } else {
+            html = `
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle"></i> Authorized for this publisher
+                </div>
+
+                <h6>Property IDs (${data.property_ids.length})</h6>
+                <ul class="list-unstyled">
+                    ${data.property_ids.map(id => `<li><code>${id}</code></li>`).join('')}
+                </ul>
+
+                <h6 class="mt-3">Property Tags (${data.property_tags.length})</h6>
+                <div class="d-flex flex-wrap gap-2">
+                    ${data.property_tags.map(tag => `<span class="badge bg-primary">${tag}</span>`).join('')}
+                </div>
+            `;
+        }
+
+        document.getElementById('propertiesContent').innerHTML = html;
+    } catch (error) {
+        document.getElementById('propertiesContent').innerHTML = `
+            <div class="alert alert-danger">Error: ${error.message}</div>
+        `;
+    }
+}
 
 </script>
 

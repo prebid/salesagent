@@ -102,7 +102,8 @@ def _list_creative_formats_impl(
         ]
 
     # Sort formats by type and name for consistent ordering
-    formats.sort(key=lambda f: (f.type, f.name))
+    # Use .value to convert enum to string for sorting (enums don't support < comparison)
+    formats.sort(key=lambda f: (f.type.value, f.name))
 
     # Log the operation
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -134,7 +135,7 @@ def list_creative_formats(
     category: str | None = None,
     format_ids: list[str] | None = None,
     webhook_url: str | None = None,
-    context: dict | None = None, # Application level context per adcp spec
+    context: dict | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):
     """List all available creative formats (AdCP spec endpoint).
@@ -160,7 +161,7 @@ def list_creative_formats(
         if format_ids:
             # For MCP tools, format_ids are simple strings, but FormatId requires agent_url
             # Use empty string as placeholder since we'll filter by ID only
-            format_ids_objects = [FormatId(id=fid, agent_url="") for fid in format_ids]
+            format_ids_objects = [FormatId(id=fid, agent_url="") for fid in format_ids]  # type: ignore[arg-type]
 
         req = ListCreativeFormatsRequest(
             type=type,

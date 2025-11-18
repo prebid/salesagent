@@ -62,18 +62,19 @@ http-server = [
 
 [[package]]
 name = "adcp"
-version = "1.6.1"
+version = "2.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
+    { name = "email-validator" },
     { name = "httpx" },
     { name = "mcp" },
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/10/e4/07af06780e4a1daf8b4aac4d2a311d3769ce335b0784c606ab30e4ef1f90/adcp-1.6.1.tar.gz", hash = "sha256:031c18cc0450e925017772e6c4d7c4513b81e9efc238ca7ee683841765bafcf8", size = 93456, upload-time = "2025-11-13T16:24:58.71Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/14/85/2e750b8a789257c831dad03cfaab870bc298a375d946cb6674c386d98847/adcp-2.5.0.tar.gz", hash = "sha256:2c47faae0b6a8ee53a865ebea36049c12bc8c9a6f9aca6230bc3146a71714944", size = 135769, upload-time = "2025-11-18T13:22:12.309Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/3c/fa61864b61c8c2a379296eef2e90715deed700f77f7e04df89908e9bb8b3/adcp-1.6.1-py3-none-any.whl", hash = "sha256:5bce71c89b1455ec6d3d6b163c2cfec9e5c18e4718fddbf1bffaba6c23f8b146", size = 73882, upload-time = "2025-11-13T16:24:57.727Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/0b/4548709b32b6e2c10d71bfad94530664c847193dcbc48e90b49ea28c404d/adcp-2.5.0-py3-none-any.whl", hash = "sha256:d50e798d4f8e68b9eae065c96400261844fd05bb90b0cc52f07c05d4f73b9884", size = 161303, upload-time = "2025-11-18T13:22:11.153Z" },
 ]
 
 [[package]]
@@ -127,6 +128,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
+    { name = "pytest-timeout" },
     { name = "ruff" },
     { name = "types-psycopg2" },
     { name = "types-pytz" },
@@ -150,6 +152,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
+    { name = "pytest-timeout" },
     { name = "ruff" },
     { name = "types-psycopg2" },
     { name = "types-pytz" },
@@ -161,7 +164,7 @@ dev = [
 requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=0.3.10" },
-    { name = "adcp", specifier = "==1.6.1" },
+    { name = "adcp", specifier = ">=2.5.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.13.5" },
@@ -192,6 +195,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.2.1" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.14.1" },
     { name = "pytest-playwright", marker = "extra == 'ui-tests'", specifier = "==0.6.1" },
+    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3.1" },
     { name = "python-socketio", specifier = ">=5.13.0" },
     { name = "pytz", specifier = ">=2024.1" },
     { name = "requests", specifier = ">=2.32.3" },
@@ -222,6 +226,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.1.0" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
     { name = "pytest-mock", specifier = ">=3.14.1" },
+    { name = "pytest-timeout", specifier = ">=2.3.1" },
     { name = "ruff", specifier = ">=0.8.0" },
     { name = "types-psycopg2", specifier = ">=2.9.21.20251012" },
     { name = "types-pytz", specifier = ">=2025.2.0.20250809" },
@@ -2619,6 +2624,18 @@ dependencies = [
     { name = "python-slugify" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4e/a9/2054793533bd69b4e0c0ae7a807edf8d6d859cd6ee55ce332a29c4446a0f/pytest_playwright-0.6.1.tar.gz", hash = "sha256:f4ccbed1ce8d37a945c010811aa9eb9aa7120eea7cad29620b90d5389fd8caf7", size = 16305, upload-time = "2024-11-25T16:32:36.327Z" }
+
+[[package]]
+name = "pytest-timeout"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/82/4c9ecabab13363e72d880f2fb504c5f750433b2b6f16e99f4ec21ada284c/pytest_timeout-2.4.0.tar.gz", hash = "sha256:7e68e90b01f9eff71332b25001f85c75495fc4e3a836701876183c4bcfd0540a", size = 17973, upload-time = "2025-05-05T19:44:34.99Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/b6/3127540ecdf1464a00e5a01ee60a1b09175f6913f0644ac748494d9c4b21/pytest_timeout-2.4.0-py3-none-any.whl", hash = "sha256:c42667e5cdadb151aeb5b26d114aff6bdf5a907f176a007a30b940d3d865b5c2", size = 14382, upload-time = "2025-05-05T19:44:33.502Z" },
+]
 
 [[package]]
 name = "python-dotenv"

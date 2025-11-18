@@ -22,8 +22,9 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.schemas import CreateMediaBuyRequest, Package, PricingModel
+from src.core.schemas import CreateMediaBuyRequest
 from src.core.tool_context import ToolContext
+from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 # Tests are now AdCP 2.4 compliant (removed status field, using errors field)
@@ -366,12 +367,11 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
         buyer_ref="test_buyer_cpm",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_cpm",
-                products=["prod_gam_cpm_guaranteed"],
-                pricing_model=PricingModel.CPM,
+            create_test_package_request(
+                buyer_ref="pkg_cpm",
+                product_id="prod_gam_cpm_guaranteed",
+                pricing_option_id="cpm_usd_fixed",  # Generated format: {model}_{currency}_{fixed|auction}
                 budget=10000.0,
-                impressions=100000,
             )
         ],
         budget={"total": 10000.0, "currency": "USD"},
@@ -399,10 +399,12 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
         ctx=context,
     )
 
-    # Verify response (AdCP 2.4 compliant)
+    # Verify response is success (AdCP 2.4 compliant)
+    # Success response has media_buy_id, error response has errors field
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
-    # Success = no errors (oneOf pattern - Success doesn't have errors field)
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == []
 
     # In dry-run mode, the response should succeed
     # In real mode, we'd verify GAM line item properties:
@@ -421,12 +423,11 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
         buyer_ref="test_buyer_cpc",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_cpc",
-                products=["prod_gam_cpc"],
-                pricing_model=PricingModel.CPC,
+            create_test_package_request(
+                buyer_ref="pkg_cpc",
+                product_id="prod_gam_cpc",
+                pricing_option_id="cpc_usd_fixed",  # Generated format: {model}_{currency}_{fixed|auction}
                 budget=5000.0,
-                impressions=2000,  # 2000 clicks goal
             )
         ],
         budget={"total": 5000.0, "currency": "USD"},
@@ -454,10 +455,12 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
         ctx=context,
     )
 
-    # Verify response (AdCP 2.4 compliant)
+    # Verify response is success (AdCP 2.4 compliant)
+    # Success response has media_buy_id, error response has errors field
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
-    # Success = no errors (oneOf pattern - Success doesn't have errors field)
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == []
 
     # In real GAM mode, line item would have:
     # - lineItemType = "PRICE_PRIORITY"
@@ -477,12 +480,11 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
         buyer_ref="test_buyer_vcpm",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_vcpm",
-                products=["prod_gam_vcpm"],
-                pricing_model=PricingModel.VCPM,
+            create_test_package_request(
+                buyer_ref="pkg_vcpm",
+                product_id="prod_gam_vcpm",
+                pricing_option_id="vcpm_usd_fixed",  # Generated format: {model}_{currency}_{fixed|auction}
                 budget=12000.0,
-                impressions=50000,  # 50k viewable impressions
             )
         ],
         budget={"total": 12000.0, "currency": "USD"},
@@ -510,10 +512,12 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
         ctx=context,
     )
 
-    # Verify response (AdCP 2.4 compliant)
+    # Verify response is success (AdCP 2.4 compliant)
+    # Success response has media_buy_id, error response has errors field
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
-    # Success = no errors (oneOf pattern - Success doesn't have errors field)
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == []
 
     # In real GAM mode, line item would have:
     # - lineItemType = "STANDARD" (VCPM only works with STANDARD)
@@ -534,12 +538,11 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
         buyer_ref="test_buyer_flatrate",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_flat",
-                products=["prod_gam_flatrate"],
-                pricing_model=PricingModel.FLAT_RATE,
+            create_test_package_request(
+                buyer_ref="pkg_flat",
+                product_id="prod_gam_flatrate",
+                pricing_option_id="flat_rate_usd_fixed",  # Generated format: {model}_{currency}_{fixed|auction}
                 budget=5000.0,
-                impressions=1000000,  # Impressions goal still tracked
             )
         ],
         budget={"total": 5000.0, "currency": "USD"},
@@ -567,10 +570,12 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
         ctx=context,
     )
 
-    # Verify response (AdCP 2.4 compliant)
+    # Verify response is success (AdCP 2.4 compliant)
+    # Success response has media_buy_id, error response has errors field
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
-    # Success = no errors (oneOf pattern - Success doesn't have errors field)
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == []
 
     # In real GAM mode, line item would have:
     # - lineItemType = "SPONSORSHIP" (FLAT_RATE → CPD uses SPONSORSHIP)
@@ -590,26 +595,23 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
         buyer_ref="test_buyer_multi",
         brand_manifest={"name": "https://example.com/campaign"},
         packages=[
-            Package(
-                package_id="pkg_1_cpm",
-                products=["prod_gam_cpm_guaranteed"],
-                pricing_model=PricingModel.CPM,
+            create_test_package_request(
+                buyer_ref="pkg_1_cpm",
+                product_id="prod_gam_cpm_guaranteed",
+                pricing_option_id="cpm_usd_fixed",  # Generated format: {model}_{currency}_{fixed|auction}
                 budget=8000.0,
-                impressions=80000,
             ),
-            Package(
-                package_id="pkg_2_cpc",
-                products=["prod_gam_cpc"],
-                pricing_model=PricingModel.CPC,
+            create_test_package_request(
+                buyer_ref="pkg_2_cpc",
+                product_id="prod_gam_cpc",
+                pricing_option_id="cpc_usd_fixed",  # Generated format: {model}_{currency}_{fixed|auction}
                 budget=3000.0,
-                impressions=1200,  # 1200 clicks
             ),
-            Package(
-                package_id="pkg_3_vcpm",
-                products=["prod_gam_vcpm"],
-                pricing_model=PricingModel.VCPM,
+            create_test_package_request(
+                buyer_ref="pkg_3_vcpm",
+                product_id="prod_gam_vcpm",
+                pricing_option_id="vcpm_usd_fixed",  # Generated format: {model}_{currency}_{fixed|auction}
                 budget=9000.0,
-                impressions=40000,  # 40k viewable impressions
             ),
         ],
         budget={"total": 20000.0, "currency": "USD"},
@@ -637,10 +639,12 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
         ctx=context,
     )
 
-    # Verify response (AdCP 2.4 compliant)
+    # Verify response is success (AdCP 2.4 compliant)
+    # Success response has media_buy_id, error response has errors field
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
-    # Success = no errors (oneOf pattern - Success doesn't have errors field)
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == []
 
     # Each package should create a line item with correct pricing:
     # - pkg_1: CPM, STANDARD, priority 8
@@ -650,7 +654,9 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
 
 @pytest.mark.requires_db
 async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_pricing_models):
-    """Test auction-based CPC (non-fixed) creates PRICE_PRIORITY line item."""
+    """Test auction-based CPC (non-fixed) is rejected with clear error (not supported by adcp library v2.5.0)."""
+    from fastmcp.exceptions import ToolError
+
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     # Add auction CPC pricing option
@@ -673,12 +679,11 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         buyer_ref="test_buyer_auction",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_auction_cpc",
-                products=["prod_gam_cpc"],
-                pricing_model=PricingModel.CPC,
+            create_test_package_request(
+                buyer_ref="pkg_auction_cpc",
+                product_id="prod_gam_cpc",
+                pricing_option_id="cpc_usd_auction",  # Generated format: {model}_{currency}_{fixed|auction}
                 budget=4000.0,
-                impressions=1500,  # 1500 clicks
                 bid_price=2.25,  # Bid within floor/ceiling
             )
         ],
@@ -697,28 +702,33 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         testing_context={"dry_run": True, "test_session_id": "test_session"},
     )
 
-    response = await _create_media_buy_impl(
-        buyer_ref=request.buyer_ref,
-        brand_manifest=request.brand_manifest,
-        packages=request.packages,
-        start_time=request.start_time,
-        end_time=request.end_time,
-        budget=request.budget,
-        ctx=context,
-    )
+    # Auction CPC should be rejected because adcp library v2.5.0 doesn't support CpcAuctionPricingOption
+    # Only CpcPricingOption exists, which requires is_fixed=true
+    with pytest.raises(ToolError) as exc_info:
+        await _create_media_buy_impl(
+            buyer_ref=request.buyer_ref,
+            brand_manifest=request.brand_manifest,
+            packages=request.packages,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            budget=request.budget,
+            ctx=context,
+        )
 
-    # Verify response (AdCP 2.4 compliant)
-    assert response.media_buy_id is not None
-    # Success = no errors (oneOf pattern - Success doesn't have errors field)
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == []
-
-    # Line item should use bid_price ($2.25) for costPerUnit
-    # - lineItemType = "PRICE_PRIORITY" (auction = non-guaranteed)
-    # - costPerUnit = $2.25 (from bid_price)
+    # Verify error message explains the limitation
+    error_message = str(exc_info.value)
+    assert "Auction CPC pricing option cpc_usd_auction is not supported" in error_message
+    assert "adcp library v2.5.0" in error_message
+    assert "CpcPricingOption class only supports fixed-rate pricing" in error_message
 
     # Cleanup auction pricing option
     with get_db_session() as session:
-        session.query(PricingOption).filter_by(
+        from sqlalchemy import select
+
+        stmt = select(PricingOption).filter_by(
             tenant_id="test_gam_pricing_tenant", product_id="prod_gam_cpc", is_fixed=False
-        ).delete()
-        session.commit()
+        )
+        pricing_option = session.scalars(stmt).first()
+        if pricing_option:
+            session.delete(pricing_option)
+            session.commit()

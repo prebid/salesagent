@@ -22,7 +22,7 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 console = Console()
 
-from adcp.types.generated import PushNotificationConfig
+from adcp.types.generated_poc.push_notification_config import PushNotificationConfig
 
 from src.core.auth import get_principal_object
 from src.core.helpers import get_principal_id_from_context
@@ -404,7 +404,7 @@ def get_media_buy_delivery(
     status_filter: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-    context: dict | None = None, # Application level context per adcp spec
+    context: dict | None = None,  # Application level context per adcp spec
     webhook_url: str | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     ctx: Context | ToolContext | None = None,
@@ -451,7 +451,7 @@ def get_media_buy_delivery_raw(
     status_filter: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-    context: dict | None = None, # Application level context per adcp spec
+    context: dict | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):
     """Get delivery metrics for media buys (raw function for A2A server use).

@@ -11,9 +11,9 @@ def test_format_comparison_with_trailing_slash():
 
     format_without_slash = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250_image")
 
-    # Normalize URLs by stripping trailing slashes
-    url_with = format_with_slash.agent_url.rstrip("/") if format_with_slash.agent_url else None
-    url_without = format_without_slash.agent_url.rstrip("/") if format_without_slash.agent_url else None
+    # Normalize URLs by stripping trailing slashes (convert AnyUrl to string first)
+    url_with = str(format_with_slash.agent_url).rstrip("/") if format_with_slash.agent_url else None
+    url_without = str(format_without_slash.agent_url).rstrip("/") if format_without_slash.agent_url else None
 
     # After normalization, they should be equal
     assert url_with == url_without

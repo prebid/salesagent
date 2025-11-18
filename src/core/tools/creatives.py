@@ -11,7 +11,6 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
@@ -1899,9 +1898,12 @@ def _list_creatives_impl(
                 )
 
             # Build Creative directly with explicit types to satisfy mypy
-            from src.core.schemas import FormatId
+            from src.core.schemas import FormatId, url
 
-            format_obj = FormatId(agent_url=db_creative.agent_url or "", id=db_creative.format or "")
+            format_obj = FormatId(
+                agent_url=url(db_creative.agent_url),  # agent_url is nullable=False in DB
+                id=db_creative.format or "",
+            )
 
             # Ensure datetime fields are datetime (not SQLAlchemy DateTime)
             created_at_dt: datetime = (
@@ -1912,43 +1914,39 @@ def _list_creatives_impl(
             )
 
             # AdCP v1 spec compliant - only spec fields
-            # Reconstruct assets dict from database data
+            # Get assets dict from database (all production data uses AdCP v2.4 format)
             assets_dict = db_creative.data.get("assets", {}) if db_creative.data else {}
-            if not assets_dict:
-                # Legacy data: reconstruct assets dict from old fields
-                assets_dict = {}
-                if content_uri:
-                    # Detect asset type and build appropriate asset structure
-                    main_asset: dict[str, Any] = {"url": content_uri}
-                    if db_creative.data:
-                        if "width" in db_creative.data and db_creative.data["width"] is not None:
-                            main_asset["width"] = db_creative.data["width"]
-                        if "height" in db_creative.data and db_creative.data["height"] is not None:
-                            main_asset["height"] = db_creative.data["height"]
-                        if "duration" in db_creative.data and db_creative.data["duration"] is not None:
-                            main_asset["duration_ms"] = int(db_creative.data["duration"] * 1000)
-                    assets_dict["main"] = main_asset
 
-                # Add click URL if present
-                if db_creative.data and "click_url" in db_creative.data:
-                    assets_dict["click_url"] = {
-                        "url": db_creative.data["click_url"],
-                        "url_type": "clickthrough",
-                    }
+            # Safety check: Skip creatives with no assets (legacy data without proper migration)
+            if not assets_dict:
+                logger.error(
+                    f"Creative {db_creative.creative_id} has no assets dict - "
+                    f"may be legacy format without proper migration. Skipping.",
+                    extra={"creative_id": db_creative.creative_id, "tenant_id": tenant["tenant_id"]},
+                )
+                continue
+
+            # Convert string status to CreativeStatus enum
+            from src.core.schemas import CreativeStatus
+
+            try:
+                status_enum = CreativeStatus(db_creative.status)
+            except ValueError:
+                # Default to pending_review if invalid status
+                status_enum = CreativeStatus.pending_review
 
             creative = Creative(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
                 format_id=format_obj,
                 assets=assets_dict,
-                inputs=db_creative.data.get("inputs") if db_creative.data else None,
                 tags=db_creative.data.get("tags") if db_creative.data else None,
-                approved=db_creative.data.get("approved") if db_creative.data else None,
-                # Internal fields
-                status=db_creative.status,
+                # AdCP spec fields (library Creative)
+                status=status_enum,
+                created_date=created_at_dt,
+                updated_date=updated_at_dt,
+                # Internal field (our extension)
                 principal_id=db_creative.principal_id,
-                created_at=created_at_dt,
-                updated_at=updated_at_dt,
             )
             creatives.append(creative)
 

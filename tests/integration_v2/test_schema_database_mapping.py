@@ -17,8 +17,9 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, MediaBuy, Principal, Tenant
 from src.core.database.models import PricingOption as DBPricingOption
 from src.core.database.models import Product as ProductModel
-from src.core.schemas import PricingOption, Product
 from src.core.schemas import Principal as PrincipalSchema
+from src.core.schemas import Product
+from tests.helpers.adcp_factories import create_test_db_product
 from tests.utils.database_helpers import (
     create_tenant_with_timestamps,
 )
@@ -47,6 +48,8 @@ class TestSchemaFieldMapping:
             "recommended_cpm",  # Suggested CPM based on goals and historical data
             # PR#88 field - populated from database relationship, not a column
             "pricing_options",  # List of PricingOption objects from pricing_options table
+            # AdCP library field - mapped from property_tags database column
+            "publisher_properties",  # Populated from property_tags database column
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)
@@ -91,15 +94,13 @@ class TestSchemaFieldMapping:
             session.add(tenant)
 
             # Create minimal product
-            product = ProductModel(
+            product = create_test_db_product(
                 tenant_id=tenant_id,
                 product_id="field_test_001",
                 name="Field Test Product",
                 description="Test product for field access validation",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-                targeting_template={},
                 delivery_type="non_guaranteed",
-                property_tags=["all_inventory"],
             )
             session.add(product)
             session.commit()
@@ -158,15 +159,13 @@ class TestSchemaFieldMapping:
             )
             session.add(tenant)
 
-            product = ProductModel(
+            product = create_test_db_product(
                 tenant_id=tenant_id,
                 product_id="conversion_test_001",
                 name="Conversion Test Product",
                 description="Product for testing safe conversion",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-                targeting_template={},
                 delivery_type="non_guaranteed",
-                property_tags=["all_inventory"],
             )
             session.add(product)
             session.commit()
@@ -231,17 +230,23 @@ class TestSchemaFieldMapping:
             "description": "Testing Pydantic field access",
             "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             "delivery_type": "non_guaranteed",
-            "is_fixed_price": False,
-            "property_tags": ["all_inventory"],  # Required per AdCP spec
-            "pricing_options": [
-                PricingOption(
-                    pricing_option_id="cpm_usd_fixed",
-                    pricing_model="cpm",
-                    rate=10.0,
-                    currency="USD",
-                    is_fixed=True,
-                )
+            "publisher_properties": [
+                {
+                    "selection_type": "by_id",
+                    "publisher_domain": "example.com",
+                    "property_ids": ["all_inventory"],
+                }
             ],
+            "pricing_options": [
+                {
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "pricing_model": "cpm",
+                    "rate": 10.0,
+                    "currency": "USD",
+                    "is_fixed": True,  # Required in adcp 2.4.0+
+                }
+            ],
+            "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
         }
 
         product = Product(**product_data)
@@ -286,7 +291,7 @@ class TestSchemaFieldMapping:
             session.add(tenant)
 
             # Test with various JSON field formats
-            product = ProductModel(
+            product = create_test_db_product(
                 tenant_id=tenant_id,
                 product_id="json_test_001",
                 name="JSON Test Product",
@@ -294,13 +299,13 @@ class TestSchemaFieldMapping:
                 format_ids=[
                     {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
                     {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
-                ],  # List
-                targeting_template={"geo": ["US"], "device": ["mobile"]},  # Dict
+                ],
                 delivery_type="non_guaranteed",
-                property_tags=["all_inventory"],
-                measurement={"viewability": True, "brand_safety": True},  # Dict
-                countries=["US", "CA", "UK"],  # List
             )
+            # Manually set additional JSON fields that aren't part of the factory defaults
+            product.targeting_template = {"geo": ["US"], "device": ["mobile"]}
+            product.measurement = {"viewability": True, "brand_safety": True}
+            product.countries = ["US", "CA", "UK"]
             session.add(product)
             session.commit()
             session.refresh(product)
@@ -341,16 +346,13 @@ class TestSchemaFieldMapping:
             )
             session.add(tenant)
 
-            product = ProductModel(
+            product = create_test_db_product(
                 tenant_id=tenant_id,
                 product_id="validation_test_001",
                 name="Schema Validation Product",
                 description="Testing schema validation with database data",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-                targeting_template={},
                 delivery_type="non_guaranteed",
-                is_custom=False,
-                property_tags=["all_inventory"],
             )
             session.add(product)
             session.commit()
@@ -364,16 +366,23 @@ class TestSchemaFieldMapping:
                 "format_ids": product.format_ids,
                 "delivery_type": product.delivery_type,
                 "is_custom": product.is_custom if product.is_custom is not None else False,
-                "property_tags": getattr(product, "property_tags", ["all_inventory"]),  # Required per AdCP spec
-                "pricing_options": [
-                    PricingOption(
-                        pricing_option_id="cpm_usd_fixed",
-                        pricing_model="cpm",
-                        rate=7.25,
-                        currency="USD",
-                        is_fixed=True,
-                    )
+                "publisher_properties": [
+                    {
+                        "selection_type": "by_id",
+                        "publisher_domain": "example.com",
+                        "property_ids": getattr(product, "property_tags", ["all_inventory"]),
+                    }
                 ],
+                "pricing_options": [
+                    {
+                        "pricing_option_id": "cpm_usd_fixed",
+                        "pricing_model": "cpm",
+                        "rate": 7.25,
+                        "currency": "USD",
+                        "is_fixed": True,  # Required by adcp 2.5.0
+                    }
+                ],
+                "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
             }
 
             # This should succeed without validation errors
@@ -402,17 +411,23 @@ class TestFieldAccessPatterns:
             "description": "Testing safe access patterns",
             "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             "delivery_type": "non_guaranteed",
-            "is_fixed_price": False,
-            "property_tags": ["all_inventory"],  # Required per AdCP spec
-            "pricing_options": [
-                PricingOption(
-                    pricing_option_id="cpm_usd_fixed",
-                    pricing_model="cpm",
-                    rate=10.0,
-                    currency="USD",
-                    is_fixed=True,
-                )
+            "publisher_properties": [
+                {
+                    "selection_type": "by_id",
+                    "publisher_domain": "example.com",
+                    "property_ids": ["all_inventory"],
+                }
             ],
+            "pricing_options": [
+                {
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "pricing_model": "cpm",
+                    "rate": 10.0,
+                    "currency": "USD",
+                    "is_fixed": True,  # Required in adcp 2.4.0+
+                }
+            ],
+            "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
         }
 
         product = Product(**product_data)
@@ -449,17 +464,23 @@ class TestFieldAccessPatterns:
             "description": "Testing unsafe access patterns",
             "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             "delivery_type": "non_guaranteed",
-            "is_fixed_price": False,
-            "property_tags": ["all_inventory"],  # Required per AdCP spec
-            "pricing_options": [
-                PricingOption(
-                    pricing_option_id="cpm_usd_fixed",
-                    pricing_model="cpm",
-                    rate=10.0,
-                    currency="USD",
-                    is_fixed=True,
-                )
+            "publisher_properties": [
+                {
+                    "selection_type": "by_id",
+                    "publisher_domain": "example.com",
+                    "property_ids": ["all_inventory"],
+                }
             ],
+            "pricing_options": [
+                {
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "pricing_model": "cpm",
+                    "rate": 10.0,
+                    "currency": "USD",
+                    "is_fixed": True,  # Required in adcp 2.4.0+
+                }
+            ],
+            "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
         }
 
         product = Product(**product_data)

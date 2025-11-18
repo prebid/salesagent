@@ -174,8 +174,7 @@ class TestAdCPReferenceImplementation:
                 end_time=end_time,
                 brand_manifest={"name": "Nike Air Jordan 2025 Basketball Shoes"},
                 targeting_overlay={
-                    "geographic": {"countries": ["US", "CA"]},
-                    "demographic": {"age_range": "25-44"},
+                    "geo_country_any_of": ["US", "CA"],
                 },
                 webhook_url=webhook_server["url"],  # Async notifications!
                 context={"e2e": "create_media_buy"},

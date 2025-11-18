@@ -229,7 +229,8 @@ class DynamicPricingService:
         if cpm_option:
             # Update existing option's price_guidance
             # Create new PriceGuidance object with updated values
-            existing_guidance = cpm_option.price_guidance
+            # Use getattr for discriminated union attribute access
+            existing_guidance = getattr(cpm_option, "price_guidance", None)
             updated_floor = (
                 floor_cpm if floor_cpm is not None else (existing_guidance.floor if existing_guidance else None)
             )
@@ -240,13 +241,8 @@ class DynamicPricingService:
             )
 
             if updated_floor is not None:
-                cpm_option.price_guidance = PriceGuidance(
-                    floor=updated_floor,
-                    p25=None,
-                    p50=None,
-                    p75=updated_p75,
-                    p90=None,
-                )
+                # Set price_guidance on discriminated union
+                cpm_option.price_guidance = PriceGuidance(floor=updated_floor, p25=None, p50=None, p75=updated_p75, p90=None)  # type: ignore[union-attr]
                 logger.debug(f"Updated existing CPM pricing option for {product.product_id}")
         else:
             # Create new CPM pricing option with price_guidance
@@ -271,5 +267,6 @@ class DynamicPricingService:
                     supported=None,
                     unsupported_reason=None,
                 )
-                product.pricing_options.append(new_option)
+                # PricingOption is compatible with discriminated union at runtime
+                product.pricing_options.append(new_option)  # type: ignore[arg-type]
                 logger.debug(f"Created new CPM pricing option for {product.product_id}")

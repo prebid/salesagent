@@ -1,26 +1,49 @@
 """Test that anonymous users get products with empty pricing_options."""
 
-from src.core.schemas import PricingOption, Product
+from src.core.schemas import Product
+from tests.helpers.adcp_factories import (
+    create_test_cpm_pricing_option,
+    create_test_publisher_properties_by_tag,
+)
 
 
 def test_product_with_empty_pricing_options():
-    """Test that Product can be created with empty pricing_options (anonymous user case)."""
+    """Test that Product with auction pricing (no rate) works for anonymous users.
+
+    Note: AdCP library requires at least 1 pricing option. For anonymous users,
+    we use auction pricing (price_guidance only, no rate field) instead of empty list.
+    """
     product = Product(
         product_id="test-1",
         name="Test Product",
         description="Test",
         format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_banner_728x90"}],
         delivery_type="guaranteed",
-        pricing_options=[],
-        property_tags=["all_inventory"],
+        delivery_measurement={
+            "provider": "test_provider",
+            "notes": "Test measurement",
+        },
+        pricing_options=[
+            {
+                "pricing_option_id": "cpm_usd_auction",
+                "pricing_model": "cpm",
+                "currency": "USD",
+                "is_fixed": False,  # Required in adcp 2.4.0+
+                "price_guidance": {"floor": 1.0, "p50": 5.0},  # Median guidance for auction
+                # Auction pricing (anonymous user view)
+            }
+        ],
+        publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
     )
 
-    # Verify the product serializes correctly without pricing_options field
+    # Verify the product serializes correctly
     dump = product.model_dump()
-    assert "pricing_options" not in dump, "Empty pricing_options should be excluded from serialization"
+    assert "pricing_options" in dump
     assert "product_id" in dump
     assert "name" in dump
     assert "description" in dump
+    # Verify no rate in pricing options (anonymous user case)
+    assert "rate" not in dump["pricing_options"][0]
 
 
 def test_product_with_pricing_options():
@@ -31,16 +54,18 @@ def test_product_with_pricing_options():
         description="Test",
         format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_banner_728x90"}],
         delivery_type="guaranteed",
+        delivery_measurement={
+            "provider": "test_provider",
+            "notes": "Test measurement",
+        },
         pricing_options=[
-            PricingOption(
+            create_test_cpm_pricing_option(
                 pricing_option_id="po-1",
-                pricing_model="cpm",
                 currency="USD",
-                is_fixed=True,
                 rate=10.0,
             )
         ],
-        property_tags=["all_inventory"],
+        publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
     )
 
     # Verify the product serializes with pricing_options
@@ -51,20 +76,29 @@ def test_product_with_pricing_options():
 
 
 def test_product_pricing_options_defaults_to_empty_list():
-    """Test that pricing_options defaults to empty list if not provided."""
-    product = Product(
-        product_id="test-3",
-        name="Test Product",
-        description="Test",
-        format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_banner_728x90"}],
-        delivery_type="guaranteed",
-        property_tags=["all_inventory"],
-        # pricing_options not provided - should default to []
-    )
+    """Test that pricing_options is required per AdCP spec.
 
-    # Verify pricing_options defaults to empty list
-    assert product.pricing_options == []
+    Note: AdCP library requires at least 1 pricing option - it does NOT default to empty list.
+    This test verifies the requirement is enforced.
+    """
+    import pytest
+    from pydantic import ValidationError
 
-    # Verify empty list is excluded from serialization
-    dump = product.model_dump()
-    assert "pricing_options" not in dump
+    # Attempting to create product without pricing_options should fail
+    with pytest.raises(ValidationError) as exc_info:
+        Product(
+            product_id="test-3",
+            name="Test Product",
+            description="Test",
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_banner_728x90"}],
+            delivery_type="guaranteed",
+            delivery_measurement={
+                "provider": "test_provider",
+                "notes": "Test measurement",
+            },
+            publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
+            # pricing_options not provided - should raise validation error
+        )
+
+    # Verify the error is about missing pricing_options
+    assert "pricing_options" in str(exc_info.value)

@@ -7,7 +7,6 @@ the AdCP testing specification.
 
 from datetime import datetime
 
-from src.core.schemas import PricingOption
 from src.core.testing_hooks import (
     AdCPTestContext,
     CampaignEvent,
@@ -124,6 +123,10 @@ class TestMockServerResponseHeaders:
     def test_response_headers_without_campaign_info(self):
         """Test response headers when no campaign info is available."""
         from src.core.schemas import Product
+        from tests.helpers.adcp_factories import (
+            create_test_format_id,
+            create_test_publisher_properties_by_tag,
+        )
 
         testing_ctx = AdCPTestContext(dry_run=True, test_session_id="test_no_campaign")
 
@@ -132,24 +135,22 @@ class TestMockServerResponseHeaders:
             product_id="test",
             name="Test Product",
             description="Real product object for testing",
-            format_ids=[
-                {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}
-            ],  # Internal field name
+            format_ids=[create_test_format_id("display_300x250")],
             delivery_type="non_guaranteed",
-            is_custom=False,
-            property_tags=["all_inventory"],  # Required per AdCP spec
+            delivery_measurement={"provider": "test_provider", "notes": "Test measurement"},
+            publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
             pricing_options=[
-                PricingOption(
-                    pricing_option_id="cpm_usd_auction",
-                    pricing_model="cpm",
-                    currency="USD",
-                    is_fixed=False,
-                    price_guidance={"floor": 1.0, "suggested_rate": 5.0},
-                )
+                {
+                    "pricing_option_id": "cpm_usd_auction",
+                    "pricing_model": "cpm",
+                    "currency": "USD",
+                    "is_fixed": False,  # Required in adcp 2.4.0+
+                    "price_guidance": {"floor": 1.0, "p50": 5.0},
+                }
             ],
         )
 
-        response_data = {"products": [test_product.model_dump_internal()]}
+        response_data = {"products": [test_product.model_dump()]}
 
         result = apply_testing_hooks(response_data, testing_ctx, "get_products")
 
@@ -164,7 +165,10 @@ class TestMockServerResponseHeaders:
         assert "X-Next-Event-Time" not in headers
 
         # CRITICAL: Test roundtrip conversion - this would catch the "formats field required" bug
-        modified_products = [Product(**p) for p in result["products"]]
+        # Filter out computed fields (pricing_summary is a @property, not a model field)
+        modified_products = [
+            Product(**{k: v for k, v in p.items() if k != "pricing_summary"}) for p in result["products"]
+        ]
 
         # Verify the roundtrip worked correctly
         assert len(modified_products) == 1
@@ -174,7 +178,9 @@ class TestMockServerResponseHeaders:
         # format_ids are now FormatId objects per AdCP spec
         assert len(reconstructed_product.format_ids) == 1
         assert reconstructed_product.format_ids[0].id == "display_300x250"
-        assert reconstructed_product.format_ids[0].agent_url == "https://creative.adcontextprotocol.org"
+        assert (
+            str(reconstructed_product.format_ids[0].agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
+        )  # AnyUrl adds trailing slash
 
     def test_response_headers_in_debug_mode(self):
         """Test that debug mode includes response header information."""

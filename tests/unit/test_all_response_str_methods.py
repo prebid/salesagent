@@ -22,8 +22,9 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
     UpdatePerformanceIndexResponse,
 )
-from src.core.schemas import (
-    PricingOption as PricingOptionSchema,
+from tests.helpers.adcp_factories import (
+    create_test_cpm_pricing_option,
+    create_test_publisher_properties_by_tag,
 )
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -45,15 +46,17 @@ class TestResponseStrMethods:
             description="Test",
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "banner"}],
             delivery_type="guaranteed",
+            delivery_measurement={
+                "provider": "test_provider",
+                "notes": "Test measurement",
+            },
             is_custom=False,
-            property_tags=["all_inventory"],  # Required per AdCP spec
+            publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
             pricing_options=[
-                PricingOptionSchema(
+                create_test_cpm_pricing_option(
                     pricing_option_id="cpm_usd_fixed",
-                    pricing_model="cpm",
-                    rate=10.0,
                     currency="USD",
-                    is_fixed=True,
+                    rate=10.0,
                 )
             ],
         )
@@ -68,16 +71,18 @@ class TestResponseStrMethods:
                 name=f"Product {i}",
                 description="Test",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "banner"}],
-                property_tags=["all_inventory"],  # Required per AdCP spec
                 delivery_type="guaranteed",
+                delivery_measurement={
+                    "provider": "test_provider",
+                    "notes": "Test measurement",
+                },
                 is_custom=False,
+                publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
                 pricing_options=[
-                    PricingOptionSchema(
+                    create_test_cpm_pricing_option(
                         pricing_option_id="cpm_usd_fixed",
-                        pricing_model="cpm",
-                        rate=10.0,
                         currency="USD",
-                        is_fixed=True,
+                        rate=10.0,
                     )
                 ],
             )
@@ -94,18 +99,22 @@ class TestResponseStrMethods:
                 name=f"Product {i}",
                 description="Test",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "banner"}],
-                property_tags=["all_inventory"],
                 delivery_type="guaranteed",
+                delivery_measurement={
+                    "provider": "test_provider",
+                    "notes": "Test measurement",
+                },
                 is_custom=False,
+                publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
                 pricing_options=[
-                    PricingOptionSchema(
-                        pricing_option_id="cpm_usd_auction",
-                        pricing_model="cpm",
-                        currency="USD",
-                        is_fixed=False,
-                        price_guidance={"floor": 1.0, "suggested_rate": 5.0},
-                        # No rate field - anonymous user doesn't see pricing
-                    )
+                    {
+                        "pricing_option_id": "cpm_usd_auction",
+                        "pricing_model": "cpm",
+                        "currency": "USD",
+                        "is_fixed": False,  # Required in adcp 2.4.0+
+                        "price_guidance": {"floor": 1.0, "p50": 5.0},
+                        # Auction pricing (anonymous user)
+                    }
                 ],
             )
             for i in range(2)
@@ -223,7 +232,7 @@ class TestResponseStrMethods:
 
     def test_update_media_buy_response(self):
         """UpdateMediaBuySuccess shows updated media buy ID."""
-        resp = UpdateMediaBuySuccess(media_buy_id="mb_123", buyer_ref="ref_456", packages=[], affected_packages=[])
+        resp = UpdateMediaBuySuccess(media_buy_id="mb_123", buyer_ref="ref_456", affected_packages=[])
         assert str(resp) == "Media buy mb_123 updated successfully."
 
     # Note: GetMediaBuyDeliveryResponse, CreateCreativeResponse, GetSignalsResponse

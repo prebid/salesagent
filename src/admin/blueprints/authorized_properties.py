@@ -325,7 +325,7 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
     except Exception as e:
         logger.error(f"Error listing authorized properties: {e}", exc_info=True)
         flash(f"Error loading properties: {str(e)}", "error")
-        return redirect(url_for("tenants.tenant_dashboard", tenant_id=tenant_id))
+        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/upload", methods=["GET", "POST"])
@@ -474,7 +474,7 @@ def list_property_tags(tenant_id: str) -> str | Response:
     except Exception as e:
         logger.error(f"Error listing property tags: {e}")
         flash(f"Error loading tags: {str(e)}", "error")
-        return redirect(url_for("tenants.tenant_dashboard", tenant_id=tenant_id))
+        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
 @authorized_properties_bp.route("/<tenant_id>/property-tags/create", methods=["POST"])

@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from src.core.schemas import (
     Budget,
-    Package,
+    PackageRequest,
     extract_budget_amount,
 )
 
@@ -20,7 +20,7 @@ class TestBudgetMigrationInMainPy:
     def test_package_budget_validation_with_float(self):
         """Test that package budget validation works with float budget (v1.8.0)."""
         # Simulate the logic from main.py lines 3633-3637
-        package = Package(product_id="prod_1", budget=5000.0, status="active")
+        package = PackageRequest(product_id="prod_1", buyer_ref="pkg1", budget=5000.0, pricing_option_id="test_pricing")
         request_currency = "USD"
 
         # This is what main.py now does

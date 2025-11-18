@@ -130,7 +130,7 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
 
         if not step:
             flash("Workflow step not found", "error")
-            return redirect(url_for("tenants.tenant_dashboard", tenant_id=tenant_id))
+            return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
         # Get the context for tenant/principal info
         context = db.scalars(select(Context).filter_by(context_id=step.context_id)).first()

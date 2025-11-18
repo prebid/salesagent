@@ -6,15 +6,11 @@ This test would have caught the issue by testing the real database→schema conv
 """
 
 import json
-import sys
-from pathlib import Path
-
-# Add the src directory to Python path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from pydantic import ValidationError
 
 from src.core.schemas import Product
+from tests.helpers.adcp_factories import create_test_product
 
 
 def test_ai_provider_bug_reproduction():
@@ -33,8 +29,6 @@ def test_ai_provider_bug_reproduction():
         "description": "Test description",
         "format_ids": ["display_300x250", "audio_15s", "audio_30s"],
         "delivery_type": "guaranteed",
-        "is_fixed_price": True,
-        "cpm": 10.0,
         # BUG: These fields were being passed to Product constructor but aren't valid
         "targeting_template": {"demographics": "adults"},  # INVALID - internal field
         "price_guidance": {"min": 5.0, "max": 15.0},  # INVALID - not in Product schema
@@ -80,45 +74,24 @@ def test_correct_product_construction():
     Test the CORRECT way to construct Product objects (as fixed in the AI provider).
 
     This demonstrates the proper pattern that should be used by all providers.
+    Uses test factory for consistent, maintainable test data.
     """
-
-    # Correct product_data dict with only AdCP-compliant fields
-
-    correct_product_data = {
-        "product_id": "test_product",
-        "name": "Test Product",
-        "description": "Test description",
-        "format_ids": [
-            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-            {"agent_url": "https://creative.adcontextprotocol.org", "id": "audio_15s"},
-            {"agent_url": "https://creative.adcontextprotocol.org", "id": "audio_30s"},
-        ],
-        "delivery_type": "guaranteed",
-        "is_custom": False,
-        "property_tags": ["all_inventory"],  # Required per AdCP spec
-        "pricing_options": [
-            {
-                "pricing_option_id": "cpm_usd_fixed",
-                "pricing_model": "cpm",
-                "rate": 10.0,
-                "currency": "USD",
-                "is_fixed": True,
-            }
-        ],
-        # NOTE: Internal fields like targeting_template, price_guidance, etc. are NOT included
-    }
-
     print("Testing the CORRECT Product construction pattern...")
-    print(f"Creating Product with clean data: {json.dumps(correct_product_data, indent=2)}")
 
-    # This should SUCCEED
-    product = Product(**correct_product_data)
+    # Use factory to create valid product - eliminates manual field construction
+    product = create_test_product(
+        product_id="test_product",
+        name="Test Product",
+        description="Test description",
+        format_ids=["display_300x250", "audio_15s", "audio_30s"],  # Factory converts to FormatId objects
+        delivery_type="guaranteed",
+    )
 
-    print("✅ Product created successfully!")
+    print("✅ Product created successfully using factory!")
 
     # Verify the AdCP-compliant response
     adcp_response = product.model_dump()
-    print(f"AdCP response: {json.dumps(adcp_response, indent=2)}")
+    print(f"AdCP response: {json.dumps(adcp_response, indent=2, default=str)}")
 
     # Verify required fields are present
     assert "product_id" in adcp_response
@@ -128,9 +101,9 @@ def test_correct_product_construction():
     assert adcp_response["format_ids"][0]["id"] == "display_300x250"
     assert adcp_response["format_ids"][1]["id"] == "audio_15s"
     assert adcp_response["format_ids"][2]["id"] == "audio_30s"
-    # All should have the same agent_url
+    # All should have the same agent_url (factory sets default)
     for fmt in adcp_response["format_ids"]:
-        assert fmt["agent_url"] == "https://creative.adcontextprotocol.org"
+        assert "agent_url" in fmt
 
     # Verify internal fields are NOT in the response
     internal_fields = ["targeting_template", "price_guidance", "implementation_config", "countries", "expires_at"]

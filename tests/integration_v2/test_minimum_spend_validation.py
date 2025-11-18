@@ -31,9 +31,10 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.schemas import Budget, Package
+from src.core.schemas import Budget
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from tests.integration_v2.conftest import create_test_product_with_pricing
+from tests.helpers.adcp_factories import create_test_package_request
+from tests.integration_v2.conftest import create_test_product_with_pricing, get_pricing_option_id
 
 
 @pytest.mark.integration
@@ -228,7 +229,28 @@ class TestMinimumSpendValidation:
             # Set current tenant
             set_current_tenant("test_minspend_tenant")
 
-        yield
+        # Return pricing_option_ids for tests (database-generated IDs as strings)
+        # Eager-load pricing_options to avoid DetachedInstanceError
+        from sqlalchemy.orm import selectinload
+
+        with get_db_session() as session:
+            stmt = (
+                select(Product)
+                .filter_by(tenant_id="test_minspend_tenant")
+                .options(selectinload(Product.pricing_options))
+            )
+            products = {p.product_id: p for p in session.scalars(stmt).all()}
+
+            # Extract pricing_option_ids while session is still open
+            pricing_data = {
+                "prod_global_usd": get_pricing_option_id(products["prod_global"], "USD"),
+                "prod_global_eur": get_pricing_option_id(products["prod_global"], "EUR"),
+                "prod_high": get_pricing_option_id(products["prod_high"], "USD"),
+                "prod_low": get_pricing_option_id(products["prod_low"], "USD"),
+                "prod_global_gbp": get_pricing_option_id(products["prod_global_gbp"], "GBP"),
+            }
+
+        yield pricing_data
 
         # Cleanup (order matters - delete children before parents due to foreign keys)
         from src.core.database.models import MediaPackage as MediaPackageModel
@@ -270,10 +292,11 @@ class TestMinimumSpendValidation:
             buyer_ref="minspend_test_1",
             brand_manifest={"name": "Test Campaign"},
             packages=[
-                Package(
+                create_test_package_request(
                     buyer_ref="minspend_test_1",
                     product_id="prod_global",
                     budget=500.0,  # Below $1000 minimum per AdCP v2.2.0, currency from pricing_option
+                    pricing_option_id=setup_test_data["prod_global_usd"],  # Use actual database-generated ID
                 )
             ],
             start_time=start_time.isoformat(),
@@ -305,10 +328,11 @@ class TestMinimumSpendValidation:
             buyer_ref="minspend_test_2",
             brand_manifest={"name": "Test Campaign"},
             packages=[
-                Package(
+                create_test_package_request(
                     buyer_ref="minspend_test_2",
                     product_id="prod_high",
                     budget=3000.0,  # Below $5000 product minimum per AdCP v2.2.0, currency from pricing_option
+                    pricing_option_id=setup_test_data["prod_high"],  # Use actual database-generated ID
                 )
             ],
             start_time=start_time.isoformat(),
@@ -340,10 +364,11 @@ class TestMinimumSpendValidation:
             buyer_ref="minspend_test_3",
             brand_manifest={"name": "Test Campaign"},
             packages=[
-                Package(
+                create_test_package_request(
                     buyer_ref="minspend_test_3",
                     product_id="prod_low",
                     budget=750.0,  # Above $500 product min, below $1000 currency limit per AdCP v2.2.0
+                    pricing_option_id=setup_test_data["prod_low"],  # Use actual database-generated ID
                 )
             ],
             start_time=start_time.isoformat(),
@@ -371,10 +396,11 @@ class TestMinimumSpendValidation:
             buyer_ref="minspend_test_4",
             brand_manifest={"name": "Test Campaign"},
             packages=[
-                Package(
+                create_test_package_request(
                     buyer_ref="minspend_test_4",
                     product_id="prod_global",
                     budget=2000.0,  # Above $1000 minimum per AdCP v2.2.0, currency from pricing_option
+                    pricing_option_id=setup_test_data["prod_global_usd"],  # Use actual database-generated ID
                 )
             ],
             start_time=start_time.isoformat(),
@@ -398,17 +424,17 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # Try to create media buy with excessive budget
-        # Without pricing_option_id, defaults to USD
         # $100,000 USD is excessive and will be rejected by adapter
         with pytest.raises(ToolError) as exc_info:
             await _create_media_buy_impl(
                 buyer_ref="minspend_test_5",
                 brand_manifest={"name": "Test Campaign"},
                 packages=[
-                    Package(
+                    create_test_package_request(
                         buyer_ref="minspend_test_5",
                         product_id="prod_global",
                         budget=100000.0,  # Excessive budget per AdCP v2.2.0 float format
+                        pricing_option_id=setup_test_data["prod_global_usd"],  # Use actual database-generated ID
                     )
                 ],
                 start_time=start_time.isoformat(),
@@ -432,16 +458,16 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # $800 should fail (below $1000 USD minimum)
-        # Note: Without pricing_option_id, defaults to USD pricing
         # Should fail validation and return errors in response
         response = await _create_media_buy_impl(
             buyer_ref="minspend_test_6",
             brand_manifest={"name": "Test Campaign"},
             packages=[
-                Package(
+                create_test_package_request(
                     buyer_ref="minspend_test_6",
                     product_id="prod_global",
                     budget=800.0,  # Below $1000 minimum per AdCP v2.2.0, currency from pricing_option
+                    pricing_option_id=setup_test_data["prod_global_usd"],  # Use actual database-generated ID
                 )
             ],
             start_time=start_time.isoformat(),
@@ -483,10 +509,11 @@ class TestMinimumSpendValidation:
             buyer_ref="minspend_test_7",
             brand_manifest={"name": "Test Campaign"},
             packages=[
-                Package(
+                create_test_package_request(
                     buyer_ref="minspend_test_7",
                     product_id="prod_global_gbp",  # Use GBP product
                     budget=100.0,  # Low budget, no minimum for GBP per AdCP v2.2.0, currency from pricing_option
+                    pricing_option_id=setup_test_data["prod_global_gbp"],  # Use actual database-generated ID
                 )
             ],
             start_time=start_time.isoformat(),

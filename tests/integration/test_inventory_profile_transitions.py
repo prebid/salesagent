@@ -351,7 +351,7 @@ class TestInventoryProfileTransitions:
         """Test clearing profile without setting custom config.
 
         Scenario: Product uses profile, profile_id cleared, no custom config set.
-        Expected: System handles gracefully with empty/default values.
+        Expected: System handles gracefully by synthesizing properties from property_tags.
         """
         # Create product with inventory_profile_id (no custom config)
         self.create_product(
@@ -385,7 +385,7 @@ class TestInventoryProfileTransitions:
             session.refresh(product)
 
             # Check effective_formats and effective_properties
-            # System should return empty custom config gracefully
+            # System should return custom config gracefully
             assert product.inventory_profile_id is None
 
             # effective_formats should return empty list (product.format_ids)
@@ -393,9 +393,13 @@ class TestInventoryProfileTransitions:
             assert isinstance(effective_formats, list)
             assert effective_formats == []
 
-            # effective_properties should return None or empty (product.properties)
+            # effective_properties should synthesize by_tag variant from property_tags
             effective_properties = product.effective_properties
-            assert effective_properties is None or effective_properties == []
+            assert effective_properties is not None
+            assert isinstance(effective_properties, list)
+            assert len(effective_properties) == 1
+            assert effective_properties[0]["selection_type"] == "by_tag"
+            assert effective_properties[0]["property_tags"] == ["all_inventory"]
 
             # Verify system handles gracefully (no exceptions)
             # Product is valid even without profile or custom config

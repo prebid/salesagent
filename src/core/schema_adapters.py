@@ -19,7 +19,7 @@ Benefits:
 
 from typing import Any
 
-from adcp.types.generated import GetProductsRequest as _GeneratedGetProductsRequest
+from adcp import GetProductsRequest as _GeneratedGetProductsRequest
 from pydantic import BaseModel, Field, model_validator
 
 from src.core.schemas import AdCPBaseModel, FormatId
@@ -103,10 +103,32 @@ class GetProductsRequest(BaseModel):
                     for fmt_id in filters_dict["format_ids"]
                 ]
 
+        # Convert brand_manifest dict to proper BrandManifest object for adcp 2.5.0
+        brand_manifest_converted: dict[str, Any] | str | None = None
+        if self.brand_manifest:
+            if isinstance(self.brand_manifest, dict):
+                # Ensure required 'name' field exists (adcp 2.5.0 requirement)
+                if "name" not in self.brand_manifest:
+                    # If only 'url' provided, use domain as name
+                    if "url" in self.brand_manifest:
+                        from urllib.parse import urlparse
+
+                        url_str = self.brand_manifest["url"]
+                        domain = urlparse(url_str).netloc or url_str
+                        self.brand_manifest["name"] = domain
+                    else:
+                        # Fallback: use a placeholder name
+                        self.brand_manifest["name"] = "Brand"
+
+                brand_manifest_converted = self.brand_manifest
+            else:
+                # String brand_manifest (URL or name)
+                brand_manifest_converted = self.brand_manifest
+
         # Create generated schema instance (only fields that exist in AdCP spec)
         # Note: promoted_offering, min_exposures, strategy_id, webhook_url are adapter-only fields
         return _GeneratedGetProductsRequest(
-            brand_manifest=self.brand_manifest,  # type: ignore[arg-type]
+            brand_manifest=brand_manifest_converted,  # type: ignore[arg-type]
             brief=self.brief or None,
             filters=filters_dict,  # type: ignore[arg-type]
         )
@@ -189,7 +211,8 @@ class GetProductsResponse(AdCPBaseModel):
                         break
                 else:
                     if hasattr(p, "pricing_options") and p.pricing_options:
-                        if any(po.rate is not None for po in p.pricing_options):
+                        # Check if any pricing option has a rate attribute with non-None value
+                        if any(hasattr(po, "rate") and po.rate is not None for po in p.pricing_options):
                             all_missing_pricing = False
                             break
 
@@ -206,7 +229,7 @@ class GetProductsRequestAdapter:
     To add an adapter for a new schema:
 
     1. Import the generated schema(s):
-       from adcp.types.generated import GeneratedModel
+       from adcp import GeneratedModel
 
     2. Create adapter class:
        class MyModel(BaseModel):
@@ -348,7 +371,7 @@ class Product(BaseModel):
 # ListCreativeFormatsResponse Adapter
 # ============================================================================
 
-from adcp.types.generated import ListCreativeFormatsResponse as _GeneratedListCreativeFormatsResponse
+from adcp import ListCreativeFormatsResponse as _GeneratedListCreativeFormatsResponse
 
 
 class ListCreativeFormatsResponse(AdCPBaseModel):
@@ -401,7 +424,7 @@ class ListCreativeFormatsResponse(AdCPBaseModel):
 # ListAuthorizedPropertiesResponse Adapter
 # ============================================================================
 
-from adcp.types.generated import ListAuthorizedPropertiesResponse as _GeneratedListAuthorizedPropertiesResponse
+from adcp import ListAuthorizedPropertiesResponse as _GeneratedListAuthorizedPropertiesResponse
 
 
 class ListAuthorizedPropertiesResponse(AdCPBaseModel):
@@ -488,10 +511,10 @@ class ListAuthorizedPropertiesResponse(AdCPBaseModel):
 # Request Adapters (simple pass-through for now)
 # ============================================================================
 
-from adcp.types.generated import (
+from adcp import (
     ListAuthorizedPropertiesRequest as _GeneratedListAuthorizedPropertiesRequest,
 )
-from adcp.types.generated import (
+from adcp import (
     ListCreativeFormatsRequest as _GeneratedListCreativeFormatsRequest,
 )
 
@@ -505,9 +528,7 @@ class ListCreativeFormatsRequest(BaseModel):
     format_ids: list[FormatId] | None = Field(
         None, description="Return only these specific format IDs (e.g., from get_products response)"
     )
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context provided by the client"
-    )
+    context: dict[str, Any] | None = Field(None, description="Application-level context provided by the client")
 
     def to_generated(self) -> _GeneratedListCreativeFormatsRequest:
         """Convert to generated schema for protocol validation."""
@@ -518,9 +539,7 @@ class ListAuthorizedPropertiesRequest(BaseModel):
     """Adapter for ListAuthorizedPropertiesRequest - simple pass-through to generated schema."""
 
     tags: list[str] | None = Field(None, description="Filter properties by specific tags")
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context provided by the client"
-    )
+    context: dict[str, Any] | None = Field(None, description="Application-level context provided by the client")
 
     def to_generated(self) -> _GeneratedListAuthorizedPropertiesRequest:
         """Convert to generated schema for protocol validation."""
@@ -560,9 +579,7 @@ class CreateMediaBuyResponse(AdCPBaseModel):
     creative_deadline: Any | None = None
     packages: list[Any] = Field(default_factory=list)
     errors: list[Any] | None = None
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context echoed from the request"
-    )
+    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -605,9 +622,7 @@ class UpdateMediaBuyResponse(AdCPBaseModel):
     implementation_date: str | None = Field(None, description="ISO 8601 date when changes will take effect")
     affected_packages: list[Any] | None = Field(default_factory=list)
     errors: list[Any] | None = None
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context echoed from the request"
-    )
+    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
 
     def __str__(self) -> str:
         """Return human-readable message for protocol layer."""
@@ -638,9 +653,7 @@ class SyncCreativesResponse(AdCPBaseModel):
 
     # Optional fields (per official spec)
     dry_run: bool | None = Field(None, description="Whether this was a dry run (no actual changes made)")
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context echoed from the request"
-    )
+    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
@@ -755,9 +768,7 @@ class ActivateSignalResponse(AdCPBaseModel):
     estimated_activation_duration_minutes: float | None = None
     deployed_at: str | None = None
     errors: list[Any] | None = None
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context echoed from the request"
-    )
+    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
 
     def __str__(self) -> str:
         """Return human-readable message for protocol layer."""

@@ -1,6 +1,5 @@
 """Database-backed product catalog provider (current implementation)."""
 
-import json
 import logging
 from typing import Any
 
@@ -8,8 +7,8 @@ from sqlalchemy.orm import joinedload
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ProductModel
-from src.core.database.product_pricing import get_product_pricing_options
-from src.core.schemas import PriceGuidance, PricingModel, PricingOption, PricingParameters, Product
+from src.core.product_conversion import convert_product_model_to_schema
+from src.core.schemas import Product
 
 from .base import ProductCatalogProvider
 
@@ -46,7 +45,7 @@ class DatabaseProductCatalog(ProductCatalogProvider):
 
             stmt = (
                 select(ProductModel)
-                .options(joinedload(ProductModel.pricing_options))
+                .options(joinedload(ProductModel.pricing_options), joinedload(ProductModel.tenant))
                 .filter_by(tenant_id=tenant_id)
                 .order_by(ProductModel.product_id)
             )
@@ -54,124 +53,24 @@ class DatabaseProductCatalog(ProductCatalogProvider):
             result = db_session.execute(stmt).unique()
             products = list(result.scalars().all())
 
+            # Convert database Product models to AdCP Product schema
             loaded_products = []
             for product_obj in products:
-                # Get pricing options using helper (handles legacy fallback)
-                pricing_options_data = get_product_pricing_options(product_obj)
-
-                # Convert to Pydantic PricingOption objects
-                # IMPORTANT: Always initialize to empty list, never None (Product schema expects list)
-                pricing_options: list[PricingOption] = []
-                if pricing_options_data:
-                    try:
-                        for po_dict in pricing_options_data:
-                            # Generate pricing_option_id if not present
-                            pricing_option_id = po_dict.get("pricing_option_id")
-                            if not pricing_option_id:
-                                # Generate from pricing model and currency
-                                fixed_str = "fixed" if po_dict["is_fixed"] else "auction"
-                                pricing_option_id = (
-                                    f"{po_dict['pricing_model']}_{po_dict['currency'].lower()}_{fixed_str}"
-                                )
-
-                            pricing_options.append(
-                                PricingOption(
-                                    pricing_option_id=pricing_option_id,
-                                    pricing_model=PricingModel(po_dict["pricing_model"]),
-                                    rate=po_dict.get("rate"),
-                                    currency=po_dict["currency"],
-                                    is_fixed=po_dict["is_fixed"],
-                                    price_guidance=(
-                                        PriceGuidance(
-                                            floor=po_dict["price_guidance"].get("floor", 0.0),
-                                            p25=po_dict["price_guidance"].get("p25"),
-                                            p50=po_dict["price_guidance"].get("p50"),
-                                            p75=po_dict["price_guidance"].get("p75"),
-                                            p90=po_dict["price_guidance"].get("p90"),
-                                        )
-                                        if po_dict.get("price_guidance")
-                                        else None
-                                    ),
-                                    parameters=(
-                                        PricingParameters(**po_dict["parameters"])
-                                        if po_dict.get("parameters")
-                                        else None
-                                    ),
-                                    min_spend_per_package=po_dict.get("min_spend_per_package"),
-                                    supported=None,  # Populated dynamically by adapter
-                                    unsupported_reason=None,
-                                )
-                            )
-                    except Exception as e:
-                        logger.warning(f"Failed to convert pricing options for product {product_obj.product_id}: {e}")
-                        # Keep empty list on error - don't set to None
-
-                # Convert ORM object to dictionary
-                product_data: dict[str, Any] = {
-                    "product_id": product_obj.product_id,
-                    "name": product_obj.name,
-                    "description": product_obj.description,
-                    "format_ids": product_obj.format_ids,
-                    "pricing_options": pricing_options,
-                    "delivery_type": product_obj.delivery_type,  # Required by AdCP spec
-                    "is_custom": product_obj.is_custom,
-                    "countries": product_obj.countries,
-                    "properties": product_obj.properties if hasattr(product_obj, "properties") else None,
-                    "property_tags": (
-                        product_obj.property_tags
-                        if hasattr(product_obj, "property_tags") and product_obj.property_tags
-                        else ["all_inventory"]  # Default required per AdCP spec
-                    ),
-                }
-
-                # Handle JSONB fields - PostgreSQL returns them as Python objects, SQLite as strings
-                if product_data.get("formats"):
-                    if isinstance(product_data["formats"], str):
-                        product_data["formats"] = json.loads(product_data["formats"])
-
-                # Note: Internal fields (targeting_template, implementation_config, countries)
-                # are not included in product_data dict - they're not part of Product schema
-
-                # Fix missing required fields for Pydantic validation
-
-                # 1. Fix missing description (required field)
-                if not product_data.get("description"):
-                    product_data["description"] = f"Advertising product: {product_data.get('name', 'Unknown Product')}"
-
-                # 2. Fix missing is_custom (should default to False)
-                if product_data.get("is_custom") is None:
-                    product_data["is_custom"] = False
-
-                # 3. Keep formats as FormatId objects (dicts with agent_url and id)
-                # Per AdCP v2.4 spec and Product schema: formats should be list[FormatId | FormatReference]
-                # Database stores formats as list[dict] with {agent_url, id} structure
-                # NO CONVERSION NEEDED - just pass through the format objects as-is
-                if product_data.get("formats"):
-                    logger.debug(
-                        f"Formats for {product_data.get('product_id')}: {product_data['formats']} (keeping as FormatId objects)"
-                    )
-
-                # Validate against AdCP protocol schema before returning
                 try:
-                    logger.debug(
-                        f"About to validate product {product_data.get('product_id')}: price_guidance={product_data.get('price_guidance')} (type: {type(product_data.get('price_guidance'))})"
-                    )
-                    validated_product = Product(**product_data)
+                    # Use shared conversion function (handles all required fields, pricing options, etc.)
+                    validated_product = convert_product_model_to_schema(product_obj)
                     loaded_products.append(validated_product)
-                    logger.debug(f"Successfully validated product {product_data.get('product_id')}")
+                    logger.debug(f"Successfully converted product {product_obj.product_id}")
                 except Exception as e:
-                    # CRITICAL: Product validation failures indicate data corruption or schema mismatch
+                    # CRITICAL: Product conversion failures indicate data corruption or schema mismatch
                     # We MUST fail loudly, not silently skip products
                     error_msg = (
-                        f"Product '{product_data.get('product_id')}' in database failed AdCP schema validation. "
+                        f"Product '{product_obj.product_id}' failed to convert to AdCP schema. "
                         f"This indicates data corruption or migration issue. Error: {e}"
                     )
-
-                    # Log with full context for production debugging
                     logger.error(error_msg)
-                    logger.error(f"Failed product data: {json.dumps(product_data, default=str)[:1000]}")
-
                     # Re-raise with context - don't silently skip products!
                     raise ValueError(error_msg) from e
 
-            return loaded_products
+            # Return library Product list - compatible with our extended Product at runtime
+            return loaded_products  # type: ignore[return-value]

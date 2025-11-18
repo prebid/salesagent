@@ -507,9 +507,13 @@ class GAMOrdersManager:
                         raise ValueError(error_msg)
 
                     # Check if format type is supported by product
-                    if format_obj.type not in supported_format_types:
+                    # Convert enum to string for comparison (adcp 2.5.0 uses Type enum)
+                    format_type_str = (
+                        format_obj.type.value if hasattr(format_obj.type, "value") else str(format_obj.type)
+                    )
+                    if format_type_str not in supported_format_types:
                         error_msg = (
-                            f"Format '{format_display}' (type: {format_obj.type}) is not supported by product {package.package_id}. "
+                            f"Format '{format_display}' (type: {format_type_str}) is not supported by product {package.package_id}. "
                             f"Product supports: {', '.join(supported_format_types)}. "
                             f"Configure 'supported_format_types' in product implementation_config if this should be supported."
                         )
@@ -517,7 +521,7 @@ class GAMOrdersManager:
                         raise ValueError(error_msg)
 
                     # Audio formats are not supported in GAM (no creative placeholders)
-                    if format_obj.type == "audio":
+                    if format_type_str == "audio":
                         error_msg = (
                             f"Audio format '{format_display}' is not supported. "
                             f"GAM does not support standalone audio line items. "

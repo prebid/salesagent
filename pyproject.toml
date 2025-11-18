@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
-    "adcp==1.6.1", # Official AdCP Python client for external agent communication and adagents.json validation
+    "adcp>=2.5.0", # Official AdCP Python client for external agent communication and adagents.json validation
     "fastmcp>=2.13.0", # Required for context.get_http_request() support
     "google-generativeai>=0.5.4",
     "google-cloud-iam>=2.19.1",
@@ -50,6 +50,7 @@ dev = [
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
     "pytest-mock>=3.14.1",
+    "pytest-timeout>=2.3.1",
     "ruff>=0.8.0",
     "datamodel-code-generator>=0.26.0",
     "jsonref>=1.1.0",
@@ -73,6 +74,7 @@ dev = [
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
     "pytest-mock>=3.14.1",
+    "pytest-timeout>=2.3.1",
     "ruff>=0.8.0",
     "datamodel-code-generator>=0.26.0",
     "jsonref>=1.1.0",

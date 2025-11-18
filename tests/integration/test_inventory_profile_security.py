@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product
+from tests.helpers.adcp_factories import create_test_db_product
 from tests.utils.database_helpers import (
     create_tenant_with_timestamps,
 )
@@ -144,7 +145,7 @@ class TestInventoryProfileSecurity:
         with get_db_session() as session:
             # Attempt to create product for tenant_b referencing tenant_a's profile
             # Note: Must satisfy ck_product_properties_xor constraint (either properties OR property_tags)
-            product_b = Product(
+            product_b = create_test_db_product(
                 tenant_id=tenant_b,  # Tenant B
                 product_id="product_b_bad",
                 name="Product B (Invalid)",
@@ -153,7 +154,6 @@ class TestInventoryProfileSecurity:
                 targeting_template={"geo": ["US"]},
                 delivery_type="non_guaranteed",
                 inventory_profile_id=profile_a,  # SECURITY VIOLATION: References tenant A's profile!
-                property_tags=["all_inventory"],  # Required by ck_product_properties_xor
             )
             session.add(product_b)
 
@@ -185,7 +185,7 @@ class TestInventoryProfileSecurity:
         """
         with get_db_session() as session:
             # Create product for tenant_a using profile_a
-            product_a = Product(
+            product_a = create_test_db_product(
                 tenant_id=tenant_a,
                 product_id="product_a",
                 name="Product A",
@@ -194,11 +194,10 @@ class TestInventoryProfileSecurity:
                 targeting_template={"geo": ["US"]},
                 delivery_type="non_guaranteed",
                 inventory_profile_id=profile_a,
-                property_tags=["all_inventory"],  # Required by ck_product_properties_xor
             )
 
             # Create product for tenant_b using profile_b
-            product_b = Product(
+            product_b = create_test_db_product(
                 tenant_id=tenant_b,
                 product_id="product_b",
                 name="Product B",
@@ -207,7 +206,6 @@ class TestInventoryProfileSecurity:
                 targeting_template={"geo": ["US"]},
                 delivery_type="non_guaranteed",
                 inventory_profile_id=profile_b,
-                property_tags=["all_inventory"],  # Required by ck_product_properties_xor
             )
 
             session.add_all([product_a, product_b])
@@ -243,7 +241,7 @@ class TestInventoryProfileSecurity:
         """
         with get_db_session() as session:
             # Create product for tenant_a using profile_a
-            product_a = Product(
+            product_a = create_test_db_product(
                 tenant_id=tenant_a,
                 product_id="product_a",
                 name="Product A",
@@ -252,11 +250,10 @@ class TestInventoryProfileSecurity:
                 targeting_template={"geo": ["US"]},
                 delivery_type="non_guaranteed",
                 inventory_profile_id=profile_a,
-                property_tags=["all_inventory"],  # Required by ck_product_properties_xor
             )
 
             # Create product for tenant_b using profile_b
-            product_b = Product(
+            product_b = create_test_db_product(
                 tenant_id=tenant_b,
                 product_id="product_b",
                 name="Product B",
@@ -265,7 +262,6 @@ class TestInventoryProfileSecurity:
                 targeting_template={"geo": ["US"]},
                 delivery_type="non_guaranteed",
                 inventory_profile_id=profile_b,
-                property_tags=["all_inventory"],  # Required by ck_product_properties_xor
             )
 
             session.add_all([product_a, product_b])

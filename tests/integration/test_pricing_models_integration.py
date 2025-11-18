@@ -11,10 +11,11 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
 from src.core.schema_adapters import GetProductsRequest
-from src.core.schemas import CreateMediaBuyRequest, Package, PricingModel
+from src.core.schemas import CreateMediaBuyRequest, PricingModel
 from src.core.tool_context import ToolContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl
+from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = pytest.mark.requires_db
@@ -273,10 +274,10 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_1",
-                products=["prod_cpm_fixed"],
-                pricing_model=PricingModel.CPM,
+            create_test_package_request(
+                buyer_ref="pkg_1",
+                product_id="prod_cpm_fixed",
+                pricing_option_id="cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=10000.0,
             )
         ],
@@ -306,8 +307,12 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
         context=None,
     )
 
+    # Verify response is success (AdCP 2.4 compliant)
+    # Success response has media_buy_id, error response has errors field
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
-    # Note: status field may not exist in response, check for media_buy_id instead
 
 
 @pytest.mark.requires_db
@@ -317,10 +322,10 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_1",
-                products=["prod_cpm_auction"],
-                pricing_model=PricingModel.CPM,
+            create_test_package_request(
+                buyer_ref="pkg_1",
+                product_id="prod_cpm_auction",
+                pricing_option_id="cpm_usd_auction",  # Format: {model}_{currency}_{fixed|auction}
                 bid_price=15.0,  # Above floor of 8.0
                 budget=10000.0,
             )
@@ -351,6 +356,11 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
         ctx=context,
     )
 
+    # Verify response is success (AdCP 2.4 compliant)
+    # Success response has media_buy_id, error response has errors field
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
 
 
@@ -361,10 +371,10 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_1",
-                products=["prod_cpm_auction"],
-                pricing_model=PricingModel.CPM,
+            create_test_package_request(
+                buyer_ref="pkg_1",
+                product_id="prod_cpm_auction",
+                pricing_option_id="cpm_usd_auction",  # Format: {model}_{currency}_{fixed|auction}
                 bid_price=5.0,  # Below floor of 8.0
                 budget=10000.0,
             )
@@ -409,10 +419,10 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_1",
-                products=["prod_cpcv"],
-                pricing_model=PricingModel.CPCV,
+            create_test_package_request(
+                buyer_ref="pkg_1",
+                product_id="prod_cpcv",
+                pricing_option_id="cpcv_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=8000.0,  # Above min spend of 5000
             )
         ],
@@ -442,6 +452,11 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
         context=None,
     )
 
+    # Verify response is success (AdCP 2.4 compliant)
+    # Success response has media_buy_id, error response has errors field
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
 
 
@@ -452,10 +467,10 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_1",
-                products=["prod_cpcv"],
-                pricing_model=PricingModel.CPCV,
+            create_test_package_request(
+                buyer_ref="pkg_1",
+                product_id="prod_cpcv",
+                pricing_option_id="cpcv_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=3000.0,  # Below min spend of 5000
             )
         ],
@@ -499,10 +514,10 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_1",
-                products=["prod_multi"],
-                pricing_model=PricingModel.CPP,
+            create_test_package_request(
+                buyer_ref="pkg_1",
+                product_id="prod_multi",
+                pricing_option_id="cpp_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=15000.0,  # Above min spend of 10000
             )
         ],
@@ -532,6 +547,11 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
         context=None,
     )
 
+    # Verify response is success (AdCP 2.4 compliant)
+    # Success response has media_buy_id, error response has errors field
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
 
 
@@ -542,10 +562,10 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
         packages=[
-            Package(
-                package_id="pkg_1",
-                products=["prod_cpm_fixed"],  # Only offers CPM
-                pricing_model=PricingModel.CPCV,  # Requesting CPCV
+            create_test_package_request(
+                buyer_ref="pkg_1",
+                product_id="prod_cpm_fixed",  # Only offers CPM
+                pricing_option_id="cpcv_usd_fixed",  # Requesting CPCV (should fail)
                 budget=10000.0,
             )
         ],

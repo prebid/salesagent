@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from src.adapters.creative_engine import CreativeEngineAdapter
-from src.core.schemas import Creative, CreativeAdaptation, CreativeStatus, FormatId
+from src.core.schemas import Creative, CreativeAdaptation, CreativeApprovalStatus, FormatId
 
 
 class MockCreativeEngine(CreativeEngineAdapter):
@@ -15,7 +15,7 @@ class MockCreativeEngine(CreativeEngineAdapter):
         # Formats that can be auto-approved
         self.auto_approve_format_ids = set(config.get("auto_approve_formats", []))
 
-    def process_creatives(self, creatives: list[Creative]) -> list[CreativeStatus]:
+    def process_creatives(self, creatives: list[Creative]) -> list[CreativeApprovalStatus]:
         """Simulates processing creatives, returning their status."""
         processed = []
         for creative in creatives:
@@ -41,14 +41,15 @@ class MockCreativeEngine(CreativeEngineAdapter):
 
             # Generate adaptation suggestions for video formats
             suggested_adaptations = []
-            if creative.format_id and "video" in creative.format_id.lower():
+            format_id_str = creative.format_id.id if creative.format_id else ""
+            if format_id_str and "video" in format_id_str.lower():
                 # Suggest vertical version for horizontal videos
-                if "16x9" in creative.format_id or "horizontal" in creative.format_id:
+                if "16x9" in format_id_str or "horizontal" in format_id_str:
                     suggested_adaptations.append(
                         CreativeAdaptation(
                             adaptation_id=f"adapt_{creative.creative_id}_vertical",
                             format_id=FormatId(
-                                agent_url="https://creative.adcontextprotocol.org",
+                                agent_url="https://creative.adcontextprotocol.org",  # type: ignore[arg-type]
                                 id="video_vertical_9x16",
                             ),
                             name="Mobile Vertical Version",
@@ -75,7 +76,7 @@ class MockCreativeEngine(CreativeEngineAdapter):
                         CreativeAdaptation(
                             adaptation_id=f"adapt_{creative.creative_id}_6s",
                             format_id=FormatId(
-                                agent_url="https://creative.adcontextprotocol.org",
+                                agent_url="https://creative.adcontextprotocol.org",  # type: ignore[arg-type]
                                 id="video_6s_bumper",
                             ),
                             name="6-Second Bumper Version",
@@ -91,7 +92,7 @@ class MockCreativeEngine(CreativeEngineAdapter):
                     )
 
             processed.append(
-                CreativeStatus(
+                CreativeApprovalStatus(
                     creative_id=creative.creative_id,
                     status=status,
                     detail=detail,

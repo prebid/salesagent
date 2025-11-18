@@ -12,6 +12,7 @@ Products can reference inventory profiles to avoid duplicating configuration.
 import json
 import logging
 import re
+from collections.abc import Sequence
 
 from flask import Blueprint, Flask, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import func, select
@@ -204,21 +205,92 @@ def add_inventory_profile(tenant_id: str):
                 flash("At least one creative format is required", "error")
                 return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
-            # Parse publisher properties
+            # Parse publisher properties based on property_mode
             publisher_properties = []
-            # TODO: Implement property parsing from form
-            # For now, require manual JSON input or derive from ad units
-            publisher_properties_json = form_data.get("publisher_properties", "").strip()
-            if publisher_properties_json:
-                try:
-                    publisher_properties = json.loads(publisher_properties_json)
-                except json.JSONDecodeError as e:
-                    flash(f"Invalid publisher properties JSON: {e}", "error")
+            property_mode = form_data.get("property_mode", "tags")
+
+            with get_db_session() as prop_session:
+                tenant = prop_session.get(Tenant, tenant_id)
+                if not tenant or not tenant.primary_domain:
+                    flash("Tenant primary_domain not configured", "error")
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
-            if not publisher_properties:
-                flash("At least one publisher property is required", "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+                publisher_domain = tenant.primary_domain
+
+                if property_mode == "tags":
+                    # by_tag mode: Parse comma-separated tags
+                    property_tags_str = form_data.get("property_tags", "").strip()
+                    if not property_tags_str:
+                        flash("Property tags are required", "error")
+                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                    # Validate tag format per AdCP spec
+                    import re
+
+                    TAG_PATTERN = re.compile(r"^[a-z0-9_]{2,50}$")
+                    property_tags = []
+                    for tag in property_tags_str.split(","):
+                        tag = tag.strip().lower()
+                        if tag and TAG_PATTERN.match(tag):
+                            property_tags.append(tag)
+                        elif tag:
+                            flash(
+                                f"Invalid tag format: '{tag}'. Use lowercase letters, numbers, underscores (2-50 chars)",
+                                "error",
+                            )
+                            return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                    if not property_tags:
+                        flash("At least one valid property tag is required", "error")
+                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                    publisher_properties = [
+                        {
+                            "publisher_domain": publisher_domain,
+                            "property_tags": property_tags,
+                            "selection_type": "by_tag",
+                        }
+                    ]
+
+                elif property_mode == "property_ids":
+                    # by_id mode: Parse selected_property_ids checkboxes
+                    selected_property_ids = request.form.getlist("selected_property_ids")
+                    if not selected_property_ids:
+                        flash("At least one property must be selected", "error")
+                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                    # Verify property_ids exist in authorized properties
+                    stmt = select(AuthorizedProperty.property_id).filter(
+                        AuthorizedProperty.tenant_id == tenant_id,
+                        AuthorizedProperty.property_id.in_(selected_property_ids),
+                    )
+                    existing_ids = set(prop_session.scalars(stmt).all())
+                    invalid_ids = set(selected_property_ids) - existing_ids
+                    if invalid_ids:
+                        flash(f"Invalid property IDs: {', '.join(invalid_ids)}", "error")
+                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                    publisher_properties = [
+                        {
+                            "publisher_domain": publisher_domain,
+                            "property_ids": selected_property_ids,
+                            "selection_type": "by_id",
+                        }
+                    ]
+
+                elif property_mode == "full":
+                    # Legacy full mode: Parse JSON from textarea
+                    publisher_properties_json = form_data.get("publisher_properties", "").strip()
+                    if publisher_properties_json:
+                        try:
+                            publisher_properties = json.loads(publisher_properties_json)
+                        except json.JSONDecodeError as e:
+                            flash(f"Invalid publisher properties JSON: {e}", "error")
+                            return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                    if not publisher_properties:
+                        flash("Publisher properties are required", "error")
+                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
             # Parse targeting template (optional)
             targeting_template = None
@@ -266,25 +338,28 @@ def add_inventory_profile(tenant_id: str):
 
     # GET: Show form
     with get_db_session() as session:
+        # Get tenant and check primary_domain upfront
+        tenant = session.get(Tenant, tenant_id)
+        if not tenant or not tenant.primary_domain:
+            flash("Tenant primary_domain must be configured before creating inventory profiles", "warning")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+
         # Get authorized properties for property selection
         authorized_properties = session.scalars(
             select(AuthorizedProperty).where(AuthorizedProperty.tenant_id == tenant_id)
         ).all()
 
-        # Get property tags
-        property_tags = session.scalars(
+        # Get property tags (as PropertyTag objects, not strings)
+        property_tags_list: Sequence[PropertyTag] = session.scalars(
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
-
-        # Get tenant for default domain
-        tenant = session.get(Tenant, tenant_id)
 
     return render_template(
         "add_inventory_profile.html",
         tenant_id=tenant_id,
         tenant=tenant,
         authorized_properties=authorized_properties,
-        property_tags=property_tags,
+        property_tags=property_tags_list,
         active_tab="inventory_profiles",
     )
 
@@ -327,19 +402,117 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 if formats:
                     profile.format_ids = formats
 
-                # Update publisher properties
-                publisher_properties_json = form_data.get("publisher_properties", "").strip()
-                if publisher_properties_json:
-                    try:
-                        publisher_properties = json.loads(publisher_properties_json)
-                        profile.publisher_properties = publisher_properties
-                    except json.JSONDecodeError as e:
-                        flash(f"Invalid publisher properties JSON: {e}", "error")
+                # Update publisher properties based on property_mode
+                property_mode = form_data.get("property_mode", "tags")
+
+                tenant_obj = session.get(Tenant, tenant_id)
+                if not tenant_obj or not tenant_obj.primary_domain:
+                    flash("Tenant primary_domain not configured", "error")
+                    return redirect(
+                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                    )
+
+                publisher_domain = tenant_obj.primary_domain
+
+                if property_mode == "tags":
+                    # by_tag mode: Parse comma-separated tags
+                    property_tags_str = form_data.get("property_tags", "").strip()
+                    if not property_tags_str:
+                        flash("Property tags are required", "error")
                         return redirect(
                             url_for(
                                 "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
                             )
                         )
+
+                    # Validate tag format per AdCP spec
+                    import re
+
+                    TAG_PATTERN = re.compile(r"^[a-z0-9_]{2,50}$")
+                    property_tags = []
+                    for tag in property_tags_str.split(","):
+                        tag = tag.strip().lower()
+                        if tag and TAG_PATTERN.match(tag):
+                            property_tags.append(tag)
+                        elif tag:
+                            flash(
+                                f"Invalid tag format: '{tag}'. Use lowercase letters, numbers, underscores (2-50 chars)",
+                                "error",
+                            )
+                            return redirect(
+                                url_for(
+                                    "inventory_profiles.edit_inventory_profile",
+                                    tenant_id=tenant_id,
+                                    profile_id=profile_id,
+                                )
+                            )
+
+                    if not property_tags:
+                        flash("At least one valid property tag is required", "error")
+                        return redirect(
+                            url_for(
+                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
+                            )
+                        )
+
+                    profile.publisher_properties = [
+                        {
+                            "publisher_domain": publisher_domain,
+                            "property_tags": property_tags,
+                            "selection_type": "by_tag",
+                        }
+                    ]
+
+                elif property_mode == "property_ids":
+                    # by_id mode: Parse selected_property_ids checkboxes
+                    selected_property_ids = request.form.getlist("selected_property_ids")
+                    if not selected_property_ids:
+                        flash("At least one property must be selected", "error")
+                        return redirect(
+                            url_for(
+                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
+                            )
+                        )
+
+                    # Verify property_ids exist in authorized properties
+                    stmt = select(AuthorizedProperty.property_id).filter(
+                        AuthorizedProperty.tenant_id == tenant_id,
+                        AuthorizedProperty.property_id.in_(selected_property_ids),
+                    )
+                    existing_ids = set(session.scalars(stmt).all())
+                    invalid_ids = set(selected_property_ids) - existing_ids
+                    if invalid_ids:
+                        flash(f"Invalid property IDs: {', '.join(invalid_ids)}", "error")
+                        return redirect(
+                            url_for(
+                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
+                            )
+                        )
+
+                    profile.publisher_properties = [
+                        {
+                            "publisher_domain": publisher_domain,
+                            "property_ids": selected_property_ids,
+                            "selection_type": "by_id",
+                        }
+                    ]
+
+                elif property_mode == "full":
+                    # Legacy full mode: Parse JSON from textarea
+                    publisher_properties_json = form_data.get("publisher_properties", "").strip()
+                    if publisher_properties_json:
+                        try:
+                            publisher_properties = json.loads(publisher_properties_json)
+                            profile.publisher_properties = publisher_properties
+                        except json.JSONDecodeError as e:
+                            flash(f"Invalid publisher properties JSON: {e}", "error")
+                            return redirect(
+                                url_for(
+                                    "inventory_profiles.edit_inventory_profile",
+                                    tenant_id=tenant_id,
+                                    profile_id=profile_id,
+                                )
+                            )
 
                 # Update targeting template
                 targeting_json = form_data.get("targeting_template", "").strip()
@@ -384,15 +557,19 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 session.rollback()
 
         # GET: Show form with existing data
+        # Get tenant and check primary_domain upfront
+        tenant = session.get(Tenant, tenant_id)
+        if not tenant or not tenant.primary_domain:
+            flash("Tenant primary_domain must be configured before editing inventory profiles", "warning")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+
         authorized_properties = session.scalars(
             select(AuthorizedProperty).where(AuthorizedProperty.tenant_id == tenant_id)
         ).all()
 
-        property_tags = session.scalars(
+        property_tags_list: Sequence[PropertyTag] = session.scalars(
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
-
-        tenant = session.get(Tenant, tenant_id)
 
     return render_template(
         "edit_inventory_profile.html",
@@ -400,7 +577,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         tenant=tenant,
         profile=profile,
         authorized_properties=authorized_properties,
-        property_tags=property_tags,
+        property_tags=property_tags_list,
         active_tab="inventory_profiles",
     )
 

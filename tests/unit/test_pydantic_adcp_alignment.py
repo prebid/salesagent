@@ -42,7 +42,6 @@ class TestGetProductsRequestAlignment:
             adcp_version="1.6.0",
             filters=ProductFilters(
                 delivery_type="guaranteed",
-                is_fixed_price=True,
                 format_types=["video", "display"],
                 format_ids=[
                     FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
@@ -56,9 +55,9 @@ class TestGetProductsRequestAlignment:
         assert req.brief == "Looking for display advertising on tech sites"
         assert req.adcp_version == "1.6.0"
         assert req.filters is not None
-        assert req.filters.delivery_type == "guaranteed"
-        assert req.filters.is_fixed_price is True
-        assert req.filters.format_types == ["video", "display"]
+        assert req.filters.delivery_type.value == "guaranteed"
+        # format_types are stored as enum objects internally but serialize to strings
+        assert [ft.value for ft in req.filters.format_types] == ["video", "display"]
         assert len(req.filters.format_ids) == 2
         assert req.filters.format_ids[0].id == "display_300x250"
         assert req.filters.format_ids[1].id == "video_30s"
@@ -71,14 +70,13 @@ class TestGetProductsRequestAlignment:
             filters={
                 "delivery_type": "non_guaranteed",
                 "format_types": ["video"],
-                "is_fixed_price": False,
             },
         )
 
         assert req.filters is not None
-        assert req.filters.delivery_type == "non_guaranteed"
-        assert req.filters.format_types == ["video"]
-        assert req.filters.is_fixed_price is False
+        # Library uses enum for delivery_type
+        assert req.filters.delivery_type.value == "non_guaranteed"
+        assert [ft.value for ft in req.filters.format_types] == ["video"]
 
     def test_partial_filters(self):
         """Test with only some filter fields (all filters are optional)."""
@@ -88,8 +86,7 @@ class TestGetProductsRequestAlignment:
         )
 
         assert req.filters is not None
-        assert req.filters.delivery_type == "guaranteed"
-        assert req.filters.is_fixed_price is None
+        assert req.filters.delivery_type.value == "guaranteed"
         assert req.filters.format_types is None
 
     def test_adcp_version_validation(self):
@@ -113,7 +110,8 @@ class TestGetProductsRequestAlignment:
             req = GetProductsRequest(
                 brand_manifest={"name": "Test product"}, filters=ProductFilters(format_types=[format_type])
             )
-            assert format_type in req.filters.format_types
+            # format_types are stored as enum objects, check enum value
+            assert format_type in [ft.value for ft in req.filters.format_types]
 
     def test_filters_delivery_type_values(self):
         """Test that delivery_type accepts valid values per AdCP spec."""
@@ -121,13 +119,13 @@ class TestGetProductsRequestAlignment:
         req1 = GetProductsRequest(
             brand_manifest={"name": "Test product"}, filters=ProductFilters(delivery_type="guaranteed")
         )
-        assert req1.filters.delivery_type == "guaranteed"
+        assert req1.filters.delivery_type.value == "guaranteed"
 
         # Non-guaranteed products
         req2 = GetProductsRequest(
             brand_manifest={"name": "Test product"}, filters=ProductFilters(delivery_type="non_guaranteed")
         )
-        assert req2.filters.delivery_type == "non_guaranteed"
+        assert req2.filters.delivery_type.value == "non_guaranteed"
 
 
 class TestProductFiltersModel:
@@ -138,7 +136,6 @@ class TestProductFiltersModel:
         filters = ProductFilters()
 
         assert filters.delivery_type is None
-        assert filters.is_fixed_price is None
         assert filters.format_types is None
         assert filters.format_ids is None
         assert filters.standard_formats_only is None
@@ -146,14 +143,12 @@ class TestProductFiltersModel:
     def test_single_field_filters(self):
         """Test filters with only one field set."""
         filters = ProductFilters(delivery_type="guaranteed")
-        assert filters.delivery_type == "guaranteed"
-        assert filters.is_fixed_price is None
+        assert filters.delivery_type.value == "guaranteed"
 
     def test_boolean_filters(self):
-        """Test boolean filter fields (is_fixed_price, standard_formats_only)."""
-        filters = ProductFilters(is_fixed_price=True, standard_formats_only=False)
+        """Test boolean filter fields (standard_formats_only)."""
+        filters = ProductFilters(standard_formats_only=False)
 
-        assert filters.is_fixed_price is True
         assert filters.standard_formats_only is False
 
     def test_array_filters(self):
@@ -168,18 +163,19 @@ class TestProductFiltersModel:
         )
 
         assert len(filters.format_types) == 3
-        assert "video" in filters.format_types
+        # format_types are stored as enum objects, convert to strings for comparison
+        assert "video" in [ft.value for ft in filters.format_types]
         assert len(filters.format_ids) == 3
         assert filters.format_ids[0].id == "display_300x250"
 
     def test_model_dump_excludes_none(self):
         """Test that model_dump with exclude_none only includes set fields."""
-        filters = ProductFilters(delivery_type="guaranteed", is_fixed_price=True)
+        filters = ProductFilters(delivery_type="guaranteed", standard_formats_only=True)
 
         dumped = filters.model_dump(exclude_none=True)
 
         assert "delivery_type" in dumped
-        assert "is_fixed_price" in dumped
+        assert "standard_formats_only" in dumped
         assert "format_types" not in dumped  # Was None
         assert "format_ids" not in dumped  # Was None
 
@@ -191,13 +187,10 @@ class TestAdCPSchemaCompatibility:
         """Test example from test_adcp_schema_compliance.py line 149."""
         # This is the exact example that was passing JSON schema validation
         # but would have failed Pydantic validation before our fix
-        req = GetProductsRequest(
-            brand_manifest={"name": "mobile apps"}, filters={"format_types": ["video"], "is_fixed_price": True}
-        )
+        req = GetProductsRequest(brand_manifest={"name": "mobile apps"}, filters={"format_types": ["video"]})
 
         assert req.brand_manifest.name == "mobile apps"
-        assert req.filters.format_types == ["video"]
-        assert req.filters.is_fixed_price is True
+        assert [ft.value for ft in req.filters.format_types] == ["video"]
 
     def test_example_minimal_adcp_request(self):
         """Test minimal valid request per AdCP spec."""
@@ -229,8 +222,8 @@ class TestAdCPSchemaCompatibility:
             },
         )
 
-        assert req.filters.delivery_type == "non_guaranteed"
-        assert req.filters.format_types == ["video"]
+        assert req.filters.delivery_type.value == "non_guaranteed"
+        assert [ft.value for ft in req.filters.format_types] == ["video"]
         assert len(req.filters.format_ids) == 2
         assert req.filters.format_ids[0].id == "video_30s"
         assert req.filters.format_ids[1].id == "video_15s"
@@ -250,8 +243,7 @@ class TestRegressionPrevention:
           "adcp_version": "1.6.0",
           "filters": {
             "delivery_type": "guaranteed",
-            "format_types": ["video"],
-            "is_fixed_price": true
+            "format_types": ["video"]
           }
         }
 
@@ -265,7 +257,6 @@ class TestRegressionPrevention:
                 filters={
                     "delivery_type": "guaranteed",
                     "format_types": ["video"],
-                    "is_fixed_price": True,
                 },
             )
             # If we get here, the bug is fixed
@@ -292,7 +283,7 @@ class TestRegressionPrevention:
             "brand_manifest": {"name": "purina cat food"},
             "brief": "video advertising campaigns",
             "adcp_version": "1.6.0",
-            "filters": {"delivery_type": "guaranteed", "format_types": ["video"], "is_fixed_price": True},
+            "filters": {"delivery_type": "guaranteed", "format_types": ["video"]},
         }
 
         # This should NOT raise ValidationError
@@ -301,6 +292,5 @@ class TestRegressionPrevention:
         assert req.brand_manifest.name == "purina cat food"
         assert req.brief == "video advertising campaigns"
         assert req.adcp_version == "1.6.0"
-        assert req.filters.delivery_type == "guaranteed"
-        assert req.filters.format_types == ["video"]
-        assert req.filters.is_fixed_price is True
+        assert req.filters.delivery_type.value == "guaranteed"
+        assert [ft.value for ft in req.filters.format_types] == ["video"]

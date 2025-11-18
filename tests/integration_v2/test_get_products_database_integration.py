@@ -6,7 +6,7 @@ These tests validate the actual database-to-schema transformation with real ORM 
 using the new pricing_options table, to catch field access bugs that mocks would miss.
 
 MIGRATION NOTE: Migrated from tests/integration/test_get_products_database_integration.py
-to use the new pricing_options model instead of legacy Product pricing fields (is_fixed_price, cpm, etc.).
+to use the new pricing_options model.
 """
 
 import threading

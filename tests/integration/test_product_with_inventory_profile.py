@@ -55,7 +55,7 @@ def test_create_product_with_inventory_profile(integration_db):
         )
         session.add(property_tag)
 
-        # Create inventory profile
+        # Create inventory profile (using proper ADCP agent URL)
         inventory_profile = InventoryProfile(
             tenant_id=tenant_id,
             profile_id="test_profile",
@@ -66,7 +66,7 @@ def test_create_product_with_inventory_profile(integration_db):
                 "placements": [],
                 "include_descendants": False,
             },
-            format_ids=[{"id": "display_300x250", "agent_url": "https://test.com"}],
+            format_ids=[{"id": "display_300x250", "agent_url": "https://creative.adcontextprotocol.org"}],
             publisher_properties=[
                 {
                     "publisher_domain": "example.com",
@@ -79,14 +79,14 @@ def test_create_product_with_inventory_profile(integration_db):
 
         profile_id = inventory_profile.id
 
-        # Create product with inventory profile
+        # Create product with inventory profile (using proper ADCP agent URL)
         product = Product(
             product_id="test_prod_with_profile",
             tenant_id=tenant_id,
             name="Test Product",
             description="Test product with profile",
             inventory_profile_id=profile_id,
-            format_ids=[{"id": "display_300x250", "agent_url": "https://test.com"}],
+            format_ids=[{"id": "display_300x250", "agent_url": "https://creative.adcontextprotocol.org"}],
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},

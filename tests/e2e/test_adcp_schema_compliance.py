@@ -148,7 +148,7 @@ class TestAdCPSchemaCompliance:
             {"brief": "video ads", "brand_manifest": {"name": "premium video"}},
             {
                 "brand_manifest": {"name": "mobile apps"},
-                "filters": {"format_types": ["video"], "is_fixed_price": True},
+                "filters": {"format_types": ["video"]},
             },
         ]
 
@@ -173,7 +173,6 @@ class TestAdCPSchemaCompliance:
                         "description": "Test description",
                         "formats": [{"format_id": "display_300x250", "name": "Rectangle", "type": "display"}],
                         "delivery_type": "guaranteed",
-                        "is_fixed_price": True,
                     }
                 ],
             },

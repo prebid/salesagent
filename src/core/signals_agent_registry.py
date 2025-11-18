@@ -31,8 +31,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from adcp import ADCPMultiAgentClient, AgentConfig, GetSignalsRequest
+from adcp import ADCPMultiAgentClient, AgentConfig, GetSignalsRequest, Protocol
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
+from adcp.types.generated_poc.destination import Destination1
+from adcp.types.generated_poc.get_signals_request import DeliverTo
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +140,8 @@ class SignalsAgentRegistry:
             # Map to AgentConfig
             config = AgentConfig(
                 id=agent.name,  # Use name as ID for readability
-                agent_uri=agent.agent_url,
-                protocol="mcp",  # Signals agents use MCP protocol
+                agent_uri=str(agent.agent_url),  # Convert AnyUrl to string for adcp 2.5.0
+                protocol=Protocol.MCP,  # Signals agents use MCP protocol
                 auth_token=auth_token,
                 auth_type=auth_type,
                 auth_header=agent.auth_header or "x-adcp-auth",
@@ -183,9 +185,17 @@ class SignalsAgentRegistry:
             signal_spec = brief
 
             # Build deliver_to (required in new schema)
-            # Default to "all" platforms if not specified
-            # NOTE: platforms must be an array of strings, not a single string
-            deliver_to = {"platforms": ["all"]}
+            # Per AdCP spec, deliver_to requires countries and destinations arrays
+            # destinations requires at least 1 item - use a generic "all platforms" destination
+            deliver_to = DeliverTo(
+                countries=[],  # Empty = all countries
+                destinations=[
+                    Destination1(
+                        type="platform",  # Generic platform destination
+                        platform="all",  # All platforms
+                    )
+                ],
+            )
 
             # Create typed request (AdCP v2.2.0 format)
             request = GetSignalsRequest(
@@ -205,16 +215,31 @@ class SignalsAgentRegistry:
             # Handle response based on status
             if result.status == "completed":
                 # Synchronous completion
+                if result.data is None:
+                    logger.warning("Completed status but no data in response")
+                    return []
                 signals = result.data.signals
                 total_duration = time.time() - start_time
                 logger.info(f"[TIMING] Got {len(signals)} signals synchronously in {total_duration:.2f}s total")
-                # Signals are already dicts (list[dict[str, Any]]) - no conversion needed
-                # This is by design in the AdCP spec - signals are untyped JSON objects
-                return signals
+                # Convert Signal objects to dicts for internal use
+                # AdCP library returns Signal objects, but our internal code expects dicts
+                # Handle both Signal objects (from adcp library) and dicts (from some test/error scenarios)
+                result_signals = []
+                for signal in signals:
+                    if isinstance(signal, dict):
+                        # Already a dict, use as-is
+                        result_signals.append(signal)
+                    else:
+                        # Pydantic Signal object, convert to dict
+                        result_signals.append(signal.model_dump(mode="json"))
+                return result_signals
 
             elif result.status == "submitted":
                 # Asynchronous completion - webhook registered
                 total_duration = time.time() - start_time
+                if result.submitted is None:
+                    logger.warning("Submitted status but no submitted info in response")
+                    return []
                 logger.info(
                     f"[TIMING] Async operation submitted in {total_duration:.2f}s, "
                     f"webhook: {result.submitted.webhook_url}"

@@ -19,7 +19,7 @@ from src.core.schemas import (
     Creative,
     FormatId,
     MediaPackage,
-    Package,
+    PackageRequest,
 )
 
 
@@ -50,11 +50,11 @@ class TestInlineCreativesInAdapters:
             start_time=datetime.now(UTC),
             end_time=datetime.now(UTC) + timedelta(days=30),
             packages=[
-                Package(
+                PackageRequest(
                     product_id="prod_test_123",
                     buyer_ref="pkg_buyer_ref",
                     budget=10000,
-                    status="active",
+                    pricing_option_id="test_pricing",
                     format_ids=[FormatId(agent_url="https://creative.test", id="display_300x250")],
                     creatives=[
                         Creative(

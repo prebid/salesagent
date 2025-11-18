@@ -72,6 +72,15 @@ class TestSignalsAgentRegistry:
                 "signal_type": "marketplace",
                 "data_provider": "Test Provider",
                 "coverage_percentage": 85.0,
+                "deployments": [
+                    {
+                        "type": "platform",
+                        "platform": "web",
+                        "is_live": True,
+                        "deployed_at": "2025-01-01T00:00:00Z",
+                    }
+                ],
+                "pricing": {"cpm": 2.50, "currency": "USD"},
             }
         ]
 

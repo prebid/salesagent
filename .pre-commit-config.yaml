@@ -284,6 +284,15 @@ repos:
         pass_filenames: false
         always_run: false  # Only run when Python files changed
 
+      # Suggest factory usage in test files (non-blocking)
+      - id: suggest-test-factories
+        name: Suggest factory usage in test files
+        entry: uv run python .pre-commit-hooks/check_test_factories.py
+        language: system
+        files: '^tests/.*\.py$'
+        pass_filenames: true
+        always_run: false  # Only run when test files change
+
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

@@ -88,9 +88,13 @@ class TestListCreativesAuthentication:
                     agent_url="https://creative.adcontextprotocol.org/",
                     status="approved",
                     data={
-                        "url": f"https://example.com/creative_a_{i}.jpg",
-                        "width": 300,
-                        "height": 250,
+                        "assets": {
+                            "image": {
+                                "url": f"https://example.com/creative_a_{i}.jpg",
+                                "width": 300,
+                                "height": 250,
+                            }
+                        }
                     },
                 )
                 session.add(creative_a)
@@ -106,9 +110,13 @@ class TestListCreativesAuthentication:
                     agent_url="https://creative.adcontextprotocol.org/",
                     status="approved",
                     data={
-                        "url": f"https://example.com/creative_b_{i}.jpg",
-                        "width": 300,
-                        "height": 250,
+                        "assets": {
+                            "image": {
+                                "url": f"https://example.com/creative_b_{i}.jpg",
+                                "width": 300,
+                                "height": 250,
+                            }
+                        }
                     },
                 )
                 session.add(creative_b)
@@ -134,7 +142,8 @@ class TestListCreativesAuthentication:
         mock_context = MockContext(auth_token=None)
 
         # Mock get_http_headers to return empty headers (no auth)
-        with patch("src.core.auth.get_http_headers", return_value={}):
+        # Patch at the source where it's imported from
+        with patch("fastmcp.server.dependencies.get_http_headers", return_value={}):
             # This should raise ToolError due to missing authentication
             from fastmcp.exceptions import ToolError
 
@@ -153,8 +162,9 @@ class TestListCreativesAuthentication:
         mock_context = MockContext(auth_token="token-advertiser-a")
 
         # Mock get_http_headers to return auth + host headers for tenant detection
+        # Patch at the source where it's imported from
         with patch(
-            "src.core.auth.get_http_headers",
+            "fastmcp.server.dependencies.get_http_headers",
             return_value={
                 "x-adcp-auth": "token-advertiser-a",
                 "host": "auth-test.sales-agent.scope3.com",
@@ -185,8 +195,9 @@ class TestListCreativesAuthentication:
         mock_context_b = MockContext(auth_token="token-advertiser-b")
 
         # Mock get_http_headers to return auth + host headers for tenant detection
+        # Patch at the source where it's imported from
         with patch(
-            "src.core.auth.get_http_headers",
+            "fastmcp.server.dependencies.get_http_headers",
             return_value={
                 "x-adcp-auth": "token-advertiser-b",
                 "host": "auth-test.sales-agent.scope3.com",
@@ -217,8 +228,9 @@ class TestListCreativesAuthentication:
         mock_context = MockContext(auth_token="invalid-token-xyz")
 
         # Mock get_http_headers to return auth + host headers for tenant detection
+        # Patch at the source where it's imported from
         with patch(
-            "src.core.auth.get_http_headers",
+            "fastmcp.server.dependencies.get_http_headers",
             return_value={
                 "x-adcp-auth": "invalid-token-xyz",
                 "host": "auth-test.sales-agent.scope3.com",

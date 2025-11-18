@@ -134,9 +134,6 @@ def create_test_product(
     # Set sensible defaults for required fields
     kwargs.setdefault("targeting_template", {"geo": ["US"], "device": ["desktop", "mobile"]})
     kwargs.setdefault("delivery_type", "non_guaranteed")
-    kwargs.setdefault("is_fixed_price", False)
-    kwargs.setdefault("cpm", 5.0)
-    kwargs.setdefault("min_spend", 1000.0)
     kwargs.setdefault("is_custom", False)
 
     return Product(

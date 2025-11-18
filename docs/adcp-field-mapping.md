@@ -15,9 +15,6 @@ The AdCP protocol defines a standard interface for AI agents to discover and pur
 | `description` | `description` | `description` | string | Yes | Detailed product description |
 | `formats` | `formats` | `formats` | array | Yes | Array of Format objects |
 | `delivery_type` | `delivery_type` | `delivery_type` | enum | Yes | Must be "guaranteed" or "non_guaranteed" |
-| `is_fixed_price` | `is_fixed_price` | `is_fixed_price` | boolean | Yes | True for fixed CPM, false for dynamic |
-| `cpm` | `cpm` | `cpm` | float | Conditional | Required if is_fixed_price=true |
-| `price_guidance` | `price_guidance` | `price_guidance` | object | Conditional | Required if is_fixed_price=false |
 | `is_custom` | `is_custom` | `is_custom` | boolean | No | Default: false |
 | `expires_at` | `expires_at` | `expires_at` | datetime | No | When product expires |
 | `countries` | - | - | array | Internal | Not exposed in AdCP |
@@ -27,8 +24,6 @@ The AdCP protocol defines a standard interface for AI agents to discover and pur
 ### Important Notes:
 - **NEVER expose `implementation_config`** - This contains proprietary ad server settings
 - `delivery_type` must use AdCP values: "guaranteed" or "non_guaranteed" (note the underscore)
-- Products with `delivery_type="guaranteed"` must have `is_fixed_price=true` and `cpm` set
-- Products with `delivery_type="non_guaranteed"` should have `price_guidance` set
 
 ## Format Fields
 
@@ -102,10 +97,7 @@ The AdCP protocol defines a standard interface for AI agents to discover and pur
       "name": "string",
       "description": "string",
       "formats": [...],
-      "delivery_type": "guaranteed|non_guaranteed",
-      "is_fixed_price": true,
-      "cpm": 10.0,
-      "price_guidance": null
+      "delivery_type": "guaranteed|non_guaranteed"
     }
   ]
 }
@@ -177,8 +169,6 @@ Before returning any Product in an API response, verify:
 - [ ] `description` is present and non-empty
 - [ ] `formats` is an array with at least one valid format
 - [ ] `delivery_type` is exactly "guaranteed" or "non_guaranteed"
-- [ ] If `is_fixed_price=true`, then `cpm` is present
-- [ ] If `is_fixed_price=false`, then `price_guidance` is present
 - [ ] `implementation_config` is NOT in the response
 - [ ] All format objects have required fields
 

@@ -19,7 +19,6 @@ def get_default_products() -> list[dict[str, Any]]:
             "name": "Run of Site - Display",
             "description": "Non-guaranteed display advertising across all available inventory. Supports standard IAB display formats.",
             "delivery_type": "non_guaranteed",
-            "is_fixed_price": False,
             "cpm": None,
             "min_spend": 100.0,  # Use AdCP-compliant field
             "formats": [
@@ -43,7 +42,6 @@ def get_default_products() -> list[dict[str, Any]]:
             "name": "Homepage Takeover",
             "description": "Premium guaranteed placement on homepage with high viewability. Desktop and mobile optimized.",
             "delivery_type": "guaranteed",
-            "is_fixed_price": True,
             "cpm": 25.0,
             "min_spend": 1000.0,
             "formats": [
@@ -69,7 +67,6 @@ def get_default_products() -> list[dict[str, Any]]:
             "name": "Mobile Interstitial",
             "description": "Full-screen mobile interstitial ads with frequency capping. High engagement rates.",
             "delivery_type": "guaranteed",
-            "is_fixed_price": True,
             "cpm": 15.0,
             "min_spend": 500.0,
             "formats": [
@@ -90,7 +87,6 @@ def get_default_products() -> list[dict[str, Any]]:
             "name": "Video Pre-Roll",
             "description": "Standard pre-roll video advertising. VAST 4.0 compliant with viewability measurement.",
             "delivery_type": "non_guaranteed",
-            "is_fixed_price": False,
             "cpm": None,
             "min_spend": 1000.0,
             "formats": [
@@ -114,7 +110,6 @@ def get_default_products() -> list[dict[str, Any]]:
             "name": "Native In-Feed",
             "description": "Native advertising that matches your site's look and feel. Appears within content feeds.",
             "delivery_type": "non_guaranteed",
-            "is_fixed_price": False,
             "cpm": None,
             "min_spend": 200.0,
             "formats": [
@@ -141,7 +136,6 @@ def get_default_products() -> list[dict[str, Any]]:
             "name": "Contextual Display",
             "description": "Display advertising with contextual targeting based on page content. No cookies required.",
             "delivery_type": "non_guaranteed",
-            "is_fixed_price": False,
             "cpm": None,
             "min_spend": 200.0,
             "formats": [

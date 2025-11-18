@@ -596,6 +596,244 @@ if (appendCheckbox) {
 // Wait for inventory picker to be initialized before accessing it
 let inventoryCache = null;
 
+// ============================================================================
+// Creative Format Size Filtering Functions (Forward Declaration)
+// ============================================================================
+
+/**
+ * Helper function to add sizes to inventory cache
+ * Eliminates duplicate size extraction code
+ * @param {Array} sizes - Array of size objects with width and height properties
+ */
+function addSizesToCache(sizes) {
+    if (!sizes || !Array.isArray(sizes)) return;
+
+    sizes.forEach(size => {
+        const sizeKey = `${size.width}x${size.height}`;
+        inventoryCache.extractedSizes.add(sizeKey);
+        inventoryCache.sizeUnitCounts.set(
+            sizeKey,
+            (inventoryCache.sizeUnitCounts.get(sizeKey) || 0) + 1
+        );
+    });
+}
+
+/**
+ * Extract all sizes from selected ad units and placements
+ * Note: Defined early so it's available in DOMContentLoaded handler
+ */
+async function extractSizesFromInventory() {
+    // Safety check - inventory picker must be initialized
+    if (!inventoryCache) {
+        console.warn('Inventory picker not initialized yet');
+        return;
+    }
+
+    // Clear previous sizes
+    inventoryCache.extractedSizes.clear();
+    inventoryCache.sizeUnitCounts.clear();
+
+    // Get selected ad unit and placement IDs
+    const adUnitIds = (document.getElementById('targeted_ad_unit_ids').value || '').split(',').filter(Boolean);
+    const placementIds = (document.getElementById('targeted_placement_ids').value || '').split(',').filter(Boolean);
+
+    // Helper function to recursively extract sizes from an ad unit and its children
+    const extractSizesFromUnit = (unitId) => {
+        const item = inventoryCache.adUnits.get(unitId);
+        if (!item) {
+            console.log('extractSizesFromUnit: unit not found in cache:', unitId);
+            return;
+        }
+
+        console.log('extractSizesFromUnit: processing unit', unitId, item);
+        console.log('extractSizesFromUnit: item.children =', item.children);
+        console.log('extractSizesFromUnit: item.metadata.sizes =', item.metadata?.sizes);
+
+        // Extract sizes from this unit using helper function
+        if (item.metadata && item.metadata.sizes) {
+            addSizesToCache(item.metadata.sizes);
+        }
+
+        // Recursively extract sizes from children (for hierarchical ad units)
+        // Children are stored as full objects from the tree API
+        if (item.children && Array.isArray(item.children)) {
+            console.log('extractSizesFromUnit: found', item.children.length, 'children');
+            item.children.forEach(child => {
+                console.log('extractSizesFromUnit: processing child', child.id, 'sizes:', child.sizes);
+                // Child has sizes directly from tree API - use helper function
+                addSizesToCache(child.sizes);
+                // Recursively process grandchildren if they exist
+                if (child.children && Array.isArray(child.children)) {
+                    // Cache this child so we can process its children recursively
+                    if (!inventoryCache.adUnits.has(child.id)) {
+                        inventoryCache.adUnits.set(child.id, {
+                            id: child.id,
+                            name: child.name,
+                            path: child.path,
+                            metadata: { sizes: child.sizes || [] },
+                            children: child.children || []
+                        });
+                    }
+                    extractSizesFromUnit(child.id);
+                }
+            });
+        }
+    };
+
+    // Extract sizes from ad units directly (including their children)
+    adUnitIds.forEach(id => {
+        extractSizesFromUnit(id);
+    });
+
+    // For placements, need to lookup their ad units and get sizes
+    // First, collect which ad units need fetching
+    const missingAdUnitIds = new Set();
+    for (const placementId of placementIds) {
+        const placement = inventoryCache.placements.get(placementId);
+        if (placement && placement.metadata && placement.metadata.ad_unit_ids) {
+            for (const adUnitId of placement.metadata.ad_unit_ids) {
+                if (!inventoryCache.adUnits.has(adUnitId)) {
+                    missingAdUnitIds.add(adUnitId);
+                }
+            }
+        }
+    }
+
+    // Fetch specific missing ad units by ID (bypasses 500-item limit)
+    if (missingAdUnitIds.size > 0) {
+        try {
+            const idsParam = Array.from(missingAdUnitIds).join(',');
+            console.log(`[DEBUG] Fetching ${missingAdUnitIds.size} missing ad units for placement size extraction`);
+            const response = await fetch(
+                `{{ url_for('inventory.get_inventory_list', tenant_id=tenant_id) }}?type=ad_unit&ids=${encodeURIComponent(idsParam)}`
+            );
+            const data = await response.json();
+            console.log(`[DEBUG] Received ${data.items.length} ad units for size extraction`);
+            data.items.forEach(item => {
+                inventoryCache.adUnits.set(item.id, item);
+            });
+        } catch (error) {
+            console.error('Failed to fetch ad units for placement sizes:', error);
+            showToast('Could not load ad unit sizes from placements', 'error');
+        }
+    }
+
+    // Now extract sizes from all placement ad units
+    for (const placementId of placementIds) {
+        const placement = inventoryCache.placements.get(placementId);
+        if (placement && placement.metadata && placement.metadata.ad_unit_ids) {
+            for (const adUnitId of placement.metadata.ad_unit_ids) {
+                const adUnit = inventoryCache.adUnits.get(adUnitId);
+
+                // Extract sizes from this ad unit using helper function
+                if (adUnit && adUnit.metadata && adUnit.metadata.sizes) {
+                    addSizesToCache(adUnit.metadata.sizes);
+                }
+            }
+        }
+    }
+
+    // Update UI
+    updateSizeChipsPanel();
+    updateFormatMatchIndicators();
+}
+
+/**
+ * Update the size chips panel display
+ */
+function updateSizeChipsPanel() {
+    const panel = document.getElementById('size-filter-panel');
+
+    if (!inventoryCache || inventoryCache.extractedSizes.size === 0) {
+        if (panel) panel.style.display = 'none';
+        return;
+    }
+
+    panel.style.display = 'block';
+
+    // Sort sizes by count (most common first), then alphabetically
+    const sortedSizes = Array.from(inventoryCache.extractedSizes).sort((a, b) => {
+        const countA = inventoryCache.sizeUnitCounts.get(a) || 0;
+        const countB = inventoryCache.sizeUnitCounts.get(b) || 0;
+        if (countB !== countA) return countB - countA;
+        return a.localeCompare(b);
+    });
+
+    const chipsContainer = document.getElementById('size-chips-container');
+    chipsContainer.innerHTML = sortedSizes.map(sizeKey => {
+        const count = inventoryCache.sizeUnitCounts.get(sizeKey) || 0;
+        const displaySize = sizeKey.replace('x', '×');
+
+        return `
+            <button type="button" class="size-chip active" data-size="${sizeKey}">
+                <span class="size-label">${displaySize}</span>
+                <span class="unit-count">(${count} ${count === 1 ? 'unit' : 'units'})</span>
+            </button>
+        `;
+    }).join('');
+}
+
+/**
+ * Add match indicators to format cards
+ */
+function updateFormatMatchIndicators() {
+    const formatCards = document.querySelectorAll('.format-card');
+
+    formatCards.forEach(card => {
+        // Get dimensions from data attribute (most reliable source)
+        const dataDimensions = card.getAttribute('data-dimensions') || '';
+
+        // Also try to extract from format name/label as fallback
+        const formatName = card.querySelector('.format-checkbox')?.value || '';
+        const formatLabel = card.querySelector('strong')?.textContent || '';
+        const allText = `${dataDimensions} ${formatLabel} ${formatName}`;
+
+        // Extract sizes from all available sources
+        const formatSizes = extractSizesFromFormatName(allText);
+
+        // Check if any format size matches inventory sizes
+        const matches = formatSizes.some(size => inventoryCache && inventoryCache.extractedSizes.has(size));
+
+        card.classList.toggle('matches-inventory', matches);
+    });
+
+    // Update the count after adding indicators
+    updateMatchingFormatsCount();
+
+    // Show/hide the "Select All Matching" button
+    const matchingCount = document.querySelectorAll('.format-card.matches-inventory').length;
+    const selectMatchingBtn = document.getElementById('select-matching-formats-btn');
+    if (selectMatchingBtn) {
+        selectMatchingBtn.style.display = matchingCount > 0 ? 'inline-block' : 'none';
+    }
+}
+
+/**
+ * Extract size strings from format name (e.g., "Display 300x250" -> ["300x250"])
+ */
+function extractSizesFromFormatName(formatText) {
+    const sizes = [];
+    // Match patterns like 300x250, 300×250, 300 x 250
+    const matches = formatText.matchAll(/(\d+)\s*[x×]\s*(\d+)/gi);
+    for (const match of matches) {
+        sizes.push(`${match[1]}x${match[2]}`);
+    }
+    return sizes;
+}
+
+/**
+ * Update the count of matching formats
+ */
+function updateMatchingFormatsCount() {
+    const matchingCards = document.querySelectorAll('.format-card.matches-inventory');
+    const totalCards = document.querySelectorAll('.format-card').length;
+
+    const countEl = document.getElementById('matching-formats-count');
+    if (countEl) {
+        countEl.textContent = `${matchingCards.length} matching / ${totalCards} total formats`;
+    }
+}
+
 // Initialize inventory cache when inventory picker is ready
 document.addEventListener('DOMContentLoaded', function() {
     if (window.inventoryPicker && window.inventoryPicker.cache) {
@@ -2058,244 +2296,8 @@ window.onclick = function(event) {
 // ============================================================================
 // Creative Format Size Filtering Functions
 // ============================================================================
-
-/**
- * Extract all sizes from selected ad units and placements
- */
-async function extractSizesFromInventory() {
-    // Safety check - inventory picker must be initialized
-    if (!inventoryCache) {
-        console.warn('Inventory picker not initialized yet');
-        return;
-    }
-
-    // Clear previous sizes
-    inventoryCache.extractedSizes.clear();
-    inventoryCache.sizeUnitCounts.clear();
-
-    // Get selected ad unit and placement IDs
-    const adUnitIds = (document.getElementById('targeted_ad_unit_ids').value || '').split(',').filter(Boolean);
-    const placementIds = (document.getElementById('targeted_placement_ids').value || '').split(',').filter(Boolean);
-
-    // Helper function to recursively extract sizes from an ad unit and its children
-    const extractSizesFromUnit = (unitId) => {
-        const item = inventoryCache.adUnits.get(unitId);
-        if (!item) {
-            console.log('extractSizesFromUnit: unit not found in cache:', unitId);
-            return;
-        }
-
-        console.log('extractSizesFromUnit: processing unit', unitId, item);
-        console.log('extractSizesFromUnit: item.children =', item.children);
-        console.log('extractSizesFromUnit: item.metadata.sizes =', item.metadata?.sizes);
-
-        // Extract sizes from this unit
-        if (item.metadata && item.metadata.sizes) {
-            item.metadata.sizes.forEach(size => {
-                const sizeKey = `${size.width}x${size.height}`;
-                inventoryCache.extractedSizes.add(sizeKey);
-                inventoryCache.sizeUnitCounts.set(
-                    sizeKey,
-                    (inventoryCache.sizeUnitCounts.get(sizeKey) || 0) + 1
-                );
-            });
-        }
-
-        // Recursively extract sizes from children (for hierarchical ad units)
-        // Children are stored as full objects from the tree API
-        if (item.children && Array.isArray(item.children)) {
-            console.log('extractSizesFromUnit: found', item.children.length, 'children');
-            item.children.forEach(child => {
-                console.log('extractSizesFromUnit: processing child', child.id, 'sizes:', child.sizes);
-                // Child has sizes directly from tree API
-                if (child.sizes && Array.isArray(child.sizes)) {
-                    child.sizes.forEach(size => {
-                        const sizeKey = `${size.width}x${size.height}`;
-                        inventoryCache.extractedSizes.add(sizeKey);
-                        inventoryCache.sizeUnitCounts.set(
-                            sizeKey,
-                            (inventoryCache.sizeUnitCounts.get(sizeKey) || 0) + 1
-                        );
-                    });
-                }
-                // Recursively process grandchildren if they exist
-                if (child.children && Array.isArray(child.children)) {
-                    // Cache this child so we can process its children recursively
-                    if (!inventoryCache.adUnits.has(child.id)) {
-                        inventoryCache.adUnits.set(child.id, {
-                            id: child.id,
-                            name: child.name,
-                            path: child.path,
-                            metadata: { sizes: child.sizes || [] },
-                            children: child.children || []
-                        });
-                    }
-                    extractSizesFromUnit(child.id);
-                }
-            });
-        }
-    };
-
-    // Extract sizes from ad units directly (including their children)
-    adUnitIds.forEach(id => {
-        extractSizesFromUnit(id);
-    });
-
-    // For placements, need to lookup their ad units and get sizes
-    // First, collect which ad units need fetching
-    const missingAdUnitIds = new Set();
-    for (const placementId of placementIds) {
-        const placement = inventoryCache.placements.get(placementId);
-        if (placement && placement.metadata && placement.metadata.ad_unit_ids) {
-            for (const adUnitId of placement.metadata.ad_unit_ids) {
-                if (!inventoryCache.adUnits.has(adUnitId)) {
-                    missingAdUnitIds.add(adUnitId);
-                }
-            }
-        }
-    }
-
-    // Fetch specific missing ad units by ID (bypasses 500-item limit)
-    if (missingAdUnitIds.size > 0) {
-        try {
-            const idsParam = Array.from(missingAdUnitIds).join(',');
-            console.log(`[DEBUG] Fetching ${missingAdUnitIds.size} missing ad units for placement size extraction`);
-            const response = await fetch(
-                `{{ url_for('inventory.get_inventory_list', tenant_id=tenant_id) }}?type=ad_unit&ids=${encodeURIComponent(idsParam)}`
-            );
-            const data = await response.json();
-            console.log(`[DEBUG] Received ${data.items.length} ad units for size extraction`);
-            data.items.forEach(item => {
-                inventoryCache.adUnits.set(item.id, item);
-            });
-        } catch (error) {
-            console.error('Failed to fetch ad units for placement sizes:', error);
-            showToast('Could not load ad unit sizes from placements', 'error');
-        }
-    }
-
-    // Now extract sizes from all placement ad units
-    for (const placementId of placementIds) {
-        const placement = inventoryCache.placements.get(placementId);
-        if (placement && placement.metadata && placement.metadata.ad_unit_ids) {
-            for (const adUnitId of placement.metadata.ad_unit_ids) {
-                const adUnit = inventoryCache.adUnits.get(adUnitId);
-
-                // Extract sizes from this ad unit
-                if (adUnit && adUnit.metadata && adUnit.metadata.sizes) {
-                    adUnit.metadata.sizes.forEach(size => {
-                        const sizeKey = `${size.width}x${size.height}`;
-                        inventoryCache.extractedSizes.add(sizeKey);
-                        inventoryCache.sizeUnitCounts.set(
-                            sizeKey,
-                            (inventoryCache.sizeUnitCounts.get(sizeKey) || 0) + 1
-                        );
-                    });
-                }
-            }
-        }
-    }
-
-    // Update UI
-    updateSizeChipsPanel();
-    updateFormatMatchIndicators();
-}
-
-/**
- * Update the size chips panel display
- */
-function updateSizeChipsPanel() {
-    const panel = document.getElementById('size-filter-panel');
-
-    if (inventoryCache.extractedSizes.size === 0) {
-        panel.style.display = 'none';
-        return;
-    }
-
-    panel.style.display = 'block';
-
-    // Sort sizes by count (most common first), then alphabetically
-    const sortedSizes = Array.from(inventoryCache.extractedSizes).sort((a, b) => {
-        const countA = inventoryCache.sizeUnitCounts.get(a) || 0;
-        const countB = inventoryCache.sizeUnitCounts.get(b) || 0;
-        if (countB !== countA) return countB - countA;
-        return a.localeCompare(b);
-    });
-
-    const chipsContainer = document.getElementById('size-chips-container');
-    chipsContainer.innerHTML = sortedSizes.map(sizeKey => {
-        const count = inventoryCache.sizeUnitCounts.get(sizeKey) || 0;
-        const displaySize = sizeKey.replace('x', '×');
-
-        return `
-            <button type="button" class="size-chip active" data-size="${sizeKey}">
-                <span class="size-label">${displaySize}</span>
-                <span class="unit-count">(${count} ${count === 1 ? 'unit' : 'units'})</span>
-            </button>
-        `;
-    }).join('');
-}
-
-/**
- * Add match indicators to format cards
- */
-function updateFormatMatchIndicators() {
-    const formatCards = document.querySelectorAll('.format-card');
-
-    formatCards.forEach(card => {
-        // Get dimensions from data attribute (most reliable source)
-        const dataDimensions = card.getAttribute('data-dimensions') || '';
-
-        // Also try to extract from format name/label as fallback
-        const formatName = card.querySelector('.format-checkbox')?.value || '';
-        const formatLabel = card.querySelector('strong')?.textContent || '';
-        const allText = `${dataDimensions} ${formatLabel} ${formatName}`;
-
-        // Extract sizes from all available sources
-        const formatSizes = extractSizesFromFormatName(allText);
-
-        // Check if any format size matches inventory sizes
-        const matches = formatSizes.some(size => inventoryCache.extractedSizes.has(size));
-
-        card.classList.toggle('matches-inventory', matches);
-    });
-
-    // Update the count after adding indicators
-    updateMatchingFormatsCount();
-
-    // Show/hide the "Select All Matching" button
-    const matchingCount = document.querySelectorAll('.format-card.matches-inventory').length;
-    const selectMatchingBtn = document.getElementById('select-matching-formats-btn');
-    if (selectMatchingBtn) {
-        selectMatchingBtn.style.display = matchingCount > 0 ? 'inline-block' : 'none';
-    }
-}
-
-/**
- * Extract size strings from format name (e.g., "Display 300x250" -> ["300x250"])
- */
-function extractSizesFromFormatName(formatText) {
-    const sizes = [];
-    // Match patterns like 300x250, 300×250, 300 x 250
-    const matches = formatText.matchAll(/(\d+)\s*[x×]\s*(\d+)/gi);
-    for (const match of matches) {
-        sizes.push(`${match[1]}x${match[2]}`);
-    }
-    return sizes;
-}
-
-/**
- * Update the count of matching formats
- */
-function updateMatchingFormatsCount() {
-    const matchingCards = document.querySelectorAll('.format-card.matches-inventory');
-    const totalCards = document.querySelectorAll('.format-card').length;
-
-    const countEl = document.getElementById('matching-formats-count');
-    if (countEl) {
-        countEl.textContent = `${matchingCards.length} matching / ${totalCards} total formats`;
-    }
-}
+// Note: All size filtering functions are defined earlier (before DOMContentLoaded)
+// to ensure they're available when inventory picker callbacks fire.
 
 /**
  * Select all visible formats

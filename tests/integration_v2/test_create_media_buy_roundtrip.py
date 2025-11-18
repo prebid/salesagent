@@ -128,7 +128,8 @@ class TestCreateMediaBuyRoundtrip:
         # Step 1: Create a valid CreateMediaBuySuccess (simulates what adapter returns)
         # NOTE: status and adcp_version are protocol fields (added by ProtocolEnvelope), not domain fields
         # NOTE: media_buy_id starts with "test_" to prevent testing hooks from adding another "test_" prefix
-        # NOTE: Per adcp v1.2.1, package.budget is a float, not a Budget object
+        # NOTE: CreateMediaBuySuccess.packages uses minimal Package schema (buyer_ref, package_id only)
+        #       per adcp library's create_media_buy_response module
         original_response = CreateMediaBuySuccess(
             buyer_ref="test-buyer-ref-123",
             media_buy_id="test_mb_12345",
@@ -136,9 +137,7 @@ class TestCreateMediaBuyRoundtrip:
                 {
                     "package_id": "pkg_1",
                     "buyer_ref": "pkg_test",
-                    "product_id": setup_test_tenant["product_id"],
-                    "budget": 5000.0,  # Float per adcp v1.2.1
-                    "status": "active",  # Required field - must be draft/active/paused/completed
+                    # Note: product_id, budget, status not in CreateMediaBuyResponse Package schema
                 }
             ],
         )

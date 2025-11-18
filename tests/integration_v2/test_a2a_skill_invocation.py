@@ -375,6 +375,7 @@ class TestA2ASkillInvocation:
                         "buyer_ref": f"pkg_{sample_products[0]}",
                         "product_id": sample_products[0],  # Use product_id per AdCP spec
                         "budget": 10000.0,  # Float only per AdCP v2.2.0, currency from pricing_option
+                        "pricing_option_id": "cpm_usd_fixed",  # Required in adcp 2.5.0
                     }
                 ],
                 "budget": {"total": 10000.0, "currency": "USD"},  # Top-level budget keeps dict format
@@ -664,16 +665,14 @@ class TestA2ASkillInvocation:
 
             adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
 
-            # Mock adapter - must return UpdateMediaBuySuccess, not dict
-            from src.core.schemas import UpdateMediaBuySuccess
+            # Mock adapter - must return UpdateMediaBuySuccessResponse, not dict
+            from adcp.types.aliases import UpdateMediaBuySuccessResponse
 
             mock_adapter = MagicMock()
-            mock_adapter.update_media_buy.return_value = UpdateMediaBuySuccess(
+            mock_adapter.update_media_buy.return_value = UpdateMediaBuySuccessResponse(
                 media_buy_id="mb_test_123",
                 buyer_ref="test_buyer_ref",
-                packages=[],  # Required field per adcp v1.2.1
-                affected_packages=[],
-                errors=None,
+                affected_packages=[],  # adcp 2.5.0 field (replaces packages/errors)
             )
             mock_get_adapter.return_value = mock_adapter
 

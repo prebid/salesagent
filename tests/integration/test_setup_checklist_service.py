@@ -22,6 +22,7 @@ from src.services.setup_checklist_service import (
     get_incomplete_critical_tasks,
     validate_setup_complete,
 )
+from tests.helpers.adcp_factories import create_test_db_product
 
 pytestmark = pytest.mark.requires_db
 
@@ -130,15 +131,12 @@ def setup_complete_tenant(integration_db, test_tenant_id):
         db_session.add(prop)
 
         # Add product
-        product = Product(
+        product = create_test_db_product(
             tenant_id=test_tenant_id,
             product_id="prod_1",
             name="Test Product",
             description="Test",
-            format_ids=["display"],
-            targeting_template={},
-            delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display"}],
         )
         db_session.add(product)
 
@@ -387,28 +385,19 @@ class TestSetupChecklistService:
             db_session.add(tenant2)
 
             # Add currency and product for tenant 2
-            from tests.fixtures.factories import PrincipalFactory, ProductFactory
+            from tests.fixtures.factories import PrincipalFactory
 
             currency2 = CurrencyLimit(
                 tenant_id=tenant_ids[1], currency_code="USD", min_package_budget=0.0, max_daily_package_spend=10000.0
             )
             db_session.add(currency2)
 
-            # Use ProductFactory to create product with all required fields
-            product2_data = ProductFactory.create(
-                tenant_id=tenant_ids[1], product_id="bulk_product_2", name="Test Product", format_ids=[]
-            )
-            product2 = Product(
-                tenant_id=product2_data["tenant_id"],
-                product_id=product2_data["product_id"],
-                name=product2_data["name"],
-                description=product2_data["description"],
-                format_ids=product2_data["format_ids"] if isinstance(product2_data["format_ids"], list) else [],
-                targeting_template=(
-                    product2_data["targeting_template"] if isinstance(product2_data["targeting_template"], dict) else {}
-                ),
-                delivery_type=product2_data["delivery_type"],
-                property_tags=["all_inventory"],  # Required by ck_product_properties_xor constraint
+            # Use create_test_db_product factory
+            product2 = create_test_db_product(
+                tenant_id=tenant_ids[1],
+                product_id="bulk_product_2",
+                name="Test Product",
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             )
             db_session.add(product2)
 
@@ -452,21 +441,12 @@ class TestSetupChecklistService:
             )
             db_session.add(property3)
 
-            # Use ProductFactory for product3 as well
-            product3_data = ProductFactory.create(
-                tenant_id=tenant_ids[2], product_id="bulk_product_3", name="Test Product", format_ids=[]
-            )
-            product3 = Product(
-                tenant_id=product3_data["tenant_id"],
-                product_id=product3_data["product_id"],
-                name=product3_data["name"],
-                description=product3_data["description"],
-                format_ids=product3_data["format_ids"] if isinstance(product3_data["format_ids"], list) else [],
-                targeting_template=(
-                    product3_data["targeting_template"] if isinstance(product3_data["targeting_template"], dict) else {}
-                ),
-                delivery_type=product3_data["delivery_type"],
-                property_tags=["all_inventory"],  # Required by ck_product_properties_xor constraint
+            # Use create_test_db_product factory
+            product3 = create_test_db_product(
+                tenant_id=tenant_ids[2],
+                product_id="bulk_product_3",
+                name="Test Product",
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             )
             db_session.add(product3)
 

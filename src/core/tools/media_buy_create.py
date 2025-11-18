@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+from adcp.types.generated_poc.media_buy_status import MediaBuyStatus
+from adcp.types.generated_poc.package_status import PackageStatus
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -62,14 +64,18 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuySuccess,
-    CreativeStatus,
+    CreativeApprovalStatus,
     Error,
     FormatId,
     MediaPackage,
     Package,
+    PackageRequest,
     Principal,
     Product,
     Targeting,
+)
+from src.core.schemas import (
+    url as make_url,
 )
 from src.core.testing_hooks import TestingContext, apply_testing_hooks, get_testing_context
 from src.core.tool_context import ToolContext
@@ -81,7 +87,7 @@ from src.services.activity_feed import activity_feed
 # --- Helper Functions ---
 
 
-def _sanitize_package_status(status: str | None) -> str | None:
+def _sanitize_package_status(status: Any) -> str | None:
     """Ensure package status matches AdCP spec.
 
     Per AdCP spec, Package.status must be one of: draft, active, paused, completed.
@@ -97,19 +103,23 @@ def _sanitize_package_status(status: str | None) -> str | None:
     Returns:
         Valid AdCP PackageStatus or None
     """
-    VALID_PACKAGE_STATUSES = {"draft", "active", "paused", "completed"}
+    # Use library enum as source of truth for valid values
+    VALID_PACKAGE_STATUSES = {s.value for s in PackageStatus}
 
     if status is None:
         return None
 
-    if status in VALID_PACKAGE_STATUSES:
-        return status
+    # Convert to string for validation
+    status_str = str(status)
+
+    if status_str in VALID_PACKAGE_STATUSES:
+        return status_str
 
     # Log error for non-spec-compliant status - this indicates a bug in our code
     logger.error(
-        f"[SPEC-VIOLATION] Package.status='{status}' violates AdCP spec! "
+        f"[SPEC-VIOLATION] Package.status='{status_str}' violates AdCP spec! "
         f"Valid PackageStatus values: {VALID_PACKAGE_STATUSES}. "
-        f"Note: '{status}' may be a TaskStatus (workflow state), which should be stored in WorkflowStep.status, NOT Package.status. "
+        f"Note: '{status_str}' may be a TaskStatus (workflow state), which should be stored in WorkflowStep.status, NOT Package.status. "
         f"Setting to None to prevent spec violation."
     )
     return None
@@ -127,12 +137,16 @@ def _determine_media_buy_status(
 
     This ensures consistent status across all adapters (GAM, Mock, Kevel, etc.).
 
-    Status Priority (highest to lowest):
-    1. pending_approval: Manual approval required, not yet approved
-    2. needs_creatives: Buy created but no creatives OR creatives not approved
-    3. ready: Scheduled for future start
-    4. active: Currently delivering
-    5. completed: Past end date
+    Status Priority (highest to lowest) - ALL SPEC-COMPLIANT:
+    1. pending_activation: Manual approval required OR needs creatives OR scheduled for future
+    2. active: Currently delivering (has creatives, approved, within flight dates)
+    3. completed: Past end date
+    4. paused: (Reserved for future use - not currently returned)
+
+    Internal states mapped to spec statuses:
+    - "pending_approval" → pending_activation (awaiting manual approval)
+    - "needs_creatives" → pending_activation (missing or unapproved creatives)
+    - "ready" → pending_activation (scheduled for future start)
 
     Args:
         manual_approval_required: Whether the media buy requires manual approval
@@ -143,26 +157,24 @@ def _determine_media_buy_status(
         now: Current time (defaults to datetime.now(UTC))
 
     Returns:
-        Status string matching AdCP media buy statuses
+        Status string matching AdCP MediaBuyStatus enum (pending_activation, active, paused, completed)
     """
     if now is None:
         now = datetime.now(UTC)
 
-    # Priority 1: Pending approval (highest priority)
-    if manual_approval_required:
-        return "pending_approval"
+    # Priority 1: Completed (past end date - check first to avoid false pending_activation)
+    if now > end_time:
+        return MediaBuyStatus.completed.value
 
-    # Priority 2: Needs creatives (either missing or not approved)
-    if not has_creatives or not creatives_approved:
-        return "needs_creatives"
+    # Priority 2: Pending activation (any blocking condition or scheduled for future)
+    # - Manual approval required
+    # - Missing creatives or unapproved creatives
+    # - Scheduled for future start
+    if manual_approval_required or not has_creatives or not creatives_approved or now < start_time:
+        return MediaBuyStatus.pending_activation.value
 
-    # Priority 3-5: Flight-based status
-    if now < start_time:
-        return "ready"  # Scheduled to go live at flight start date
-    elif now > end_time:
-        return "completed"
-    else:
-        return "active"
+    # Priority 3: Active (currently delivering - all conditions met)
+    return MediaBuyStatus.active.value
 
 
 def _extract_creative_url_and_dimensions(
@@ -170,9 +182,12 @@ def _extract_creative_url_and_dimensions(
 ) -> tuple[str | None, int | None, int | None]:
     """Extract URL and dimensions from creative data.
 
+    All production creatives now use AdCP v2.4 format with data.assets[asset_id]
+    containing typed asset objects per the creative format specification.
+
     Extraction priority:
     1. Format spec assets_required (most specific - AdCP v2.4 compliant)
-    2. Top-level fields (backwards compatibility)
+    2. First available asset with URL (fallback if no format spec)
 
     Args:
         creative_data: Creative data dict from database
@@ -199,10 +214,6 @@ def _extract_creative_url_and_dimensions(
                     if isinstance(asset_obj, dict) and asset_obj.get("url"):
                         url = asset_obj["url"]
                         break
-
-    # Fallback: Check for URL at top level (backwards compatibility)
-    if not url and creative_data.get("url"):
-        url = creative_data["url"]
 
     # Extract dimensions from assets using format specification
     width = None
@@ -235,18 +246,6 @@ def _extract_creative_url_and_dimensions(
                                 )
                         if width and height:
                             break
-
-    # Fallback: Check for dimensions at top level (backwards compatibility)
-    if width is None and creative_data.get("width"):
-        try:
-            width = int(creative_data["width"])
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid width type in creative: {creative_data.get('width')}")
-    if height is None and creative_data.get("height"):
-        try:
-            height = int(creative_data["height"])
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid height type in creative: {creative_data.get('height')}")
 
     return url, width, height
 
@@ -616,8 +615,15 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         logger.error(f"[APPROVAL] {error_msg}")
                         return False, error_msg
 
+                    # Extract delivery_type string value from enum (if it's an enum)
+                    if hasattr(product.delivery_type, "value"):
+                        # It's an enum - extract the string value
+                        delivery_type_str = product.delivery_type.value
+                    else:
+                        # Already a string
+                        delivery_type_str = str(product.delivery_type)
+
                     # Validate delivery_type is a valid literal
-                    delivery_type_str = str(product.delivery_type)
                     if delivery_type_str not in ["guaranteed", "non_guaranteed"]:
                         delivery_type_str = "non_guaranteed"  # Default fallback
 
@@ -645,7 +651,8 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                                 if not format_id or not isinstance(format_id, str):
                                     raise ValueError(f"Format missing or invalid id: id={format_id!r}")
 
-                                format_ids_list.append(FormatIdType(agent_url=agent_url, id=format_id))
+                                # Pydantic automatically converts string to AnyUrl per FormatId schema
+                                format_ids_list.append(FormatIdType(agent_url=make_url(agent_url), id=format_id))
 
                             # Already correct type (no conversion needed)
                             elif isinstance(fmt, FormatIdType):
@@ -696,7 +703,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         delivery_type=delivery_type_str,  # type: ignore[arg-type]
                         cpm=cpm,
                         impressions=impressions,
-                        format_ids=format_ids_list,
+                        format_ids=format_ids_list,  # type: ignore[arg-type]
                         targeting_overlay=targeting_overlay,
                         buyer_ref=package_config.get("buyer_ref"),
                         product_id=product_id,
@@ -932,7 +939,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
 
 def _validate_pricing_model_selection(
-    package: Package,
+    package: Package | PackageRequest,
     product: Any,  # ProductModel from database
     campaign_currency: str | None,
 ) -> dict[str, Any]:
@@ -1009,8 +1016,9 @@ def _validate_pricing_model_selection(
             break
 
     if not selected_option:
+        # Show available options in same format as matching logic expects
         available_options = [
-            f"{opt.pricing_model}_{opt.currency}_{opt.id} ({opt.pricing_model} - {opt.currency})"
+            f"{opt.pricing_model}_{opt.currency.lower()}_{'fixed' if opt.is_fixed else 'auction'} ({opt.pricing_model} - {opt.currency})"
             for opt in product.pricing_options
         ]
         error_msg = f"Product {product.product_id} does not offer "
@@ -1309,7 +1317,7 @@ async def _create_media_buy_impl(
     if not principal:
         error_msg = f"Principal {principal_id} not found"
         # Cannot create context or workflow step without valid principal
-        return CreateMediaBuyError(
+        return CreateMediaBuyError(  # type: ignore[return-value]
             errors=[Error(code="authentication_error", message=error_msg, details=None)],
             context=req.context,
         )
@@ -1453,7 +1461,7 @@ async def _create_media_buy_impl(
         product_ids = req.get_product_ids()
         logger.info(f"DEBUG: Extracted product_ids: {product_ids}")
         logger.info(
-            f"DEBUG: Request packages: {[{'package_id': p.package_id, 'product_id': p.product_id, 'buyer_ref': p.buyer_ref, 'bid_price': p.bid_price, 'pricing_option_id': p.pricing_option_id} for p in (req.packages or [])]}"
+            f"DEBUG: Request packages: {[{'product_id': p.product_id, 'buyer_ref': p.buyer_ref, 'bid_price': p.bid_price, 'pricing_option_id': p.pricing_option_id} for p in (req.packages or [])]}"
         )
         if not product_ids:
             error_msg = "At least one product is required."
@@ -1461,9 +1469,9 @@ async def _create_media_buy_impl(
 
         if req.packages:
             for package in req.packages:
-                # Check product_id field (single) or products field (array) per AdCP spec
-                if not package.product_id and not package.products:
-                    error_msg = f"Package {package.buyer_ref} must specify product_id or products."
+                # Check product_id field per AdCP spec
+                if not package.product_id:
+                    error_msg = f"Package {package.buyer_ref} must specify product_id."
                     raise ValueError(error_msg)
 
             # Check for duplicate product_ids across packages
@@ -1500,6 +1508,23 @@ async def _create_media_buy_impl(
 
             # Build product lookup map
             product_map = {p.product_id: p for p in products}
+
+            # Resolve legacy pricing_option_id values to actual product pricing_option_ids
+            # This happens when using the legacy product_ids parameter (auto-converted to packages)
+            for package in req.packages:
+                if package.pricing_option_id == "legacy_conversion" and package.product_id in product_map:
+                    product = product_map[package.product_id]
+                    # Use the first pricing option from the product
+                    if product.pricing_options and len(product.pricing_options) > 0:
+                        # Use the generated pricing_option_id format from the product's first option
+                        first_option = product.pricing_options[0]
+                        pricing_model = first_option.pricing_model.lower()
+                        currency = first_option.currency.lower()
+                        is_fixed = "fixed" if first_option.is_fixed else "auction"
+                        package.pricing_option_id = f"{pricing_model}_{currency}_{is_fixed}"
+                        logger.info(
+                            f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
+                        )
 
             # Get currency from product pricing options (per AdCP spec)
             request_currency = None
@@ -1563,10 +1588,8 @@ async def _create_media_buy_impl(
             if req.packages:
                 for idx, package in enumerate(req.packages):
                     # Get product ID for this package (AdCP spec: single product per package)
-                    # Check both products array (AdCP 2.4) and product_id (legacy)
-                    package_product_ids = (
-                        package.products if package.products else ([package.product_id] if package.product_id else [])
-                    )
+                    # Get product_id from package (AdCP spec has product_id field)
+                    package_product_ids = [package.product_id] if package.product_id else []
 
                     # Validate pricing for the product
                     if package_product_ids:
@@ -1723,7 +1746,7 @@ async def _create_media_buy_impl(
         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
 
         # Return error response (protocol layer will add status="failed")
-        return CreateMediaBuyError(
+        return CreateMediaBuyError(  # type: ignore[return-value]
             errors=[Error(code="validation_error", message=str(e), details=None)],
             context=req.context,
         )
@@ -2001,7 +2024,7 @@ async def _create_media_buy_impl(
                                         req_pkg.targeting_overlay.model_dump() if req_pkg.targeting_overlay else None
                                     ),
                                     "creative_ids": req_pkg.creative_ids,
-                                    "format_ids_to_provide": req_pkg.format_ids_to_provide,
+                                    "format_ids": req_pkg.format_ids if hasattr(req_pkg, "format_ids") else None,
                                     "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                                     "impressions": req_pkg.impressions,  # Store impressions for display
                                 }
@@ -2116,11 +2139,11 @@ async def _create_media_buy_impl(
             # The workflow_step_id in packages indicates approval is required
             # buyer_ref is required by schema, but mypy needs explicit check
             response_buyer_ref = req.buyer_ref if req.buyer_ref else "unknown"
-            return CreateMediaBuySuccess(
+            return CreateMediaBuySuccess(  # type: ignore[return-value]
                 buyer_ref=response_buyer_ref,
                 media_buy_id=media_buy_id,
                 creative_deadline=None,
-                packages=pending_packages,
+                packages=pending_packages,  # type: ignore[arg-type]
                 workflow_step_id=step.step_id,  # Client can track approval via this ID
                 context=req.context,
             )
@@ -2187,7 +2210,7 @@ async def _create_media_buy_impl(
                     f"  • {err}" for err in config_errors
                 )
                 ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_detail)
-                return CreateMediaBuyError(
+                return CreateMediaBuyError(  # type: ignore[return-value]
                     errors=[Error(code="invalid_configuration", message=err, details=None) for err in config_errors],
                     context=req.context,
                 )
@@ -2219,23 +2242,13 @@ async def _create_media_buy_impl(
 
                 package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
 
-                # Serialize the full package to include all fields (budget, targeting, etc.)
-                # Use model_dump_internal to get complete package data
-                if hasattr(pkg, "model_dump_internal"):
-                    pkg_dict = pkg.model_dump_internal()
-                elif hasattr(pkg, "model_dump"):
-                    pkg_dict = pkg.model_dump(exclude_none=True, mode="python")
-                else:
-                    pkg_dict = {}
-
-                # Build response with complete package data (matching auto-approval path)
+                # Per AdCP spec, create-media-buy-response Package only includes:
+                # - buyer_ref (required): Buyer's reference identifier
+                # - package_id (required): Publisher's unique identifier
                 response_packages.append(
                     {
-                        **pkg_dict,  # Include all package fields (budget, targeting_overlay, creative_ids, etc.)
+                        "buyer_ref": pkg.buyer_ref,
                         "package_id": package_id,
-                        "name": f"{pkg.product_id} - Package {idx}",
-                        "buyer_ref": pkg.buyer_ref,  # Include buyer_ref from request
-                        "status": "draft",  # Package is pending approval (AdCP-compliant status)
                     }
                 )
 
@@ -2280,10 +2293,10 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
-            return CreateMediaBuySuccess(
+            return CreateMediaBuySuccess(  # type: ignore[return-value]
                 buyer_ref=req.buyer_ref if req.buyer_ref else "unknown",
                 media_buy_id=media_buy_id,
-                packages=response_packages,  # Include packages with buyer_ref
+                packages=response_packages,  # type: ignore[arg-type]
                 workflow_step_id=step.step_id,
                 context=req.context,
             )
@@ -2304,15 +2317,11 @@ async def _create_media_buy_impl(
         packages = []
         for idx, pkg in enumerate(req.packages, 1):  # Iterate over request packages
             # Find the product for this package (from schema catalog, not database model)
-            # Package can have either product_id (singular) or products (array) per AdCP spec
-            pkg_product_id: str | None = None
-            if pkg.products and len(pkg.products) > 0:
-                pkg_product_id = pkg.products[0]  # Use first product from array
-            elif pkg.product_id:
-                pkg_product_id = pkg.product_id  # Use singular product_id
+            # Package has product_id field per AdCP spec
+            pkg_product_id = pkg.product_id
 
             if not pkg_product_id:
-                error_msg = f"Package {idx} has neither product_id nor products field set"
+                error_msg = f"Package {idx} has no product_id field set"
                 raise ValueError(error_msg)
 
             pkg_product: Product | None = None
@@ -2326,7 +2335,7 @@ async def _create_media_buy_impl(
                 raise ValueError(error_msg)
 
             # Determine format_ids to use
-            format_ids_to_use = []
+            format_ids_to_use: list[FormatId] = []
 
             # Use format_ids from request package if provided
             matching_package = pkg  # The package we're iterating over
@@ -2431,19 +2440,18 @@ async def _create_media_buy_impl(
                     raise ValueError(error_msg)
 
                 # Preserve original format objects for format_ids_to_use
-                format_ids_to_use = list(matching_package.format_ids)
+                format_ids_to_use = list(matching_package.format_ids)  # type: ignore[arg-type]
 
             # Fallback to product's formats if no request format_ids
             if not format_ids_to_use:
                 if pkg_product.format_ids:
                     # Convert product.format_ids to FormatId objects if they're strings
-                    format_ids_to_use = []
                     # Get default creative agent URL from tenant config (tenant is dict[str, Any])
                     default_agent_url = tenant.get("creative_agent_url") or "https://creative.adcontextprotocol.org"
                     for fmt in pkg_product.format_ids:  # type: ignore[assignment]
                         if isinstance(fmt, str):
                             # Convert legacy string format to FormatId object
-                            format_ids_to_use.append(FormatId(agent_url=default_agent_url, id=fmt))
+                            format_ids_to_use.append(FormatId(agent_url=make_url(default_agent_url), id=fmt))
                         else:
                             # Already a FormatId or FormatReference object
                             format_ids_to_use.append(fmt)  # type: ignore[arg-type]
@@ -2454,8 +2462,10 @@ async def _create_media_buy_impl(
             cpm = 10.0  # Default
             if pkg_product.pricing_options and len(pkg_product.pricing_options) > 0:
                 first_option = pkg_product.pricing_options[0]
-                if first_option.rate:
-                    cpm = float(first_option.rate)
+                # Use getattr for discriminated union to avoid union-attr errors
+                rate = getattr(first_option, "rate", None)
+                if rate:
+                    cpm = float(rate)
 
             # Generate permanent package ID (not product_id)
             import secrets
@@ -2484,11 +2494,18 @@ async def _create_media_buy_impl(
                         else:
                             package_budget_value = None
 
-            # Ensure delivery_type is the correct literal type
+            # Extract delivery_type string value from enum (if it's an enum)
             from typing import cast
 
+            if hasattr(pkg_product.delivery_type, "value"):
+                # It's an enum - extract the string value
+                delivery_type_str = pkg_product.delivery_type.value
+            else:
+                # Already a string - cast to satisfy mypy
+                delivery_type_str = str(pkg_product.delivery_type)
+
             delivery_type_value: Literal["guaranteed", "non_guaranteed"] = cast(
-                Literal["guaranteed", "non_guaranteed"], pkg_product.delivery_type
+                Literal["guaranteed", "non_guaranteed"], delivery_type_str
             )
 
             packages.append(
@@ -2498,9 +2515,9 @@ async def _create_media_buy_impl(
                     delivery_type=delivery_type_value,
                     cpm=cpm,
                     impressions=int(total_budget / cpm * 1000),
-                    format_ids=format_ids_to_use,
+                    format_ids=format_ids_to_use,  # type: ignore[arg-type]
                     targeting_overlay=(
-                        matching_package.targeting_overlay
+                        matching_package.targeting_overlay  # type: ignore[arg-type]
                         if matching_package and hasattr(matching_package, "targeting_overlay")
                         else None
                     ),
@@ -2533,7 +2550,7 @@ async def _create_media_buy_impl(
         if not req.start_time or not req.end_time:
             error_msg = "start_time and end_time are required but were not properly set"
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-            return CreateMediaBuyError(
+            return CreateMediaBuyError(  # type: ignore[return-value]
                 errors=[Error(code="invalid_datetime", message=error_msg, details=None)],
                 context=req.context,
             )
@@ -2692,7 +2709,7 @@ async def _create_media_buy_impl(
                     pricing_info_for_package = package_pricing_info.get(package_id)
 
                     # Get impressions from request package if available
-                    request_pkg: Package | None = req.packages[i] if i < len(req.packages) else None
+                    request_pkg: PackageRequest | None = req.packages[i] if i < len(req.packages) else None
                     impressions = request_pkg.impressions if request_pkg else None
 
                     package_config = {
@@ -2817,7 +2834,8 @@ async def _create_media_buy_impl(
                         # NO FALLBACK - if adapter doesn't return package_id, fail loudly
                         response_package_id = None
                         if response.packages and i < len(response.packages):
-                            response_package_id = response.packages[i].get("package_id")
+                            # Package is a Pydantic model, use attribute access
+                            response_package_id = getattr(response.packages[i], "package_id", None)
                             logger.info(f"[DEBUG] Package {i}: response.packages[i] = {response.packages[i]}")
                             logger.info(f"[DEBUG] Package {i}: extracted package_id = {response_package_id}")
 
@@ -2829,7 +2847,7 @@ async def _create_media_buy_impl(
                         # Get platform_line_item_id from response if available
                         platform_line_item_id = None
                         if response.packages and i < len(response.packages):
-                            platform_line_item_id = response.packages[i].get("platform_line_item_id")
+                            platform_line_item_id = getattr(response.packages[i], "platform_line_item_id", None)
 
                         # Collect platform creative IDs for association
                         platform_creative_ids = []
@@ -2993,7 +3011,7 @@ async def _create_media_buy_impl(
                             )
 
         # Handle creatives if provided
-        creative_statuses: dict[str, CreativeStatus] = {}
+        creative_statuses: dict[str, CreativeApprovalStatus] = {}
         if req.creatives:
             # Convert Creative objects to format expected by adapter
             assets = []
@@ -3006,7 +3024,7 @@ async def _create_media_buy_impl(
                 except Exception as e:
                     logger.error(f"Error converting creative {creative.creative_id}: {e}")
                     # Add a failed status for this creative
-                    creative_statuses[creative.creative_id] = CreativeStatus(
+                    creative_statuses[creative.creative_id] = CreativeApprovalStatus(
                         creative_id=creative.creative_id, status="rejected", detail=f"Conversion error: {str(e)}"
                     )
                     continue
@@ -3026,80 +3044,50 @@ async def _create_media_buy_impl(
                         final_status = "approved" if status.status == "approved" else "pending_review"
                         detail = "Creative submitted to ad server"
 
-                    creative_statuses[status.creative_id] = CreativeStatus(
+                    creative_statuses[status.creative_id] = CreativeApprovalStatus(
                         creative_id=status.creative_id,
                         status=final_status,  # type: ignore[arg-type]
                         detail=detail,
                     )
 
         # Build packages list for response (AdCP v2.4 format)
-        # Use packages from adapter response (has package_ids) merged with request package fields
+        # Per AdCP spec, create-media-buy-response Package only includes:
+        # - buyer_ref (required): Buyer's reference identifier
+        # - package_id (required): Publisher's unique identifier
         response_packages = []
 
         # Get adapter response packages (have package_ids)
         adapter_packages = response.packages if response.packages else []
 
         for i, package in enumerate(req.packages):
-            # Start with adapter response package (has package_id)
+            # Get package_id from adapter response
             if i < len(adapter_packages):
-                # Get package_id and other fields from adapter response
                 # adapter_packages may be Package Pydantic objects (adcp v1.2.1) or dicts
                 response_package = adapter_packages[i]
                 if hasattr(response_package, "model_dump"):
                     response_package_dict = response_package.model_dump(exclude_none=True, mode="python")
                 else:
                     response_package_dict = response_package if isinstance(response_package, dict) else {}
+
+                adapter_package_id = response_package_dict.get("package_id")
             else:
                 # Fallback if adapter didn't return enough packages
                 logger.warning(f"Adapter returned fewer packages than request. Using request package {i}")
-                response_package_dict = {}  # type: ignore[assignment]
+                adapter_package_id = None
 
-            # CRITICAL: Save package_id from adapter response BEFORE merge
-            adapter_package_id = response_package_dict.get("package_id")
-            logger.info(f"[DEBUG] Package {i}: adapter_package_id from response = {adapter_package_id}")
-
-            # Serialize the request package to get fields like buyer_ref, format_ids
-            if hasattr(package, "model_dump_internal"):
-                request_package_dict = package.model_dump_internal()
-            elif hasattr(package, "model_dump"):
-                request_package_dict = package.model_dump(exclude_none=True, mode="python")
-            else:
-                request_package_dict = package if isinstance(package, dict) else {}
-
-            # Merge: Start with adapter response (has package_id), overlay request fields
-            package_dict = {**response_package_dict, **request_package_dict}
-
-            # CRITICAL: Restore package_id from adapter (merge may have overwritten it with None from request)
-            if adapter_package_id:
-                package_dict["package_id"] = adapter_package_id
-                logger.info(f"[DEBUG] Package {i}: Forced package_id = {adapter_package_id}")
-            else:
-                # NO FALLBACK - adapter MUST return package_id
+            # Validate that adapter returned package_id
+            if not adapter_package_id:
                 error_msg = f"Adapter did not return package_id for package {i}. Cannot build response."
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 
-            # Validate and convert format_ids (request field) to format_ids_to_provide (response field)
-            if "format_ids" in package_dict and package_dict["format_ids"]:
-                validated_format_ids = await _validate_and_convert_format_ids(
-                    package_dict["format_ids"], tenant["tenant_id"], i
-                )
-                package_dict["format_ids_to_provide"] = validated_format_ids
-                # Remove format_ids from response
-                del package_dict["format_ids"]
-
-            # Determine package status (AdCP expects: "draft", "active", "paused", "completed")
-            # Map internal TaskStatus to AdCP status strings
-            if package.creative_ids and len(package.creative_ids) > 0:
-                package_status = "active"  # Has creatives, so it's active
-            elif hasattr(package, "format_ids_to_provide") and package.format_ids_to_provide:
-                package_status = "active"  # Has format requirements, considered active
-            else:
-                package_status = "draft"  # Default to draft if no creatives or formats
-
-            # Add status
-            package_dict["status"] = package_status
-            response_packages.append(package_dict)
+            # Build minimal response package per AdCP spec
+            response_packages.append(
+                {
+                    "buyer_ref": package.buyer_ref,
+                    "package_id": adapter_package_id,
+                }
+            )
 
         # Ensure buyer_ref is set (defensive check)
         buyer_ref_value = req.buyer_ref if req.buyer_ref else buyer_ref
@@ -3114,7 +3102,7 @@ async def _create_media_buy_impl(
         adcp_response = CreateMediaBuySuccess(
             buyer_ref=buyer_ref_value,
             media_buy_id=response.media_buy_id,
-            packages=response_packages,
+            packages=response_packages,  # type: ignore[arg-type]
             creative_deadline=response.creative_deadline,
             context=req.context,
         )
@@ -3257,7 +3245,7 @@ async def _create_media_buy_impl(
             },
         )
 
-        return modified_response
+        return modified_response  # type: ignore[return-value]
 
     except Exception as e:
         # Update workflow step as failed on any error during execution

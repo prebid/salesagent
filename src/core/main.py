@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 from datetime import UTC, datetime
@@ -213,8 +212,14 @@ console.print(f"[bold cyan]🔌 Using adapter: {SELECTED_ADAPTER.upper()}[/bold 
 
 
 def get_product_catalog() -> list[Product]:
-    """Get products for the current tenant."""
+    """Get products for the current tenant.
+
+    Uses shared convert_product_model_to_schema() to ensure consistent
+    conversion logic across all product catalog providers.
+    """
     from sqlalchemy.orm import selectinload
+
+    from src.core.product_conversion import convert_product_model_to_schema
 
     tenant = get_current_tenant()
 
@@ -226,81 +231,21 @@ def get_product_catalog() -> list[Product]:
         )
         products = session.scalars(stmt).all()
 
+        # Use shared conversion function - handles all required fields,
+        # pricing options (with typed instances), and all edge cases
         loaded_products = []
         for product in products:
-            # Convert ORM model to Pydantic schema
-            # Parse JSON fields that might be strings (SQLite) or dicts (PostgreSQL)
-            def safe_json_parse(value):
-                if isinstance(value, str):
-                    try:
-                        return json.loads(value)
-                    except (json.JSONDecodeError, TypeError):
-                        return value
-                return value
+            try:
+                converted_product = convert_product_model_to_schema(product)
+                loaded_products.append(converted_product)
+            except Exception as e:
+                logger.error(f"Failed to convert product {product.product_id}: {e}")
+                # Re-raise to surface conversion errors
+                raise ValueError(f"Product {product.product_id} conversion failed: {e}") from e
 
-            # Parse formats - now stored as strings by the validator
-            # Use effective_formats to auto-resolve from inventory profile if set
-            format_ids = safe_json_parse(product.effective_format_ids) or []
-            # Ensure it's a list of strings (validator guarantees this)
-            if not isinstance(format_ids, list):
-                format_ids = []
-
-            # Convert pricing_options ORM objects to Pydantic objects
-            from src.core.schemas import PricingOption as PricingOptionSchema
-
-            pricing_options = []
-            for po in product.pricing_options:
-                fixed_str = "fixed" if po.is_fixed else "auction"
-                pricing_option_data = {
-                    "pricing_option_id": f"{po.pricing_model}_{po.currency.lower()}_{fixed_str}",
-                    "pricing_model": po.pricing_model,
-                    "rate": float(po.rate) if po.rate else None,
-                    "currency": po.currency,
-                    "is_fixed": po.is_fixed,
-                    "price_guidance": safe_json_parse(po.price_guidance) if po.price_guidance else None,
-                    "parameters": safe_json_parse(po.parameters) if po.parameters else None,
-                    "min_spend_per_package": float(po.min_spend_per_package) if po.min_spend_per_package else None,
-                }
-                pricing_options.append(PricingOptionSchema(**pricing_option_data))
-
-            product_data = {
-                "product_id": product.product_id,
-                "name": product.name,
-                "description": product.description,
-                "format_ids": format_ids,
-                "delivery_type": product.delivery_type,
-                "pricing_options": pricing_options,
-                "measurement": (
-                    safe_json_parse(product.measurement)
-                    if hasattr(product, "measurement") and product.measurement
-                    else None
-                ),
-                "creative_policy": (
-                    safe_json_parse(product.creative_policy)
-                    if hasattr(product, "creative_policy") and product.creative_policy
-                    else None
-                ),
-                "is_custom": product.is_custom,
-                "expires_at": product.expires_at,
-                # Note: brief_relevance is populated dynamically when brief is provided
-                # Use effective_implementation_config to auto-resolve from inventory profile if set
-                "implementation_config": safe_json_parse(product.effective_implementation_config),
-                # Required per AdCP spec: either properties OR property_tags
-                # Use effective_properties/effective_property_tags to auto-resolve from inventory profile if set
-                "properties": (
-                    safe_json_parse(product.effective_properties)
-                    if hasattr(product, "effective_properties") and product.effective_properties
-                    else None
-                ),
-                "property_tags": (
-                    safe_json_parse(product.effective_property_tags)
-                    if hasattr(product, "effective_property_tags") and product.effective_property_tags
-                    else ["all_inventory"]  # Default required per AdCP spec
-                ),
-            }
-            loaded_products.append(Product(**product_data))
-
-    return loaded_products
+    # convert_product_model_to_schema returns LibraryProduct,
+    # which our Product extends - safe cast at runtime
+    return loaded_products  # type: ignore[return-value]
 
 
 # Creative macro support is now simplified to a single creative_macro string

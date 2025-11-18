@@ -27,15 +27,16 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
     """Test that get_product_catalog() loads pricing_options relationship."""
     from src.core.config_loader import set_current_tenant
 
-    # Create test tenant
-    unique_id = str(uuid.uuid4())[:8]
+    # Create test tenant with valid domain (no underscores)
+    unique_id = str(uuid.uuid4())[:8].replace("_", "")  # Remove underscores
     now = datetime.now(UTC)
 
     with get_db_session() as session:
         tenant = TenantModel(
-            tenant_id=f"test_tenant_{unique_id}",
+            tenant_id=f"test-tenant-{unique_id}",
             name=f"Test Tenant {unique_id}",
-            subdomain=f"test_{unique_id}",
+            subdomain=f"test-{unique_id}",  # Use hyphens, not underscores
+            virtual_host=f"test-{unique_id}.example.com",  # Valid domain per AdCP pattern
             is_active=True,
             ad_server="mock",
             created_at=now,
@@ -47,10 +48,10 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
         # Create test principal
         principal = PrincipalModel(
             tenant_id=tenant.tenant_id,
-            principal_id=f"test_principal_{unique_id}",
+            principal_id=f"test-principal-{unique_id}",
             name=f"Test Principal {unique_id}",
-            access_token=f"test_token_{unique_id}",
-            platform_mappings={"mock": {"advertiser_id": f"test_advertiser_{unique_id}"}},
+            access_token=f"test-token-{unique_id}",
+            platform_mappings={"mock": {"advertiser_id": f"test-advertiser-{unique_id}"}},
         )
         session.add(principal)
         session.commit()
@@ -66,18 +67,19 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
         # Create a product with pricing options
         product = ProductModel(
             tenant_id=tenant.tenant_id,
-            product_id="test_product_with_pricing",
+            product_id="test-product-with-pricing",
             name="Test Product",
             description="Test description",
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
             property_tags=["all_inventory"],
+            delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)
         session.flush()
 
-        # Add pricing option
+        # Add pricing option (pricing_option_id auto-generated during conversion)
         pricing_option = PricingOptionModel(
             tenant_id=tenant.tenant_id,
             product_id=product.product_id,
@@ -107,15 +109,16 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
 @pytest.mark.requires_db
 def test_product_query_with_eager_loading(integration_db):
     """Test that Product queries use eager loading for pricing_options."""
-    # Create test tenant
-    unique_id = str(uuid.uuid4())[:8]
+    # Create test tenant with valid domain
+    unique_id = str(uuid.uuid4())[:8].replace("_", "")
     now = datetime.now(UTC)
 
     with get_db_session() as session:
         tenant = TenantModel(
-            tenant_id=f"test_tenant_{unique_id}",
+            tenant_id=f"test-tenant-{unique_id}",
             name=f"Test Tenant {unique_id}",
-            subdomain=f"test_{unique_id}",
+            subdomain=f"test-{unique_id}",
+            virtual_host=f"test-{unique_id}.example.com",
             is_active=True,
             ad_server="mock",
             created_at=now,
@@ -127,13 +130,14 @@ def test_product_query_with_eager_loading(integration_db):
         # Create a product with pricing options
         product = ProductModel(
             tenant_id=tenant.tenant_id,
-            product_id="test_eager_load",
+            product_id="test-eager-load",
             name="Test Eager Load",
             description="Test description",
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
             property_tags=["all_inventory"],
+            delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)
         session.flush()
@@ -151,7 +155,7 @@ def test_product_query_with_eager_loading(integration_db):
         session.commit()
 
     # Store tenant_id before session closes
-    tenant_id = f"test_tenant_{unique_id}"
+    tenant_id = f"test-tenant-{unique_id}"
 
     # Query product with eager loading (simulating get_product_catalog pattern)
     with get_db_session() as session:
@@ -159,7 +163,7 @@ def test_product_query_with_eager_loading(integration_db):
 
         stmt = (
             select(ProductModel)
-            .filter_by(tenant_id=tenant_id, product_id="test_eager_load")
+            .filter_by(tenant_id=tenant_id, product_id="test-eager-load")
             .options(selectinload(ProductModel.pricing_options))
         )
 
@@ -175,21 +179,23 @@ def test_product_query_with_eager_loading(integration_db):
 
 @pytest.mark.requires_db
 def test_product_without_eager_loading_fails_validation(integration_db):
-    """Test that Products loaded without eager loading get empty pricing_options list.
+    """Test that Products without pricing_options fail validation.
 
-    This is a regression test to ensure the bug doesn't come back.
-    Since pricing_options now has default_factory=list, it won't raise ValidationError,
-    but we want to ensure that get_product_catalog() always loads them properly.
+    In adcp 2.5.0, pricing_options is a required field with no default.
+    This enforces that all products MUST have pricing information, which is correct
+    per AdCP spec. This test ensures we get a validation error if pricing_options
+    is missing, which helps catch bugs where eager loading is forgotten.
     """
-    # Create test tenant
-    unique_id = str(uuid.uuid4())[:8]
+    # Create test tenant with valid domain
+    unique_id = str(uuid.uuid4())[:8].replace("_", "")
     now = datetime.now(UTC)
 
     with get_db_session() as session:
         tenant = TenantModel(
-            tenant_id=f"test_tenant_{unique_id}",
+            tenant_id=f"test-tenant-{unique_id}",
             name=f"Test Tenant {unique_id}",
-            subdomain=f"test_{unique_id}",
+            subdomain=f"test-{unique_id}",
+            virtual_host=f"test-{unique_id}.example.com",
             is_active=True,
             ad_server="mock",
             created_at=now,
@@ -201,13 +207,14 @@ def test_product_without_eager_loading_fails_validation(integration_db):
         # Create a product with pricing options
         product = ProductModel(
             tenant_id=tenant.tenant_id,
-            product_id="test_no_eager_load",
+            product_id="test-no-eager-load",
             name="Test No Eager Load",
             description="Test description",
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
             property_tags=["all_inventory"],
+            delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)
         session.flush()
@@ -225,47 +232,62 @@ def test_product_without_eager_loading_fails_validation(integration_db):
         session.commit()
 
     # Store tenant_id before session closes
-    tenant_id = f"test_tenant_{unique_id}"
+    tenant_id = f"test-tenant-{unique_id}"
 
     # Query product WITHOUT eager loading (the bug scenario)
     with get_db_session() as session:
-        stmt = select(ProductModel).filter_by(tenant_id=tenant_id, product_id="test_no_eager_load")
+        stmt = select(ProductModel).filter_by(tenant_id=tenant_id, product_id="test-no-eager-load")
         # NOTE: No .options(selectinload(...)) here - this is the bug!
 
         loaded_product = session.scalars(stmt).first()
         assert loaded_product is not None
 
-        # Convert to Pydantic schema - pricing_options will be empty list (default)
+        # Convert to Pydantic schema - pricing_options is missing
+        # Also need publisher_properties for AdCP 2.5.0 Product schema
         product_data = {
             "product_id": loaded_product.product_id,
             "name": loaded_product.name,
             "description": loaded_product.description,
             "format_ids": loaded_product.format_ids if isinstance(loaded_product.format_ids, list) else [],
             "delivery_type": loaded_product.delivery_type,
-            "property_tags": loaded_product.property_tags if loaded_product.property_tags else ["all_inventory"],
-            # NOTE: pricing_options is intentionally missing - will use default_factory=list
+            "delivery_measurement": {"provider": "publisher", "notes": "Test measurement"},
+            "publisher_properties": [
+                {
+                    "publisher_domain": f"test-{unique_id}.example.com",
+                    "property_tags": ["all_inventory"],
+                    "selection_type": "by_tag",
+                }
+            ],
+            # NOTE: pricing_options is intentionally missing to test validation
         }
 
-        # This will succeed but pricing_options will be empty (the bug!)
-        product_schema = ProductSchema(**product_data)
-
-        # The bug is that pricing_options is empty when it should have data
-        assert product_schema.pricing_options == [], "Without eager loading, pricing_options will be empty"
+        # This will fail validation because pricing_options is required in adcp 2.5.0
+        # This is actually GOOD - it enforces that products always have pricing
+        try:
+            product_schema = ProductSchema(**product_data)
+            raise AssertionError("Should have raised ValidationError for missing pricing_options")
+        except Exception as e:
+            # Expected: ValidationError for missing required field
+            assert "pricing_options" in str(e).lower(), f"Expected pricing_options error, got: {e}"
+            assert (
+                "required" in str(e).lower() or "missing" in str(e).lower()
+            ), f"Expected required/missing error, got: {e}"
 
 
 @pytest.mark.requires_db
 def test_create_media_buy_loads_pricing_options(integration_db):
     """Test that create_media_buy logic loads pricing_options for currency detection."""
     # This tests the second place we fixed in PR #413
-    # Create test tenant
-    unique_id = str(uuid.uuid4())[:8]
+    # Create test tenant with valid domain
+    unique_id = str(uuid.uuid4())[:8].replace("_", "")
     now = datetime.now(UTC)
 
     with get_db_session() as session:
         tenant = TenantModel(
-            tenant_id=f"test_tenant_{unique_id}",
+            tenant_id=f"test-tenant-{unique_id}",
             name=f"Test Tenant {unique_id}",
-            subdomain=f"test_{unique_id}",
+            subdomain=f"test-{unique_id}",
+            virtual_host=f"test-{unique_id}.example.com",
             is_active=True,
             ad_server="mock",
             created_at=now,
@@ -277,10 +299,10 @@ def test_create_media_buy_loads_pricing_options(integration_db):
         # Create test principal
         principal = PrincipalModel(
             tenant_id=tenant.tenant_id,
-            principal_id=f"test_principal_{unique_id}",
+            principal_id=f"test-principal-{unique_id}",
             name=f"Test Principal {unique_id}",
-            access_token=f"test_token_{unique_id}",
-            platform_mappings={"mock": {"advertiser_id": f"test_advertiser_{unique_id}"}},
+            access_token=f"test-token-{unique_id}",
+            platform_mappings={"mock": {"advertiser_id": f"test-advertiser-{unique_id}"}},
         )
         session.add(principal)
         session.commit()
@@ -288,13 +310,14 @@ def test_create_media_buy_loads_pricing_options(integration_db):
         # Create a product with pricing options
         product = ProductModel(
             tenant_id=tenant.tenant_id,
-            product_id="test_cmb_pricing",
+            product_id="test-cmb-pricing",
             name="Test CMB Product",
             description="Test description",
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
             property_tags=["all_inventory"],
+            delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)
         session.flush()
@@ -312,8 +335,8 @@ def test_create_media_buy_loads_pricing_options(integration_db):
         session.commit()
 
     # Store IDs before session closes to avoid DetachedInstanceError
-    tenant_id = f"test_tenant_{unique_id}"
-    product_id = "test_cmb_pricing"
+    tenant_id = f"test-tenant-{unique_id}"
+    product_id = "test-cmb-pricing"
 
     # Query product with eager loading (as fixed in PR #413)
     with get_db_session() as session:

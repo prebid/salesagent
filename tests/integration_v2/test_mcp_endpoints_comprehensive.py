@@ -12,6 +12,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal
+from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration_v2.conftest import create_test_product_with_pricing
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
@@ -139,6 +140,7 @@ class TestMCPEndpointsComprehensive:
         client = Client(transport=transport)
         return client
 
+    @pytest.mark.timeout(60)
     @pytest.mark.requires_server
     async def test_get_products_basic(self, mcp_client):
         """Test basic get_products functionality."""
@@ -176,6 +178,7 @@ class TestMCPEndpointsComprehensive:
                 assert "pricing_model" in pricing
                 assert "is_fixed" in pricing
 
+    @pytest.mark.timeout(60)
     @pytest.mark.requires_server
     async def test_get_products_filtering(self, mcp_client):
         """Test that get_products filters based on brief."""
@@ -196,6 +199,7 @@ class TestMCPEndpointsComprehensive:
             news_products = [p for p in products if "news" in p["name"].lower()]
             assert len(news_products) > 0
 
+    @pytest.mark.timeout(60)
     @pytest.mark.requires_server
     async def test_get_products_missing_required_field(self, mcp_client):
         """Test that get_products succeeds without brand_manifest when authenticated.
@@ -219,7 +223,8 @@ class TestMCPEndpointsComprehensive:
         """Test that AdCP v2.4 schema maintains backward compatibility."""
         from datetime import date
 
-        from src.core.schemas import Budget, CreateMediaBuyRequest, Package
+        from src.core.schemas import Budget, CreateMediaBuyRequest
+        from tests.helpers.adcp_factories import create_test_package_request
 
         # Test 1: Legacy format should work
         legacy_request = CreateMediaBuyRequest(
@@ -256,8 +261,12 @@ class TestMCPEndpointsComprehensive:
             po_number="PO-V24-67890",  # Required per AdCP spec
             budget=Budget(total=10000.0, currency="EUR", pacing="asap"),
             packages=[
-                Package(buyer_ref="pkg_1", product_id="prod_1", budget=6000.0),  # Float budget per AdCP v2.2.0
-                Package(buyer_ref="pkg_2", product_id="prod_2", budget=4000.0),  # Float budget per AdCP v2.2.0
+                create_test_package_request(
+                    buyer_ref="pkg_1", product_id="prod_1", budget=6000.0, pricing_option_id="default"
+                ),  # Float budget per AdCP v2.2.0
+                create_test_package_request(
+                    buyer_ref="pkg_2", product_id="prod_2", budget=4000.0, pricing_option_id="default"
+                ),  # Float budget per AdCP v2.2.0
             ],
             start_time=datetime.now(UTC),
             end_time=datetime.now(UTC) + timedelta(days=30),
@@ -284,6 +293,7 @@ class TestMCPEndpointsComprehensive:
         assert mixed_request.budget.currency == "GBP"
         assert mixed_request.get_total_budget() == 3000.0
 
+    @pytest.mark.timeout(60)
     @pytest.mark.requires_server
     async def test_invalid_auth(self, mcp_server):
         """Test that invalid authentication is rejected."""
@@ -304,6 +314,7 @@ class TestMCPEndpointsComprehensive:
             # Should get authentication error
             assert "auth" in str(exc_info.value).lower() or "invalid" in str(exc_info.value).lower()
 
+    @pytest.mark.timeout(60)
     @pytest.mark.requires_server
     async def test_get_signals_optional(self, mcp_client):
         """Test the optional get_signals endpoint."""
@@ -332,6 +343,7 @@ class TestMCPEndpointsComprehensive:
                 if "unknown tool" not in str(e).lower():
                     raise
 
+    @pytest.mark.timeout(60)
     @pytest.mark.requires_server
     async def test_full_workflow(self, mcp_client):
         """Test a complete workflow from discovery to media buy."""
@@ -353,17 +365,21 @@ class TestMCPEndpointsComprehensive:
             start_time = (datetime.now(UTC) + timedelta(days=7)).isoformat()
             end_time = (datetime.now(UTC) + timedelta(days=37)).isoformat()
 
+            # Get pricing_option_id from product's first pricing option
+            pricing_option_id = product["pricing_options"][0]["pricing_option_id"]
+
             buy_result = await client.call_tool(
                 "create_media_buy",
                 {
                     "brand_manifest": {"name": "Enterprise SaaS platform for data analytics"},
                     "buyer_ref": "test_workflow_buy_001",  # Required per AdCP spec
                     "packages": [
-                        {
-                            "buyer_ref": "pkg_001",
-                            "product_id": product["product_id"],
-                            "budget": 10000.0,  # Float only per AdCP v2.2.0, currency from pricing_option
-                        }
+                        create_test_package_request_dict(
+                            buyer_ref="pkg_001",
+                            product_id=product["product_id"],
+                            pricing_option_id=pricing_option_id,
+                            budget=10000.0,
+                        )
                     ],
                     "start_time": start_time,
                     "end_time": end_time,

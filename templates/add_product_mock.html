@@ -449,15 +449,23 @@
                 <input type="radio" name="property_mode" value="tags" checked onchange="togglePropertyMode()">
                 Use Property Tags (Recommended)
             </label>
-            <small style="display: block; color: #666; margin-left: 1.5rem;">Assign tags that group related properties. Buyers use list_authorized_properties to get full details.</small>
+            <small style="display: block; color: #666; margin-left: 1.5rem;">Assign tags that group related properties. Simple and flexible - buyers fetch property details via list_authorized_properties.</small>
+        </div>
+
+        <div class="form-group" style="margin-top: 0.5rem;">
+            <label>
+                <input type="radio" name="property_mode" value="property_ids" onchange="togglePropertyMode()">
+                Select Specific Properties (by ID)
+            </label>
+            <small style="display: block; color: #666; margin-left: 1.5rem;">Choose exact properties from your authorized inventory. Provides precise property-level control.</small>
         </div>
 
         <div class="form-group" style="margin-top: 0.5rem;">
             <label>
                 <input type="radio" name="property_mode" value="full" onchange="togglePropertyMode()">
-                Specify Full Properties
+                Specify Full Properties (Legacy)
             </label>
-            <small style="display: block; color: #666; margin-left: 1.5rem;">Include complete property objects for direct validation.</small>
+            <small style="display: block; color: #666; margin-left: 1.5rem;">Include complete property objects - for backward compatibility only.</small>
         </div>
 
         <div id="property-tags-section" style="margin-top: 1rem;">
@@ -514,9 +522,44 @@
             </div>
         </div>
 
+        <div id="property-ids-section" style="margin-top: 1rem; display: none;">
+            <div class="form-group">
+                <label>Select Specific Properties *</label>
+                <small style="color: #666; display: block; margin-bottom: 0.5rem;">Select one or more properties from your authorized inventory.</small>
+                {% if authorized_properties and authorized_properties|length > 0 %}
+                <div style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #fafafa;">
+                    {% for prop in authorized_properties %}
+                    <label style="display: block; padding: 0.5rem; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s;"
+                           onmouseover="this.style.background='#f0f7ff'"
+                           onmouseout="this.style.background='transparent'">
+                        <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}" style="margin-right: 0.5rem;">
+                        <strong>{{ prop.name or prop.property_id }}</strong>
+                        <span style="color: #666; font-size: 0.9em;">({{ prop.property_type }})</span>
+                        {% if prop.tags %}
+                        <div style="margin-left: 1.5rem; margin-top: 0.25rem;">
+                            {% for tag in prop.tags %}
+                            <span style="background: #e3f2fd; color: #1976d2; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.8em; margin-right: 0.25rem;">{{ tag }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </label>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="alert" style="background: #fff3cd; border: 1px solid #ffc107; padding: 1rem; border-radius: 4px;">
+                    <strong>⚠️ No publisher properties found</strong><br>
+                    <small style="display: block; margin-top: 0.5rem;">
+                        You need to add publisher partnerships first.
+                        <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}#publishers-tab" style="color: #856404; text-decoration: underline;">Go to Inventory → Publishers & Properties →</a>
+                    </small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
         <div id="property-full-section" style="margin-top: 1rem; display: none;">
             <div class="alert" style="background: #fff3e0; border-left: 4px solid #ff9800; padding: 1rem;">
-                <strong>Advanced:</strong> For most cases, using property tags is simpler. Use this only if you need precise property-level control.
+                <strong>⚠️ Legacy Mode:</strong> This mode includes full property objects in the product definition. For most cases, use property tags or property IDs instead.
             </div>
             <div class="form-group">
                 <label>Select Properties</label>
@@ -524,15 +567,15 @@
                 <div style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem;">
                     {% for prop in authorized_properties %}
                     <label style="display: block; padding: 0.5rem;">
-                        <input type="checkbox" name="property_ids" value="{{ prop.id }}">
-                        {{ prop.name }} ({{ prop.property_type }})
+                        <input type="checkbox" name="full_property_ids" value="{{ prop.property_id }}">
+                        {{ prop.name or prop.property_id }} ({{ prop.property_type }})
                         {% if prop.tags %}<span class="badge" style="margin-left: 0.5rem;">{{ prop.tags|join(', ') }}</span>{% endif %}
                     </label>
                     {% endfor %}
                 </div>
                 {% else %}
                 <div class="alert" style="background: #fff; border: 1px solid #ddd; padding: 1rem;">
-                    No authorized properties found. <a href="{{ url_for('authorized_properties.list_authorized_properties', tenant_id=tenant_id) }}">Add authorized properties first</a>.
+                    No publisher properties found. <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}#publishers-tab">Add publisher partnerships first</a>.
                 </div>
                 {% endif %}
             </div>
@@ -639,13 +682,20 @@ function updatePricingFields() {
 function togglePropertyMode() {
     const mode = document.querySelector('input[name="property_mode"]:checked').value;
     const tagsSection = document.getElementById('property-tags-section');
+    const idsSection = document.getElementById('property-ids-section');
     const fullSection = document.getElementById('property-full-section');
 
+    // Hide all sections first
+    tagsSection.style.display = 'none';
+    idsSection.style.display = 'none';
+    fullSection.style.display = 'none';
+
+    // Show the selected section
     if (mode === 'tags') {
         tagsSection.style.display = 'block';
-        fullSection.style.display = 'none';
-    } else {
-        tagsSection.style.display = 'none';
+    } else if (mode === 'property_ids') {
+        idsSection.style.display = 'block';
+    } else if (mode === 'full') {
         fullSection.style.display = 'block';
     }
 }

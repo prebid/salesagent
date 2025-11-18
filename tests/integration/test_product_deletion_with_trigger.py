@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, Tenant
+from tests.helpers.adcp_factories import create_test_db_product
 
 
 @pytest.mark.requires_db
@@ -27,15 +28,12 @@ def test_product_deletion_cascades_pricing_options(integration_db):
         session.flush()
 
         # Create test product
-        product = Product(
+        product = create_test_db_product(
             tenant_id="test_trigger",
             product_id="test_prod_001",
             name="Test Product",
             description="Product for testing trigger",
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}],
-            targeting_template={},
-            delivery_type="guaranteed",
-            property_tags=["all_inventory"],
         )
         session.add(product)
         session.flush()
@@ -152,15 +150,12 @@ def test_trigger_still_blocks_manual_deletion_of_last_pricing_option(integration
         session.flush()
 
         # Create test product
-        product = Product(
+        product = create_test_db_product(
             tenant_id="test_trigger_2",
             product_id="test_prod_002",
             name="Test Product 2",
             description="Product for testing trigger constraint",
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90_image"}],
-            targeting_template={},
-            delivery_type="guaranteed",
-            property_tags=["all_inventory"],
         )
         session.add(product)
         session.flush()
@@ -232,15 +227,12 @@ def test_product_deletion_with_multiple_pricing_options(integration_db):
         session.flush()
 
         # Create test product
-        product = Product(
+        product = create_test_db_product(
             tenant_id="test_trigger_3",
             product_id="test_prod_003",
             name="Test Product 3",
             description="Product with multiple pricing options",
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_640x480_video"}],
-            targeting_template={},
-            delivery_type="guaranteed",
-            property_tags=["all_inventory"],
         )
         session.add(product)
         session.flush()

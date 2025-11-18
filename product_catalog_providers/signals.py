@@ -5,7 +5,7 @@ from typing import Any
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
-from src.core.database.product_pricing import get_product_pricing_options
+from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product
 from src.core.signals_agent_registry import get_signals_agent_registry
 
@@ -172,48 +172,53 @@ class SignalsDiscoveryProvider(ProductCatalogProvider):
         product_id = f"signal_{product_id_hash}"
 
         # Create AdCP-compliant Product (without internal fields like tenant_id)
-        from src.core.schemas import FormatId, PriceGuidance, PricingOption
+        from adcp.types import CpmAuctionPricingOption
+        from adcp.types.generated_poc.cpm_auction_option import PriceGuidance
+        from adcp.types.generated_poc.product import DeliveryMeasurement, PropertyTag, PublisherProperties5
+
+        from src.core.schemas import FormatId
 
         return Product(
             product_id=product_id,
             name=product_name,
             description=product_description,
             format_ids=[
-                FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-                FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
-                FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_pre_roll"),
+                FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),  # type: ignore[arg-type]
+                FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),  # type: ignore[arg-type]
+                FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_pre_roll"),  # type: ignore[arg-type]
             ],
-            delivery_type="non_guaranteed",  # Signals products are typically programmatic
+            delivery_type="non_guaranteed",  # type: ignore[arg-type]  # String matches DeliveryType enum
             measurement=None,  # Optional - signals products don't include measurement
             creative_policy=None,  # Optional - signals products don't include creative policy
             is_custom=True,  # These are custom products created from signals
             brief_relevance=f"Generated from {len(signals)} signals in {category} category for: {brief[:100]}...",
-            property_tags=["all_inventory"],  # Required per AdCP spec (using property_tags instead of properties)
-            properties=None,  # Using property_tags instead
+            publisher_properties=[
+                PublisherProperties5(
+                    selection_type="by_tag",
+                    property_tags=[PropertyTag("all_inventory")],  # Tag for all inventory
+                    publisher_domain="publisher.example.com",  # Placeholder domain
+                )
+            ],  # Required per AdCP spec
             estimated_exposures=None,  # Optional - signals products don't have exposure estimates
-            delivery_measurement=None,  # Optional - new field from product details
+            delivery_measurement=DeliveryMeasurement(provider="Signals Discovery Agent"),  # Required in adcp 2.5.0
             product_card=None,  # Optional - new field from product details
             product_card_detailed=None,  # Optional - new field from product details
             placements=None,  # Optional - new field from product details
             reporting_capabilities=None,  # Optional - new field from product details
             pricing_options=[
-                PricingOption(
+                CpmAuctionPricingOption(
                     pricing_option_id="cpm_usd_auction",
-                    pricing_model="cpm",  # type: ignore[arg-type]  # String literal matches PricingModel enum
-                    rate=None,  # Optional - auction-based pricing doesn't have fixed rate
+                    pricing_model="cpm",  # Required literal for discriminated union
+                    is_fixed=False,  # Required literal for CpmAuctionPricingOption
                     currency="USD",
-                    is_fixed=False,
                     price_guidance=PriceGuidance(
                         floor=float(adjusted_price),
                         p25=None,  # Optional percentile
                         p50=float(adjusted_price) * 1.2,
                         p75=float(adjusted_price) * 1.5,
-                        p90=float(adjusted_price) * 1.8,  # Required field
+                        p90=float(adjusted_price) * 1.8,
                     ),
-                    parameters=None,  # Optional - no additional parameters needed
                     min_spend_per_package=100.0,
-                    supported=True,  # Required field - signals products are supported
-                    unsupported_reason=None,  # Optional field
                 )
             ],
         )
@@ -240,53 +245,16 @@ class SignalsDiscoveryProvider(ProductCatalogProvider):
 
                 for db_product in db_products:
                     # Convert database model to AdCP-compliant Product schema
-                    # (Similar to database.py approach - only include AdCP spec fields)
-                    # Get pricing from pricing_options (preferred) or legacy fields (fallback)
-                    pricing_options = get_product_pricing_options(db_product)
-                    first_pricing = pricing_options[0] if pricing_options else {}
-
-                    product_data = {
-                        "product_id": db_product.product_id,
-                        "name": db_product.name,
-                        "description": db_product.description or f"Advertising product: {db_product.name}",
-                        "format_ids": db_product.format_ids or [],
-                        "delivery_type": "guaranteed" if first_pricing.get("is_fixed") else "non_guaranteed",
-                        "is_fixed_price": first_pricing.get("is_fixed", False),
-                        "cpm": first_pricing.get("rate"),
-                        "min_spend": (
-                            float(first_pricing["min_spend_per_package"])
-                            if first_pricing.get("min_spend_per_package")
-                            else None
-                        ),
-                        "is_custom": getattr(db_product, "is_custom", False),
-                        "property_tags": getattr(
-                            db_product, "property_tags", ["all_inventory"]
-                        ),  # Required per AdCP spec
-                    }
-
-                    # Handle JSON fields (might be strings in SQLite)
-                    if isinstance(product_data["format_ids"], str):
-                        import json
-
-                        try:
-                            product_data["format_ids"] = json.loads(product_data["format_ids"])
-                        except json.JSONDecodeError:
-                            product_data["format_ids"] = []
-
-                    # Extract format IDs if format_ids are objects
-                    if product_data["format_ids"]:
-                        format_ids = []
-                        for fmt in product_data["format_ids"]:
-                            if isinstance(fmt, dict) and "format_id" in fmt:
-                                format_ids.append(fmt["format_id"])
-                            elif isinstance(fmt, str):
-                                format_ids.append(fmt)
-                        product_data["format_ids"] = format_ids
-
-                    product = Product(**product_data)
-                    products.append(product)
+                    # Use proper conversion function to ensure all required fields are present
+                    # (delivery_measurement, pricing_options, publisher_properties, etc.)
+                    try:
+                        product = convert_product_model_to_schema(db_product)
+                        products.append(product)
+                    except ValueError as convert_error:
+                        # Log conversion errors but continue with other products
+                        logger.warning(f"Skipping product {db_product.product_id}: {convert_error}")
 
         except Exception as e:
             logger.error(f"Error fetching database products: {e}")
 
-        return products
+        return products  # type: ignore[return-value]  # Library Product is compatible with our extended Product

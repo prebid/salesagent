@@ -10,7 +10,9 @@ from src.core.schemas import Creative, FormatId
 def test_format_id_object_structure():
     """Test that FormatId accepts AdCP v2.4 structure."""
     format_id = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")
-    assert format_id.agent_url == "https://creative.adcontextprotocol.org"
+    assert (
+        str(format_id.agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
+    )  # AnyUrl adds trailing slash
     assert format_id.id == "display_300x250"
 
 
@@ -44,8 +46,11 @@ def test_creative_upgrades_string_format():
     )
     # Should be automatically upgraded to FormatId object
     assert isinstance(creative.format, FormatId)
-    assert creative.format_id == "display_300x250"
-    assert creative.format_agent_url == "https://creative.adcontextprotocol.org"
+    assert isinstance(creative.format_id, FormatId), "format_id is now a FormatId object (library pattern)"
+    assert creative.format_id.id == "display_300x250", "Access string ID via format_id.id"
+    assert (
+        str(creative.format_agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
+    )  # AnyUrl adds trailing slash
 
 
 def test_creative_accepts_format_id_object():
@@ -68,8 +73,11 @@ def test_creative_accepts_format_id_object():
         updated_at=datetime.now(),
     )
     assert isinstance(creative.format, FormatId)
-    assert creative.format_id == "display_300x250"
-    assert creative.format_agent_url == "https://creative.adcontextprotocol.org"
+    assert isinstance(creative.format_id, FormatId), "format_id is now a FormatId object (library pattern)"
+    assert creative.format_id.id == "display_300x250", "Access string ID via format_id.id"
+    assert (
+        str(creative.format_agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
+    )  # AnyUrl adds trailing slash
 
 
 def test_creative_from_dict_with_format_id_object():
@@ -91,8 +99,10 @@ def test_creative_from_dict_with_format_id_object():
         "updated_at": datetime.now(),
     }
     creative = Creative(**data)
-    assert creative.format_id == "display_300x250"
-    assert creative.format_agent_url == "https://creative.adcontextprotocol.org"
+    assert creative.format_id.id == "display_300x250", "Access string ID via format_id.id"
+    assert (
+        str(creative.format_agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
+    )  # AnyUrl adds trailing slash
 
 
 def test_creative_upgrades_dict_without_agent_url():
@@ -115,8 +125,11 @@ def test_creative_upgrades_dict_without_agent_url():
     )
     # Should be automatically upgraded with default agent_url
     assert isinstance(creative.format, FormatId)
-    assert creative.format_id == "display_300x250"
-    assert creative.format_agent_url == "https://creative.adcontextprotocol.org"
+    assert isinstance(creative.format_id, FormatId), "format_id is now a FormatId object (library pattern)"
+    assert creative.format_id.id == "display_300x250", "Access string ID via format_id.id"
+    assert (
+        str(creative.format_agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
+    )  # AnyUrl adds trailing slash
 
 
 def test_extract_format_namespace():
@@ -129,13 +142,13 @@ def test_extract_format_namespace():
 
     # Dict format with agent_url
     agent_url, format_id = _extract_format_namespace({"agent_url": "https://example.com", "id": "display_300x250"})
-    assert agent_url == "https://example.com"
+    assert str(agent_url).rstrip("/") == "https://example.com"  # AnyUrl adds trailing slash
     assert format_id == "display_300x250"
 
     # FormatId object
     format_obj = FormatId(agent_url="https://example.com", id="display_300x250")
     agent_url, format_id = _extract_format_namespace(format_obj)
-    assert agent_url == "https://example.com"
+    assert str(agent_url).rstrip("/") == "https://example.com"  # AnyUrl adds trailing slash
     assert format_id == "display_300x250"
 
     # String format (should be rejected - use upgrade_legacy_format_id first)

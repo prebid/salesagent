@@ -14,7 +14,7 @@ Design principles:
 import json
 from pathlib import Path
 
-from src.core.schemas import FormatId
+from src.core.schemas import FormatId, url
 
 # Default agent URL for AdCP reference implementation
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -89,7 +89,7 @@ def upgrade_legacy_format_id(format_id_value: str | dict | FormatId) -> FormatId
             return FormatId(**format_id_value)
         # Dict without agent_url - use default
         if "id" in format_id_value:
-            return FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id_value["id"])
+            return FormatId(agent_url=url(DEFAULT_AGENT_URL), id=format_id_value["id"])
 
     # Legacy string format - upgrade to namespaced format (DEPRECATED)
     if isinstance(format_id_value, str):
@@ -117,7 +117,7 @@ def upgrade_legacy_format_id(format_id_value: str | dict | FormatId) -> FormatId
             f"String format_ids will be removed in a future version."
         )
 
-        return FormatId(agent_url=agent_url, id=format_id_value)
+        return FormatId(agent_url=url(agent_url), id=format_id_value)
 
     raise ValueError(f"Invalid format_id type: {type(format_id_value)}")
 

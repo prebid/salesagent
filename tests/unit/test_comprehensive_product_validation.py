@@ -97,7 +97,6 @@ async def test_all_providers():
                         "name",
                         "description",
                         "delivery_type",
-                        "is_fixed_price",
                         "is_custom",
                     ]
                     for field in required_fields:

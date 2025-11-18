@@ -111,7 +111,7 @@ class AIProductCatalog(ProductCatalogProvider):
                     for fmt in formats_raw:
                         if isinstance(fmt, dict):
                             # Database format: {"agent_url": "...", "id": "..."}
-                            formats.append(FormatId(agent_url=fmt.get("agent_url", ""), id=fmt.get("id", "")))
+                            formats.append(FormatId(agent_url=fmt.get("agent_url", ""), id=fmt.get("id", "")))  # type: ignore[arg-type]
                         elif isinstance(fmt, str):
                             # Legacy string format (backwards compatibility)
                             formats.append(FormatId(agent_url="", id=fmt))
@@ -146,7 +146,8 @@ class AIProductCatalog(ProductCatalogProvider):
         for product in products:
             # Product schema objects already have pricing_options structure
             # Extract pricing info from first option for AI analysis
-            first_pricing: PricingOption | None = product.pricing_options[0] if product.pricing_options else None
+            # Type ignore: discriminated union types are compatible with PricingOption at runtime
+            first_pricing: PricingOption | None = product.pricing_options[0] if product.pricing_options else None  # type: ignore[assignment]
             product_info = {
                 "product_id": product.product_id,
                 "name": product.name,

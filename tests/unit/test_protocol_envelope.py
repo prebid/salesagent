@@ -37,7 +37,7 @@ class TestProtocolEnvelope:
         """Test wrapping with all optional envelope fields."""
         # Create domain response (no protocol fields - those go in envelope)
         response = CreateMediaBuySuccess(
-            buyer_ref="ref123", media_buy_id="mb_456", packages=[{"package_id": "pkg_1", "status": "active"}]
+            buyer_ref="ref123", media_buy_id="mb_456", packages=[{"buyer_ref": "ref123", "package_id": "pkg_1"}]
         )
 
         # Create push notification config
@@ -141,7 +141,7 @@ class TestProtocolEnvelope:
     def test_message_generation_from_payload_str(self):
         """Test that message is auto-generated from payload.__str__ if not provided."""
         response = CreateMediaBuySuccess(
-            buyer_ref="ref123", media_buy_id="mb_456", packages=[{"package_id": "pkg_1", "status": "active"}]
+            buyer_ref="ref123", media_buy_id="mb_456", packages=[{"buyer_ref": "ref123", "package_id": "pkg_1"}]
         )
 
         envelope = ProtocolEnvelope.wrap(payload=response, status="completed", add_timestamp=False)
@@ -170,7 +170,7 @@ class TestProtocolEnvelope:
     def test_async_operation_with_task_id(self):
         """Test envelope for async operation (submitted status with task_id)."""
         response = CreateMediaBuySuccess(
-            buyer_ref="ref123", media_buy_id="mb_456", packages=[{"package_id": "pkg_1", "status": "active"}]
+            buyer_ref="ref123", media_buy_id="mb_456", packages=[{"buyer_ref": "ref123", "package_id": "pkg_1"}]
         )
 
         envelope = ProtocolEnvelope.wrap(

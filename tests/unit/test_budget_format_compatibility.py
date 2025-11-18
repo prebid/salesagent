@@ -11,8 +11,9 @@ Tests cover both Package.budget and CreateMediaBuyRequest.budget fields.
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
-from src.core.schemas import Budget, CreateMediaBuyRequest, Package
+from src.core.schemas import Budget, CreateMediaBuyRequest, PackageRequest
 
 
 class TestBudgetFormatCompatibility:
@@ -20,7 +21,7 @@ class TestBudgetFormatCompatibility:
 
     def test_package_budget_as_number(self):
         """Test Package with budget as number (v1.8.0 format)."""
-        package = Package(product_id="prod_1", budget=5000.0, status="active")
+        package = PackageRequest(product_id="prod_1", budget=5000.0, buyer_ref="pkg1", pricing_option_id="test_pricing")
 
         # Extract budget using the pattern from main.py
         if isinstance(package.budget, dict):
@@ -45,7 +46,9 @@ class TestBudgetFormatCompatibility:
             buyer_ref="test-123",
             budget=5000.0,  # LEGACY: top-level budget (not in AdCP spec)
             currency="USD",  # Separate currency field
-            packages=[Package(product_id="prod_1", budget=2500.0, status="active")],
+            packages=[
+                PackageRequest(product_id="prod_1", budget=2500.0, buyer_ref="pkg1", pricing_option_id="test_pricing")
+            ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
         )
@@ -80,7 +83,9 @@ class TestBudgetFormatCompatibility:
             brand_manifest={"name": "Test Campaign"},
             buyer_ref="test-123",
             budget=Budget(total=3000.0, currency="EUR"),  # LEGACY format
-            packages=[Package(product_id="prod_1", budget=1500.0, status="active")],
+            packages=[
+                PackageRequest(product_id="prod_1", budget=1500.0, buyer_ref="pkg1", pricing_option_id="test_pricing")
+            ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
         )
@@ -117,7 +122,9 @@ class TestBudgetFormatCompatibility:
             brand_manifest={"name": "Test Campaign"},
             buyer_ref="test-123",
             budget={"total": 7500.0, "currency": "GBP"},  # LEGACY format
-            packages=[Package(product_id="prod_1", budget=3000.0, status="active")],
+            packages=[
+                PackageRequest(product_id="prod_1", budget=3000.0, buyer_ref="pkg1", pricing_option_id="test_pricing")
+            ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
         )
@@ -150,7 +157,9 @@ class TestBudgetFormatCompatibility:
             buyer_ref="test-123",
             budget=5000.0,  # LEGACY: top-level budget
             currency="JPY",
-            packages=[Package(product_id="prod_1", budget=2000.0, status="active")],
+            packages=[
+                PackageRequest(product_id="prod_1", budget=2000.0, buyer_ref="pkg1", pricing_option_id="test_pricing")
+            ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
         )
@@ -172,7 +181,9 @@ class TestBudgetFormatCompatibility:
             brand_manifest={"name": "Test Campaign"},
             buyer_ref="test-123",
             budget=5000.0,  # LEGACY: top-level budget
-            packages=[Package(product_id="prod_1", budget=3500.0, status="active")],
+            packages=[
+                PackageRequest(product_id="prod_1", budget=3500.0, buyer_ref="pkg1", pricing_option_id="test_pricing")
+            ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
         )
@@ -200,9 +211,15 @@ class TestBudgetFormatCompatibility:
             budget=10000.0,  # LEGACY: ignored by get_total_budget()
             currency="USD",
             packages=[
-                Package(product_id="prod_1", budget=5000.0, status="active"),  # Number
-                Package(product_id="prod_2", budget=3000.0, status="active"),  # Number
-                Package(product_id="prod_3", budget=2000.0, status="active"),  # Number
+                PackageRequest(
+                    product_id="prod_1", budget=5000.0, buyer_ref="pkg1", pricing_option_id="test_pricing"
+                ),  # Number
+                PackageRequest(
+                    product_id="prod_2", budget=3000.0, buyer_ref="pkg2", pricing_option_id="test_pricing"
+                ),  # Number
+                PackageRequest(
+                    product_id="prod_3", budget=2000.0, buyer_ref="pkg3", pricing_option_id="test_pricing"
+                ),  # Number
             ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
@@ -223,7 +240,9 @@ class TestBudgetFormatCompatibility:
         Note: Pydantic may coerce integers to floats for numeric fields,
         but the value is preserved correctly.
         """
-        package = Package(product_id="prod_1", budget=5000, status="active")  # int, not float
+        package = PackageRequest(
+            product_id="prod_1", budget=5000, buyer_ref="pkg1", pricing_option_id="test_pricing"
+        )  # int, not float
 
         # Extract budget
         if isinstance(package.budget, int | float):
@@ -238,7 +257,7 @@ class TestBudgetFormatCompatibility:
 
         Per AdCP v2.2.0, Package.budget is float | None.
         """
-        package = Package(product_id="prod_1", budget=0.0, status="active")
+        package = PackageRequest(product_id="prod_1", budget=0.0, buyer_ref="pkg1", pricing_option_id="test_pricing")
 
         # Extract budget
         if isinstance(package.budget, int | float):
@@ -255,14 +274,13 @@ class TestBudgetFormatCompatibility:
         assert budget_dict["currency"] == "USD"
 
     def test_package_with_none_budget(self):
-        """Test that None budget is handled correctly."""
-        package = Package(product_id="prod_1", budget=None, status="active")
+        """Test that None budget is rejected (budget is required per adcp library)."""
+        # PackageRequest now extends adcp library PackageRequest where budget is required
+        with pytest.raises(ValidationError) as exc_info:
+            PackageRequest(product_id="prod_1", budget=None, buyer_ref="pkg1", pricing_option_id="test_pricing")
 
-        # Skip extraction if budget is None
-        if package.budget:
-            pytest.fail("Should not extract budget when it's None")
-
-        assert package.budget is None
+        # Verify it's a budget validation error
+        assert "budget" in str(exc_info.value).lower()
 
 
 class TestBudgetExtractionHelpers:

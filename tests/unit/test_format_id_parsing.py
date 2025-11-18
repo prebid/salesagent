@@ -19,7 +19,7 @@ def test_extract_format_namespace_with_format_id_object():
     """Test _extract_format_namespace with FormatId object."""
     format_obj = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")
     agent_url, format_id = _extract_format_namespace(format_obj)
-    assert agent_url == "https://creative.adcontextprotocol.org"
+    assert str(agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
     assert format_id == "display_300x250"
 
 

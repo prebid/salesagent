@@ -92,18 +92,19 @@ class TestCreativeAgentRegistry:
         mock_agent_client = Mock()
 
         # Mock format data as dicts (as returned by adcp library)
+        # Using spec-compliant renders array for dimensions (not top-level dimensions field)
         mock_formats = [
             {
                 "format_id": {"agent_url": "https://test-agent.example.com/mcp", "id": "display_300x250"},
                 "name": "Display 300x250",
                 "type": "display",
-                "dimensions": {"width": 300, "height": 250},
+                "renders": [{"role": "primary", "dimensions": {"width": 300, "height": 250, "unit": "px"}}],
             },
             {
                 "format_id": {"agent_url": "https://test-agent.example.com/mcp", "id": "display_728x90"},
                 "name": "Display 728x90",
                 "type": "display",
-                "dimensions": {"width": 728, "height": 90},
+                "renders": [{"role": "primary", "dimensions": {"width": 728, "height": 90, "unit": "px"}}],
             },
         ]
 
@@ -261,7 +262,7 @@ class TestCreativeAgentRegistry:
                 "format_id": {"agent_url": "https://test-agent.example.com/mcp", "id": "display_300x250"},
                 "name": "Display 300x250",
                 "type": "display",
-                "dimensions": {"width": 300, "height": 250},
+                "renders": [{"role": "primary", "dimensions": {"width": 300, "height": 250, "unit": "px"}}],
             }
         )
 

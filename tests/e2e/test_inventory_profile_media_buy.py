@@ -16,10 +16,10 @@ from src.core.database.models import (
     InventoryProfile,
     PricingOption,
     Principal,
-    Product,
 )
-from src.core.schemas import CreateMediaBuyRequest, Package, PricingParameters
 from src.core.tools import create_media_buy_raw
+from tests.e2e.adcp_request_builder import build_adcp_media_buy_request
+from tests.helpers.adcp_factories import create_test_db_product
 
 
 @pytest.mark.e2e
@@ -54,16 +54,13 @@ def test_create_media_buy_with_profile_based_product_uses_profile_inventory(db_s
         session.flush()
 
         # Create product referencing profile
-        product = Product(
+        product = create_test_db_product(
             tenant_id=sample_tenant["tenant_id"],
             product_id="test_product_media_buy",
             name="Profile-Based Product",
             description="Product using inventory profile",
             inventory_profile_id=profile.id,
             format_ids=[],
-            targeting_template={},
-            delivery_type="guaranteed",
-            property_tags=["all_inventory"],
             is_custom=False,
             countries=["US"],
         )
@@ -92,26 +89,16 @@ def test_create_media_buy_with_profile_based_product_uses_profile_inventory(db_s
 
         session.commit()
 
-        # Create media buy request
-        start_date = datetime.now() + timedelta(days=1)
-        end_date = start_date + timedelta(days=7)
+        # Create media buy request using helper (includes all required fields)
+        start_time = datetime.now() + timedelta(days=1)
+        end_time = start_time + timedelta(days=7)
 
-        request = CreateMediaBuyRequest(
-            buyer_ref="test-buyer-ref",
-            promoted_offering="Test Campaign",
-            packages=[
-                Package(
-                    product_ids=[product.product_id],
-                    start_date=start_date,
-                    end_date=end_date,
-                    quantity=10000,
-                    pricing=PricingParameters(
-                        pricing_model="cpm",
-                        currency="USD",
-                        rate=Decimal("15.00"),
-                    ),
-                )
-            ],
+        request_dict = build_adcp_media_buy_request(
+            product_ids=[product.product_id],
+            total_budget=150.0,  # 10000 impressions * $15 CPM / 1000
+            start_time=start_time,
+            end_time=end_time,
+            brand_manifest={"name": "Test Campaign"},
         )
 
         # Mock GAM adapter to capture line item creation
@@ -135,9 +122,7 @@ def test_create_media_buy_with_profile_based_product_uses_profile_inventory(db_s
 
             # Execute media buy creation
             response = create_media_buy_raw(
-                promoted_offering="Test Campaign",
-                buyer_ref="test-buyer-ref",
-                packages=[request.packages[0]],
+                **request_dict,
                 tenant_id=sample_tenant["tenant_id"],
                 principal_id=principal.principal_id,
             )
@@ -192,16 +177,13 @@ def test_create_media_buy_with_profile_based_product_validates_formats(db_sessio
         session.flush()
 
         # Create product referencing profile
-        product = Product(
+        product = create_test_db_product(
             tenant_id=sample_tenant["tenant_id"],
             product_id="test_product_format_validation",
             name="Format Validation Product",
             description="Product using inventory profile",
             inventory_profile_id=profile.id,
             format_ids=[],
-            targeting_template={},
-            delivery_type="guaranteed",
-            property_tags=["all_inventory"],
             is_custom=False,
             countries=["US"],
         )
@@ -231,27 +213,18 @@ def test_create_media_buy_with_profile_based_product_validates_formats(db_sessio
         session.commit()
 
         # Create media buy request with creative that doesn't match profile formats
-        start_date = datetime.now() + timedelta(days=1)
-        end_date = start_date + timedelta(days=7)
+        start_time = datetime.now() + timedelta(days=1)
+        end_time = start_time + timedelta(days=7)
 
-        request = CreateMediaBuyRequest(
-            buyer_ref="test-buyer-ref-format",
-            promoted_offering="Test Campaign Format",
-            packages=[
-                Package(
-                    product_ids=[product.product_id],
-                    start_date=start_date,
-                    end_date=end_date,
-                    quantity=10000,
-                    pricing=PricingParameters(
-                        pricing_model="cpm",
-                        currency="USD",
-                        rate=Decimal("15.00"),
-                    ),
-                    creative_ids=["creative_video_15s"],  # Video format not in profile
-                )
-            ],
+        request_dict = build_adcp_media_buy_request(
+            product_ids=[product.product_id],
+            total_budget=150.0,
+            start_time=start_time,
+            end_time=end_time,
+            brand_manifest={"name": "Test Campaign Format"},
         )
+        # Add creative_ids to first package
+        request_dict["packages"][0]["creative_ids"] = ["creative_video_15s"]
 
         # Mock GAM adapter
         with patch("src.adapters.get_adapter") as mock_get_adapter:
@@ -263,9 +236,7 @@ def test_create_media_buy_with_profile_based_product_validates_formats(db_sessio
             # This test documents expected behavior
             try:
                 response = create_media_buy_raw(
-                    promoted_offering="Test Campaign Format",
-                    buyer_ref="test-buyer-ref-format",
-                    packages=[request.packages[0]],
+                    **request_dict,
                     tenant_id=sample_tenant["tenant_id"],
                     principal_id=principal.principal_id,
                 )
@@ -309,16 +280,13 @@ def test_multiple_products_same_profile_in_media_buy(db_session, sample_tenant):
         # Create 3 products referencing same profile
         products = []
         for i in range(3):
-            product = Product(
+            product = create_test_db_product(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id=f"test_product_shared_{i}",
                 name=f"Shared Profile Product {i}",
                 description=f"Product {i} sharing profile",
                 inventory_profile_id=profile.id,
                 format_ids=[],
-                targeting_template={},
-                delivery_type="guaranteed",
-                property_tags=["all_inventory"],
                 is_custom=False,
                 countries=["US"],
             )
@@ -349,25 +317,15 @@ def test_multiple_products_same_profile_in_media_buy(db_session, sample_tenant):
         session.commit()
 
         # Create media buy with all 3 products in one package
-        start_date = datetime.now() + timedelta(days=1)
-        end_date = start_date + timedelta(days=7)
+        start_time = datetime.now() + timedelta(days=1)
+        end_time = start_time + timedelta(days=7)
 
-        request = CreateMediaBuyRequest(
-            buyer_ref="test-buyer-ref-shared",
-            promoted_offering="Test Campaign Shared",
-            packages=[
-                Package(
-                    product_ids=[p.product_id for p in products],
-                    start_date=start_date,
-                    end_date=end_date,
-                    quantity=30000,
-                    pricing=PricingParameters(
-                        pricing_model="cpm",
-                        currency="USD",
-                        rate=Decimal("15.00"),
-                    ),
-                )
-            ],
+        request_dict = build_adcp_media_buy_request(
+            product_ids=[p.product_id for p in products],
+            total_budget=450.0,  # 30000 impressions * $15 CPM / 1000
+            start_time=start_time,
+            end_time=end_time,
+            brand_manifest={"name": "Test Campaign Shared"},
         )
 
         # Mock GAM adapter
@@ -390,9 +348,7 @@ def test_multiple_products_same_profile_in_media_buy(db_session, sample_tenant):
 
             # Execute media buy creation
             response = create_media_buy_raw(
-                promoted_offering="Test Campaign Shared",
-                buyer_ref="test-buyer-ref-shared",
-                packages=[request.packages[0]],
+                **request_dict,
                 tenant_id=sample_tenant["tenant_id"],
                 principal_id=principal.principal_id,
             )
@@ -436,16 +392,13 @@ def test_media_buy_reflects_profile_updates_made_after_product_creation(db_sessi
         profile_id = profile.id
 
         # Create product referencing profile
-        product = Product(
+        product = create_test_db_product(
             tenant_id=sample_tenant["tenant_id"],
             product_id="test_product_updates",
             name="Product with Updatable Profile",
             description="Product using updatable profile",
             inventory_profile_id=profile_id,
             format_ids=[],
-            targeting_template={},
-            delivery_type="guaranteed",
-            property_tags=["all_inventory"],
             is_custom=False,
             countries=["US"],
         )
@@ -493,25 +446,15 @@ def test_media_buy_reflects_profile_updates_made_after_product_creation(db_sessi
         session.commit()
 
         # Create media buy AFTER profile update
-        start_date = datetime.now() + timedelta(days=1)
-        end_date = start_date + timedelta(days=7)
+        start_time = datetime.now() + timedelta(days=1)
+        end_time = start_time + timedelta(days=7)
 
-        request = CreateMediaBuyRequest(
-            buyer_ref="test-buyer-ref-updates",
-            promoted_offering="Test Campaign Updates",
-            packages=[
-                Package(
-                    product_ids=[product.product_id],
-                    start_date=start_date,
-                    end_date=end_date,
-                    quantity=10000,
-                    pricing=PricingParameters(
-                        pricing_model="cpm",
-                        currency="USD",
-                        rate=Decimal("15.00"),
-                    ),
-                )
-            ],
+        request_dict = build_adcp_media_buy_request(
+            product_ids=[product.product_id],
+            total_budget=150.0,
+            start_time=start_time,
+            end_time=end_time,
+            brand_manifest={"name": "Test Campaign Updates"},
         )
 
         # Mock GAM adapter to capture configuration
@@ -533,9 +476,7 @@ def test_media_buy_reflects_profile_updates_made_after_product_creation(db_sessi
 
             # Execute media buy creation
             response = create_media_buy_raw(
-                promoted_offering="Test Campaign Updates",
-                buyer_ref="test-buyer-ref-updates",
-                packages=[request.packages[0]],
+                **request_dict,
                 tenant_id=sample_tenant["tenant_id"],
                 principal_id=principal.principal_id,
             )

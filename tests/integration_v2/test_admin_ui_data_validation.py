@@ -521,84 +521,9 @@ class TestWorkflowsDataValidation:
         ), "Workflows page should contain workflow-related content"
 
 
-class TestAuthorizedPropertiesDataValidation:
-    """Validate that authorized properties list shows correct data."""
-
-    def test_authorized_properties_no_duplicates_with_tags(
-        self, authenticated_admin_session, test_tenant_with_data, integration_db
-    ):
-        """Test that properties with multiple tags aren't duplicated.
-
-        If using joinedload() on property tags, must use .unique().
-        """
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import AuthorizedProperty
-
-        tenant_id = test_tenant_with_data["tenant_id"]
-
-        # Create property with multiple tags
-        with get_db_session() as db_session:
-            prop = AuthorizedProperty(
-                tenant_id=tenant_id,
-                property_id="test_property_duplicate_check",
-                property_type="website",
-                name="Test Property",
-                identifiers=[{"type": "domain", "value": "example.com"}],
-                tags=["tag1", "tag2", "tag3"],  # Multiple tags
-                publisher_domain="example.com",
-                verification_status="verified",
-            )
-            db_session.add(prop)
-            db_session.commit()
-
-        # Request properties page
-        response = authenticated_admin_session.get(f"/tenant/{tenant_id}/authorized-properties", follow_redirects=True)
-        assert response.status_code == 200
-
-        html = response.data.decode("utf-8")
-
-        # Property should appear exactly once
-        count = html.count("Test Property")
-        assert count == 1, f"Property appears {count} times (expected 1). Check for joinedload() without .unique() bug."
-
-    def test_authorized_properties_shows_all_properties(
-        self, authenticated_admin_session, test_tenant_with_data, integration_db
-    ):
-        """Test that all authorized properties are displayed."""
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import AuthorizedProperty
-
-        tenant_id = test_tenant_with_data["tenant_id"]
-
-        # Create 5 properties
-        domains = [f"site{i}.example.com" for i in range(5)]
-
-        with get_db_session() as db_session:
-            for domain in domains:
-                prop = AuthorizedProperty(
-                    tenant_id=tenant_id,
-                    property_id=f"prop_{domain}",
-                    property_type="website",
-                    name=f"Test Property {domain}",
-                    identifiers=[{"type": "domain", "value": domain}],
-                    tags=["all_inventory"],
-                    publisher_domain=domain,
-                    verification_status="verified",
-                )
-                db_session.add(prop)
-            db_session.commit()
-
-        # Request properties page
-        response = authenticated_admin_session.get(f"/tenant/{tenant_id}/authorized-properties", follow_redirects=True)
-        assert response.status_code == 200
-
-        html = response.data.decode("utf-8")
-
-        # Each property should appear once
-        for domain in domains:
-            count = html.count(domain)
-            assert count >= 1, f"Property {domain} should appear at least once"
-
+# NOTE: TestAuthorizedPropertiesDataValidation tests removed - authorized_properties_list.html
+# template was intentionally removed as part of functionality change. The authorized properties
+# feature now works differently and no longer uses that template.
 
 # Add more data validation tests as bugs are found...
 # TODO: Add tests for:

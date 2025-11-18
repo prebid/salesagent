@@ -4,7 +4,7 @@ Tests that package budget updates are persisted to the database
 and that unsupported actions return explicit errors (no silent failures).
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, Mock, patch
 
 from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuySuccess
@@ -59,7 +59,7 @@ def test_update_package_budget_persists_to_database():
             action="update_package_budget",
             package_id=package_id,
             budget=new_budget,
-            today=datetime.now(),
+            today=datetime.now(UTC),
         )
 
         # Verify GAM sync was called
@@ -117,7 +117,7 @@ def test_update_package_budget_returns_error_when_package_not_found():
             action="update_package_budget",
             package_id=package_id,
             budget=new_budget,
-            today=datetime.now(),
+            today=datetime.now(UTC),
         )
 
         # Verify error response
@@ -205,7 +205,7 @@ def test_pause_resume_package_actions_work():
             action="pause_package",
             package_id=package_id,
             budget=None,
-            today=datetime.now(),
+            today=datetime.now(UTC),
         )
 
         # Verify pause was called
@@ -228,7 +228,7 @@ def test_pause_resume_package_actions_work():
             action="resume_package",
             package_id=package_id,
             budget=None,
-            today=datetime.now(),
+            today=datetime.now(UTC),
         )
 
         # Verify resume was called
@@ -283,7 +283,7 @@ def test_pause_resume_media_buy_actions_work():
             action="pause_media_buy",
             package_id=None,
             budget=None,
-            today=datetime.now(),
+            today=datetime.now(UTC),
         )
 
         # Verify pause was called for both packages
@@ -308,7 +308,7 @@ def test_pause_resume_media_buy_actions_work():
             action="resume_media_buy",
             package_id=None,
             budget=None,
-            today=datetime.now(),
+            today=datetime.now(UTC),
         )
 
         # Verify resume was called for both packages
@@ -364,7 +364,7 @@ def test_update_package_budget_rejects_budget_below_delivery():
             action="update_package_budget",
             package_id=package_id,
             budget=new_budget,
-            today=datetime.now(),
+            today=datetime.now(UTC),
         )
 
         # Verify error response

@@ -10,9 +10,9 @@
         <div class="col-12">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>{{ "Edit" if mode == "edit" else "Create" }} Authorized Property</h2>
-                <a href="{{ url_for('authorized_properties.list_authorized_properties', tenant_id=tenant.tenant_id) }}"
+                <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}#publishers-tab"
                    class="btn btn-outline-secondary">
-                    <i class="fas fa-arrow-left"></i> Back to Properties
+                    <i class="fas fa-arrow-left"></i> Back to Publishers & Properties
                 </a>
             </div>
 
@@ -158,7 +158,7 @@
 
                                 <!-- Submit Button -->
                                 <div class="d-flex justify-content-between">
-                                    <a href="{{ url_for('authorized_properties.list_authorized_properties', tenant_id=tenant.tenant_id) }}"
+                                    <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}#publishers-tab"
                                        class="btn btn-outline-secondary">
                                         Cancel
                                     </a>

@@ -35,9 +35,7 @@ jobs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-${{ hashFiles('**/uv.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-uv-
+        key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
 
     - name: Install dependencies
       run: |
@@ -84,9 +82,7 @@ jobs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-${{ hashFiles('**/uv.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-uv-
+        key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
 
     - name: Install dependencies
       run: |
@@ -142,9 +138,7 @@ jobs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-${{ hashFiles('**/uv.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-uv-
+        key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
 
     - name: Install dependencies
       run: |
@@ -215,9 +209,7 @@ jobs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-${{ hashFiles('**/uv.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-uv-
+        key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
 
     - name: Install dependencies
       run: |
@@ -272,9 +264,7 @@ jobs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-${{ hashFiles('**/uv.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-uv-
+        key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
 
     - name: Install dependencies
       run: |

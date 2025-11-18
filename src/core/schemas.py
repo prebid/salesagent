@@ -5,25 +5,77 @@ from datetime import UTC, date, datetime, time
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Union
 
-from adcp import (
-    CreateMediaBuyError as AdCPCreateMediaBuyError,
+from adcp import Error
+from adcp.types.aliases import (
+    CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
 )
-from adcp import (
-    CreateMediaBuySuccess as AdCPCreateMediaBuySuccess,
+from adcp.types.aliases import (
+    CreateMediaBuySuccessResponse as AdCPCreateMediaBuySuccess,
 )
-from adcp import (
-    Error,
+from adcp.types.aliases import (
+    UpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
 )
-from adcp import (
-    UpdateMediaBuyError as AdCPUpdateMediaBuyError,
+from adcp.types.aliases import (
+    UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
-from adcp import (
-    UpdateMediaBuySuccess as AdCPUpdateMediaBuySuccess,
+
+# Import Creative-related library types
+from adcp.types.generated_poc.creative_status import CreativeStatus
+from adcp.types.generated_poc.format import Format as LibraryFormat
+from adcp.types.generated_poc.format import Type as FormatTypeEnum
+from adcp.types.generated_poc.format_id import FormatId as LibraryFormatId
+from adcp.types.generated_poc.get_products_request import Filters as LibraryFilters
+from adcp.types.generated_poc.list_creative_formats_request import (
+    ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
 )
-from adcp.types.generated import PushNotificationConfig
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
+from adcp.types.generated_poc.list_creative_formats_response import (
+    ListCreativeFormatsResponse as LibraryListCreativeFormatsResponse,
+)
+from adcp.types.generated_poc.list_creatives_request import (
+    FieldModel as LibraryFieldModel,
+)
+from adcp.types.generated_poc.list_creatives_request import (
+    Filters as LibraryCreativeFilters,
+)
+from adcp.types.generated_poc.list_creatives_request import (
+    ListCreativesRequest as LibraryListCreativesRequest,
+)
+from adcp.types.generated_poc.list_creatives_request import Pagination as LibraryPagination
+from adcp.types.generated_poc.list_creatives_request import Sort as LibrarySort
+from adcp.types.generated_poc.list_creatives_response import Creative as LibraryCreative
+
+# Import library Package and PackageRequest for proper request/response separation
+from adcp.types.generated_poc.package import Package as LibraryPackage
+from adcp.types.generated_poc.package_request import PackageRequest as LibraryPackageRequest
+
+# Import library Product, Format, and FormatId to ensure we use canonical AdCP schema
+from adcp.types.generated_poc.product import Product as LibraryProduct
+from adcp.types.generated_poc.push_notification_config import PushNotificationConfig
+
+# Import AffectedPackage for UpdateMediaBuySuccess response
+from adcp.types.generated_poc.update_media_buy_response import AffectedPackage as LibraryAffectedPackage
+from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
+
+
+# Helper function for creating AnyUrl instances (eliminates mypy warnings)
+def url(value: str) -> AnyUrl:
+    """Convert string to AnyUrl for type-safe URL construction.
+
+    This helper eliminates mypy warnings when passing strings to AnyUrl fields.
+    Pydantic's AnyUrl accepts strings at runtime and validates/converts them automatically.
+
+    Usage:
+        FormatId(agent_url=url("https://example.com"), id="test")
+
+    Args:
+        value: URL string to convert
+
+    Returns:
+        AnyUrl instance (auto-validated by Pydantic)
+    """
+    return AnyUrl(value)  # type: ignore[return-value]  # Pydantic handles string -> AnyUrl conversion
 
 
 class CreativeStatusEnum(Enum):
@@ -235,19 +287,46 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
+# --- Update Media Buy Response Components ---
+
+
+class AffectedPackage(LibraryAffectedPackage):
+    """Affected package in UpdateMediaBuySuccess response.
+
+    Extends adcp library AffectedPackage with internal tracking fields.
+
+    Library AffectedPackage required fields:
+    - buyer_ref: Buyer's reference for the package
+    - package_id: Publisher's package identifier
+    """
+
+    # Internal fields for tracking what changed (not in AdCP spec)
+    changes_applied: dict[str, Any] | None = Field(
+        None,
+        description="Internal: Detailed changes applied to package (creative_ids added/removed, etc.)",
+        exclude=True,
+    )
+    buyer_package_ref: str | None = Field(
+        None, description="Internal: Buyer's package reference (legacy compatibility)", exclude=True
+    )
+
+
 class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     """Successful update_media_buy response extending adcp v1.2.1 type.
 
-    Extends the official adcp UpdateMediaBuySuccess type with internal workflow tracking
-    and affected_packages field.
+    Extends the official adcp UpdateMediaBuySuccess type with internal workflow tracking.
     Per AdCP PR #113, this response contains ONLY domain data.
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
     """
 
+    # Override affected_packages to use our extended AffectedPackage type
+    # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
+    # while still being AdCP-compliant (those fields are excluded via exclude=True)
+    affected_packages: list[AffectedPackage] | None = None  # type: ignore[assignment]
+
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
-    affected_packages: list[dict[str, Any]] = Field(default_factory=list, description="Packages affected by update")
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -255,14 +334,21 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
         # Get base serialization
         data = serializer(self)
 
-        # Exclude internal fields from protocol responses
+        # Exclude workflow_step_id from protocol responses
         # (unless explicitly requested via model_dump_internal)
         if not info.context or not info.context.get("include_internal"):
             data.pop("workflow_step_id", None)
-            data.pop("affected_packages", None)
 
-        # Auto-handle nested Pydantic models
+        # Explicitly serialize affected_packages to ensure AffectedPackage.model_dump() is called
+        # This ensures internal fields (changes_applied, buyer_package_ref) are excluded via exclude=True
+        if "affected_packages" in data and self.affected_packages:
+            data["affected_packages"] = [pkg.model_dump() for pkg in self.affected_packages]
+
+        # Auto-handle other nested Pydantic models
         for field_name in self.__class__.model_fields:
+            if field_name == "affected_packages":
+                continue  # Already handled above
+
             field_value = getattr(self, field_name, None)
             if field_value is None:
                 continue
@@ -521,55 +607,55 @@ class FormatReference(BaseModel):
     format_id: str = Field(..., serialization_alias="id", description="Format ID within that agent's format catalog")
 
 
-class Format(BaseModel):
-    """Creative format definition per AdCP v2.4 spec.
+class Format(LibraryFormat):
+    """Creative format definition per AdCP spec.
 
-    Represents a creative format with its requirements. The agent_url field identifies
+    Extends the adcp library's Format class. The format_id.agent_url field identifies
     the authoritative creative agent that provides this format (e.g., the reference
     creative agent at https://creative.adcontextprotocol.org).
+
+    Note: All spec-defined fields are inherited from adcp.types.generated_poc.format.Format.
+    We only add internal fields here marked with exclude=True.
     """
 
-    format_id: "FormatId" = Field(..., description="Format identifier (FormatId object per AdCP spec)")
-    agent_url: str | None = Field(
+    # Internal fields for backward compatibility and convenience
+    # These are NOT part of the AdCP spec and are excluded from serialization
+    platform_config: dict[str, Any] | None = Field(
         None,
-        description="Base URL of the agent that provides this format (authoritative source). "
-        "E.g., 'https://creative.adcontextprotocol.org', 'https://dco.example.com'",
+        exclude=True,
+        description="Internal: Platform-specific configuration (e.g., gam, kevel) for creative mapping",
     )
-    name: str = Field(..., description="Human-readable format name")
-    type: Literal["audio", "video", "display", "native", "dooh", "rich_media", "universal", "generative"] = Field(
-        ..., description="Media type of this format"
+    category: Literal["standard", "custom", "generative"] | None = Field(
+        None, exclude=True, description="Internal: Format category (not in AdCP spec)"
     )
-    category: Literal["standard", "custom", "generative"] | None = Field(None, description="Format category")
     is_standard: bool | None = Field(
-        None, description="Whether this follows IAB specifications or AdCP standard format definitions"
-    )
-    iab_specification: str | None = Field(None, description="Name of the IAB specification (if applicable)")
-    description: str | None = Field(None, description="Human-readable description of the format")
-    renders: list[dict[str, Any]] | None = Field(
-        None,
-        description="Specification of rendered pieces (AdCP v2.4 spec). "
-        "Each render contains role and dimensions. Most formats have a single 'primary' render.",
+        None, exclude=True, description="Internal: Whether this follows IAB specifications (not in AdCP spec)"
     )
     requirements: dict[str, Any] | None = Field(
-        None, description="Technical specifications for this format (e.g., dimensions, duration, file size limits)"
+        None,
+        exclude=True,
+        description="Internal: Legacy technical specifications (not in AdCP spec, use renders instead)",
     )
-    assets_required: list[AssetRequirement] | None = Field(
-        None, description="Array of required assets or asset groups for this format"
-    )
-    delivery: dict[str, Any] | None = Field(
-        None, description="Delivery method specifications (e.g., hosted, VAST, third-party tags)"
+    iab_specification: str | None = Field(
+        None, exclude=True, description="Internal: Name of IAB specification (not in AdCP spec)"
     )
     accepts_3p_tags: bool | None = Field(
-        None, description="Whether this format can accept third-party served creative tags"
+        None, exclude=True, description="Internal: Whether format accepts third-party tags (not in AdCP spec)"
     )
-    supported_macros: list[str] | None = Field(None, description="List of universal macros supported by this format")
-    platform_config: dict[str, Any] | None = Field(
-        None, description="Platform-specific configuration (e.g., gam, kevel) for creative mapping"
-    )
-    output_format_ids: list["FormatId"] | None = Field(
-        None,
-        description="For generative formats: array of FormatId objects this format can generate per AdCP spec",
-    )
+
+    @property
+    def agent_url(self) -> str | None:
+        """Convenience property to access agent_url from format_id.
+
+        Returns the agent_url from format_id.agent_url per AdCP spec.
+        This property exists for backward compatibility with code that expects format.agent_url.
+
+        Returns:
+            Agent URL string, or None if not available
+        """
+        if hasattr(self.format_id, "agent_url"):
+            return str(self.format_id.agent_url)
+        return None
 
     def get_primary_dimensions(self) -> tuple[int, int] | None:
         """Extract primary dimensions from renders array.
@@ -577,17 +663,16 @@ class Format(BaseModel):
         Returns:
             Tuple of (width, height) in pixels, or None if not available.
         """
-        # Try renders field first (AdCP v2.4 spec)
+        # Try renders field first (AdCP spec - renders is list of Render objects)
         if self.renders and len(self.renders) > 0:
             primary_render = self.renders[0]  # First render is typically primary
-            if "dimensions" in primary_render:
-                dims = primary_render["dimensions"]
-                width = dims.get("width")
-                height = dims.get("height")
-                if width is not None and height is not None:
-                    return (int(width), int(height))
+            if hasattr(primary_render, "dimensions") and primary_render.dimensions:
+                dims = primary_render.dimensions
+                # dimensions is a Dimensions object with width/height attributes
+                if dims.width is not None and dims.height is not None:
+                    return (int(dims.width), int(dims.height))
 
-        # Fallback to requirements field (legacy)
+        # Fallback to requirements field (legacy, internal field)
         if self.requirements:
             width = self.requirements.get("width")
             height = self.requirements.get("height")
@@ -614,12 +699,11 @@ class Format(BaseModel):
         # Extract format_id string - handle both FormatId object and plain string
         if hasattr(self.format_id, "id"):
             format_id_str = self.format_id.id  # FormatId object
+            # Get agent_url from FormatId (per AdCP spec)
+            agent_url = str(self.format_id.agent_url) if hasattr(self.format_id, "agent_url") else ""
         else:
             format_id_str = str(self.format_id)  # Plain string (shouldn't happen but defensive)
-
-        # Use agent_url from Format object (not from FormatId) for consistency
-        # This matches what template rendering uses in get_creative_formats()
-        agent_url = self.agent_url or ""
+            agent_url = ""
 
         return f"{agent_url}|{format_id_str}"
 
@@ -680,9 +764,9 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
             # For unknown format IDs, create a minimal Format object with FormatId
             formats.append(
                 Format(  # type: ignore[call-arg]
-                    format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id=format_id),
+                    format_id=FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id=format_id),
                     name=format_id.replace("_", " ").title(),
-                    type="display",  # Default to display
+                    type=FormatTypeEnum.display,  # Default to display type
                 )
             )
     return formats
@@ -1009,74 +1093,25 @@ class Placement(BaseModel):
     )
 
 
-class Product(BaseModel):
-    product_id: str
-    name: str
-    description: str
-    format_ids: list["FormatId"] = Field(
-        ...,
-        description="Array of supported creative format IDs with agent_url and id per AdCP spec. "
-        "Database validation ensures all format_ids match FormatId structure.",
-    )
-    delivery_type: Literal["guaranteed", "non_guaranteed"]
+class Product(LibraryProduct):
+    """Product schema extending library Product with internal fields.
 
-    # NEW: Pricing options (AdCP PR #88)
-    # Note: This is populated from database relationship, not a column
-    # REQUIRED: All products must have at least one pricing option in database
-    # Can be empty list for anonymous users (hidden for privacy)
-    pricing_options: list[PricingOption] = Field(
-        default_factory=list,
-        description="Available pricing models for this product (AdCP PR #88). May be empty for unauthenticated requests.",
-    )
+    Inherits all AdCP-compliant fields from adcp library's Product,
+    ensuring we stay in sync with spec updates. Adds only internal-only
+    fields that we need for our implementation.
 
-    # Other fields
-    measurement: Measurement | None = Field(None, description="Measurement capabilities included with this product")
-    creative_policy: CreativePolicy | None = Field(None, description="Creative requirements and restrictions")
-    is_custom: bool = Field(default=False)
-    brief_relevance: str | None = Field(
-        None, description="Explanation of why this product matches the brief (populated when brief is provided)"
-    )
-    expires_at: datetime | None = None
+    This pattern ensures:
+    - External serialization uses library Product (spec-compliant)
+    - Internal code has extra fields it needs (implementation_config)
+    - No conversion functions needed - inheritance handles it
+    - Automatic updates when library Product changes
+    """
+
+    # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(
         default=None,
-        description="Ad server-specific configuration for implementing this product (placements, line item settings, etc.)",
-    )
-    # AdCP property authorization fields (at least one required per spec)
-    properties: list["Property"] | None = Field(
-        None,
-        description="Full property objects covered by this product for adagents.json validation",
-        min_length=1,
-    )
-    property_tags: list[str] | None = Field(
-        None,
-        description="Tags identifying groups of properties (use list_authorized_properties for details)",
-        min_length=1,
-    )
-    # AdCP PR #79 fields - populated dynamically from historical reporting data
-    # These are NOT stored in database, calculated on-demand from product_performance_metrics
-    estimated_exposures: int | None = Field(None, description="Estimated impressions (calculated dynamically)", gt=0)
-
-    # Product detail fields (AdCP v1 spec compliance)
-    delivery_measurement: DeliveryMeasurement | None = Field(
-        None,
-        description="Measurement provider and methodology for delivery metrics. REQUIRED per AdCP spec.",
-    )
-    product_card: ProductCard | None = Field(
-        None,
-        description="Optional standard visual card (300x400px) for displaying this product in user interfaces",
-    )
-    product_card_detailed: ProductCardDetailed | None = Field(
-        None,
-        description="Optional detailed card with carousel and full specifications for rich product presentation",
-    )
-    placements: list[Placement] | None = Field(
-        None,
-        description="Optional array of specific placements within this product",
-        min_length=1,
-    )
-    reporting_capabilities: dict[str, Any] | None = Field(
-        None,
-        description="Available reports and reporting capabilities for this product",
+        description="Internal: Ad server-specific configuration for implementing this product",
+        exclude=True,  # Exclude from serialization by default
     )
 
     @model_validator(mode="after")
@@ -1092,26 +1127,15 @@ class Product(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_properties_or_tags(self) -> "Product":
-        """Validate that at least one of properties or property_tags is provided per AdCP spec.
+    def validate_publisher_properties(self) -> "Product":
+        """Validate publisher_properties per AdCP spec.
 
-        Per AdCP spec, products must have either:
-        - properties: Full Property objects for adagents.json validation
-        - property_tags: Tag strings (buyers use list_authorized_properties for details)
+        Per AdCP spec, products must have at least one publisher property.
         """
-        has_properties = self.properties and len(self.properties) > 0
-        has_tags = self.property_tags and len(self.property_tags) > 0
-
-        if not has_properties and not has_tags:
+        if not self.publisher_properties or len(self.publisher_properties) == 0:
             raise ValueError(
-                "Product must have either 'properties' or 'property_tags' per AdCP spec. "
-                "Use property_tags=['all_inventory'] as a default if unsure."
-            )
-
-        if has_properties and has_tags:
-            raise ValueError(
-                "Product cannot have both 'properties' and 'property_tags' (AdCP oneOf constraint). "
-                "Use properties for full validation OR property_tags for tag-based authorization, not both."
+                "Product must have at least one publisher_property per AdCP spec. "
+                "Properties identify the inventory covered by this product."
             )
 
         return self
@@ -1142,14 +1166,14 @@ class Product(BaseModel):
                     result.append(upgrade_legacy_format_id(fmt))
                 except ValueError:
                     # Unknown format - use default agent_url
-                    result.append(FormatId(agent_url=DEFAULT_AGENT_URL, id=fmt))
+                    result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt))
             elif isinstance(fmt, FormatId):
                 # Already a FormatId object
                 result.append(fmt)
             elif isinstance(fmt, dict):
                 # Dict representation - convert to FormatId
                 if "id" in fmt and "agent_url" in fmt:
-                    result.append(FormatId(agent_url=fmt["agent_url"], id=fmt["id"]))
+                    result.append(FormatId(agent_url=url(fmt["agent_url"]), id=fmt["id"]))
                 elif "id" in fmt:
                     # Missing agent_url - try upgrade, fallback to default
                     from src.core.format_cache import upgrade_legacy_format_id
@@ -1157,24 +1181,29 @@ class Product(BaseModel):
                     try:
                         result.append(upgrade_legacy_format_id(fmt["id"]))
                     except ValueError:
-                        result.append(FormatId(agent_url=DEFAULT_AGENT_URL, id=fmt["id"]))
+                        result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt["id"]))
                 else:
                     raise ValueError(f"Invalid format dict: {fmt}")
             else:
                 # Other object types (like FormatReference)
                 if hasattr(fmt, "agent_url") and hasattr(fmt, "id"):
-                    result.append(FormatId(agent_url=fmt.agent_url, id=fmt.id))
+                    result.append(FormatId(agent_url=url(str(fmt.agent_url)), id=fmt.id))
                 elif hasattr(fmt, "format_id"):
                     from src.core.format_cache import upgrade_legacy_format_id
 
                     try:
                         result.append(upgrade_legacy_format_id(fmt.format_id))
                     except ValueError:
-                        result.append(FormatId(agent_url=DEFAULT_AGENT_URL, id=fmt.format_id))
+                        result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt.format_id))
                 else:
                     raise ValueError(f"Cannot serialize format: {fmt}")
 
         return result
+
+    # Note: is_fixed field is now provided by adcp library 2.4.0+
+    # Individual pricing option types (CpmFixedRatePricingOption, CpmAuctionPricingOption, etc.)
+    # include is_fixed as a required field per AdCP spec.
+    # No custom serialization needed - library handles it correctly.
 
     @property
     def pricing_summary(self) -> str | None:
@@ -1182,19 +1211,34 @@ class Product(BaseModel):
 
         Returns string like: "CPM: $8-$15 (auction), CPCV: $0.35 (fixed)"
         Returns None if no pricing information available.
+
+        Note: Works with discriminated union pricing options (library Product).
+        Fixed rate options have 'rate' field, auction options have 'price_guidance' field.
         """
         if not self.pricing_options or len(self.pricing_options) == 0:
             return None
 
         summary_parts = []
         for option in self.pricing_options:
-            model = option.pricing_model.value if hasattr(option.pricing_model, "value") else option.pricing_model
+            # Handle both enum and string pricing_model
+            # pricing_model could be Literal string or enum with .value
+            pricing_model = option.pricing_model
+            if isinstance(pricing_model, str):
+                # It's already a string (Literal)
+                model = pricing_model
+            elif hasattr(pricing_model, "value"):
+                # It's an enum
+                model = pricing_model.value
+            else:
+                # Fallback: convert to string
+                model = str(pricing_model)
             model_upper = model.upper()
 
-            if option.is_fixed and option.rate:
+            # Discriminated union: presence of 'rate' means fixed, 'price_guidance' means auction
+            if hasattr(option, "rate") and option.rate:
                 # Fixed pricing: show rate
                 summary_parts.append(f"{model_upper}: ${option.rate:.2f} ({option.currency}, fixed)")
-            elif not option.is_fixed and option.price_guidance:
+            elif hasattr(option, "price_guidance") and option.price_guidance:
                 # Auction pricing: show floor-p90 range
                 floor = option.price_guidance.floor
                 p90 = option.price_guidance.p90 if option.price_guidance.p90 else option.price_guidance.p50
@@ -1332,13 +1376,7 @@ class UpdatePerformanceIndexResponse(AdCPBaseModel):
 
 
 # --- Discovery ---
-class FormatType(str, Enum):
-    """Valid format types per AdCP spec."""
-
-    VIDEO = "video"
-    DISPLAY = "display"
-    AUDIO = "audio"
-    # Note: "native" is not in cached AdCP schema v1.6.0, only video/display/audio
+# Note: FormatType is imported from adcp library as FormatTypeEnum
 
 
 class DeliveryType(str, Enum):
@@ -1348,29 +1386,23 @@ class DeliveryType(str, Enum):
     NON_GUARANTEED = "non_guaranteed"
 
 
-class ProductFilters(BaseModel):
-    """Structured filters for product discovery per AdCP spec."""
+class ProductFilters(LibraryFilters):
+    """Product filters extending library Filters from AdCP spec.
 
-    delivery_type: DeliveryType | None = Field(
-        None,
-        description="Filter by delivery type",
-    )
-    is_fixed_price: bool | None = Field(
-        None,
-        description="Filter for fixed price vs auction products",
-    )
-    format_types: list[FormatType] | None = Field(
-        None,
-        description="Filter by format types",
-    )
-    format_ids: list["FormatId"] | None = Field(
-        None,
-        description="Filter by specific format IDs",
-    )
-    standard_formats_only: bool | None = Field(
-        None,
-        description="Only return products accepting IAB standard formats",
-    )
+    Inherits all AdCP-compliant filter fields from adcp library's Filters class,
+    ensuring we stay in sync with spec updates. All fields come from the library:
+    - delivery_type: Filter by delivery type (guaranteed, auction)
+    - format_ids: Filter by specific format IDs
+    - format_types: Filter by format types (video, display, audio)
+    - is_fixed_price: Filter for fixed price vs auction products
+    - min_exposures: Minimum exposures for measurement validity
+    - standard_formats_only: Only return IAB standard formats
+
+    This pattern ensures:
+    - External requests use library Filters (spec-compliant)
+    - We automatically get spec updates when library updates
+    - No manual field duplication = no drift from spec
+    """
 
     @model_validator(mode="before")
     @classmethod
@@ -1451,49 +1483,36 @@ class GetProductsResponse(NestedModelSerializerMixin, AdCPBaseModel):
             base_msg = f"Found {count} products that match your requirements."
 
         # Check if this looks like an anonymous response (all pricing options have no rates)
+        # Use getattr() to handle discriminated union (rate field only exists in fixed-rate variants)
         if count > 0 and all(
-            all(po.rate is None for po in p.pricing_options) for p in self.products if p.pricing_options
+            all(getattr(po, "rate", None) is None for po in p.pricing_options)
+            for p in self.products
+            if p.pricing_options
         ):
             return f"{base_msg} Please connect through an authorized buying agent for pricing data."
 
         return base_msg
 
 
-class ListCreativeFormatsRequest(AdCPBaseModel):
-    """Request for list_creative_formats tool.
+class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
+    """Extends library ListCreativeFormatsRequest from AdCP spec.
 
-    All parameters are optional filters per AdCP spec.
+    Inherits all AdCP-compliant fields from adcp library,
+    ensuring we stay in sync with spec updates.
+
+    Adds internal convenience fields for backward compatibility
+    (marked with exclude=True to prevent leaking to AdCP clients).
     """
 
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context provided by the client (echoed in responses)"
-    )
-
+    # Internal convenience fields (not in AdCP spec, excluded from serialization)
     adcp_version: str = Field(
         default="1.0.0",
         pattern=r"^\d+\.\d+\.\d+$",
         description="AdCP schema version for this request (e.g., '1.0.0')",
+        exclude=True,
     )
-    type: str | None = Field(None, description="Filter by format type (audio, video, display)")
-    standard_only: bool | None = Field(None, description="Only return IAB standard formats")
-    category: str | None = Field(None, description="Filter by format category (standard, custom)")
-    format_ids: list["FormatId"] | None = Field(
-        None, description="Return only these specific format IDs (e.g., from get_products response)"
-    )
-    asset_types: list[str] | None = Field(
-        None,
-        description="Filter to formats that include these asset types (e.g., ['image', 'text'], ['javascript'])",
-    )
-    max_width: int | None = Field(
-        None, description="Maximum width in pixels (inclusive). Returns formats with width <= this value"
-    )
-    max_height: int | None = Field(
-        None, description="Maximum height in pixels (inclusive). Returns formats with height <= this value"
-    )
-    min_width: int | None = Field(None, description="Minimum width in pixels (inclusive)")
-    min_height: int | None = Field(None, description="Minimum height in pixels (inclusive)")
-    is_responsive: bool | None = Field(None, description="Filter for responsive formats that adapt to container size")
-    name_search: str | None = Field(None, description="Search for formats by name (case-insensitive partial match)")
+    standard_only: bool | None = Field(None, description="Only return IAB standard formats", exclude=True)
+    category: str | None = Field(None, description="Filter by format category (standard, custom)", exclude=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -1518,21 +1537,19 @@ class ListCreativeFormatsRequest(AdCPBaseModel):
         return values
 
 
-class ListCreativeFormatsResponse(NestedModelSerializerMixin, AdCPBaseModel):
-    """Response for list_creative_formats tool (AdCP v2.4 spec compliant).
+class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse):
+    """Extends library ListCreativeFormatsResponse from AdCP spec.
+
+    Inherits all AdCP-compliant fields from adcp library,
+    ensuring we stay in sync with spec updates.
+
+    Adds NestedModelSerializerMixin for proper nested model serialization
+    and custom __str__ for human-readable protocol messages.
 
     Per AdCP PR #113, this response contains ONLY domain data.
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
     """
-
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
-
-    formats: list[Format] = Field(..., description="Full format definitions per AdCP spec")
-    creative_agents: list[dict[str, Any]] | None = Field(
-        None, description="Creative agents providing additional formats"
-    )
-    errors: list[Error] | None = Field(None, description="Task-specific errors and warnings")
 
     def __str__(self) -> str:
         """Return human-readable message for protocol layer.
@@ -1561,13 +1578,13 @@ class CreativeGroup(BaseModel):
     tags: list[str] | None = []
 
 
-class FormatId(BaseModel):
-    """AdCP v2.4 format identifier object."""
+class FormatId(LibraryFormatId):
+    """AdCP format identifier - extends library FormatId with convenience methods.
 
-    agent_url: str = Field(..., description="URL of the agent defining this format")
-    id: str = Field(..., pattern=r"^[a-zA-Z0-9_-]+$", description="Format identifier")
-
-    model_config = {"extra": "forbid"}
+    Note: The inherited agent_url field has type AnyUrl, but Pydantic accepts strings
+    at runtime and automatically validates/converts them. This causes mypy warnings
+    (str vs AnyUrl) which are safe to ignore - the code works correctly at runtime.
+    """
 
     def __str__(self) -> str:
         """Return human-readable format identifier for display in UIs."""
@@ -1578,46 +1595,54 @@ class FormatId(BaseModel):
         return f"FormatId(id='{self.id}', agent_url='{self.agent_url}')"
 
 
-class Creative(AdCPBaseModel):
-    """Individual creative asset - STRICT AdCP v1 spec compliance.
+class Creative(LibraryCreative):
+    """Individual creative asset - extends library Creative with customizations for our workflow.
 
-    **BREAKING CHANGE:** This model now enforces strict AdCP v1 specification compliance.
-    Only fields defined in the official spec are accepted. Legacy fields (media_url, width,
-    height, snippet, etc.) have been REMOVED.
+    Extends the official AdCP library Creative type with:
+    1. Simplified assets field (dict[str, Any] instead of strict typed unions)
+    2. Internal-only principal_id for workflow tracking
+    3. Backward-compatible defaults for created_date/updated_date/status
 
-    **AdCP v1 Spec Fields:**
-    - Required: creative_id, name, format_id, assets
-    - Optional: inputs, tags, approved
-    - Internal: principal_id, created_at, updated_at, status (added by sales agent)
+    **Library Fields (from adcp.types.generated_poc.list_creatives_response.Creative):**
+    - Required: creative_id, name, format_id, created_date, updated_date, status
+    - Optional: assets, click_url, media_url, width, height, duration, tags, performance,
+                assignments, sub_assets
 
-    **Migration Guide:**
-    - Old: media_url, width, height → New: Put in assets dict
-    - Old: click_url → New: Use URL asset with url_type="clickthrough"
-    - Old: snippet → New: Use HTML asset in assets dict
-    - Old: template_variables → New: Use text/image assets
+    **Our Customizations:**
+    - assets: Simplified to dict[str, Any] (instead of strict typed asset unions)
+    - created_date/updated_date: Made optional with datetime.now() defaults
+    - status: Made optional with "pending_review" default
+    - principal_id: Internal field for workflow tracking (excluded from responses)
 
-    Official spec: https://adcontextprotocol.org/schemas/v1/core/creative-asset.json
+    **Notes:**
+    - Supports both modern (assets + format_id) and legacy (media_url/width/height) patterns
+    - Library's status is CreativeStatus enum: processing, approved, rejected, pending_review
+    - Backward compatible with existing test suite and database schemas
     """
 
-    # === AdCP v1 Spec Required Fields ===
-    creative_id: str = Field(description="Unique identifier for the creative")
-    name: str = Field(description="Human-readable creative name")
-    format: FormatId = Field(alias="format_id", description="Creative format identifier with agent_url namespace")
-    assets: dict[str, dict[str, Any]] = Field(
-        description="Assets required by the format, keyed by asset_role. "
-        "Values can be image, video, audio, text, html, css, javascript, vast, daast, url, or promoted-offerings assets."
+    # Allow extra fields (for backward compat with created_at/updated_at aliases)
+    model_config = ConfigDict(extra="allow")
+
+    # Override assets to accept simple dicts (instead of strict typed asset unions)
+    assets: dict[str, Any] | None = Field(default=None, description="Assets for this creative, keyed by asset_role")
+
+    # Make dates optional with defaults for backward compatibility
+    created_date: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), description="When the creative was uploaded to the library"
+    )
+    updated_date: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), description="When the creative was last modified"
     )
 
-    # === AdCP v1 Spec Optional Fields ===
-    inputs: list[dict[str, Any]] | None = Field(
-        None,
-        description="Preview contexts for generative formats - defines what scenarios to generate previews for",
+    # Make status optional with default (using library enum type)
+    status: CreativeStatus = Field(
+        default=CreativeStatus.pending_review,
+        description="Current approval status: processing, approved, rejected, pending_review",
     )
-    tags: list[str] | None = Field(None, description="User-defined tags for organization and searchability")
-    approved: bool | None = Field(
-        None,
-        description="For generative creatives: set to true to approve and finalize, "
-        "false to request regeneration. Omit for non-generative creatives.",
+
+    # === Internal Fields (excluded from AdCP responses) ===
+    principal_id: str | None = Field(
+        default=None, exclude=True, description="Associates creative with advertiser (workflow tracking)"
     )
 
     @model_validator(mode="before")
@@ -1626,49 +1651,92 @@ class Creative(AdCPBaseModel):
         """Validate and upgrade format_id to AdCP namespaced format."""
         from src.core.format_cache import upgrade_legacy_format_id
 
+        # Handle both 'format' and 'format_id' keys
         format_val = values.get("format_id") or values.get("format")
         if format_val is not None:
             try:
                 upgraded = upgrade_legacy_format_id(format_val)
                 values["format_id"] = upgraded
-                values["format"] = upgraded
+                # Don't set 'format' - it's an alias in library, not a real field
             except ValueError as e:
                 raise ValueError(f"Invalid format_id: {e}")
         return values
 
-    # === Internal Fields (not in AdCP spec) ===
-    # These fields are added by the sales agent for workflow management
-    # Buyers should NOT provide these - they are populated during processing
-    principal_id: str | None = None  # Associates creative with advertiser
-    created_at: datetime | None = None  # Audit trail timestamp
-    updated_at: datetime | None = None  # Audit trail timestamp
-    status: str = Field(default="pending", description="Workflow status: pending, approved, rejected")
-
-    # Helper properties
+    # Helper properties for backward compatibility
     @property
-    def format_id(self) -> str:
-        """Get format ID string from FormatId object."""
-        return self.format.id
+    def format(self) -> LibraryFormatId:
+        """Alias for format_id (backward compatibility with old code that used .format)."""
+        return self.format_id
+
+    @property
+    def format_id_str(self) -> str:
+        """Get format ID string from FormatId object.
+
+        For backward compatibility with code expecting format_id to be a string.
+        Library's format_id is a FormatId object; this returns the string ID.
+        """
+        return self.format_id.id
 
     @property
     def format_agent_url(self) -> str:
-        """Get agent URL from FormatId object."""
-        return self.format.agent_url
+        """Get agent URL string from FormatId object."""
+        return str(self.format_id.agent_url)
+
+    # Compatibility alias for old tests that used 'created_at'
+    @property
+    def created_at(self) -> datetime:
+        """Alias for created_date (backward compatibility)."""
+        return self.created_date
+
+    # Compatibility alias for old tests that used 'updated_at'
+    @property
+    def updated_at(self) -> datetime:
+        """Alias for updated_date (backward compatibility)."""
+        return self.updated_date
 
     def model_dump(self, **kwargs):
-        """Override to exclude internal fields by default for AdCP compliance."""
-        exclude = kwargs.get("exclude", set())
-        if isinstance(exclude, set):
-            # Exclude internal fields from responses
-            exclude.update({"principal_id", "created_at", "updated_at", "status"})
-            kwargs["exclude"] = exclude
-        return super().model_dump(**kwargs)
+        """Override to exclude internal fields and extra fields for AdCP compliance.
+
+        Excludes:
+        - principal_id: Internal field (marked with exclude=True)
+        - created_at, updated_at, format: Extra fields used for backward compat (not in spec)
+
+        Includes:
+        - created_date, updated_date, status: These ARE in the AdCP spec
+        """
+        # Get default serialization (principal_id auto-excluded via exclude=True)
+        data = super().model_dump(**kwargs)
+
+        # Remove extra fields that leaked in due to extra="allow"
+        # These are backward compat aliases, not part of the spec
+        data.pop("created_at", None)
+        data.pop("updated_at", None)
+        data.pop("format", None)  # format_id is the spec field
+
+        # Convert status enum to string value for AdCP compliance
+        if "status" in data and hasattr(data["status"], "value"):
+            data["status"] = data["status"].value
+
+        return data
 
     def model_dump_internal(self, **kwargs):
-        """Dump including internal fields for database storage."""
-        # Don't exclude anything
-        kwargs.pop("exclude", None)
-        return super().model_dump(**kwargs)
+        """Dump including internal fields for database storage.
+
+        Pydantic v2's Field(exclude=True) cannot be overridden via model_dump parameters.
+        We manually include principal_id by accessing the attribute directly.
+        """
+        # Get base serialization
+        data = super().model_dump(exclude=set(), **kwargs)
+
+        # Manually add excluded fields
+        if hasattr(self, "principal_id") and self.principal_id is not None:
+            data["principal_id"] = self.principal_id
+
+        # Convert status enum to string value for database storage
+        if "status" in data and hasattr(data["status"], "value"):
+            data["status"] = data["status"].value
+
+        return data
 
 
 class CreativeAdaptation(BaseModel):
@@ -1684,7 +1752,9 @@ class CreativeAdaptation(BaseModel):
     estimated_performance_lift: float | None = None  # Percentage improvement expected
 
 
-class CreativeStatus(BaseModel):
+class CreativeApprovalStatus(BaseModel):
+    """Creative approval status result (different from CreativeStatus enum)."""
+
     creative_id: str
     status: Literal["pending_review", "approved", "rejected", "adaptation_required"]
     detail: str
@@ -1751,7 +1821,7 @@ class AddCreativeAssetsRequest(AdCPBaseModel):
 class AddCreativeAssetsResponse(NestedModelSerializerMixin, AdCPBaseModel):
     """Response from adding creative assets (AdCP spec compliant)."""
 
-    statuses: list[CreativeStatus]
+    statuses: list[CreativeApprovalStatus]
 
 
 # Legacy aliases for backward compatibility (to be removed)
@@ -1761,6 +1831,9 @@ SubmitCreativesResponse = AddCreativeAssetsResponse
 
 class SyncCreativesRequest(AdCPBaseModel):
     """Request to sync creative assets to centralized library (AdCP v2.4 spec compliant).
+
+    NOTE: Uses Creative instead of library's CreativeAsset due to implementation differences.
+    Library uses CreativeAsset which has different structure than our Creative type.
 
     Supports bulk operations, patch updates, and assignment management.
     Creatives are synced to a central library and can be used across multiple media buys.
@@ -1899,6 +1972,11 @@ class AssignmentResult(BaseModel):
 class SyncCreativesResponse(AdCPBaseModel):
     """Response from syncing creative assets (AdCP v2.4 spec compliant).
 
+    NOTE: Does not extend library type due to incompatible discriminated union pattern.
+    The library uses RootModel with discriminated union (success vs error variants),
+    which conflicts with our protocol envelope wrapping pattern. Our implementation
+    provides equivalent functionality with proper internal field exclusion.
+
     Per AdCP PR #113, this response contains ONLY domain data.
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
@@ -1975,45 +2053,196 @@ class SyncCreativesResponse(AdCPBaseModel):
         return msg
 
 
-class ListCreativesRequest(AdCPBaseModel):
-    """Request to list and search creative library (AdCP spec compliant)."""
+class ListCreativesRequest(LibraryListCreativesRequest):
+    """Extends library ListCreativesRequest from AdCP spec.
 
-    media_buy_id: str | None = Field(None, description="Filter by media buy ID")
-    buyer_ref: str | None = Field(None, description="Filter by buyer reference")
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context provided by the client (echoed in responses)"
+    Inherits all AdCP-compliant fields from adcp library:
+    - filters: LibraryCreativeFilters (structured filter object)
+    - pagination: LibraryPagination (structured pagination object)
+    - sort: LibrarySort (structured sort object)
+    - fields: list[FieldModel] (specific fields to return)
+    - include_performance: bool (include performance metrics)
+    - include_assignments: bool (include package assignments)
+    - include_sub_assets: bool (include sub-assets)
+    - context: dict[str, Any] (application-level context)
+
+    Adds internal convenience fields for backward compatibility:
+    - media_buy_id: Filter by media buy (NOT in spec, mapped to filters internally)
+    - buyer_ref: Filter by buyer reference (NOT in spec, mapped to filters internally)
+    - status: Flat status filter (mapped to filters.status)
+    - format: Flat format filter (mapped to filters.format)
+    - tags: Flat tags filter (mapped to filters.tags)
+    - created_after: Flat date filter (mapped to filters.created_after)
+    - created_before: Flat date filter (mapped to filters.created_before)
+    - search: Search text (mapped to filters.name_contains)
+    - page: Flat page number (mapped to pagination.offset)
+    - limit: Flat limit (mapped to pagination.limit)
+    - sort_by: Flat sort field (mapped to sort.field)
+    - sort_order: Flat sort direction (mapped to sort.direction)
+
+    All internal convenience fields are marked with exclude=True to prevent leaking
+    to AdCP clients.
+    """
+
+    # Override parent fields to accept dict or Pydantic objects (validator handles conversion)
+    filters: LibraryCreativeFilters | dict[str, Any] | None = None  # type: ignore[assignment]
+    pagination: LibraryPagination | dict[str, Any] | None = None  # type: ignore[assignment]
+    sort: LibrarySort | dict[str, Any] | None = None  # type: ignore[assignment]
+    fields: list[LibraryFieldModel] | list[str] | None = None  # type: ignore[assignment]
+
+    # Internal convenience fields (NOT in AdCP spec, excluded from serialization)
+    media_buy_id: str | None = Field(None, description="Filter by media buy ID", exclude=True)
+    buyer_ref: str | None = Field(None, description="Filter by buyer reference", exclude=True)
+    status: str | None = Field(
+        None, description="Filter by creative status (pending, approved, rejected)", exclude=True
     )
-    status: str | None = Field(None, description="Filter by creative status (pending, approved, rejected)")
-    format: str | None = Field(None, description="Filter by creative format")
-    tags: list[str] | None = Field(None, description="Filter by tags")
-    created_after: datetime | None = Field(None, description="Filter by creation date")
-    created_before: datetime | None = Field(None, description="Filter by creation date")
-    search: str | None = Field(None, description="Search in creative names and descriptions")
+    format: str | None = Field(None, description="Filter by creative format", exclude=True)
+    tags: list[str] | None = Field(None, description="Filter by tags", exclude=True)
+    created_after: datetime | None = Field(None, description="Filter by creation date", exclude=True)
+    created_before: datetime | None = Field(None, description="Filter by creation date", exclude=True)
+    search: str | None = Field(None, description="Search in creative names and descriptions", exclude=True)
+    page: int = Field(1, ge=1, description="Page number for pagination", exclude=True)
+    limit: int = Field(50, ge=1, le=1000, description="Number of results per page", exclude=True)
+    sort_by: str | None = Field("created_date", description="Sort field (created_date, name, status)", exclude=True)
+    sort_order: Literal["asc", "desc"] = Field("desc", description="Sort order", exclude=True)
 
-    # AdCP spec fields
-    filters: dict[str, Any] | None = Field(None, description="Advanced filtering options")
-    pagination: dict[str, Any] | None = Field(None, description="Pagination parameters (page, limit)")
-    sort: dict[str, Any] | None = Field(None, description="Sort configuration (field, direction)")
-    fields: list[str] | None = Field(None, description="Specific fields to return")
-    include_performance: bool = Field(False, description="Include performance metrics")
-    include_assignments: bool = Field(False, description="Include package assignments")
-    include_sub_assets: bool = Field(False, description="Include sub-assets (e.g., video thumbnails)")
-    page: int = Field(1, ge=1, description="Page number for pagination")
-    limit: int = Field(50, ge=1, le=1000, description="Number of results per page")
-    sort_by: str | None = Field("created_date", description="Sort field (created_date, name, status)")
-    sort_order: Literal["asc", "desc"] = Field("desc", description="Sort order")
+    @model_validator(mode="before")
+    @classmethod
+    def map_convenience_fields(cls, values: dict) -> dict:
+        """Map flat convenience fields to structured AdCP objects.
 
-    @model_validator(mode="after")
-    def validate_timezone_aware(self):
-        """Validate that datetime fields are timezone-aware.
+        This validator runs BEFORE Pydantic validation, allowing us to accept
+        flat convenience fields and map them to the structured AdCP spec format.
 
-        AdCP spec requires ISO 8601 datetime strings with timezone information.
+        Mapping:
+        - media_buy_id, buyer_ref, status, format, tags, created_after, created_before, search
+          → filters: LibraryCreativeFilters
+        - page, limit → pagination: LibraryPagination (page converted to offset)
+        - sort_by, sort_order → sort: LibrarySort
         """
-        if self.created_after and self.created_after.tzinfo is None:
-            raise ValueError("created_after must be timezone-aware (ISO 8601 with timezone)")
-        if self.created_before and self.created_before.tzinfo is None:
-            raise ValueError("created_before must be timezone-aware (ISO 8601 with timezone)")
-        return self
+        if not isinstance(values, dict):
+            return values
+
+        # Only map if convenience fields are present
+        has_convenience_fields = any(
+            values.get(field) is not None
+            for field in [
+                "media_buy_id",
+                "buyer_ref",
+                "status",
+                "format",
+                "tags",
+                "created_after",
+                "created_before",
+                "search",
+                "page",
+                "limit",
+                "sort_by",
+                "sort_order",
+            ]
+        )
+
+        if not has_convenience_fields:
+            return values
+
+        # Map filter fields to structured Filters object
+        filters_dict: dict[str, Any] = {}
+
+        # Note: media_buy_id and buyer_ref are NOT in AdCP spec
+        # These are internal convenience fields that will remain as flat fields
+        # (user has submitted spec change to upstream)
+
+        if values.get("status"):
+            filters_dict["status"] = values["status"]
+
+        if values.get("format"):
+            filters_dict["format"] = values["format"]
+
+        if values.get("tags"):
+            filters_dict["tags"] = values["tags"]
+
+        if values.get("created_after"):
+            # Validate timezone awareness
+            dt = values["created_after"]
+            if isinstance(dt, datetime) and dt.tzinfo is None:
+                raise ValueError("created_after must be timezone-aware (ISO 8601 with timezone)")
+            filters_dict["created_after"] = dt
+
+        if values.get("created_before"):
+            # Validate timezone awareness
+            dt = values["created_before"]
+            if isinstance(dt, datetime) and dt.tzinfo is None:
+                raise ValueError("created_before must be timezone-aware (ISO 8601 with timezone)")
+            filters_dict["created_before"] = dt
+
+        if values.get("search"):
+            filters_dict["name_contains"] = values["search"]
+
+        # Create Filters object if we have any filter fields
+        if filters_dict:
+            # Merge with existing filters if present
+            existing_filters = values.get("filters")
+            if existing_filters:
+                if isinstance(existing_filters, dict):
+                    filters_dict = {**existing_filters, **filters_dict}
+                else:
+                    # Already a LibraryCreativeFilters object, convert to dict
+                    filters_dict = {**existing_filters.model_dump(), **filters_dict}
+
+            values["filters"] = LibraryCreativeFilters(**filters_dict)
+
+        # Map pagination fields to structured Pagination object
+        page = values.get("page", 1)
+        limit = values.get("limit", 50)
+
+        if page != 1 or limit != 50:
+            # Convert page number to offset (page 1 = offset 0)
+            offset = (page - 1) * limit
+
+            pagination_dict = {"offset": offset, "limit": limit}
+
+            # Merge with existing pagination if present
+            existing_pagination = values.get("pagination")
+            if existing_pagination:
+                if isinstance(existing_pagination, dict):
+                    pagination_dict = {**existing_pagination, **pagination_dict}
+                else:
+                    # Already a LibraryPagination object, convert to dict
+                    pagination_dict = {**existing_pagination.model_dump(), **pagination_dict}
+
+            values["pagination"] = LibraryPagination(**pagination_dict)
+
+        # Map sort fields to structured Sort object
+        sort_by = values.get("sort_by")
+        sort_order = values.get("sort_order", "desc")
+
+        if sort_by:
+            # Map sort_by field names to AdCP enum values
+            field_mapping = {
+                "created_date": "created_date",
+                "updated_date": "updated_date",
+                "name": "name",
+                "status": "status",
+                "assignment_count": "assignment_count",
+                "performance_score": "performance_score",
+            }
+
+            mapped_field = field_mapping.get(sort_by, "created_date")
+
+            sort_dict = {"field": mapped_field, "direction": sort_order}
+
+            # Merge with existing sort if present
+            existing_sort = values.get("sort")
+            if existing_sort:
+                if isinstance(existing_sort, dict):
+                    sort_dict = {**existing_sort, **sort_dict}
+                else:
+                    # Already a LibrarySort object, convert to dict
+                    sort_dict = {**existing_sort.model_dump(), **sort_dict}
+
+            values["sort"] = LibrarySort(**sort_dict)
+
+        return values
 
 
 class QuerySummary(BaseModel):
@@ -2037,6 +2266,10 @@ class Pagination(BaseModel):
 
 class ListCreativesResponse(AdCPBaseModel):
     """Response from listing creative assets (AdCP v2.4 spec compliant).
+
+    NOTE: Does not extend library type because our Creative extends library Creative with
+    internal fields. The nested Creative serialization ensures internal fields are properly
+    excluded via Field(exclude=True) pattern.
 
     Per AdCP PR #113, this response contains ONLY domain data.
     Protocol fields (status, task_id, message, context_id) are added by the
@@ -2102,7 +2335,7 @@ class CheckCreativeStatusRequest(AdCPBaseModel):
 
 
 class CheckCreativeStatusResponse(NestedModelSerializerMixin, AdCPBaseModel):
-    statuses: list[CreativeStatus]
+    statuses: list[CreativeApprovalStatus]
 
 
 # New creative management endpoints
@@ -2129,7 +2362,7 @@ class CreateCreativeRequest(AdCPBaseModel):
 
 class CreateCreativeResponse(AdCPBaseModel):
     creative: Creative
-    status: CreativeStatus
+    status: CreativeApprovalStatus
     suggested_adaptations: list[CreativeAdaptation] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
@@ -2372,74 +2605,65 @@ class BrandManifestRef(BaseModel):
         return values
 
 
-class Package(BaseModel):
-    """Package object - AdCP spec compliant.
+# --- Package Schemas (Extend adcp library for proper request/response separation) ---
 
-    Note: In create-media-buy-request, clients only provide buyer_ref+products.
-    Server generates package_id and sets initial status per AdCP package schema.
+
+class PackageRequest(LibraryPackageRequest):
+    """Package request schema (for CreateMediaBuyRequest).
+
+    Extends adcp library PackageRequest with internal fields.
+    Used when CREATING media buys - has creative_ids/creatives/format_ids but no package_id/status.
+
+    Library PackageRequest required fields per AdCP spec:
+    - budget, buyer_ref, pricing_option_id, product_id
     """
 
-    # AdCP Package object fields (required in responses, generated during creation)
-    package_id: str | None = Field(None, description="Publisher's unique identifier for the package")
-    status: Literal["draft", "active", "paused", "completed"] | None = Field(None, description="Status of the package")
-
-    # AdCP optional fields
-    buyer_ref: str | None = Field(None, description="Buyer's reference identifier for this package")
-    product_id: str | None = Field(None, description="ID of the product this package is based on (single product)")
-    products: list[str] | None = Field(None, description="Array of product IDs to include in this package")
-    budget: float | None = Field(
-        None, ge=0, description="Budget allocation for this package in the currency specified by the pricing option"
+    # Internal fields (not in AdCP spec) - excluded from API responses
+    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
+    media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID", exclude=True)
+    platform_line_item_id: str | None = Field(
+        None, description="Internal: Platform-specific line item ID", exclude=True
     )
-    impressions: float | None = Field(None, description="Impression goal for this package", gt=-1)
-    targeting_overlay: Targeting | None = Field(None, description="Package-specific targeting")
-    creative_ids: list[str] | None = Field(None, description="Creative IDs to assign to this package")
-    creatives: list[Creative] | None = Field(
-        None,
-        description="Full creative objects to upload and assign to this package at creation time (alternative to creative_ids)",
-    )
-    creative_assignments: list[dict[str, Any]] | None = Field(
-        None, description="Creative assets assigned to this package"
-    )
-    # AdCP v2.4 request field (input) - array of FormatId objects
-    format_ids: list[FormatId] | None = Field(
-        None,
-        description="Format IDs for this package (array of FormatId objects with agent_url and id per AdCP v2.4)",
-    )
-
-    # AdCP v2.4 response field (output) - array of FormatId objects
-    format_ids_to_provide: list[FormatId] | None = Field(
-        None,
-        description="Format IDs that creative assets will be provided for this package (array of FormatId objects per AdCP v2.4)",
-    )
-
-    # Internal field (NOT part of AdCP spec) - platform line item ID for update operations
-    # This is stored internally to enable budget updates, pause/resume, etc.
-    # Must be excluded from AdCP responses via model_dump(exclude={'platform_line_item_id'})
-    platform_line_item_id: str | None = Field(None, description="Internal: Platform-specific line item ID")
-
-    # NEW: Pricing option selection (AdCP v2.2.0 spec - REQUIRED in package-request.json)
-    pricing_option_id: str | None = Field(
-        None,
-        description="ID of the selected pricing option from the product's pricing_options array (REQUIRED in requests)",
-    )
-    bid_price: float | None = Field(
-        None, ge=0, description="Bid price for auction-based pricing (required if pricing option is auction-based)"
-    )
-    pacing: Literal["even", "asap", "front_loaded"] | None = Field(None, description="Pacing strategy for this package")
+    created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)
+    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp", exclude=True)
+    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
 
     # Legacy field (deprecated - use pricing_option_id instead)
     pricing_model: PricingModel | None = Field(
         None,
         description="DEPRECATED: Use pricing_option_id instead. Selected pricing model for backward compatibility.",
+        exclude=True,
     )
 
-    # Internal fields (not in AdCP spec)
-    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy")
-    media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID")
-    # NOTE: platform_line_item_id already defined above (line 2443) - don't duplicate here
-    created_at: datetime | None = Field(None, description="Internal: Creation timestamp")
-    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp")
-    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata")
+    impressions: float | None = Field(None, description="Legacy: Impression goal (use budget instead)", exclude=True)
+    creatives: list["Creative"] | None = Field(  # type: ignore[assignment]
+        None,
+        description="Full creative objects to upload and assign at creation time (alternative to creative_ids)",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def remove_invalid_fields(cls, values: dict) -> dict:
+        """Remove fields that are not valid in PackageRequest per AdCP spec.
+
+        Handles reconstruction from database where Package (response) may be stored
+        but we need PackageRequest (request) for validation.
+
+        Response-only fields to remove:
+        - status: Only in Package response, not in PackageRequest
+        - package_id: Assigned by publisher, not in request
+        """
+        if not isinstance(values, dict):
+            return values
+
+        # Create copy to avoid mutating input dict (critical for shared/cached dicts)
+        values = values.copy()
+
+        # Remove response-only fields when reconstructing from database
+        values.pop("status", None)
+        values.pop("package_id", None)
+
+        return values
 
     @model_validator(mode="before")
     @classmethod
@@ -2463,49 +2687,52 @@ class Package(BaseModel):
 
         return values
 
-    def model_dump(self, **kwargs):
-        """Override to provide AdCP-compliant responses while excluding internal fields.
 
-        Internal fields (platform_line_item_id, tenant_id, etc.) are excluded from AdCP responses
-        to maintain spec compliance. These fields are only used internally within the system.
-        """
-        # Default to excluding internal fields for AdCP compliance
-        exclude = kwargs.get("exclude", set())
-        if isinstance(exclude, set):
-            # Add internal fields to exclude by default
-            # Legacy format fields also excluded (migrated to format_ids_to_provide)
-            exclude.update(
-                {
-                    "tenant_id",
-                    "media_buy_id",
-                    "platform_line_item_id",  # Internal field - not part of AdCP spec
-                    "created_at",
-                    "updated_at",
-                    "metadata",
-                    "format_ids",
-                    "formats_to_provide",
-                }
-            )
-            kwargs["exclude"] = exclude
+class Package(LibraryPackage):
+    """Package response schema (for CreateMediaBuySuccess and responses).
 
-        data = super().model_dump(**kwargs)
+    Extends adcp library Package with internal fields.
+    Used in RESPONSES - has package_id/status but no creative_ids/format_ids (those become creative_assignments/format_ids_to_provide).
 
-        # Ensure required AdCP fields are present for responses
-        # (These should be set during package creation/processing)
-        # Check the actual object attributes, not the serialized dict,
-        # because exclude_none=True (default) may exclude None values from the dict
-        if self.package_id is None:
-            raise ValueError("Package missing required package_id for AdCP response")
-        if self.status is None:
-            raise ValueError("Package missing required status for AdCP response")
+    Library Package required fields:
+    - package_id, status
+    """
 
-        return data
+    # Internal fields (not in AdCP spec) - excluded from API responses
+    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
+    media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID", exclude=True)
+    platform_line_item_id: str | None = Field(
+        None, description="Internal: Platform-specific line item ID for creative association", exclude=True
+    )
+    created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)
+    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp", exclude=True)
+    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
+
+    # Legacy field (deprecated - use pricing_option_id instead)
+    pricing_model: PricingModel | None = Field(
+        None,
+        description="DEPRECATED: Use pricing_option_id instead. Selected pricing model for backward compatibility.",
+        exclude=True,
+    )
+
+    # Note: No need for validate_required hack - library Package already has package_id and status as required fields!
 
     def model_dump_internal(self, **kwargs):
         """Dump including internal fields for database storage and internal processing."""
-        # Don't exclude internal fields
-        kwargs.pop("exclude", None)  # Remove any exclude parameter
-        return super().model_dump(**kwargs)
+        # Get base dump with all AdCP fields
+        result = super().model_dump(mode="python", exclude_none=False, **kwargs)
+
+        # Manually add internal fields that are marked with exclude=True
+        # (Pydantic's exclude=True at field level cannot be overridden via parameters)
+        result["tenant_id"] = self.tenant_id
+        result["media_buy_id"] = self.media_buy_id
+        result["platform_line_item_id"] = self.platform_line_item_id
+        result["created_at"] = self.created_at
+        result["updated_at"] = self.updated_at
+        result["metadata"] = self.metadata
+        result["pricing_model"] = self.pricing_model
+
+        return result
 
 
 # --- Media Buy Lifecycle ---
@@ -2518,7 +2745,7 @@ class CreateMediaBuyRequest(AdCPBaseModel):
         ...,
         description="Brand information manifest (inline object or URL string). REQUIRED per AdCP v2.2.0 spec.",
     )
-    packages: list[Package] = Field(..., description="Array of packages with products and budgets (REQUIRED)")
+    packages: list[PackageRequest] = Field(..., description="Array of packages with products and budgets (REQUIRED)")
     start_time: datetime | Literal["asap"] = Field(
         ..., description="Campaign start time: ISO 8601 datetime or 'asap' for immediate start (REQUIRED)"
     )
@@ -2590,20 +2817,22 @@ class CreateMediaBuyRequest(AdCPBaseModel):
 
         # If using legacy format, convert to new format
         if "product_ids" in values and not values.get("packages"):
-            # Convert product_ids to packages
-            # Note: AdCP create-media-buy-request only requires products from client
-            # Server generates package_id and initial status per AdCP package schema
-            # buyer_ref is optional and should only be set by the buyer/client
+            # Convert product_ids to PackageRequest objects
+            # Note: PackageRequest is the request schema (not Package which is response schema)
+            # PackageRequest requires: product_id, buyer_ref, budget, pricing_option_id
             product_ids = values.get("product_ids") or []  # Handle None
+            total_budget = values.get("total_budget", 0.0)
+            budget_per_package = total_budget / len(product_ids) if product_ids else 0.0
+
             packages = []
             for i, pid in enumerate(product_ids):
                 package_uuid = uuid.uuid4().hex[:6]
                 packages.append(
                     {
-                        "package_id": f"pkg_{i}_{package_uuid}",  # Server-generated per AdCP spec
-                        # buyer_ref is NOT auto-generated - it's the buyer's identifier
-                        "product_id": pid,  # Use product_id (singular) per current validation
-                        "status": "draft",  # Server sets initial status per AdCP package schema
+                        "product_id": pid,  # Required: product being purchased
+                        "buyer_ref": f"pkg_{i}_{package_uuid}",  # Required: buyer's package identifier
+                        "budget": budget_per_package,  # Required: budget allocation
+                        "pricing_option_id": "legacy_conversion",  # Required: pricing option (placeholder for legacy)
                     }
                 )
             values["packages"] = packages
@@ -2722,19 +2951,19 @@ class CreateMediaBuyRequest(AdCPBaseModel):
         return self.total_budget or 0.0
 
     def get_product_ids(self) -> list[str]:
-        """Extract all product IDs from packages for backward compatibility.
+        """Extract unique product IDs from packages per AdCP spec.
 
-        Supports both singular product_id and plural products fields per AdCP spec.
+        Per AdCP spec, packages use product_id (singular, required) field.
+        Returns list of unique product IDs (no duplicates).
         """
         if self.packages:
+            # Use dict.fromkeys() to preserve order while removing duplicates
             product_ids = []
             for package in self.packages:
-                # Check both products (array) and product_id (single) fields
-                if package.products:
-                    product_ids.extend(package.products)
-                elif package.product_id:
+                if package.product_id:
                     product_ids.append(package.product_id)
-            return product_ids
+            # Remove duplicates while preserving order
+            return list(dict.fromkeys(product_ids))
         return self.product_ids or []
 
 
@@ -2927,8 +3156,11 @@ class MediaPackage(BaseModel):
     delivery_type: Literal["guaranteed", "non_guaranteed"]
     cpm: float
     impressions: int
-    format_ids: list[FormatId]  # FormatId objects per AdCP spec
-    targeting_overlay: Optional["Targeting"] = None
+    # Accept library FormatId (not our extended FormatId) to avoid validation errors
+    # when Product from library returns LibraryFormatId instances
+    format_ids: list[LibraryFormatId]  # FormatId objects per AdCP spec
+    # Accept both Targeting (internal) and TargetingOverlay (adcp library) for compatibility
+    targeting_overlay: Union["Targeting", Any] | None = None
     buyer_ref: str | None = None  # Optional buyer reference from request package
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option

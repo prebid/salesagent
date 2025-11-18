@@ -16,7 +16,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     gcc \
-    libpq-dev
+    libpq-dev \
+    git
 
 # Install uv (cacheable)
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -54,7 +55,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libpq5 \
-    curl
+    curl \
+    git
 
 # Install uv (cacheable)
 RUN --mount=type=cache,target=/root/.cache/pip \

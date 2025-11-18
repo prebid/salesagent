@@ -12,9 +12,9 @@
                     <p class="text-muted">Manage tags for categorizing authorized properties</p>
                 </div>
                 <div>
-                    <a href="{{ url_for('authorized_properties.list_authorized_properties', tenant_id=tenant.tenant_id) }}"
+                    <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}#publishers-tab"
                        class="btn btn-outline-secondary">
-                        <i class="fas fa-arrow-left"></i> Back to Properties
+                        <i class="fas fa-arrow-left"></i> Back to Publishers & Properties
                     </a>
                 </div>
             </div>

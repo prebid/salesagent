@@ -145,11 +145,11 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
     # Check affected_packages structure
     affected = response.affected_packages[0]
-    assert affected["buyer_package_ref"] == "pkg_default"
-    assert "changes_applied" in affected
-    assert "creative_ids" in affected["changes_applied"]
+    assert affected.buyer_package_ref == "pkg_default"  # Internal field
+    assert affected.changes_applied is not None  # Internal field
+    assert "creative_ids" in affected.changes_applied
 
-    creative_changes = affected["changes_applied"]["creative_ids"]
+    creative_changes = affected.changes_applied["creative_ids"]
     assert set(creative_changes["added"]) == {"creative_1", "creative_2"}
     assert creative_changes["removed"] == []
     assert set(creative_changes["current"]) == {"creative_1", "creative_2"}
@@ -320,7 +320,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
 
     # Check changes
     affected = response.affected_packages[0]
-    creative_changes = affected["changes_applied"]["creative_ids"]
+    creative_changes = affected.changes_applied["creative_ids"]  # Access internal field via attribute
     assert set(creative_changes["added"]) == {"creative_2", "creative_3"}
     assert set(creative_changes["removed"]) == {"creative_1"}
     assert set(creative_changes["current"]) == {"creative_2", "creative_3"}

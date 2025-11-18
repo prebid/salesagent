@@ -12,16 +12,11 @@ Philosophy:
 
 from typing import Any
 
-from adcp.types.generated import (
-    GetProductsRequest,
-    GetProductsResponse,
-    Product,
-)
+from adcp import GetProductsRequest, GetProductsResponse, Product
 
-# Filters type - check if it exists in adcp.types.generated
-# If not, we'll need to define it locally or use dict[str, Any]
+# Filters type - import from get_products_request module
 try:
-    from adcp.types.generated import Filters
+    from adcp.types.generated_poc.get_products_request import Filters
 except ImportError:
     # Fallback: Filters might be a nested type or not exported
     Filters = dict[str, Any]  # type: ignore
@@ -51,11 +46,27 @@ def create_get_products_request(
         ...     brief="Display ads"
         ... )
     """
+    # Adapt brand_manifest to ensure 'name' field exists (adcp 2.5.0 requirement)
+    brand_manifest_adapted = brand_manifest
+    if brand_manifest and isinstance(brand_manifest, dict):
+        if "name" not in brand_manifest:
+            # If only 'url' provided, use domain as name
+            if "url" in brand_manifest:
+                from urllib.parse import urlparse
+
+                url_str = brand_manifest["url"]
+                domain = urlparse(url_str).netloc or url_str
+                brand_manifest_adapted = {**brand_manifest, "name": domain}
+            else:
+                # Fallback: use a placeholder name
+                brand_manifest_adapted = {**brand_manifest, "name": "Brand"}
+
     # Create GetProductsRequest directly - adcp library handles validation
+    # Type ignores: dict inputs are validated by Pydantic at runtime
     return GetProductsRequest(
-        brand_manifest=brand_manifest,
+        brand_manifest=brand_manifest_adapted,  # type: ignore[arg-type]
         brief=brief or None,
-        filters=filters,
+        filters=filters,  # type: ignore[arg-type]
         context=context,
     )
 

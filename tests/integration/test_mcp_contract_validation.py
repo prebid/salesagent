@@ -21,6 +21,7 @@ from src.core.schemas import (
     SignalDeliverTo,
     UpdateMediaBuyRequest,
 )
+from tests.helpers.adcp_factories import create_test_package_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -82,7 +83,11 @@ class TestMCPContractValidation:
         request = CreateMediaBuyRequest(
             buyer_ref="test_ref",
             brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
-            packages=[{"buyer_ref": "pkg1", "products": ["prod1"], "status": "draft"}],
+            packages=[
+                create_test_package_request(
+                    buyer_ref="pkg1", product_id="prod1", budget=1000.0, pricing_option_id="default-pricing-option"
+                )
+            ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             budget={"total": 5000.0, "currency": "USD"},
@@ -94,52 +99,35 @@ class TestMCPContractValidation:
         assert len(request.packages) == 1
         assert request.pacing == "even"  # Should have default
 
-    def test_create_media_buy_with_packages_product_id_none(self):
-        """Test that packages with product_id=None don't crash get_product_ids().
+    def test_create_media_buy_get_product_ids(self):
+        """Test get_product_ids() extracts unique product IDs from packages.
 
-        Per AdCP spec, packages use product_id (singular) field.
+        Per AdCP spec, packages use product_id (singular, required) field.
         """
-        from src.core.schemas import Package
-
-        # Test 1: Package with product_id=None
+        # Test: Multiple packages with product IDs
         request = CreateMediaBuyRequest(
             buyer_ref="test_ref_1",
             brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
             po_number="PO-12345",
-            packages=[Package(buyer_ref="pkg1", product_id=None)],
-            start_time="2025-02-15T00:00:00Z",
-            end_time="2025-02-28T23:59:59Z",
-            budget={"total": 5000.0, "currency": "USD"},
-        )
-        assert request.get_product_ids() == []  # Should return empty list, not crash
-
-        # Test 2: Package without product_id
-        request = CreateMediaBuyRequest(
-            buyer_ref="test_ref_2",
-            brand_manifest={"name": "Adidas UltraBoost 2025 running shoes"},
-            po_number="PO-12346",
-            packages=[Package(buyer_ref="pkg2")],
-            start_time="2025-02-15T00:00:00Z",
-            end_time="2025-02-28T23:59:59Z",
-            budget={"total": 5000.0, "currency": "USD"},
-        )
-        assert request.get_product_ids() == []
-
-        # Test 3: Mixed packages (some None, some with product_id)
-        request = CreateMediaBuyRequest(
-            buyer_ref="test_ref_3",
-            brand_manifest={"name": "Puma RS-X 2025 training shoes"},
-            po_number="PO-12347",
             packages=[
-                Package(buyer_ref="pkg_none", product_id=None),
-                Package(buyer_ref="pkg_with_product", product_id="prod1"),
-                Package(buyer_ref="pkg_no_product"),
+                create_test_package_request(
+                    buyer_ref="pkg1", product_id="prod1", budget=1000.0, pricing_option_id="test_pricing"
+                ),
+                create_test_package_request(
+                    buyer_ref="pkg2", product_id="prod2", budget=1000.0, pricing_option_id="test_pricing"
+                ),
+                create_test_package_request(
+                    buyer_ref="pkg3", product_id="prod1", budget=1000.0, pricing_option_id="test_pricing"
+                ),  # Duplicate
             ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             budget={"total": 5000.0, "currency": "USD"},
         )
-        assert request.get_product_ids() == ["prod1"]
+        # Should return unique product IDs
+        product_ids = request.get_product_ids()
+        assert set(product_ids) == {"prod1", "prod2"}
+        assert len(product_ids) == 2
 
     def test_get_signals_minimal_now_works(self):
         """Test get_signals with minimal parameters - now fixed!"""
@@ -238,7 +226,6 @@ class TestSchemaDefaultValues:
 
     def test_optional_fields_have_reasonable_defaults(self):
         """Test that optional fields have defaults that make sense."""
-
         # GetProductsRequest
         req = GetProductsRequest(brand_manifest={"name": "test"})
         assert req.brief == ""  # Empty string, not None
@@ -247,7 +234,11 @@ class TestSchemaDefaultValues:
         req = CreateMediaBuyRequest(
             buyer_ref="test_ref",
             brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
-            packages=[{"buyer_ref": "pkg1", "products": ["prod1"], "status": "draft"}],
+            packages=[
+                create_test_package_request(
+                    buyer_ref="pkg1", product_id="prod1", budget=1000.0, pricing_option_id="default-pricing-option"
+                )
+            ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             budget={"total": 5000.0, "currency": "USD"},

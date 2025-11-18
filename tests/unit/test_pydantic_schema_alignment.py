@@ -453,11 +453,10 @@ class TestSpecificFieldValidation:
             filters={
                 "delivery_type": "guaranteed",
                 "format_types": ["video"],
-                "is_fixed_price": True,
             },
         )
         assert request.filters is not None
-        assert request.filters.delivery_type == "guaranteed"
+        assert request.filters.delivery_type.value == "guaranteed"
 
     def test_get_products_accepts_adcp_version(self):
         """REGRESSION TEST: adcp_version must be accepted."""

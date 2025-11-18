@@ -6,7 +6,7 @@ targeting_overlay for create_media_buy and update_media_buy operations.
 
 from datetime import UTC
 
-from src.core.schemas import CreateMediaBuyRequest, Package, Targeting, UpdateMediaBuyRequest
+from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting, UpdateMediaBuyRequest
 
 
 def test_targeting_has_axe_segment_fields():
@@ -43,14 +43,15 @@ def test_targeting_axe_segments_are_optional():
 
 def test_package_targeting_overlay_supports_axe_segments():
     """Test that Package.targeting_overlay supports AXE segment targeting."""
-    package = Package(
-        package_id="pkg_123",  # Required for serialization
-        status="active",  # Required for serialization
-        product_id="prod_123",
-        targeting_overlay=Targeting(
-            geo_country_any_of=["US"],
-            axe_include_segment="x8dj3k",
-        ),
+    package = PackageRequest(
+        buyer_ref="test_buyer",  # Required per AdCP spec
+        product_id="prod_123",  # Required per AdCP spec
+        budget=1000.0,  # Required per AdCP spec
+        pricing_option_id="pricing_1",  # Required per AdCP spec
+        targeting_overlay={
+            "geo_country_any_of": ["US"],
+            "axe_include_segment": "x8dj3k",
+        },
     )
 
     # Verify targeting overlay is present
@@ -72,13 +73,16 @@ def test_create_media_buy_request_with_axe_segments():
         start_time=datetime(2025, 1, 15, 0, 0, 0, tzinfo=UTC),
         end_time=datetime(2025, 2, 15, 23, 59, 59, tzinfo=UTC),
         packages=[
-            Package(
-                product_id="prod_123",
-                targeting_overlay=Targeting(
-                    geo_country_any_of=["US"],
-                    axe_include_segment="x8dj3k",
-                    axe_exclude_segment="y9kl4m",
-                ),
+            PackageRequest(
+                buyer_ref="test_buyer",  # Required per AdCP spec
+                product_id="prod_123",  # Required per AdCP spec
+                budget=1000.0,  # Required per AdCP spec
+                pricing_option_id="pricing_1",  # Required per AdCP spec
+                targeting_overlay={
+                    "geo_country_any_of": ["US"],
+                    "axe_include_segment": "x8dj3k",
+                    "axe_exclude_segment": "y9kl4m",
+                },
             )
         ],
     )

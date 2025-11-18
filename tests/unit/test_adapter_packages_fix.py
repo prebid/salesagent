@@ -13,7 +13,7 @@ import pytest
 from src.adapters.kevel import Kevel
 from src.adapters.triton_digital import TritonDigital
 from src.adapters.xandr import XandrAdapter
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, Package
+from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
 
 
 @pytest.fixture
@@ -28,12 +28,14 @@ def mock_principal():
 @pytest.fixture
 def sample_request():
     """Sample CreateMediaBuyRequest."""
+    from tests.helpers.adcp_factories import create_test_package_request
+
     return CreateMediaBuyRequest(
         buyer_ref="test_buyer_ref_123",
         brand_manifest={"name": "Test Brand"},
         packages=[
-            Package(package_id="pkg_001", products=["prod_123"], status="active"),
-            Package(package_id="pkg_002", products=["prod_456"], status="active"),
+            create_test_package_request(product_id="prod_123", buyer_ref="buyer_pkg_001"),
+            create_test_package_request(product_id="prod_456", buyer_ref="buyer_pkg_002"),
         ],
         start_date=date.today(),
         end_date=date.today() + timedelta(days=30),

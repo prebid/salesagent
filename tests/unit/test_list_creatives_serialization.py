@@ -17,14 +17,13 @@ from src.core.schemas import Creative, ListCreativesResponse, Pagination, QueryS
 def test_list_creatives_response_excludes_internal_fields_from_nested_creatives():
     """Test that ListCreativesResponse excludes Creative internal fields.
 
-    Creative has 4 internal fields that should NOT appear in responses:
-    - principal_id: Internal advertiser association
-    - created_at: Internal audit timestamp
-    - updated_at: Internal audit timestamp
-    - status: Internal workflow state
+    After refactoring Creative to extend library type:
+    - principal_id: Internal advertiser association (excluded via exclude=True)
+    - created_at/updated_at: Legacy aliases (removed from serialization)
+    - status, created_date, updated_date: Now part of AdCP spec (included in responses)
 
-    Creative.model_dump() excludes these, but ListCreativesResponse must
-    explicitly call it for nested creatives.
+    Creative.model_dump() handles exclusions, and ListCreativesResponse
+    explicitly calls it for nested creatives.
     """
     # Create Creative with internal fields populated
     creative = Creative(
@@ -53,16 +52,18 @@ def test_list_creatives_response_excludes_internal_fields_from_nested_creatives(
     creative_in_response = result["creatives"][0]
 
     assert "principal_id" not in creative_in_response, "Internal field 'principal_id' should be excluded"
-    assert "created_at" not in creative_in_response, "Internal field 'created_at' should be excluded"
-    assert "updated_at" not in creative_in_response, "Internal field 'updated_at' should be excluded"
-    assert "status" not in creative_in_response, "Internal field 'status' should be excluded"
+    assert "created_at" not in creative_in_response, "Legacy alias 'created_at' should be excluded"
+    assert "updated_at" not in creative_in_response, "Legacy alias 'updated_at' should be excluded"
 
-    # Verify required AdCP fields are present
+    # Verify required AdCP spec fields are present (library Creative includes these)
     assert "creative_id" in creative_in_response
     assert creative_in_response["creative_id"] == "test_123"
     assert "name" in creative_in_response
-    assert "format" in creative_in_response
+    assert "format_id" in creative_in_response, "Spec field format_id should be present"
     assert "assets" in creative_in_response
+    assert "status" in creative_in_response, "Status is now a spec field, should be present"
+    assert "created_date" in creative_in_response, "Spec field created_date should be present"
+    assert "updated_date" in creative_in_response, "Spec field updated_date should be present"
 
 
 def test_list_creatives_response_with_multiple_creatives():
@@ -77,7 +78,7 @@ def test_list_creatives_response_with_multiple_creatives():
             principal_id=f"principal_{i}",
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
-            status="approved" if i % 2 == 0 else "pending",
+            status="approved" if i % 2 == 0 else "pending_review",
         )
         for i in range(3)
     ]
@@ -93,23 +94,24 @@ def test_list_creatives_response_with_multiple_creatives():
     # Verify internal fields excluded from all creatives
     for i, creative_data in enumerate(result["creatives"]):
         assert "principal_id" not in creative_data, f"Creative {i}: principal_id should be excluded"
-        assert "created_at" not in creative_data, f"Creative {i}: created_at should be excluded"
-        assert "updated_at" not in creative_data, f"Creative {i}: updated_at should be excluded"
-        assert "status" not in creative_data, f"Creative {i}: status should be excluded"
+        assert "created_at" not in creative_data, f"Creative {i}: legacy alias created_at should be excluded"
+        assert "updated_at" not in creative_data, f"Creative {i}: legacy alias updated_at should be excluded"
 
-        # Verify required fields present
+        # Verify spec fields present
         assert creative_data["creative_id"] == f"creative_{i}"
+        assert "status" in creative_data, f"Creative {i}: status is a spec field"
+        assert "created_date" in creative_data, f"Creative {i}: created_date is a spec field"
+        assert "updated_date" in creative_data, f"Creative {i}: updated_date is a spec field"
 
 
 def test_list_creatives_response_with_optional_fields():
-    """Test that optional AdCP fields (tags, inputs, approved) are included when present."""
+    """Test that optional AdCP fields (tags) are included when present."""
     creative = Creative(
         creative_id="test_with_optional",
         name="Test Creative",
         format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         assets={"banner": {"asset_type": "image", "url": "https://example.com/banner.jpg"}},
         tags=["sports", "premium"],  # Optional AdCP field
-        approved=True,  # Optional AdCP field for generative creatives
         # Internal fields
         principal_id="principal_123",
         status="approved",
@@ -127,9 +129,9 @@ def test_list_creatives_response_with_optional_fields():
     # Optional AdCP fields should be included
     assert "tags" in creative_data
     assert creative_data["tags"] == ["sports", "premium"]
-    assert "approved" in creative_data
-    assert creative_data["approved"] is True
 
     # Internal fields still excluded
     assert "principal_id" not in creative_data
-    assert "status" not in creative_data
+
+    # Spec fields should be present
+    assert "status" in creative_data, "Status is a spec field, should be present"

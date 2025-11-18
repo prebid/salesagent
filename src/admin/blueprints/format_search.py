@@ -62,7 +62,7 @@ def search_formats():
                 "agent_url": fmt.agent_url,
                 "format_id": format_id_str,
                 "name": fmt.name,
-                "type": fmt.type,
+                "type": fmt.type.value if hasattr(fmt.type, "value") else str(fmt.type),  # Handle Type enum
                 "category": fmt.category,
                 "description": fmt.description,
                 "is_standard": fmt.is_standard,
@@ -124,17 +124,34 @@ def list_all_formats():
             if agent_url not in by_agent:
                 by_agent[agent_url] = []
 
-            # Handle FormatId object - extract string value
-            format_id_str = fmt.format_id.id if hasattr(fmt.format_id, "id") else str(fmt.format_id)
+            # Keep format_id as nested object (matches library schema)
+            # Frontend will access format_id.id when needed
+            format_id_obj = fmt.format_id
+            if hasattr(format_id_obj, "model_dump"):
+                # Pydantic object - serialize to dict
+                format_id_value = format_id_obj.model_dump(mode="json")
+            elif isinstance(format_id_obj, dict):
+                format_id_value = format_id_obj
+            else:
+                # Fallback for string format_ids (legacy)
+                format_id_value = {"id": str(format_id_obj), "agent_url": agent_url}
+
+            # Get dimensions for matching
+            dimensions_str = None
+            dims = fmt.get_primary_dimensions() if hasattr(fmt, "get_primary_dimensions") else None
+            if dims:
+                width, height = dims
+                dimensions_str = f"{width}x{height}"
 
             by_agent[agent_url].append(
                 {
-                    "format_id": format_id_str,
+                    "format_id": format_id_value,  # Nested object, not flattened string
                     "name": fmt.name,
-                    "type": fmt.type,
+                    "type": fmt.type.value if hasattr(fmt.type, "value") else str(fmt.type),  # Handle Type enum
                     "category": fmt.category,
                     "description": fmt.description,
                     "is_standard": fmt.is_standard,
+                    "dimensions": dimensions_str,  # Add dimensions for size matching
                 }
             )
 

@@ -383,26 +383,22 @@ class TestMCPToolsAudit:
         2. Type mismatches during reconstruction
         """
         # Test that format_ids now works (it's a valid alias)
-        from src.core.schemas import Product
+        from tests.helpers.adcp_factories import create_test_product
 
-        valid_data_with_format_ids = {
-            "product_id": "anti_pattern_test",
-            "name": "Anti-pattern Test Product",
-            "description": "Testing anti-pattern detection",
-            "format_ids": [
-                {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}
-            ],  # Now VALID: Accepts both formats and format_ids
-            "delivery_type": "guaranteed",
-            "is_custom": False,
-            "property_tags": ["all_inventory"],  # Required per AdCP spec
-            "pricing_options": [],  # Can be empty for anonymous users
-        }
+        # Use factory to create Product with proper library-compliant fields
+        product = create_test_product(
+            product_id="anti_pattern_test",
+            name="Anti-pattern Test Product",
+            description="Testing anti-pattern detection",
+            format_ids=["display_300x250"],  # Factory handles conversion to FormatId objects
+            delivery_type="guaranteed",
+            # publisher_properties, delivery_measurement, pricing_options have defaults from factory
+        )
 
-        # This should now succeed (format_ids is a valid alias)
-        product = Product(**valid_data_with_format_ids)
-        # format_ids is list[FormatId] objects
+        # Verify factory created valid Product
         assert len(product.format_ids) == 1
         assert product.format_ids[0].id == "display_300x250"
+        assert product.product_id == "anti_pattern_test"
 
         # Anti-pattern: Type mismatches
         type_mismatch_data = {

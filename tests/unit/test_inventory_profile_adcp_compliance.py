@@ -49,7 +49,9 @@ def test_profile_formats_match_adcp_format_id_schema():
 
         # Validate using Pydantic schema
         format_obj = FormatId(**format_dict)
-        assert format_obj.agent_url == format_dict["agent_url"]
+        assert str(format_obj.agent_url).rstrip("/") == format_dict["agent_url"].rstrip(
+            "/"
+        )  # AnyUrl adds trailing slash
         assert format_obj.id == format_dict["id"]
 
         # Verify no extra fields (AdCP compliance)
@@ -125,6 +127,11 @@ def test_profile_publisher_properties_match_adcp_property_schema():
 
 def test_product_with_profile_passes_adcp_validation():
     """Test that product referencing profile passes AdCP Product validation."""
+    from tests.helpers.adcp_factories import (
+        create_test_cpm_pricing_option,
+        create_test_publisher_properties_by_tag,
+    )
+
     # Create profile
     profile = InventoryProfile(
         tenant_id="test_tenant",
@@ -191,14 +198,20 @@ def test_product_with_profile_passes_adcp_validation():
 
     # Create ProductSchema from product data
     # This simulates what happens when product is serialized for AdCP API
+    # Note: Only include fields that are in the AdCP Product spec
     product_data = {
         "product_id": product.product_id,
         "name": product.name,
         "description": product.description,
         "format_ids": [FormatId(**f) for f in effective_formats],
         "delivery_type": product.delivery_type,
-        "properties": [Property(**p) for p in effective_properties],
-        "targeting_template": product.targeting_template,
+        "delivery_measurement": {
+            "provider": "test_provider",
+            "notes": "Test measurement",
+        },
+        "publisher_properties": [create_test_publisher_properties_by_tag(publisher_domain="example.com")],
+        "pricing_options": [create_test_cpm_pricing_option()],
+        # Note: targeting_template is NOT in AdCP Product schema - it's internal
     }
 
     # Validate using AdCP ProductSchema (with extra="forbid" in development)
@@ -209,8 +222,9 @@ def test_product_with_profile_passes_adcp_validation():
     assert product_schema.product_id == product.product_id
     assert product_schema.name == product.name
     assert len(product_schema.format_ids) == 2
-    assert len(product_schema.properties) == 1
-    assert product_schema.delivery_type == "guaranteed"
+    assert len(product_schema.publisher_properties) == 1
+    # delivery_type is an enum in the library, compare string value
+    assert product_schema.delivery_type.value == "guaranteed"
 
 
 def test_profile_formats_validation_rejects_invalid_structure():
@@ -265,6 +279,11 @@ def test_profile_properties_validation_rejects_invalid_structure():
 
 def test_product_with_profile_has_no_internal_fields_in_serialization():
     """Test that product serialization doesn't leak internal fields."""
+    from tests.helpers.adcp_factories import (
+        create_test_cpm_pricing_option,
+        create_test_publisher_properties_by_tag,
+    )
+
     # Create profile
     profile = InventoryProfile(
         tenant_id="test_tenant",
@@ -309,15 +328,21 @@ def test_product_with_profile_has_no_internal_fields_in_serialization():
     effective_formats = product.effective_format_ids
     effective_properties = product.effective_properties
 
+    # Only include fields that exist in AdCP Product schema
     product_data = {
         "product_id": product.product_id,
         "name": product.name,
         "description": product.description,
         "format_ids": [FormatId(**f) for f in effective_formats],
         "delivery_type": product.delivery_type,
-        "countries": product.countries,
-        "properties": [Property(**p) for p in effective_properties],
-        "targeting_template": product.targeting_template,
+        "delivery_measurement": {
+            "provider": "test_provider",
+            "notes": "Test measurement",
+        },
+        # Note: countries is NOT in AdCP Product schema - it's internal
+        # Note: targeting_template is NOT in AdCP Product schema - it's internal
+        "publisher_properties": [create_test_publisher_properties_by_tag(publisher_domain="example.com")],
+        "pricing_options": [create_test_cpm_pricing_option()],
     }
 
     # Verify internal fields are NOT present
@@ -326,9 +351,12 @@ def test_product_with_profile_has_no_internal_fields_in_serialization():
         "inventory_profile_id",
         "inventory_profile",
         "implementation_config",
-        "property_tags",  # When properties are used
+        "property_tags",  # Legacy field, replaced by publisher_properties
+        "properties",  # Internal database field, external API uses publisher_properties
         "created_at",
         "updated_at",
+        "countries",  # Internal field
+        "targeting_template",  # Internal field
     ]
 
     for field in internal_fields:

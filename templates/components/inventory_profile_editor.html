@@ -180,6 +180,9 @@ Then call: window.inventoryProfileEditor.open(profileData)
 } %}
 {% include 'components/inventory_picker.html' %}
 
+<!-- Format utilities for type-safe format_id handling -->
+<script src="{{ url_for('static', filename='js/format-utils.js') }}"></script>
+
 <script>
 // Inventory Profile Editor - Complete Component
 (function() {
@@ -444,6 +447,11 @@ Then call: window.inventoryProfileEditor.open(profileData)
             allFormats = [];
             for (const [agentUrl, formats] of Object.entries(data.agents || {})) {
                 formats.forEach(fmt => {
+                    // Debug: Log first format to see structure
+                    if (allFormats.length === 0) {
+                        console.log('[loadFormats] First format from API:', fmt);
+                        console.log('[loadFormats] format_id type:', typeof fmt.format_id, fmt.format_id);
+                    }
                     allFormats.push({...fmt, agent_url: agentUrl});
                 });
             }
@@ -485,7 +493,9 @@ Then call: window.inventoryProfileEditor.open(profileData)
             `;
 
             typeFormats.forEach(format => {
-                const isSelected = selectedFormats.has(format.format_id);
+                // Use utility function for type-safe format_id extraction
+                const formatIdValue = getFormatId(format);
+                const isSelected = selectedFormats.has(formatIdValue);
                 const checkIcon = isSelected ? '✓ ' : '';
 
                 // Get dimensions display (check both width/height and dimensions field)
@@ -498,7 +508,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
 
                 html += `
                     <div class="format-card ${isSelected ? 'selected' : ''} format-item"
-                         onclick="window.inventoryProfileEditor.toggleFormat('${format.format_id}', '${format.name}', '${format.agent_url || ''}')"
+                         onclick="window.inventoryProfileEditor.toggleFormat('${formatIdValue}', '${format.name}', '${format.agent_url || ''}')"
                          style="border: 2px solid ${isSelected ? '#0066cc' : '#e0e0e0'}; border-radius: 4px; padding: 0.75rem; background: ${isSelected ? '#f0f7ff' : '#f9f9f9'}; cursor: pointer; transition: all 0.2s;">
                         <div style="font-weight: 600; color: #333;">${checkIcon}${format.name}</div>
                         ${format.description ? `<div style="color: #777; font-size: 0.85rem; margin-top: 0.25rem;">${format.description}</div>` : ''}
@@ -765,12 +775,20 @@ Then call: window.inventoryProfileEditor.open(profileData)
     }
 
     function selectMatchingSizes() {
+        console.log('[selectMatchingSizes] Called with extractedSizes:', Array.from(extractedSizes));
+
         if (extractedSizes.size === 0) {
+            console.log('[selectMatchingSizes] No extracted sizes, returning');
             return;
         }
 
         // Find formats that match the extracted sizes exactly
         selectedFormats.clear();
+
+        console.log('[selectMatchingSizes] Checking', allFormats.length, 'formats');
+        if (allFormats.length > 0) {
+            console.log('[selectMatchingSizes] Sample format structure:', allFormats[0]);
+        }
 
         allFormats.forEach(format => {
             // Check both width/height fields AND dimensions field
@@ -784,17 +802,23 @@ Then call: window.inventoryProfileEditor.open(profileData)
             }
 
             if (formatSize && extractedSizes.has(formatSize)) {
-                selectedFormats.add(format.format_id);
+                // Use utility function for type-safe format_id extraction
+                const formatIdValue = getFormatId(format);
+                console.log('[selectMatchingSizes] Match found! Format:', formatIdValue, 'Size:', formatSize);
+                selectedFormats.add(formatIdValue);
             }
         });
 
+        console.log('[selectMatchingSizes] Selected', selectedFormats.size, 'formats');
         renderFormats(allFormats);
         updateSelectedFormatsDisplay();
     }
 
     function selectAllFormats() {
         allFormats.forEach(format => {
-            selectedFormats.add(format.format_id);
+            // Use utility function for type-safe format_id extraction
+            const formatIdValue = getFormatId(format);
+            selectedFormats.add(formatIdValue);
         });
         renderFormats(allFormats);
         updateSelectedFormatsDisplay();

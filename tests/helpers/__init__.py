@@ -10,6 +10,7 @@ from tests.helpers.adcp_factories import (
     create_test_media_buy_dict,
     create_test_media_buy_request_dict,
     create_test_package,
+    create_test_package_request,
     create_test_package_request_dict,
     create_test_pricing_option,
     create_test_product,
@@ -30,6 +31,7 @@ __all__ = [
     "create_test_property",
     # Package factories
     "create_test_package",
+    "create_test_package_request",
     "create_test_package_request_dict",
     # Media buy factories (dict-based due to schema duplication issues)
     "create_test_media_buy_request_dict",

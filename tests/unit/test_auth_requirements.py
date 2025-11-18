@@ -110,9 +110,10 @@ class TestAuthenticationRequirements:
             "brand_manifest": {"name": "Test Brand"},
             "packages": [
                 {
-                    "package_id": "pkg1",
+                    "buyer_ref": "pkg1",
                     "product_id": "prod1",
                     "budget": 1000.0,  # AdCP v2.2.0: budget is a number, not an object
+                    "pricing_option_id": "test_pricing",
                 }
             ],
             "start_time": "2025-01-01T00:00:00Z",

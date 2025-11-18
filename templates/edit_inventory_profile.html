@@ -103,24 +103,103 @@
             <strong>Required:</strong> Inventory profiles must specify which properties they cover for AdCP compliance.
         </div>
 
+        <!-- Property Selection Mode -->
         <div class="form-group">
-            <label for="publisher_properties">Publisher Properties (JSON) *</label>
-            <textarea id="publisher_properties" name="publisher_properties" rows="8"
-                      placeholder='[{"publisher_domain": "example.com", "property_tags": ["all_inventory"]}]'
-                      style="font-family: monospace; font-size: 0.9rem;"></textarea>
-            <small style="color: #666;">
-                AdCP-compliant publisher properties structure. Each entry must include:
-                <ul style="margin-top: 0.5rem; margin-bottom: 0;">
-                    <li><code>publisher_domain</code> (required): Domain where adagents.json is hosted</li>
-                    <li><code>property_ids</code> (array) OR <code>property_tags</code> (array): Specific properties or tags</li>
-                </ul>
-            </small>
+            <label>Property Selection Method *</label>
+            <div class="form-group">
+                <label>
+                    <input type="radio" name="property_mode" value="tags" checked onchange="togglePropertyMode()">
+                    Use Property Tags (Recommended)
+                </label>
+                <small style="display: block; color: #666; margin-left: 1.5rem;">Assign tags that group related properties. Simple and flexible - buyers fetch property details via list_authorized_properties.</small>
+            </div>
 
-            {% if tenant and tenant.primary_domain %}
-            <button type="button" class="btn btn-sm btn-secondary mt-2" onclick="setDefaultProperties()">
-                Use Default ({{ tenant.primary_domain }})
-            </button>
-            {% endif %}
+            <div class="form-group" style="margin-top: 0.5rem;">
+                <label>
+                    <input type="radio" name="property_mode" value="property_ids" onchange="togglePropertyMode()">
+                    Select Specific Properties (by ID)
+                </label>
+                <small style="display: block; color: #666; margin-left: 1.5rem;">Choose exact properties from your authorized inventory. Provides precise property-level control.</small>
+            </div>
+
+            <div class="form-group" style="margin-top: 0.5rem;">
+                <label>
+                    <input type="radio" name="property_mode" value="full" onchange="togglePropertyMode()">
+                    Specify Full Properties (Legacy)
+                </label>
+                <small style="display: block; color: #666; margin-left: 1.5rem;">Include complete property objects - for backward compatibility only.</small>
+            </div>
+        </div>
+
+        <!-- Property Tags Section (Default) -->
+        <div id="property-tags-section" style="margin-top: 1rem;">
+            <div class="form-group">
+                <label for="property_tags">Property Tags *</label>
+                <input type="text" id="property_tags" name="property_tags" placeholder="e.g., all_inventory, premium, sports">
+                <small style="color: #666;">Comma-separated list of tags. Example: all_inventory, premium, homepage</small>
+            </div>
+        </div>
+
+        <!-- Property IDs Section (NEW) -->
+        <div id="property-ids-section" style="margin-top: 1rem; display: none;">
+            <div class="form-group">
+                <label>Select Specific Properties *</label>
+                <small style="color: #666; display: block; margin-bottom: 0.5rem;">Select one or more properties from your authorized inventory.</small>
+                {% if authorized_properties and authorized_properties|length > 0 %}
+                <div style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #fafafa;">
+                    {% for prop in authorized_properties %}
+                    <label style="display: block; padding: 0.5rem; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s;"
+                           onmouseover="this.style.background='#f0f7ff'"
+                           onmouseout="this.style.background='transparent'">
+                        <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}" style="margin-right: 0.5rem;">
+                        <strong>{{ prop.name or prop.property_id }}</strong>
+                        <span style="color: #666; font-size: 0.9em;">({{ prop.property_type }})</span>
+                        {% if prop.tags %}
+                        <div style="margin-left: 1.5rem; margin-top: 0.25rem;">
+                            {% for tag in prop.tags %}
+                            <span style="background: #e3f2fd; color: #1976d2; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.8em; margin-right: 0.25rem;">{{ tag }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </label>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="alert" style="background: #fff3cd; border: 1px solid #ffc107; padding: 1rem; border-radius: 4px;">
+                    <strong>⚠️ No publisher properties found</strong><br>
+                    <small style="display: block; margin-top: 0.5rem;">
+                        You need to add publisher partnerships first.
+                        <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}#publishers-tab" style="color: #856404; text-decoration: underline;">Go to Inventory → Publishers & Properties →</a>
+                    </small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Full Properties Section (Legacy) -->
+        <div id="property-full-section" style="margin-top: 1rem; display: none;">
+            <div class="alert" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem; margin-bottom: 1rem;">
+                <strong>⚠️ Legacy Mode:</strong> This mode is for backward compatibility only. New profiles should use property tags or property IDs.
+            </div>
+            <div class="form-group">
+                <label for="publisher_properties">Publisher Properties (JSON) *</label>
+                <textarea id="publisher_properties" name="publisher_properties" rows="8"
+                          placeholder='[{"publisher_domain": "example.com", "property_tags": ["all_inventory"]}]'
+                          style="font-family: monospace; font-size: 0.9rem;"></textarea>
+                <small style="color: #666;">
+                    AdCP-compliant publisher properties structure. Each entry must include:
+                    <ul style="margin-top: 0.5rem; margin-bottom: 0;">
+                        <li><code>publisher_domain</code> (required): Domain where adagents.json is hosted</li>
+                        <li><code>property_ids</code> (array) OR <code>property_tags</code> (array): Specific properties or tags</li>
+                    </ul>
+                </small>
+
+                {% if tenant and tenant.primary_domain %}
+                <button type="button" class="btn btn-sm btn-secondary mt-2" onclick="setDefaultProperties()">
+                    Use Default ({{ tenant.primary_domain }})
+                </button>
+                {% endif %}
+            </div>
         </div>
 
         <!-- Section 5: Optional Targeting Template -->
@@ -158,9 +237,11 @@ const existingProfile = {
 
 // Load formats from API on page load
 document.addEventListener('DOMContentLoaded', function() {
-    loadFormats();
+    loadFormats().then(() => {
+        // Pre-populate data after formats have loaded to avoid race condition
+        prePopulateData();
+    });
     setupFormatSearch();
-    prePopulateData();
 });
 
 function prePopulateData() {
@@ -186,9 +267,36 @@ function prePopulateData() {
         });
     }
 
-    // Pre-populate publisher properties
-    if (existingProfile.publisher_properties) {
-        document.getElementById('publisher_properties').value = JSON.stringify(existingProfile.publisher_properties, null, 2);
+    // Pre-populate publisher properties - detect mode and populate appropriate field
+    if (existingProfile.publisher_properties && existingProfile.publisher_properties.length > 0) {
+        const firstProp = existingProfile.publisher_properties[0];
+
+        // Detect property selection mode based on fields present
+        if (firstProp.property_ids && Array.isArray(firstProp.property_ids)) {
+            // by_id mode: has property_ids array
+            document.querySelector('input[name="property_mode"][value="property_ids"]').checked = true;
+            togglePropertyMode();
+
+            // Check the appropriate checkboxes
+            firstProp.property_ids.forEach(propId => {
+                const checkbox = document.querySelector(`input[name="selected_property_ids"][value="${propId}"]`);
+                if (checkbox) checkbox.checked = true;
+            });
+        } else if (firstProp.property_tags && Array.isArray(firstProp.property_tags)) {
+            // by_tag mode: has property_tags array
+            document.querySelector('input[name="property_mode"][value="tags"]').checked = true;
+            togglePropertyMode();
+
+            // Populate tags input
+            document.getElementById('property_tags').value = firstProp.property_tags.join(', ');
+        } else {
+            // Legacy full mode: has other fields (like 'properties')
+            document.querySelector('input[name="property_mode"][value="full"]').checked = true;
+            togglePropertyMode();
+
+            // Populate JSON textarea
+            document.getElementById('publisher_properties').value = JSON.stringify(existingProfile.publisher_properties, null, 2);
+        }
     }
 
     // Pre-populate targeting template
@@ -354,12 +462,34 @@ function updateHiddenInput() {
         if (format) {
             formatRefs.push({
                 agent_url: format.agent_url || 'https://creative.adcontextprotocol.org',
-                id: formatId
+                format_id: formatId
             });
         }
     });
 
     document.getElementById('formats-data').value = JSON.stringify(formatRefs);
+}
+
+// Property mode toggle
+function togglePropertyMode() {
+    const mode = document.querySelector('input[name="property_mode"]:checked').value;
+    const tagsSection = document.getElementById('property-tags-section');
+    const idsSection = document.getElementById('property-ids-section');
+    const fullSection = document.getElementById('property-full-section');
+
+    // Hide all sections first
+    tagsSection.style.display = 'none';
+    idsSection.style.display = 'none';
+    fullSection.style.display = 'none';
+
+    // Show the selected section
+    if (mode === 'tags') {
+        tagsSection.style.display = 'block';
+    } else if (mode === 'property_ids') {
+        idsSection.style.display = 'block';
+    } else if (mode === 'full') {
+        fullSection.style.display = 'block';
+    }
 }
 
 // Set default properties
@@ -389,25 +519,54 @@ document.getElementById('profile-form').addEventListener('submit', function(e) {
         return false;
     }
 
-    // Validate publisher properties
-    const propsJson = document.getElementById('publisher_properties').value.trim();
-    if (!propsJson) {
-        e.preventDefault();
-        alert('Please specify publisher properties');
-        return false;
-    }
+    // Validate publisher properties based on property_mode
+    const mode = document.querySelector('input[name="property_mode"]:checked').value;
 
-    try {
-        const props = JSON.parse(propsJson);
-        if (!Array.isArray(props) || props.length === 0) {
+    if (mode === 'tags') {
+        const tags = document.getElementById('property_tags').value.trim();
+        if (!tags) {
             e.preventDefault();
-            alert('Publisher properties must be a non-empty array');
+            alert('Please enter at least one property tag');
             return false;
         }
-    } catch (error) {
-        e.preventDefault();
-        alert('Invalid JSON in publisher properties: ' + error.message);
-        return false;
+        // Validate tag format
+        const tagArray = tags.split(',').map(t => t.trim()).filter(t => t);
+        const tagPattern = /^[a-z0-9_]{2,50}$/;
+        for (const tag of tagArray) {
+            if (!tagPattern.test(tag.toLowerCase())) {
+                e.preventDefault();
+                alert(`Invalid tag format: "${tag}". Use lowercase letters, numbers, underscores (2-50 chars)`);
+                return false;
+            }
+        }
+    } else if (mode === 'property_ids') {
+        const checked = document.querySelectorAll('input[name="selected_property_ids"]:checked');
+        if (checked.length === 0) {
+            e.preventDefault();
+            alert('Please select at least one property');
+            return false;
+        }
+    } else if (mode === 'full') {
+        // Legacy full mode JSON validation
+        const propsJson = document.getElementById('publisher_properties').value.trim();
+        if (!propsJson) {
+            e.preventDefault();
+            alert('Please specify publisher properties');
+            return false;
+        }
+
+        try {
+            const props = JSON.parse(propsJson);
+            if (!Array.isArray(props) || props.length === 0) {
+                e.preventDefault();
+                alert('Publisher properties must be a non-empty array');
+                return false;
+            }
+        } catch (error) {
+            e.preventDefault();
+            alert('Invalid JSON in publisher properties: ' + error.message);
+            return false;
+        }
     }
 
     return true;

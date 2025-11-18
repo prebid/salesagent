@@ -63,12 +63,15 @@ class TestCreateMediaBuyErrorHandling:
         assert hasattr(success_response, "media_buy_id")
         assert success_response.media_buy_id == "mb_123"
 
-    def test_error_response_with_empty_errors_list(self):
-        """Test CreateMediaBuyError with empty errors list."""
-        error_response = CreateMediaBuyError(errors=[])
+    def test_error_response_with_single_error(self):
+        """Test CreateMediaBuyError with single error (AdCP spec requires min_length=1)."""
+        error_response = CreateMediaBuyError(
+            errors=[Error(code="INVALID_REQUEST", message="Single validation error")]
+        )
 
-        # Still an error response, just with no errors
+        # Verify error response structure
         assert isinstance(error_response, CreateMediaBuyError)
         assert hasattr(error_response, "errors")
-        assert len(error_response.errors) == 0
+        assert len(error_response.errors) == 1
+        assert error_response.errors[0].code == "INVALID_REQUEST"
         assert not hasattr(error_response, "media_buy_id")

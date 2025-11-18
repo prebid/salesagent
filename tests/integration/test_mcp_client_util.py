@@ -63,6 +63,7 @@ class TestBuildAuthHeaders:
 class TestCreateMCPClient:
     """Test MCP client creation and connection."""
 
+    @pytest.mark.skip_ci
     async def test_connect_to_creative_agent(self):
         """Can connect to AdCP creative agent (known good server)."""
         agent_url = "https://creative.adcontextprotocol.org/mcp"
@@ -80,6 +81,7 @@ class TestCreateMCPClient:
             tool_names = [tool.name for tool in tools]
             assert "list_creative_formats" in tool_names
 
+    @pytest.mark.skip_ci
     async def test_connect_to_audience_agent(self):
         """Can connect to audience/signals agent."""
         agent_url = "https://audience-agent.fly.dev"
@@ -143,6 +145,7 @@ class TestCreateMCPClient:
 class TestMCPConnectionTest:
     """Test the check_mcp_agent_connection helper function."""
 
+    @pytest.mark.skip_ci
     async def test_successful_connection(self):
         """Successful connection returns success dict."""
         agent_url = "https://creative.adcontextprotocol.org/mcp"
@@ -163,6 +166,7 @@ class TestMCPConnectionTest:
         assert "error" in result
         assert "Connection failed" in result["error"]
 
+    @pytest.mark.skip_ci
     async def test_with_auth(self):
         """Connection test works with auth config."""
         agent_url = "https://creative.adcontextprotocol.org/mcp"
@@ -179,6 +183,7 @@ class TestMCPConnectionTest:
 class TestURLHandling:
     """Test that URL handling respects user input."""
 
+    @pytest.mark.skip_ci
     async def test_respects_user_url_exactly(self):
         """Client uses the exact URL provided by user (no modifications)."""
         # Audience agent is at base URL (no path)
@@ -190,6 +195,7 @@ class TestURLHandling:
             assert len(tools) > 0
             assert any(tool.name == "get_signals" for tool in tools)
 
+    @pytest.mark.skip_ci
     async def test_strips_trailing_slashes_only(self):
         """Client strips trailing slashes but preserves path."""
         # URL with trailing slash
@@ -205,6 +211,7 @@ class TestURLHandling:
 class TestErrorHandling:
     """Test error handling and edge cases."""
 
+    @pytest.mark.skip_ci
     async def test_client_cleanup_on_error(self):
         """Client is properly cleaned up even if error occurs during usage."""
         agent_url = "https://creative.adcontextprotocol.org/mcp"

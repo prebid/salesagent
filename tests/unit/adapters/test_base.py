@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from src.adapters.mock_ad_server import MockAdServer
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, Package, Principal
+from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest, Principal
 
 pytestmark = pytest.mark.unit
 
@@ -56,11 +56,11 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
 
     # Per AdCP v2.2.0: packages with budget are required
     packages = [
-        Package(
+        PackageRequest(
             buyer_ref="pkg_ref_1",
-            products=["pkg_1"],
+            product_id="pkg_1",
             budget=5000.0,
-            status="active",
+            pricing_option_id="test_pricing",
             format_ids=[
                 make_format_id("display_300x250"),
                 make_format_id("display_728x90"),

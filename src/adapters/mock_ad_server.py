@@ -771,38 +771,40 @@ class MockAdServer(AdServerAdapter):
             self.log(f"Would return: Campaign ID '{media_buy_id}' with status 'pending_creative'")
 
         # Build packages response with buyer_ref from original request
+        # Per AdCP spec, CreateMediaBuyResponse.Package only contains:
+        # - buyer_ref (required)
+        # - package_id (required)
         response_packages = []
         for idx, pkg in enumerate(packages):
-            # Use mode="python" to ensure all fields are included
-            pkg_dict = pkg.model_dump(mode="python", exclude_none=False)
-            self.log(f"[DEBUG] MockAdapter: Package {idx} model_dump() = {pkg_dict}")
-            self.log(f"[DEBUG] MockAdapter: Package {idx} has package_id = {pkg_dict.get('package_id')}")
+            # Get package_id from MediaPackage
+            package_id = pkg.package_id
 
-            # CRITICAL: Ensure package_id is set (required for AdCP response)
             # If package doesn't have package_id yet, generate one
-            if not pkg_dict.get("package_id"):
+            if not package_id:
                 import uuid
 
-                generated_package_id = f"pkg_{idx}_{uuid.uuid4().hex[:8]}"
-                pkg_dict["package_id"] = generated_package_id
-                self.log(f"[DEBUG] MockAdapter: Generated package_id for package {idx}: {generated_package_id}")
+                package_id = f"pkg_{idx}_{uuid.uuid4().hex[:8]}"
+                self.log(f"[DEBUG] MockAdapter: Generated package_id for package {idx}: {package_id}")
 
-            # Add buyer_ref from original request package if available
+            # Get buyer_ref from original request package
+            buyer_ref = "unknown"  # Default fallback
             if request.packages and idx < len(request.packages):
-                pkg_dict["buyer_ref"] = request.packages[idx].buyer_ref
+                buyer_ref = request.packages[idx].buyer_ref or buyer_ref
 
-            # Add status (required by AdCP spec)
-            if "status" not in pkg_dict:
-                pkg_dict["status"] = "active"
-
-            response_packages.append(pkg_dict)
+            # Create minimal AdCP-compliant Package response (only buyer_ref + package_id)
+            response_packages.append(
+                {
+                    "buyer_ref": buyer_ref,
+                    "package_id": package_id,
+                }
+            )
 
         self.log(f"[DEBUG] MockAdapter: Returning {len(response_packages)} packages in response")
         return CreateMediaBuySuccess(
             buyer_ref=request.buyer_ref or "unknown",  # Required field per AdCP spec
             media_buy_id=media_buy_id,
-            creative_deadline=(datetime.now(UTC) + timedelta(days=2)).isoformat(),
-            packages=response_packages,  # Include packages with buyer_ref
+            creative_deadline=datetime.now(UTC) + timedelta(days=2),  # type: ignore[arg-type]
+            packages=response_packages,  # type: ignore[arg-type]
         )
 
     def add_creative_assets(
@@ -1244,7 +1246,7 @@ class MockAdServer(AdServerAdapter):
         return UpdateMediaBuySuccess(
             media_buy_id=media_buy_id,
             buyer_ref=buyer_ref,
-            packages=[],  # Required by AdCP spec
+            affected_packages=[],  # type: ignore[arg-type]
             implementation_date=today,
         )
 

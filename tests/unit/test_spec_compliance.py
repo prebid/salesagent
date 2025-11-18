@@ -192,7 +192,7 @@ class TestProtocolCompliance:
         response = CreateMediaBuySuccess(
             media_buy_id="buy_456",
             buyer_ref="ref_789",
-            packages=[{"package_id": "pkg_1", "status": "active"}],
+            packages=[{"buyer_ref": "ref_789", "package_id": "pkg_1"}],
         )
 
         assert response.media_buy_id == "buy_456"

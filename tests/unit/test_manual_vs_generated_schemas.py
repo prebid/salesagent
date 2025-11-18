@@ -18,11 +18,11 @@ from typing import Any, get_args, get_origin
 
 import pytest
 
-# Generated schemas from adcp library
-from adcp.types.generated import (
+# Generated schemas from adcp library (using public API)
+from adcp import (
     GetProductsRequest as GeneratedGetProductsRequest,
 )
-from adcp.types.generated import (
+from adcp import (
     GetProductsResponse as GeneratedGetProductsResponse,
 )
 from pydantic import BaseModel

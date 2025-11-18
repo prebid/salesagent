@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product
+from tests.helpers.adcp_factories import create_test_db_product
 
 
 @pytest.mark.requires_db
@@ -47,7 +48,7 @@ def test_updating_profile_formats_affects_all_products(integration_db, sample_te
         # Create 3 products referencing this profile
         products = []
         for i in range(3):
-            product = Product(
+            product = create_test_db_product(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id=f"test_product_formats_{i}",
                 name=f"Test Product {i}",
@@ -55,9 +56,6 @@ def test_updating_profile_formats_affects_all_products(integration_db, sample_te
                 inventory_profile_id=profile_id,
                 # Legacy fields (not used when profile is set)
                 format_ids=[],
-                targeting_template={},
-                delivery_type="guaranteed",
-                property_tags=["all_inventory"],
                 is_custom=False,
                 countries=["US"],
             )
@@ -134,16 +132,13 @@ def test_updating_profile_inventory_affects_product_implementation_config(integr
         # Create products referencing this profile
         products = []
         for i in range(2):
-            product = Product(
+            product = create_test_db_product(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id=f"test_product_inventory_{i}",
                 name=f"Test Product Inventory {i}",
                 description=f"Product {i} with inventory profile",
                 inventory_profile_id=profile_id,
                 format_ids=[],
-                targeting_template={},
-                delivery_type="guaranteed",
-                property_tags=["all_inventory"],
                 is_custom=False,
                 countries=["US"],
             )
@@ -227,16 +222,13 @@ def test_updating_profile_properties_affects_all_products(integration_db, sample
         # Create products referencing this profile
         products = []
         for i in range(3):
-            product = Product(
+            product = create_test_db_product(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id=f"test_product_props_{i}",
                 name=f"Test Product Props {i}",
                 description=f"Product {i} with inventory profile",
                 inventory_profile_id=profile_id,
                 format_ids=[],
-                targeting_template={},
-                delivery_type="guaranteed",
-                property_tags=["all_inventory"],
                 is_custom=False,
                 countries=["US"],
             )

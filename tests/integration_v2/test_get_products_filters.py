@@ -209,8 +209,8 @@ class TestGetProductsFilterBehavior:
         assert len(result.products) > 0
 
         # Count products by delivery_type for manual verification
-        guaranteed_count = sum(1 for p in result.products if p.delivery_type == "guaranteed")
-        non_guaranteed_count = sum(1 for p in result.products if p.delivery_type == "non_guaranteed")
+        guaranteed_count = sum(1 for p in result.products if p.delivery_type.value == "guaranteed")
+        non_guaranteed_count = sum(1 for p in result.products if p.delivery_type.value == "non_guaranteed")
 
         # Should have both types before filtering
         assert guaranteed_count >= 3  # guaranteed_display, multiformat_guaranteed, guaranteed_audio

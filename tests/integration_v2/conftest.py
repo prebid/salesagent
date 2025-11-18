@@ -452,6 +452,28 @@ def add_required_setup_data(session, tenant_id: str):
 # (intentional - ensures tests stay up to date with migrations).
 
 
+def get_pricing_option_id(product, currency: str = "USD") -> str:
+    """Get the pricing_option_id for a given product and currency.
+
+    Args:
+        product: Product instance (from create_test_product_with_pricing)
+        currency: Currency code to find (default: USD)
+
+    Returns:
+        String pricing_option_id in format {pricing_model}_{currency}_{fixed|auction}
+
+    Raises:
+        ValueError: If no pricing option found for currency
+    """
+    for pricing_option in product.pricing_options:
+        if pricing_option.currency == currency:
+            # Generate pricing_option_id in same format as media_buy_create matching logic
+            # Format: {pricing_model}_{currency}_{fixed|auction}
+            fixed_str = "fixed" if pricing_option.is_fixed else "auction"
+            return f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
+    raise ValueError(f"No pricing option found for currency {currency} on product {product.product_id}")
+
+
 def create_test_product_with_pricing(
     session,
     tenant_id: str,
@@ -471,8 +493,7 @@ def create_test_product_with_pricing(
 ):
     """Create a Product with pricing_options using the new pricing model.
 
-    This helper provides a simple API that mirrors the old Product(is_fixed_price=True, cpm=15.0)
-    pattern but uses the new PricingOption table.
+    This helper provides a simple API for creating products with pricing options.
 
     Args:
         session: SQLAlchemy session
@@ -494,10 +515,6 @@ def create_test_product_with_pricing(
         Product instance with pricing_options populated
 
     Example:
-        # Old pattern (BROKEN):
-        product = Product(tenant_id="test", is_fixed_price=True, cpm=15.0)
-
-        # New pattern (WORKS):
         product = create_test_product_with_pricing(
             session, tenant_id="test", pricing_model="CPM", rate=15.0
         )
@@ -518,10 +535,6 @@ def create_test_product_with_pricing(
     if targeting_template is None:
         targeting_template = {}
 
-    # Default property_tags (required by AdCP spec: must have properties OR property_tags)
-    if property_tags is None and "properties" not in product_kwargs:
-        property_tags = ["all_inventory"]
-
     # Convert rate to Decimal
     if isinstance(rate, str):
         rate_decimal = Decimal(rate)
@@ -540,7 +553,65 @@ def create_test_product_with_pricing(
         else:
             min_spend_decimal = min_spend_per_package
 
-    # Create Product
+    # =========================================================================
+    # AdCP Library Schema Compliance
+    # =========================================================================
+    # Per AdCP spec, Products must have:
+    # 1. delivery_measurement (REQUIRED)
+    # 2. property_tags (database model uses property_tags, which gets converted to publisher_properties)
+    # 3. measurement (without invalid fields like viewability, brand_safety)
+    # 4. creative_policy (without invalid fields like formats, max_file_size)
+
+    # 1. Add delivery_measurement (REQUIRED by adcp library)
+    if "delivery_measurement" not in product_kwargs:
+        product_kwargs["delivery_measurement"] = {
+            "provider": "Google Ad Manager",
+            "notes": "MRC-accredited viewability",
+        }
+
+    # 2. Set property_tags (database model field - NOT publisher_properties)
+    # Default property_tags (required by AdCP spec: must have properties OR property_tags)
+    if property_tags is None and "properties" not in product_kwargs:
+        property_tags = ["all_inventory"]
+
+    # 3. Fix measurement - remove invalid fields (viewability, brand_safety not in adcp library)
+    if "measurement" in product_kwargs and isinstance(product_kwargs["measurement"], dict):
+        # Keep only valid fields per adcp library schema
+        valid_measurement_fields = {"available_metrics", "reporting_frequency", "reporting_delay_hours"}
+        product_kwargs["measurement"] = {
+            k: v for k, v in product_kwargs["measurement"].items() if k in valid_measurement_fields
+        }
+        # If measurement is now empty, remove it (use default)
+        if not product_kwargs["measurement"]:
+            del product_kwargs["measurement"]
+
+    # 4. Fix creative_policy - remove invalid fields (formats, max_file_size, duration_max not in adcp library)
+    if "creative_policy" in product_kwargs and isinstance(product_kwargs["creative_policy"], dict):
+        # Keep only valid fields per adcp library schema
+        # Required: co_branding, landing_page, templates_available
+        valid_creative_policy_fields = {"co_branding", "landing_page", "templates_available"}
+        filtered_policy = {
+            k: v for k, v in product_kwargs["creative_policy"].items() if k in valid_creative_policy_fields
+        }
+
+        # If required fields are missing, provide defaults
+        if "co_branding" not in filtered_policy:
+            filtered_policy["co_branding"] = "optional"
+        if "landing_page" not in filtered_policy:
+            filtered_policy["landing_page"] = "any"
+        if "templates_available" not in filtered_policy:
+            filtered_policy["templates_available"] = False
+
+        product_kwargs["creative_policy"] = filtered_policy
+    elif "creative_policy" not in product_kwargs:
+        # Add default creative_policy if none provided (all fields are required)
+        product_kwargs["creative_policy"] = {
+            "co_branding": "optional",
+            "landing_page": "any",
+            "templates_available": False,
+        }
+
+    # Create Product using database model fields
     product = Product(
         tenant_id=tenant_id,
         product_id=product_id,

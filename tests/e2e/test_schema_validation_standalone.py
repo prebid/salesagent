@@ -61,6 +61,7 @@ async def test_valid_get_products_response():
                             "pricing_model": "cpm",
                             "rate": 5.0,
                             "currency": "USD",
+                            "is_fixed": True,  # Required by adcp 2.5.0 discriminated unions
                             "min_spend_per_package": 1000.0,
                         }
                     ],

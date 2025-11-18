@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from src.adapters.google_ad_manager import GoogleAdManager
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, Package
+from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest
 
 
 @pytest.fixture
@@ -42,8 +42,8 @@ def sample_request():
         buyer_ref="test_buyer_ref_123",
         brand_manifest={"name": "Test Brand"},
         packages=[
-            Package(package_id="pkg_001", products=["prod_123"], status="active"),
-            Package(package_id="pkg_002", products=["prod_456"], status="active"),
+            PackageRequest(product_id="prod_123", buyer_ref="pkg_001", budget=5000.0, pricing_option_id="test_pricing"),
+            PackageRequest(product_id="prod_456", buyer_ref="pkg_002", budget=5000.0, pricing_option_id="test_pricing"),
         ],
         start_date=date.today(),
         end_date=date.today() + timedelta(days=30),

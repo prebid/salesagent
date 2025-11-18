@@ -66,7 +66,9 @@ class TestApprovalErrorHandling:
         error_str = str(error_with_errors)
         assert "2 error(s)" in error_str
 
-        # Empty errors
-        error_empty = CreateMediaBuyError(errors=[])
-        error_str_empty = str(error_empty)
-        assert "failed" in error_str_empty.lower()
+        # Single error - AdCP spec requires min_length=1 for errors array
+        error_single = CreateMediaBuyError(
+            errors=[Error(code="INVALID_REQUEST", message="Single error")]
+        )
+        error_str_single = str(error_single)
+        assert "1 error(s)" in error_str_single or "failed" in error_str_single.lower()
