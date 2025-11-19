@@ -381,7 +381,7 @@ async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
         mock_sim.return_value = {"impressions": 1234, "spend": 50.0}
         
         await scheduler._send_reports()
-        qa
+        
         # Verify simulator was called (proof that testing_ctx.dry_run was respected)
         assert mock_sim.called
         assert mock_send.call_count == 1
