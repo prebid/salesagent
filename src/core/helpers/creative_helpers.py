@@ -332,7 +332,8 @@ def process_and_upload_package_creatives(
                 if isinstance(creative, dict):
                     creative_dicts.append(creative)
                 elif hasattr(creative, "model_dump"):
-                    creative_dicts.append(creative.model_dump(exclude_none=True))
+                    # Use mode='json' to serialize Pydantic types (AnyUrl, etc.) to JSON-compatible primitives
+                    creative_dicts.append(creative.model_dump(exclude_none=True, mode="json"))
                 else:
                     # Fail fast instead of risky conversion
                     raise TypeError(

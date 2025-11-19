@@ -75,7 +75,10 @@ def _sync_creatives_impl(
 
     # Process raw creative dictionaries without schema validation initially
     # Schema objects will be created later with populated internal fields
-    raw_creatives = [creative if isinstance(creative, dict) else creative.model_dump() for creative in creatives]
+    # Use mode='json' to serialize Pydantic types (AnyUrl, etc.) to JSON-compatible primitives
+    raw_creatives = [
+        creative if isinstance(creative, dict) else creative.model_dump(mode="json") for creative in creatives
+    ]
 
     start_time = time.time()
 
