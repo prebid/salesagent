@@ -51,25 +51,34 @@ class GAMDataFreshnessValidator:
 
         # Check 1: Is it too early in the day for yesterday's data?
         if now.hour < cls.DAILY_DATA_READY_HOUR_ET:
+            message = f"Too early for fresh data (current hour: {now.hour}, need {cls.DAILY_DATA_READY_HOUR_ET}+)"
+            logger.error(message)
+
             return (
                 False,
-                f"Too early for fresh data (current hour: {now.hour}, need {cls.DAILY_DATA_READY_HOUR_ET}+)",
+                message
             )
 
         # Check 2: Does the report actually include our target date?
         report_end = reporting_data.end_date
         if report_end.date() < target_date.date():
+            message = f"Report ends {report_end.date()}, but we need data through {target_date.date()}"
+            logger.error(message)
+            
             return (
                 False,
-                f"Report ends {report_end.date()}, but we need data through {target_date.date()}",
+                message
             )
 
         # Check 3: Is the data valid until after our target date?
         data_valid_until = reporting_data.data_valid_until
         if data_valid_until.date() < target_date.date():
+            message = f"Data only valid until {data_valid_until.date()}, need {target_date.date()}"
+            logger.error(message)
+            
             return (
                 False,
-                f"Data only valid until {data_valid_until.date()}, need {target_date.date()}",
+                message
             )
 
         # Check 4: Is this month-end data that might still be processing?

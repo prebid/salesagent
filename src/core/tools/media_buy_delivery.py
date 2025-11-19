@@ -474,12 +474,12 @@ def get_media_buy_delivery(
             push_notification_config=push_notification_config,
             context=context
         )
+        
+        response = _get_media_buy_delivery_impl(req, ctx)
+    
+        return ToolResult(content=str(response), structured_content=response.model_dump())
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="get_media_buy_delivery request")) from e
-
-    response = _get_media_buy_delivery_impl(req, ctx)
-    return ToolResult(content=str(response), structured_content=response.model_dump())
-
+        raise ToolError(format_validation_error(e, context="get_media_buy_delivery request"))
 
 def get_media_buy_delivery_raw(
     media_buy_ids: list[str] | None = None,
