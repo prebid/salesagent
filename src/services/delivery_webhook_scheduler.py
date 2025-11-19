@@ -16,9 +16,11 @@ from sqlalchemy import func, select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WebhookDeliveryLog, PushNotificationConfig as DBPushNotificationConfig
 from src.core.schemas import GetMediaBuyDeliveryRequest
+from src.core.schema_adapters import GetMediaBuyDeliveryResponse
 from src.core.tool_context import ToolContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.protocol_webhook_service import get_protocol_webhook_service
+from src.adapters.gam_data_freshness import validate_and_log_freshness
 
 logger = logging.getLogger(__name__)
 
@@ -177,12 +179,11 @@ class DeliveryWebhookScheduler:
 
             # Validate data freshness before sending webhook (optional - only if reporting_data available)
             # Skip webhook if data isn't fresh enough
-            if hasattr(delivery_response, "reporting_data") and delivery_response.reporting_data:
+            if isinstance(delivery_response, GetMediaBuyDeliveryResponse):
                 try:
-                    from src.adapters.gam_data_freshness import validate_and_log_freshness
 
                     is_fresh = validate_and_log_freshness(
-                        delivery_response.reporting_data,
+                        delivery_response,
                         media_buy.media_buy_id,
                         target_date=datetime.combine(end_date_obj, datetime.min.time(), tzinfo=UTC),
                     )
@@ -192,6 +193,9 @@ class DeliveryWebhookScheduler:
                 except Exception as e:
                     # If freshness check fails, log warning but continue (data freshness is optional)
                     logger.warning(f"Could not validate data freshness for {media_buy.media_buy_id}: {e}")
+            else:
+                logger.warning(f"Couldn't get media_delivery for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}")
+                return
 
             # Get sequence number for this webhook (get max sequence + 1)
             sequence_number = 1

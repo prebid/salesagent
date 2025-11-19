@@ -7,9 +7,9 @@ These tests:
 """
 
 import pytz
-from datetime import UTC, datetime, timedelta, time
+from datetime import UTC, datetime, timedelta, time, timezone
 from unittest.mock import AsyncMock, patch
-
+from freezegun import freeze_time
 import pytest
 
 from src.adapters.gam_reporting_service import ReportingData
@@ -57,7 +57,9 @@ def _create_test_tenant_and_principal(
 
 def _create_basic_media_buy_with_webhook(
     tenant_id: str,
-    principal_id: str
+    principal_id: str,
+    start_date=datetime.now(UTC).date() - timedelta(days=7),
+    end_date=datetime.now(UTC).date() + timedelta(days=7)
 ) -> str:
     """Create a minimal tenant/principal/media_buy with a daily reporting_webhook.
 
@@ -66,8 +68,6 @@ def _create_basic_media_buy_with_webhook(
     """
     product_id = "sample_product_id"
     media_buy_id = "mb_integration"
-
-    today = datetime.now(UTC).date()
 
     with get_db_session() as session:
         product = Product(
@@ -99,8 +99,8 @@ def _create_basic_media_buy_with_webhook(
             buyer_ref="buyer_ref_123",
             order_name="Test Order",
             advertiser_name="Test Advertiser",
-            start_date=today - timedelta(days=7),
-            end_date=today + timedelta(days=7),
+            start_date=start_date,
+            end_date=end_date,
             status="active",
             raw_request={
                 "packages": [{
@@ -190,10 +190,9 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
 async def test_delivery_webhook_sends_gam_based_reporting_data_only_on_gam_available_time(integration_db):
     """
     Scheduler should call webhook with fresh data every day at 4 AM PST but scheduler it self should keep checking to run every hour.
-    Because per adcp spec publishers/sales agents should support pinging the buyers every hour if it is available 
     """
     tenant_id, principal_id = _create_test_tenant_and_principal("google_ad_manager")
-    media_buy_id = _create_basic_media_buy_with_webhook(tenant_id, principal_id)
+    media_buy_id = _create_basic_media_buy_with_webhook(tenant_id, principal_id, start_date=datetime(2024, 12, 28, 1, 0, 0, tzinfo=timezone.utc), end_date=datetime(2026, 1, 1, 15, 0, 5, tzinfo=timezone.utc))
 
     scheduler = DeliveryWebhookScheduler()
 
@@ -222,6 +221,7 @@ async def test_delivery_webhook_sends_gam_based_reporting_data_only_on_gam_avail
                 "spend": 100.0,
                 "cpm": 100.0,
                 "aggregated_rows": 1,
+
             }
         ],
         start_date=now_utc - timedelta(days=1),
@@ -256,18 +256,52 @@ async def test_delivery_webhook_sends_gam_based_reporting_data_only_on_gam_avail
         mock_reporting_instance = mock_reporting_service_class.return_value
         mock_reporting_instance.get_reporting_data.return_value = mocked_reporting_data
 
-        # Run a single batch (no need to run the full hourly loop)
-        await scheduler._send_reports()
-        
-        args, kwargs = mock_send_notification.await_args
-        
-        result = kwargs.get("result")
-        errors = result.get("errors")
+        # Set time to 2 AM
+        with freeze_time("2025-1-1 02:00:00"):
+            await scheduler._send_reports()
 
-        print("RESULT: ")
-        print(result)
+            # Expect there's no webhook has been called
+            assert mock_send_notification.await_count == 0
 
-        assert errors is None
+        # Set time to 3 AM
+        with freeze_time("2025-1-1 03:00:00"):
+            await scheduler._send_reports()
+            
+            # Expect there's no webhook has been called
+            assert mock_send_notification.await_count == 0
 
+        # Set time to 4 AM
+        with freeze_time("2025-1-1 04:00:00"):
+            await scheduler._send_reports()
+
+            # Expect one webhook has been called
+            assert mock_send_notification.await_count == 1
+
+            # Check payload of the delivery
+            args, kwargs = mock_send_notification.await_args
+            
+            result = kwargs.get("result")
+            errors = result.get("errors")
+
+            assert errors is None
+
+        # Set time to 5 AM
+        with freeze_time("2025-1-1 05:00:00"):
+            await scheduler._send_reports()
+
+            # Expect no webhook has been called
+            assert mock_send_notification.await_count == 0
+
+        # Set time to 4 AM next day
+        with freeze_time("2025-1-2 04:00:00"):
+            await scheduler._send_reports()
+
+            # Expect one webhook has been called
+            assert mock_send_notification.await_count == 1
+
+
+# TODO: @yusuf - Test we don't call get_media_buy_delivery tool unless media_buy start date + frequency time has been passed
+ 
+# TODO: @yusuf - Test we call get_media_buy_delivery tool one more time when media_buy is ended and we won't call anymore no matter if we reach the frequency
 
 # TODO: @yusuf - also tests we pick up simulated path when context is in testing mode

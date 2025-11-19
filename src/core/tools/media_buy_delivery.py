@@ -189,7 +189,7 @@ def _get_media_buy_delivery_impl(
                         date_range=reporting_period,
                         today=simulation_datetime,
                     )
-                    
+
                     # Map adapter's by_package to package_id -> metrics
                     for adapter_pkg in adapter_response.by_package:
                         adapter_package_metrics[adapter_pkg.package_id] = {
