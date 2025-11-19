@@ -8,7 +8,6 @@ from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 
 # TODO: @yusuf - We actually need to:
 # - Test the scheduler is calling sending webhooks correctly in every correct intervals
-# - Test the sending contains correct payloads/data according to the adcp spec
 
 @pytest.fixture
 def scheduler():
@@ -23,7 +22,6 @@ async def test_scheduler_start_stop(scheduler):
     await scheduler.start()
     assert scheduler.is_running is True
 
-    # TODO: @yusuf - Why _task is not None? shouldn't it be None because we just started the scheduler?
     assert scheduler._task is not None
 
     # Stop scheduler

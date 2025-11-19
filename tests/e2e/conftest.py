@@ -77,150 +77,164 @@ def docker_services_e2e(request):
             print(f"⚠️  Warning: Could not verify A2A server: {e}")
             print("   Services may still be starting up")
 
-        yield {"mcp_port": mcp_port, "a2a_port": a2a_port, "admin_port": admin_port, "postgres_port": postgres_port}
-        return
-
-    # Check if Docker is available
-    try:
-        subprocess.run(["docker", "--version"], check=True, capture_output=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pytest.skip("Docker not available")
-
-    # Always clean up existing services and volumes to ensure fresh state
-    print("Cleaning up any existing Docker services and volumes...")
-    subprocess.run(["docker-compose", "down", "-v"], capture_output=True, check=False)
-
-    # Explicitly remove volumes in case docker-compose down -v didn't work
-    print("Explicitly removing Docker volumes...")
-    subprocess.run(["docker", "volume", "prune", "-f"], capture_output=True, check=False)
-
-    # Use environment variable ports if set, otherwise allocate dynamic ports
-    mcp_port = int(os.getenv("ADCP_SALES_PORT")) if os.getenv("ADCP_SALES_PORT") else find_free_port(10000, 20000)
-    a2a_port = int(os.getenv("A2A_PORT")) if os.getenv("A2A_PORT") else find_free_port(20000, 30000)
-    admin_port = int(os.getenv("ADMIN_UI_PORT")) if os.getenv("ADMIN_UI_PORT") else find_free_port(30000, 40000)
-    postgres_port = int(os.getenv("POSTGRES_PORT")) if os.getenv("POSTGRES_PORT") else find_free_port(40000, 50000)
-
-    print(f"Using ports: MCP={mcp_port}, A2A={a2a_port}, Admin={admin_port}, Postgres={postgres_port}")
-
-    # Set environment variables for docker-compose
-    env = os.environ.copy()
-    env["ADCP_SALES_PORT"] = str(mcp_port)
-    env["A2A_PORT"] = str(a2a_port)
-    env["ADMIN_UI_PORT"] = str(admin_port)
-    env["POSTGRES_PORT"] = str(postgres_port)
-    # Ensure ADCP_TESTING is passed to Docker containers (for test mode validation)
-    if "ADCP_TESTING" in os.environ:
-        env["ADCP_TESTING"] = os.environ["ADCP_TESTING"]
     else:
-        env["ADCP_TESTING"] = "true"  # Default to testing mode in E2E tests
-
-    print("Building and starting Docker services with dynamic ports...")
-    print("This may take 2-3 minutes for initial build...")
-
-    # Build first with output visible, then start detached
-    print("Step 1/2: Building Docker images...")
-    build_result = subprocess.run(
-        ["docker-compose", "build", "--progress=plain"],
-        env=env,
-        capture_output=False,  # Show build output
-    )
-    if build_result.returncode != 0:
-        print(f"❌ Docker build failed with exit code {build_result.returncode}")
-        raise subprocess.CalledProcessError(build_result.returncode, "docker-compose build")
-
-    print("Step 2/2: Starting services...")
-    subprocess.run(["docker-compose", "up", "-d"], check=True, env=env)
-
-    # Wait for services to be healthy
-    max_wait = 120  # Increased from 60 to 120 seconds for CI
-    start_time = time.time()
-
-    mcp_ready = False
-    a2a_ready = False
-
-    print(f"Waiting for services (max {max_wait}s)...")
-    print(f"  MCP: http://localhost:{mcp_port}/health")
-    print(f"  A2A: http://localhost:{a2a_port}/")
-
-    while time.time() - start_time < max_wait:
-        elapsed = int(time.time() - start_time)
-
-        # Show progress every 5 seconds
-        if elapsed > 0 and elapsed % 5 == 0 and not (mcp_ready and a2a_ready):
-            print(f"  ⏱️  Still waiting... ({elapsed}s / {max_wait}s)")
-            # Show container status for debugging
-            try:
-                ps_result = subprocess.run(
-                    ["docker-compose", "ps", "--format", "table"], capture_output=True, text=True, timeout=2
-                )
-                if ps_result.returncode == 0 and ps_result.stdout:
-                    print(f"  Container status:\n{ps_result.stdout}")
-            except:
-                pass
-
-        # Check MCP server health
-        if not mcp_ready:
-            try:
-                response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
-                if response.status_code == 200:
-                    print(f"✓ MCP server is ready (after {elapsed}s)")
-                    mcp_ready = True
-            except requests.RequestException as e:
-                if elapsed % 10 == 0:  # Log every 10 seconds
-                    print(f"  MCP not ready yet ({elapsed}s): {type(e).__name__}")
-
-        # Check A2A server health
-        if not a2a_ready:
-            try:
-                response = requests.get(f"http://localhost:{a2a_port}/", timeout=2)
-                if response.status_code in [200, 404, 405]:  # Any response means it's up
-                    print(f"✓ A2A server is ready (after {elapsed}s)")
-                    a2a_ready = True
-            except requests.RequestException as e:
-                if elapsed % 10 == 0:  # Log every 10 seconds
-                    print(f"  A2A not ready yet ({elapsed}s): {type(e).__name__}")
-
-        # Both services ready
-        if mcp_ready and a2a_ready:
-            break
-
-        time.sleep(2)
-    else:
-        # Timeout - try to get container logs for debugging
-        print("\n❌ Health check timeout. Attempting to get container logs...")
-
-        # Get logs from all services
-        for service in ["adcp-server", "postgres", "admin-ui"]:
-            try:
-                print(f"\n📋 {service} logs (last 100 lines):")
-                result = subprocess.run(
-                    ["docker-compose", "logs", "--tail=100", service], capture_output=True, text=True, timeout=5
-                )
-                if result.stdout:
-                    print(result.stdout)
-                if result.stderr:
-                    print(f"STDERR: {result.stderr}")
-            except Exception as e:
-                print(f"Could not get {service} logs: {e}")
-
-        # Show container status
+        # Check if Docker is available
         try:
-            print("\n📊 Container status:")
-            ps_result = subprocess.run(["docker-compose", "ps"], capture_output=True, text=True, timeout=2)
-            print(ps_result.stdout)
-        except Exception as e:
-            print(f"Could not get container status: {e}")
+            subprocess.run(["docker", "--version"], check=True, capture_output=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pytest.skip("Docker not available")
 
-        if not mcp_ready:
-            pytest.fail(f"MCP server did not become healthy in time (waited {max_wait}s, port {mcp_port})")
-        if not a2a_ready:
-            pytest.fail(f"A2A server did not become healthy in time (waited {max_wait}s, port {a2a_port})")
+        # Always clean up existing services and volumes to ensure fresh state
+        print("Cleaning up any existing Docker services and volumes...")
+        subprocess.run(["docker-compose", "down", "-v"], capture_output=True, check=False)
+
+        # Explicitly remove volumes in case docker-compose down -v didn't work
+        print("Explicitly removing Docker volumes...")
+        subprocess.run(["docker", "volume", "prune", "-f"], capture_output=True, check=False)
+
+        # Use environment variable ports if set, otherwise allocate dynamic ports
+        mcp_port = int(os.getenv("ADCP_SALES_PORT")) if os.getenv("ADCP_SALES_PORT") else find_free_port(10000, 20000)
+        a2a_port = int(os.getenv("A2A_PORT")) if os.getenv("A2A_PORT") else find_free_port(20000, 30000)
+        admin_port = int(os.getenv("ADMIN_UI_PORT")) if os.getenv("ADMIN_UI_PORT") else find_free_port(30000, 40000)
+        postgres_port = int(os.getenv("POSTGRES_PORT")) if os.getenv("POSTGRES_PORT") else find_free_port(40000, 50000)
+
+        print(f"Using ports: MCP={mcp_port}, A2A={a2a_port}, Admin={admin_port}, Postgres={postgres_port}")
+
+        # Set environment variables for docker-compose
+        env = os.environ.copy()
+        env["ADCP_SALES_PORT"] = str(mcp_port)
+        env["A2A_PORT"] = str(a2a_port)
+        env["ADMIN_UI_PORT"] = str(admin_port)
+        env["POSTGRES_PORT"] = str(postgres_port)
+        # Set 5 seconds interval for delivery webhooks in E2E tests
+        env["DELIVERY_WEBHOOK_INTERVAL"] = "5"
+        # Ensure ADCP_TESTING is passed to Docker containers (for test mode validation)
+        if "ADCP_TESTING" in os.environ:
+            env["ADCP_TESTING"] = os.environ["ADCP_TESTING"]
+        else:
+            env["ADCP_TESTING"] = "true"  # Default to testing mode in E2E tests
+
+        print("Building and starting Docker services with dynamic ports...")
+        print("This may take 2-3 minutes for initial build...")
+
+        # Build first with output visible, then start detached
+        print("Step 1/2: Building Docker images...")
+        build_result = subprocess.run(
+            ["docker-compose", "build", "--progress=plain"],
+            env=env,
+            capture_output=False,  # Show build output
+        )
+        if build_result.returncode != 0:
+            print(f"❌ Docker build failed with exit code {build_result.returncode}")
+            raise subprocess.CalledProcessError(build_result.returncode, "docker-compose build")
+
+        print("Step 2/2: Starting services...")
+        subprocess.run(["docker-compose", "up", "-d"], check=True, env=env)
+
+        # Wait for services to be healthy
+        max_wait = 120  # Increased from 60 to 120 seconds for CI
+        start_time = time.time()
+
+        mcp_ready = False
+        a2a_ready = False
+
+        print(f"Waiting for services (max {max_wait}s)...")
+        print(f"  MCP: http://localhost:{mcp_port}/health")
+        print(f"  A2A: http://localhost:{a2a_port}/")
+
+        while time.time() - start_time < max_wait:
+            elapsed = int(time.time() - start_time)
+
+            # Show progress every 5 seconds
+            if elapsed > 0 and elapsed % 5 == 0 and not (mcp_ready and a2a_ready):
+                print(f"  ⏱️  Still waiting... ({elapsed}s / {max_wait}s)")
+                # Show container status for debugging
+                try:
+                    ps_result = subprocess.run(
+                        ["docker-compose", "ps", "--format", "table"], capture_output=True, text=True, timeout=2
+                    )
+                    if ps_result.returncode == 0 and ps_result.stdout:
+                        print(f"  Container status:\n{ps_result.stdout}")
+                except:
+                    pass
+
+            # Check MCP server health
+            if not mcp_ready:
+                try:
+                    response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
+                    if response.status_code == 200:
+                        print(f"✓ MCP server is ready (after {elapsed}s)")
+                        mcp_ready = True
+                except requests.RequestException as e:
+                    if elapsed % 10 == 0:  # Log every 10 seconds
+                        print(f"  MCP not ready yet ({elapsed}s): {type(e).__name__}")
+
+            # Check A2A server health
+            if not a2a_ready:
+                try:
+                    response = requests.get(f"http://localhost:{a2a_port}/", timeout=2)
+                    if response.status_code in [200, 404, 405]:  # Any response means it's up
+                        print(f"✓ A2A server is ready (after {elapsed}s)")
+                        a2a_ready = True
+                except requests.RequestException as e:
+                    if elapsed % 10 == 0:  # Log every 10 seconds
+                        print(f"  A2A not ready yet ({elapsed}s): {type(e).__name__}")
+
+            # Both services ready
+            if mcp_ready and a2a_ready:
+                break
+
+            time.sleep(2)
+        else:
+            # Timeout - try to get container logs for debugging
+            print("\n❌ Health check timeout. Attempting to get container logs...")
+
+            # Get logs from all services
+            for service in ["adcp-server", "postgres", "admin-ui"]:
+                try:
+                    print(f"\n📋 {service} logs (last 100 lines):")
+                    result = subprocess.run(
+                        ["docker-compose", "logs", "--tail=100", service], capture_output=True, text=True, timeout=5
+                    )
+                    if result.stdout:
+                        print(result.stdout)
+                    if result.stderr:
+                        print(f"STDERR: {result.stderr}")
+                except Exception as e:
+                    print(f"Could not get {service} logs: {e}")
+
+            # Show container status
+            try:
+                print("\n📊 Container status:")
+                ps_result = subprocess.run(["docker-compose", "ps"], capture_output=True, text=True, timeout=2)
+                print(ps_result.stdout)
+            except Exception as e:
+                print(f"Could not get container status: {e}")
+
+            if not mcp_ready:
+                pytest.fail(f"MCP server did not become healthy in time (waited {max_wait}s, port {mcp_port})")
+            if not a2a_ready:
+                pytest.fail(f"A2A server did not become healthy in time (waited {max_wait}s, port {a2a_port})")
 
     # Initialize CI test data now that services are healthy
     print("📦 Initializing CI test data (products, principals, etc.)...")
+    
+    # Setup environment for init script - reuse existing env if available, else create minimal
+    init_env = os.environ.copy()
+    init_env["ADCP_SALES_PORT"] = str(mcp_port)
+    init_env["POSTGRES_PORT"] = str(postgres_port)
+    init_env["ADMIN_UI_PORT"] = str(admin_port)
+    
+    # Use docker-compose exec to run the script inside the container
+    # This works for both self-managed (else block) and existing services (if block)
+    # provided we are in the correct project context.
+    
+    # Note: run_all_tests.sh sets COMPOSE_PROJECT_NAME, so we inherit that environment.
+    # If running manually without script, it defaults to folder name.
+    
     init_result = subprocess.run(
         ["docker-compose", "exec", "-T", "adcp-server", "python", "scripts/setup/init_database_ci.py"],
-        env=env,
+        env=init_env,
         capture_output=True,
         text=True,
     )

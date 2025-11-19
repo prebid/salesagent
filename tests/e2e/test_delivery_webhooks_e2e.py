@@ -11,14 +11,16 @@ All TODOs are left for you to fill in assertions and any spec-specific checks.
 """
 
 import json
+import socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from time import sleep
-
+from typing import Any
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.e2e.utils import wait_for_server_readiness
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
     get_test_date_range,
@@ -29,7 +31,7 @@ from tests.e2e.adcp_request_builder import (
 class DeliveryWebhookReceiver(BaseHTTPRequestHandler):
     """Simple webhook receiver to capture delivery_report notifications."""
 
-    received_webhooks = []
+    received_webhooks: list[Any] = []
 
     def do_POST(self):
         """Handle POST requests (webhook notifications)."""
@@ -57,19 +59,30 @@ class DeliveryWebhookReceiver(BaseHTTPRequestHandler):
 @pytest.fixture
 def delivery_webhook_server():
     """Start a local HTTP server to receive delivery_report webhooks."""
-    import socket
-
+    
     # Find an available port
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("", 0))
+    s.bind(("0.0.0.0", 0))
     port = s.getsockname()[1]
     s.close()
 
-    server = HTTPServer(("127.0.0.1", port), DeliveryWebhookReceiver)
+    # Start server on all interfaces so it's reachable
+    server = HTTPServer(("0.0.0.0", port), DeliveryWebhookReceiver)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    webhook_url = f"http://127.0.0.1:{port}/webhook"
+    # The webhook URL passed to the container must use a hostname reachable 
+    # from inside the Docker container. 
+    # On macOS/Windows with Docker Desktop, 'host.docker.internal' works.
+    # On Linux, it might vary (often 172.17.0.1), but for now we assume 
+    # host.docker.internal or that the user configures extra_hosts.
+    webhook_host = "host.docker.internal"
+    
+    # Fallback for non-Docker environments (running locally)
+    # If running tests against localhost directly (no docker), localhost is fine.
+    # But the e2e tests use docker_services_e2e, so we assume Docker.
+    
+    webhook_url = f"http://{webhook_host}:{port}/webhook"
 
     yield {
         "url": webhook_url,
@@ -99,8 +112,6 @@ class TestDailyDeliveryWebhookFlow:
         2. Create media buy with reporting_webhook.frequency = "daily"
         3. Get delivery metrics explicitly via get_media_buy_delivery
         4. Wait for scheduled delivery_report webhook and inspect payload
-
-        TODOs are left for you to define exact assertions and spec expectations.
         """
         # ------------------------------------------------------------------
         # MCP client setup (same pattern as reference implementation)
@@ -109,7 +120,12 @@ class TestDailyDeliveryWebhookFlow:
             "x-adcp-auth": test_auth_token,
             "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E
         }
+        print("live_server")
+        print(live_server)
         transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
+
+        # Wait for server readiness
+        wait_for_server_readiness(live_server['mcp'])
 
         async with Client(transport=transport) as client:
             # ==============================================================
@@ -125,8 +141,12 @@ class TestDailyDeliveryWebhookFlow:
             )
             products_data = parse_tool_result(products_result)
 
-            # TODO: Assert products_data structure (e.g. "products" key, non-empty list)
-            # TODO: Assert context echo if desired
+            assert "products" in products_data
+            assert isinstance(products_data["products"], list)
+            assert len(products_data["products"]) > 0
+            
+            # Verify context echo
+            assert products_data.get("context", {}).get("e2e") == "delivery_webhook_get_products"
 
             # Pick first product
             product = products_data["products"][0]
@@ -147,7 +167,6 @@ class TestDailyDeliveryWebhookFlow:
                 # Explicitly configure daily reporting frequency
                 reporting_webhook_extra={
                     "frequency": "daily",
-                    # TODO: Add authentication config here if you want to test HMAC/Bearer
                 },
                 context={"e2e": "delivery_webhook_create_media_buy"},
             )
@@ -155,15 +174,15 @@ class TestDailyDeliveryWebhookFlow:
             create_result = await client.call_tool("create_media_buy", media_buy_request)
             create_data = parse_tool_result(create_result)
 
-            # TODO: Assert shape of create_data (media_buy_id / buyer_ref / status)
-            # TODO: Assert context echo for create_media_buy
+            assert "media_buy_id" in create_data
+            assert create_data.get("status") in ["pending", "approved", "active"]
+            
+            # Verify context echo
+            assert create_data.get("context", {}).get("e2e") == "delivery_webhook_create_media_buy"
 
             media_buy_id = create_data.get("media_buy_id")
             buyer_ref = create_data.get("buyer_ref")
 
-            # If async-only, you may need to derive media_buy_id differently or
-            # skip the direct get_media_buy_delivery step.
-            # TODO: Decide how you want to handle async-only create responses.
             assert media_buy_id or buyer_ref  # Blueprint sanity check
 
             # ==============================================================
@@ -172,7 +191,6 @@ class TestDailyDeliveryWebhookFlow:
             # Use media_buy_id if available; otherwise you might use buyer_ref-based lookup
             if media_buy_id:
                 delivery_period = {
-                    # Example: use the campaign start/end dates; adjust as needed
                     "start_date": start_time.split("T")[0],
                     "end_date": end_time.split("T")[0],
                 }
@@ -187,60 +205,43 @@ class TestDailyDeliveryWebhookFlow:
                 )
                 delivery_data = parse_tool_result(delivery_result)
 
-                # TODO: Assert delivery_data structure (e.g. "deliveries" or "media_buy_deliveries")
-                # TODO: Assert context echo for get_media_buy_delivery
-                # TODO: Optionally assert that the requested period was applied as expected
+                # Delivery might be empty if campaign hasn't started, but structure should valid
+                assert "media_buy_deliveries" in delivery_data or "deliveries" in delivery_data
+                assert delivery_data.get("context", {}).get("e2e") == "delivery_webhook_get_media_buy_delivery"
 
             # ==============================================================
             # PHASE 4: Scheduled delivery webhook (delivery_report)
             # ==============================================================
-            # At this point, the DeliveryWebhookScheduler (running in the MCP process)
-            # should eventually send a "delivery_report" webhook to
-            # delivery_webhook_server["url"].
-            #
-            # Because the scheduler runs on an hourly cadence in the real app, you may
-            # want to:
-            # - run this test in an environment where the interval is shortened, OR
-            # - explicitly trigger a one-off run via a direct call to the scheduler
-            #   implementation in a separate integration test (see
-            #   tests/integration/test_delivery_webhooks_integration.py).
-            #
-            # Here we just provide a polling blueprint you can adapt.
+            # The scheduler runs inside the container. 
+            # We configured DELIVERY_WEBHOOK_INTERVAL=5 in conftest.py for E2E tests.
+            # It should trigger in 5 seconds.
 
             received = delivery_webhook_server["received"]
 
-            # Wait a bit for at least one webhook; tune timeout/poll interval as needed.
-            # In CI you may want to replace this with a deterministic trigger instead.
-            timeout_seconds = 60
-            poll_interval = 2
+            # Wait for webhook
+            timeout_seconds = 30
+            poll_interval = 1
 
             elapsed = 0
             while elapsed < timeout_seconds and not received:
                 sleep(poll_interval)
                 elapsed += poll_interval
 
-            # TODO: Replace this with real assertions once you are comfortable with timing:
-            # assert received, "Expected at least one delivery_report webhook"
+            assert received, "Expected at least one delivery report webhook. Check connectivity and DELIVERY_WEBHOOK_INTERVAL."
 
             if received:
                 webhook_payload = received[0]
-                # TODO: Assert shape of webhook_payload:
-                # - webhook_payload["task_type"] == "delivery_report"
-                # - webhook_payload["status"] == "completed"
-                # - webhook_payload["result"]["media_buy_id"] == media_buy_id
-                # - webhook_payload["result"]["next_expected_at"] is an ISO timestamp
-                # - webhook_payload["result"]["sequence_number"] starts at 1, etc.
-                #
-                # Example skeleton:
-                # assert webhook_payload["task_type"] == "delivery_report"
-                # assert webhook_payload["status"] == "completed"
-                # result = webhook_payload.get("result") or {}
-                # assert result.get("media_buy_id") == media_buy_id
-                # assert "next_expected_at" in result
-
-            # TODO: Optionally add a second phase where you:
-            # - wait for another scheduler run
-            # - assert sequence_number increments
-            # - or assert only one webhook per reporting period, etc.
-
+                
+                # Verify webhook payload structure
+                # The scheduler uses task_type="media_buy_delivery"
+                assert webhook_payload.get("task_type") == "media_buy_delivery"
+                assert webhook_payload.get("status") == "completed"
+                
+                result = webhook_payload.get("result") or {}
+                assert result.get("media_buy_id") == media_buy_id
+                
+                # Verify scheduling metadata
+                assert "next_expected_at" in result
+                assert result.get("frequency") == "daily"
+                assert "sequence_number" in result
 

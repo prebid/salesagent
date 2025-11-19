@@ -6,6 +6,7 @@ This runs as a background task and sends reports when GAM data is fresh (after 4
 """
 import asyncio
 import logging
+import os
 import uuid
 from datetime import UTC, date, datetime, timedelta, time
 from typing import Any
@@ -24,7 +25,8 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 # 1 hour because AdCP protocol has frequency options hourly, daily and monthly
-SLEEP_INTERVAL_SECONDS = 3600
+# Configurable via env var for testing
+SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL", "3600"))
 
 
 class DeliveryWebhookScheduler:
