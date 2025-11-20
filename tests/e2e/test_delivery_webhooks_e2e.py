@@ -22,7 +22,7 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from tests.e2e.utils import wait_for_server_readiness
+from tests.e2e.utils import wait_for_server_readiness, force_approve_media_buy_in_db
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
     get_test_date_range,
@@ -65,27 +65,16 @@ def delivery_webhook_server():
     
     # Find an available port
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("0.0.0.0", 0))
+    s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
     s.close()
 
     # Start server on all interfaces so it's reachable
-    server = HTTPServer(("0.0.0.0", port), DeliveryWebhookReceiver)
+    server = HTTPServer(("127.0.0.1", port), DeliveryWebhookReceiver)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    # The webhook URL passed to the container must use a hostname reachable 
-    # from inside the Docker container. 
-    # On macOS/Windows with Docker Desktop, 'host.docker.internal' works.
-    # On Linux, it might vary (often 172.17.0.1), but for now we assume 
-    # host.docker.internal or that the user configures extra_hosts.
-    webhook_host = "host.docker.internal"
-    
-    # Fallback for non-Docker environments (running locally)
-    # If running tests against localhost directly (no docker), localhost is fine.
-    # But the e2e tests use docker_services_e2e, so we assume Docker.
-    
-    webhook_url = f"http://{webhook_host}:{port}/webhook"
+    webhook_url = f"http://localhost:{port}/webhook"
 
     yield {
         "url": webhook_url,
@@ -204,6 +193,10 @@ class TestDailyDeliveryWebhookFlow:
         
         return media_buy_id, start_time, end_time
 
+    def force_approve_media_buy(self, live_server, media_buy_id):
+        """Force approve media buy in database to bypass approval workflow."""
+        force_approve_media_buy_in_db(live_server, media_buy_id)
+
     @pytest.mark.asyncio
     async def test_daily_delivery_webhook_end_to_end(
         self,
@@ -237,13 +230,17 @@ class TestDailyDeliveryWebhookFlow:
             # 1. Discover Product
             product_id, pricing_option_id, format_ids = await self.discover_product(client)
 
-            # 3. Create Media Buy
+            # 2. Create Media Buy
+            # Use approved creatives from init_database_ci.py
             media_buy_id, start_time, end_time = await self.create_media_buy(
                 client, 
                 product_id, 
                 pricing_option_id, 
                 delivery_webhook_server
             )
+
+            # 3. Force Approve Media Buy
+            self.force_approve_media_buy(live_server, media_buy_id)
 
             # 4. Explicit Delivery Check
             start_date_str = start_time
@@ -269,7 +266,6 @@ class TestDailyDeliveryWebhookFlow:
 
             delivery_data = parse_tool_result(delivery_result)
 
-            print(delivery_data)
             assert "media_buy_deliveries" in delivery_data
             assert len(delivery_data["media_buy_deliveries"]) > 0
             assert delivery_data["media_buy_deliveries"][0]["totals"]["impressions"] > 0
@@ -294,19 +290,22 @@ class TestDailyDeliveryWebhookFlow:
 
             assert received, "Expected at least one delivery report webhook. Check connectivity and DELIVERY_WEBHOOK_INTERVAL."
 
-            # if received:
-            #     webhook_payload = received[0]
+            if received:
+                webhook_payload = received[0]
                 
-            #     # Verify webhook payload structure
-            #     # The scheduler uses task_type="media_buy_delivery"
-            #     assert webhook_payload.get("task_type") == "media_buy_delivery"
-            #     assert webhook_payload.get("status") == "completed"
+                # # Verify webhook payload structure
+                # # The scheduler uses task_type="media_buy_delivery"
+                assert webhook_payload.get("task_type") == "media_buy_delivery"
+                assert webhook_payload.get("status") == "completed"
                 
-            #     result = webhook_payload.get("result") or {}
-            #     assert result.get("media_buy_id") == media_buy_id
+                result = webhook_payload.get("result") or {}
+
+                media_buy_deliveries = result.get("media_buy_deliveries")
+                assert len(media_buy_deliveries) > 0
+                assert media_buy_deliveries[0]['media_buy_id'] == media_buy_id
                 
-            #     # Verify scheduling metadata
-            #     assert "next_expected_at" in result
-            #     assert result.get("frequency") == "daily"
-            #     assert "sequence_number" in result
+                # # Verify scheduling metadata
+                assert "next_expected_at" in result
+                assert result.get("frequency") == "daily"
+                assert "sequence_number" in result
 

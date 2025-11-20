@@ -49,9 +49,6 @@ services:
       # Delivery webhook scheduler interval (default 1 hour)
       DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-3600}
 
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
     depends_on:
       postgres:
         condition: service_healthy

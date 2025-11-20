@@ -56,6 +56,7 @@ def build_adcp_media_buy_request(
     reporting_frequency: str = "daily",
     brand_manifest: dict[str, Any] | str | None = None,  # AdCP spec field (preferred)
     context: dict[str, Any] | None = None,
+    creative_ids: list[str] | None = None,
     pricing_option_id: str = "default"
 ) -> dict[str, Any]:
     """
@@ -113,7 +114,8 @@ def build_adcp_media_buy_request(
                     product_ids[0] if len(product_ids) == 1 else product_ids[0]
                 ),  # AdCP spec: singular product_id
                 "budget": total_budget,  # Package budget is plain number per AdCP spec
-                "pricing_option_id": pricing_option_id,  # Required per AdCP spec
+                "pricing_option_id": pricing_option_id,  # Required per AdCP spec,
+                "creative_ids": creative_ids
             }
         ],
         "start_time": start_time,

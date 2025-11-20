@@ -367,6 +367,13 @@ def live_server(docker_services_e2e):
         "a2a": f"http://localhost:{ports['a2a_port']}",
         "admin": f"http://localhost:{ports['admin_port']}",
         "postgres": f"postgresql://adcp_user:secure_password_change_me@localhost:{ports['postgres_port']}/adcp",
+        "postgres_params": {
+            "host": "localhost",
+            "port": ports['postgres_port'],
+            "user": "adcp_user",
+            "password": "secure_password_change_me",
+            "dbname": "adcp"
+        }
     }
 
 

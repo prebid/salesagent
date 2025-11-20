@@ -71,6 +71,7 @@ def init_db_ci():
                     session.add(principal)
                     print(f"Created principal (ID: {principal_id}) for existing tenant")
                 elif existing_principal.tenant_id != tenant_id:
+                    principal_id = existing_principal.principal_id
                     # Principal exists but for different tenant - update it to point to new tenant
                     print(
                         f"⚠️  Warning: Principal with token 'ci-test-token' exists for different tenant ({existing_principal.tenant_id})"
@@ -80,6 +81,7 @@ def init_db_ci():
                     session.flush()
                     print("   ✓ Principal updated to new tenant")
                 else:
+                    principal_id = existing_principal.principal_id
                     print(f"Principal already exists (ID: {existing_principal.principal_id})")
 
                 # Check if currency limit exists for this tenant
