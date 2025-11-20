@@ -290,6 +290,16 @@ jobs:
         docker-compose down -v 2>/dev/null || true
         docker system prune -f 2>/dev/null || true
 
+    - name: Configure Docker for Linux (CI)
+      run: |
+        # Create override file to enable host.docker.internal on Linux
+        echo 'version: "3.8"' > docker-compose.override.yml
+        echo 'services:' >> docker-compose.override.yml
+        echo '  adcp-server:' >> docker-compose.override.yml
+        echo '    extra_hosts:' >> docker-compose.override.yml
+        echo '      - "host.docker.internal:host-gateway"' >> docker-compose.override.yml
+        cat docker-compose.override.yml
+
     - name: Run E2E tests
       env:
         # Docker Compose manages its own PostgreSQL - don't set DATABASE_URL
