@@ -374,6 +374,7 @@ def update_mappings(tenant_id, principal_id):
 
             # Update mappings - JSONType handles serialization
             principal.platform_mappings = platform_mappings
+            principal.updated_at = datetime.now(UTC)
             db_session.commit()
 
             return jsonify(

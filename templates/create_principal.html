@@ -53,6 +53,8 @@
             <strong>ℹ️ Note:</strong> This tenant uses the Mock adapter for testing. No real ad server API calls will be made.
             <br><strong>To use a real ad server</strong>, configure GAM or another adapter in the Settings → Ad Server tab.
         </div>
+        <!-- Automatically enable mock adapter when no real ad server is configured -->
+        <input type="hidden" name="enable_mock" value="1">
         {% endif %}
 
         <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; margin: 2rem 0;">

@@ -477,6 +477,9 @@ class Principal(Base, JSONValidatorMixin):
     platform_mappings: Mapped[dict] = mapped_column(JSONType, nullable=False)
     access_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     created_at: Mapped[DateTime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
     # Relationships
     tenant = relationship("Tenant", back_populates="principals")
