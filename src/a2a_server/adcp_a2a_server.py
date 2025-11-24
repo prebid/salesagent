@@ -30,6 +30,7 @@ from a2a.server.events.event_queue import Event
 from a2a.server.request_handlers.request_handler import RequestHandler
 from a2a.types import (
     AgentCard,
+    AgentExtension,
     Artifact,
     DataPart,
     InternalError,
@@ -2200,6 +2201,20 @@ def create_agent_card() -> AgentCard:
     server_url = get_a2a_server_url()
 
     from a2a.types import AgentCapabilities, AgentSkill
+    from adcp import get_adcp_version
+
+    # Create AdCP extension (AdCP 2.5 spec)
+    # As of adcp 2.12.1, get_adcp_version() returns the protocol version (e.g., "2.5.0")
+    # Previously it returned the schema version (e.g., "v1"), but this was fixed upstream
+    protocol_version = get_adcp_version()
+    adcp_extension = AgentExtension(
+        uri=f"https://adcontextprotocol.org/schemas/{protocol_version}/protocols/adcp-extension.json",
+        description="AdCP protocol version and supported domains",
+        params={
+            "adcp_version": protocol_version,
+            "protocols_supported": ["media_buy"],  # Only media_buy protocol is currently supported
+        },
+    )
 
     # Create the agent card with minimal required fields
     agent_card = AgentCard(
@@ -2207,7 +2222,10 @@ def create_agent_card() -> AgentCard:
         description="AI agent for programmatic advertising campaigns via AdCP protocol",
         version="1.0.0",
         protocol_version="1.0",
-        capabilities=AgentCapabilities(push_notifications=True),
+        capabilities=AgentCapabilities(
+            push_notifications=True,
+            extensions=[adcp_extension],
+        ),
         default_input_modes=["message"],
         default_output_modes=["message"],
         skills=[

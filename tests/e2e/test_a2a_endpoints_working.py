@@ -55,6 +55,24 @@ class TestA2AEndpointsActual:
                 # Note: A2A spec uses security/securitySchemes instead of simple authentication field
                 assert "security" in data or "securitySchemes" in data
 
+                # AdCP 2.5: Should have AdCP extension in capabilities
+                assert "capabilities" in data
+                assert "extensions" in data["capabilities"]
+                extensions = data["capabilities"]["extensions"]
+                assert isinstance(extensions, list)
+                assert len(extensions) > 0
+
+                # Find AdCP extension
+                adcp_ext = None
+                for ext in extensions:
+                    if "adcp-extension" in ext.get("uri", ""):
+                        adcp_ext = ext
+                        break
+
+                assert adcp_ext is not None, "AdCP extension not found in live agent card"
+                assert adcp_ext["params"]["adcp_version"] == "2.5.0"
+                assert "media_buy" in adcp_ext["params"]["protocols_supported"]
+
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip("A2A server not running on localhost:8091")
 
@@ -156,6 +174,43 @@ class TestA2AAgentCardCreation:
         for skill in agent_card.skills:
             assert hasattr(skill, "name")
             assert hasattr(skill, "description")
+
+    def test_agent_card_adcp_extension(self):
+        """Test that agent card includes AdCP 2.5 extension."""
+        from src.a2a_server.adcp_a2a_server import create_agent_card
+
+        agent_card = create_agent_card()
+
+        # Check capabilities has extensions
+        assert hasattr(agent_card, "capabilities")
+        assert agent_card.capabilities is not None
+        assert hasattr(agent_card.capabilities, "extensions")
+        assert agent_card.capabilities.extensions is not None
+        assert len(agent_card.capabilities.extensions) > 0
+
+        # Find AdCP extension
+        adcp_ext = None
+        for ext in agent_card.capabilities.extensions:
+            if "adcp-extension" in ext.uri:
+                adcp_ext = ext
+                break
+
+        assert adcp_ext is not None, "AdCP extension not found in capabilities.extensions"
+
+        # Validate AdCP extension structure
+        assert adcp_ext.uri == "https://adcontextprotocol.org/schemas/2.5.0/protocols/adcp-extension.json"
+        assert adcp_ext.params is not None
+        assert "adcp_version" in adcp_ext.params
+        assert "protocols_supported" in adcp_ext.params
+
+        # Validate AdCP extension values
+        assert adcp_ext.params["adcp_version"] == "2.5.0"
+        protocols = adcp_ext.params["protocols_supported"]
+        assert isinstance(protocols, list)
+        assert len(protocols) >= 1
+        # Currently only media_buy protocol is supported
+        assert "media_buy" in protocols
+        assert set(protocols) == {"media_buy"}, "Only media_buy protocol is currently supported"
 
     def test_agent_card_skills_coverage(self):
         """Test that agent card includes expected AdCP skills."""
