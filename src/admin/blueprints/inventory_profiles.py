@@ -206,7 +206,10 @@ def add_inventory_profile(tenant_id: str):
                 return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
             # Parse publisher properties based on property_mode
-            publisher_properties = []
+            # NOTE: New unified inventory page sends either:
+            # - property_mode = "all" or "specific" with full publisher_properties JSON
+            # - or legacy modes: "tags", "property_ids", "full"
+            publisher_properties: list[dict] = []
             property_mode = form_data.get("property_mode", "tags")
 
             with get_db_session() as prop_session:
@@ -278,8 +281,10 @@ def add_inventory_profile(tenant_id: str):
                         }
                     ]
 
-                elif property_mode == "full":
-                    # Legacy full mode: Parse JSON from textarea
+                elif property_mode in {"full", "all", "specific"}:
+                    # "full" is legacy textarea JSON mode
+                    # "all"/"specific" are used by the unified inventory page and
+                    # send complete publisher_properties JSON in the form field.
                     publisher_properties_json = form_data.get("publisher_properties", "").strip()
                     if publisher_properties_json:
                         try:

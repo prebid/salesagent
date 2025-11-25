@@ -393,9 +393,11 @@ Then call: window.inventoryProfileEditor.open(profileData)
         formPayload.append('publisher_properties', JSON.stringify(publisherProperties));
         formPayload.append('property_mode', propertyMode);
 
-        const url = currentProfile
-            ? `/tenant/${config.tenantId}/inventory-profiles/${currentProfile.id}/edit`
-            : `/tenant/${config.tenantId}/inventory-profiles/add`;
+        const url = scriptRoot + (
+            currentProfile
+                ? `/tenant/${config.tenantId}/inventory-profiles/${currentProfile.id}/edit`
+                : `/tenant/${config.tenantId}/inventory-profiles/add`
+        );
 
         try {
             const response = await fetch(url, {
@@ -410,8 +412,24 @@ Then call: window.inventoryProfileEditor.open(profileData)
                 if (window.loadProfiles) window.loadProfiles();
                 if (window.location.reload) window.location.reload();
             } else {
-                const error = await response.json();
-                alert('Error saving profile: ' + (error.error || 'Unknown error'));
+                // Try to parse JSON error first, but fall back to plain text to
+                // avoid "Unexpected token" errors when the response isn't JSON.
+                let message = `HTTP ${response.status} ${response.statusText}`;
+                const contentType = response.headers.get('content-type') || '';
+                try {
+                    if (contentType.includes('application/json')) {
+                        const error = await response.json();
+                        message = error.error || error.message || message;
+                    } else {
+                        const text = await response.text();
+                        if (text) {
+                            message = text;
+                        }
+                    }
+                } catch (e) {
+                    // Swallow JSON/text parsing errors and use default message
+                }
+                alert('Error saving profile: ' + message);
             }
         } catch (error) {
             alert('Error saving profile: ' + error.message);
