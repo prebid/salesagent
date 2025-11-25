@@ -156,10 +156,18 @@ class GCPServiceAccountService:
 
             # Generate account ID from tenant ID (must be 6-30 chars, lowercase, numbers, hyphens)
             # Format: adcp-sales-{tenant_id}
-            account_id = f"adcp-sales-{tenant_id}".lower()
+            # GCP service account IDs must match: [a-zA-Z][a-zA-Z\d\-]*[a-zA-Z\d]
+            # - No underscores allowed (replace with hyphens)
+            # - Must start with letter, end with letter or digit
+            sanitized_tenant_id = tenant_id.replace("_", "-")
+            account_id = f"adcp-sales-{sanitized_tenant_id}".lower()
+            
+            # Ensure account_id doesn't end with hyphen (GCP requirement)
+            account_id = account_id.rstrip("-")
+            
             if len(account_id) > 30:
-                # Truncate if too long
-                account_id = account_id[:30]
+                # Truncate if too long, but ensure we don't end with hyphen after truncation
+                account_id = account_id[:30].rstrip("-")
 
             # Expected service account email format
             expected_email = f"{account_id}@{self.gcp_project_id}.iam.gserviceaccount.com"
