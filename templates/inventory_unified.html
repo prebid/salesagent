@@ -1121,13 +1121,13 @@ function searchInventory() {
     const status = document.getElementById('inventoryStatus').value;
 
     const params = new URLSearchParams();
-    if (query) params.append('query', query);
+    if (query) params.append('search', query);
     if (inventoryType) params.append('type', inventoryType);
     if (status) params.append('status', status);
 
     // Use scriptRoot for proxy deployment support
     const scriptRoot = '{{ request.script_root }}' || '';
-    fetch(scriptRoot + `/api/tenant/${tenantId}/inventory/search?${params.toString()}`, {
+    fetch(scriptRoot + `/api/tenant/${tenantId}/inventory-list?${params.toString()}`, {
         credentials: 'same-origin'
     })
         .then(response => {
@@ -1146,7 +1146,7 @@ function searchInventory() {
             }
 
             // Display search results
-            displaySearchResults(data.results || []);
+            displaySearchResults(data.items || []);
         })
         .catch(error => {
             if (error.message !== 'Session expired') {
