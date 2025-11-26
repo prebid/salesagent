@@ -113,19 +113,47 @@ class DeliveryWebhookScheduler:
         except Exception as e:
             logger.error(f"Error in daily delivery report batch: {e}", exc_info=True)
 
-    async def _send_report_for_media_buy(self, media_buy: Any, reporting_webhook: dict, session: Any) -> None:
+    async def trigger_report_for_media_buy(self, media_buy: Any, session: Any) -> bool:
+        """Manually trigger a delivery report for a single media buy.
+
+        Args:
+            media_buy: MediaBuy database model
+            session: Database session
+
+        Returns:
+            bool: True if report was triggered successfully, False otherwise
+        """
+        try:
+            raw_request = media_buy.raw_request or {}
+            reporting_webhook = raw_request.get("reporting_webhook")
+
+            if not reporting_webhook:
+                logger.warning(f"Cannot trigger report: No reporting_webhook configured for {media_buy.media_buy_id}")
+                return False
+
+            # Force sending even if already sent today (for testing)
+            await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
+            return True
+        except Exception as e:
+            logger.error(f"Error manually triggering report for {media_buy.media_buy_id}: {e}", exc_info=True)
+            return False
+
+    async def _send_report_for_media_buy(
+        self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
+    ) -> None:
         """Send a delivery report for a single media buy.
 
         Args:
             media_buy: MediaBuy database model
             reporting_webhook: Webhook configuration dict
             session: Database session
+            force: If True, bypass frequency checks and duplicate checks
         """
         try:
             # Determine reporting frequency from AdCP config (hourly, daily, monthly)
             raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
 
-            if raw_freq != "daily":
+            if not force and raw_freq != "daily":
                 logger.warning(
                     "Skipping reporting webhook with frequency '%s' for media buy %s – "
                     "only 'daily' frequency is supported for delivery webhooks at this time",
@@ -140,22 +168,25 @@ class DeliveryWebhookScheduler:
 
             # Check if we've already sent a scheduled delivery_report webhook for this media buy
             # and reporting date. We use created_at::date as the period key.
-            existing_stmt = select(WebhookDeliveryLog).where(
-                WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
-                WebhookDeliveryLog.task_type == "delivery_report",
-                WebhookDeliveryLog.notification_type == "scheduled",
-                WebhookDeliveryLog.status == "success",
-                func.date(WebhookDeliveryLog.created_at) == end_date_obj,
-            )
-            existing_log = session.scalars(existing_stmt).first()
-            if existing_log:
-                logger.info(
-                    "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
-                    media_buy.media_buy_id,
-                    end_date_obj,
-                    existing_log.id,
+            if not force:
+                # Look back 24 hours to find recent successful webhooks
+                one_day_ago = datetime.now(UTC) - timedelta(hours=24)
+                existing_stmt = select(WebhookDeliveryLog).where(
+                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
+                    WebhookDeliveryLog.task_type == "media_buy_delivery",
+                    WebhookDeliveryLog.notification_type == "scheduled",
+                    WebhookDeliveryLog.status == "success",
+                    WebhookDeliveryLog.created_at > one_day_ago,
                 )
-                return
+                existing_log = session.scalars(existing_stmt).first()
+                if existing_log:
+                    logger.info(
+                        "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
+                        media_buy.media_buy_id,
+                        end_date_obj,
+                        existing_log.id,
+                    )
+                    return
 
             # Fetch delivery metrics
             # Create a minimal context object for the delivery call

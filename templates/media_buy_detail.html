@@ -96,7 +96,16 @@
 
 {% if delivery_metrics %}
 <div class="custom-card">
-    <h2>📊 Delivery Metrics</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="margin: 0;">📊 Delivery Metrics</h2>
+        {% if media_buy.raw_request and media_buy.raw_request.get('reporting_webhook') %}
+        <form method="POST" action="{{ url_for('operations.trigger_delivery_webhook', tenant_id=tenant_id, media_buy_id=media_buy.media_buy_id) }}" style="margin: 0;">
+            <button type="submit" class="btn btn-sm btn-secondary" title="Trigger delivery report webhook now" onclick="return confirm('Send delivery report webhook now?');">
+                🔔 Test Webhook
+            </button>
+        </form>
+        {% endif %}
+    </div>
     <div class="detail-rows">
         <div class="detail-row">
             <span class="label">Impressions:</span>
@@ -155,7 +164,16 @@
 </div>
 {% elif media_buy.status in ['active', 'approved', 'completed'] %}
 <div class="custom-card">
-    <h2>📊 Delivery Metrics</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="margin: 0;">📊 Delivery Metrics</h2>
+        {% if media_buy.raw_request and media_buy.raw_request.get('reporting_webhook') %}
+        <form method="POST" action="{{ url_for('operations.trigger_delivery_webhook', tenant_id=tenant_id, media_buy_id=media_buy.media_buy_id) }}" style="margin: 0;">
+            <button type="submit" class="btn btn-sm btn-secondary" title="Trigger delivery report webhook now" onclick="return confirm('Send delivery report webhook now?');">
+                🔔 Test Webhook
+            </button>
+        </form>
+        {% endif %}
+    </div>
     <p style="color: #666; margin: 0;">
         <em>Delivery metrics are being loaded from the ad server...</em>
     </p>

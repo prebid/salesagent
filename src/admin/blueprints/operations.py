@@ -522,6 +522,42 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
         return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
 
+@operations_bp.route("/media-buy/<media_buy_id>/trigger-delivery-webhook", methods=["POST"])
+@require_tenant_access()
+def trigger_delivery_webhook(tenant_id, media_buy_id, **kwargs):
+    """Trigger a delivery report webhook for a media buy manually."""
+    from flask import flash, redirect, url_for
+
+    from src.core.database.database_session import get_db_session
+    from src.services.delivery_webhook_scheduler import get_delivery_webhook_scheduler
+
+    try:
+        with get_db_session() as db_session:
+            # Get media buy
+            stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
+            media_buy = db_session.scalars(stmt).first()
+
+            if not media_buy:
+                flash("Media buy not found", "error")
+                return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+
+            # Trigger webhook using scheduler
+            scheduler = get_delivery_webhook_scheduler()
+            success = asyncio.run(scheduler.trigger_report_for_media_buy(media_buy, db_session))
+
+            if success:
+                flash("Delivery webhook triggered successfully", "success")
+            else:
+                flash("Failed to trigger delivery webhook. Check logs or configuration.", "warning")
+
+            return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+
+    except Exception as e:
+        logger.error(f"Error triggering delivery webhook for {media_buy_id}: {e}", exc_info=True)
+        flash("Error triggering delivery webhook", "error")
+        return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+
+
 @operations_bp.route("/webhooks", methods=["GET"])
 @require_tenant_access()
 def webhooks(tenant_id, **kwargs):
