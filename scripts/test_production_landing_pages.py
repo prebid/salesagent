@@ -47,8 +47,8 @@ PRODUCTION_AGENTS = {
         "type": "adcontextprotocol domain",
         "test_mcp": True,
         "test_a2a": True,
-        "expect_landing": False,
-        "expect_login": True,  # Redirects to login
+        "expect_landing": True,  # Shows agent landing page (custom domain with tenant)
+        "expect_login": False,
     },
     "admin": {
         "url": "https://admin.sales-agent.scope3.com",
