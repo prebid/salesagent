@@ -108,6 +108,34 @@ _request_auth_token: contextvars.ContextVar[str | None] = contextvars.ContextVar
 _request_headers: contextvars.ContextVar[dict | None] = contextvars.ContextVar("request_headers", default=None)
 
 
+class MinimalContext:
+    """Minimal context for unauthenticated requests that need tenant detection.
+
+    This lightweight context object is used when authentication is not required
+    but tenant detection via headers is still needed (e.g., discovery endpoints).
+    It provides the same interface as FastMCP Context for header access.
+    """
+
+    def __init__(self, headers: dict[str, Any]):
+        """Initialize minimal context with request headers.
+
+        Args:
+            headers: Request headers for tenant detection
+        """
+        self.headers: dict[str, Any] = headers
+        self.meta: dict[str, Any] = {"headers": headers}
+
+    @classmethod
+    def from_request_context(cls) -> "MinimalContext":
+        """Create minimal context from current request context.
+
+        Returns:
+            MinimalContext with headers from current request
+        """
+        headers = _request_headers.get() or {}
+        return cls(headers)
+
+
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
 
@@ -1245,7 +1273,7 @@ class AdCPRequestHandler(RequestHandler):
         Args:
             skill_name: The AdCP skill name (e.g., "get_products")
             parameters: Dictionary of skill-specific parameters
-            auth_token: Bearer token for authentication
+            auth_token: Bearer token for authentication (optional for discovery endpoints)
 
         Returns:
             Dictionary containing the skill result
@@ -1255,8 +1283,28 @@ class AdCPRequestHandler(RequestHandler):
         """
         logger.info(f"Handling explicit skill: {skill_name} with parameters: {list(parameters.keys())}")
 
-        # Validate auth_token is provided
-        if auth_token is None:
+        # Define discovery skills that support optional authentication
+        # Per AdCP spec section 3.2, these endpoints allow anonymous access for public discovery
+        #
+        # IMPORTANT: This is the single source of truth for auth-optional skills.
+        # Add new skills here ONLY if they meet AdCP discovery endpoint requirements:
+        #   1. Return only public/non-sensitive data
+        #   2. Support tenant-level access control via brand_manifest_policy
+        #   3. Never expose user-specific or transactional data
+        #   4. Must be safe to call without authentication
+        #
+        # Current auth-optional skills:
+        #   - list_creative_formats: Always public (creative specifications)
+        #   - list_authorized_properties: Always public (property catalog)
+        #   - get_products: Conditional based on tenant brand_manifest_policy setting
+        discovery_skills = {
+            "list_creative_formats",
+            "list_authorized_properties",
+            "get_products",  # Conditional: depends on tenant brand_manifest_policy
+        }
+
+        # Validate auth_token for non-discovery skills
+        if skill_name not in discovery_skills and auth_token is None:
             raise ServerError(InvalidRequestError(message="Authentication token required for skill invocation"))
 
         # Map skill names to handlers
@@ -1282,8 +1330,8 @@ class AdCPRequestHandler(RequestHandler):
             "get_signals": self._handle_get_signals_skill,
             "search_signals": self._handle_search_signals_skill,
             # Legacy skill names (for backward compatibility)
-            "get_pricing": lambda params, token: self._get_pricing(),
-            "get_targeting": lambda params, token: self._get_targeting(),
+            "get_pricing": lambda params, token: self._get_pricing(),  # type: ignore[dict-item]
+            "get_targeting": lambda params, token: self._get_targeting(),  # type: ignore[dict-item]
         }
 
         if skill_name not in skill_handlers:
@@ -1296,10 +1344,10 @@ class AdCPRequestHandler(RequestHandler):
             handler = skill_handlers[skill_name]
             if skill_name in ["get_pricing", "get_targeting"]:
                 # These are simple handlers without async
-                return handler(parameters, auth_token)  # type: ignore[return-value]
+                return handler(parameters, auth_token)  # type: ignore[return-value,arg-type]
             else:
                 # These are async handlers that call core tools
-                return await handler(parameters, auth_token)  # type: ignore[misc]
+                return await handler(parameters, auth_token)  # type: ignore[misc,arg-type]
         except ServerError:
             # Re-raise ServerError as-is (already properly formatted)
             raise
@@ -1307,17 +1355,27 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in skill handler {skill_name}: {e}")
             raise ServerError(InternalError(message=f"Skill {skill_name} failed: {str(e)}"))
 
-    async def _handle_get_products_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_get_products_skill(self, parameters: dict, auth_token: str | None) -> dict:
         """Handle explicit get_products skill invocation.
 
         Aligned with adcp v1.2.1 spec - brand_manifest must be a dict.
+
+        NOTE: Authentication is OPTIONAL for this endpoint. Access depends on tenant's
+        brand_manifest_policy setting (public/require_brand/require_auth).
         """
         try:
-            # Create ToolContext from A2A auth info
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="get_products",
-            )
+            # Create ToolContext from A2A auth info (if provided)
+            tool_context: ToolContext | MinimalContext
+
+            if auth_token:
+                # Token provided - authentication MUST succeed (don't silently fall back)
+                tool_context = self._create_tool_context_from_a2a(
+                    auth_token=auth_token,
+                    tool_name="get_products",
+                )
+            else:
+                # No auth token - create minimal Context-like object with headers for tenant detection
+                tool_context = MinimalContext.from_request_context()
 
             # Map A2A parameters to GetProductsRequest (adcp v1.2.1)
             brief = parameters.get("brief", "")
@@ -1358,7 +1416,7 @@ class AdCPRequestHandler(RequestHandler):
                 adcp_version=adcp_version,
                 strategy_id=strategy_id,
                 context=context,
-                ctx=self._tool_context_to_mcp_context(tool_context),
+                ctx=self._tool_context_to_mcp_context(tool_context),  # type: ignore[arg-type]
             )
 
             # Convert response to dict
@@ -1754,14 +1812,24 @@ class AdCPRequestHandler(RequestHandler):
             "parameters_received": parameters,
         }
 
-    async def _handle_list_creative_formats_skill(self, parameters: dict, auth_token: str) -> dict:
-        """Handle explicit list_creative_formats skill invocation (CRITICAL AdCP endpoint)."""
+    async def _handle_list_creative_formats_skill(self, parameters: dict, auth_token: str | None) -> dict:
+        """Handle explicit list_creative_formats skill invocation (CRITICAL AdCP endpoint).
+
+        NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.
+        """
         try:
-            # Create ToolContext from A2A auth info
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="list_creative_formats",
-            )
+            # Create ToolContext from A2A auth info (if provided)
+            tool_context: ToolContext | MinimalContext
+
+            if auth_token:
+                # Token provided - authentication MUST succeed (don't silently fall back)
+                tool_context = self._create_tool_context_from_a2a(
+                    auth_token=auth_token,
+                    tool_name="list_creative_formats",
+                )
+            else:
+                # No auth token - create minimal Context-like object with headers for tenant detection
+                tool_context = MinimalContext.from_request_context()
 
             # Build request from parameters (all optional)
             from src.core.schema_adapters import ListCreativeFormatsRequest
@@ -1775,7 +1843,9 @@ class AdCPRequestHandler(RequestHandler):
             )
 
             # Call core function with request
-            response = core_list_creative_formats_tool(req=req, ctx=self._tool_context_to_mcp_context(tool_context))
+            response = core_list_creative_formats_tool(
+                req=req, ctx=self._tool_context_to_mcp_context(tool_context)  # type: ignore[arg-type]
+            )
 
             # Convert response to dict
             if isinstance(response, dict):
@@ -1808,27 +1878,15 @@ class AdCPRequestHandler(RequestHandler):
             tool_context = None
 
             if auth_token:
-                try:
-                    tool_context = self._create_tool_context_from_a2a(
-                        auth_token=auth_token,
-                        tool_name="list_authorized_properties",
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to create authenticated context (continuing without auth): {e}")
-                    tool_context = None
+                # Token provided - authentication MUST succeed (don't silently fall back)
+                tool_context = self._create_tool_context_from_a2a(
+                    auth_token=auth_token,
+                    tool_name="list_authorized_properties",
+                )
             else:
                 # No auth token - create minimal Context-like object with headers for tenant detection
                 # This allows tenant detection via Apx-Incoming-Host, Host, or x-adcp-tenant headers
-                headers = _request_headers.get() or {}
-
-                # Create a simple object that quacks like a FastMCP Context
-                # get_principal_from_context() needs: context.meta["headers"] or context.headers
-                class MinimalContext:
-                    def __init__(self, headers):
-                        self.meta = {"headers": headers}
-                        self.headers = headers
-
-                tool_context = MinimalContext(headers)  # type: ignore[assignment]
+                tool_context = MinimalContext.from_request_context()  # type: ignore[assignment]
 
             # Map A2A parameters to ListAuthorizedPropertiesRequest
             from src.core.schema_adapters import ListAuthorizedPropertiesRequest as SchemaAdapterRequest
