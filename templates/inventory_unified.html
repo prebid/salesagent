@@ -33,7 +33,13 @@
     <!-- Tab Navigation -->
     <ul class="nav nav-tabs mb-4" id="inventoryTabs" role="tablist">
         <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="profiles-tab" data-bs-toggle="tab" data-bs-target="#profiles-pane" type="button" role="tab">
+            <button class="nav-link active" id="publishers-tab" data-bs-toggle="tab" data-bs-target="#publishers-pane" type="button" role="tab">
+                <i class="fas fa-globe"></i> Publishers & Properties
+            </button>
+        </li>
+        {% if is_gam %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="profiles-tab" data-bs-toggle="tab" data-bs-target="#profiles-pane" type="button" role="tab">
                 <i class="fas fa-layer-group"></i> Inventory Profiles
             </button>
         </li>
@@ -42,17 +48,14 @@
                 <i class="fas fa-th"></i> Browse Inventory
             </button>
         </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="publishers-tab" data-bs-toggle="tab" data-bs-target="#publishers-pane" type="button" role="tab">
-                <i class="fas fa-globe"></i> Publishers & Properties
-            </button>
-        </li>
+        {% endif %}
     </ul>
 
     <!-- Tab Content -->
     <div class="tab-content" id="inventoryTabContent">
-        <!-- Inventory Profiles Tab -->
-        <div class="tab-pane fade show active" id="profiles-pane" role="tabpanel">
+        {% if is_gam %}
+        <!-- Inventory Profiles Tab (GAM only) -->
+        <div class="tab-pane fade" id="profiles-pane" role="tabpanel">
             <!-- Profile Statistics -->
             <div class="row mb-4">
                 <div class="col-md-4">
@@ -216,16 +219,20 @@
                 </div>
             </div>
         </div>
+        {% endif %}
 
-        <!-- Publishers & Properties Tab -->
-        <div class="tab-pane fade" id="publishers-pane" role="tabpanel">
+        <!-- Publishers & Properties Tab (Always visible) -->
+        <div class="tab-pane fade show active" id="publishers-pane" role="tabpanel">
             <div class="row mb-4">
                 <div class="col-12">
                     <div class="alert alert-info">
                         <h5><i class="fas fa-info-circle"></i> Publisher Partnerships</h5>
                         <p class="mb-0">
-                            Manage your publisher partnerships and discover which properties you're authorized to represent.
-                            Properties are fetched fresh from each publisher's <code>adagents.json</code> file.
+                            Manage your publisher partnerships{% if is_gam %} and discover which properties you're authorized to represent.
+                            Properties are fetched fresh from each publisher's <code>adagents.json</code> file{% endif %}.
+                            {% if not is_gam %}
+                            <br><strong>Note:</strong> For {{ adapter_type }} tenants{% if adapter_type == 'mock' %} or development environments{% endif %}, publishers are automatically verified without requiring adagents.json verification.
+                            {% endif %}
                         </p>
                     </div>
                 </div>

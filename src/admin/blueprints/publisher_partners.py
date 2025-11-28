@@ -14,6 +14,7 @@ from adcp.exceptions import AdagentsNotFoundError, AdagentsTimeoutError, Adagent
 from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import select
 
+from src.core.config import get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
 from src.core.domain_config import get_tenant_url
@@ -87,6 +88,20 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
         publisher_domain = publisher_domain.rstrip("/")
 
         with get_db_session() as session:
+            # Check tenant adapter type
+            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
+            tenant = session.scalars(stmt_tenant).first()
+            if not tenant:
+                return jsonify({"error": "Tenant not found"}), 404
+
+            # For mock adapters OR development environment, auto-verify publishers (no adagents.json to check)
+            # Development: Local dev servers won't be in any publisher's adagents.json
+            # Mock: Testing tenants use fake domains
+            config = get_config()
+            is_dev = config.environment == "development"
+            is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
+            should_auto_verify = is_dev or is_mock
+
             # Check if already exists
             stmt = select(PublisherPartner).filter_by(tenant_id=tenant_id, publisher_domain=publisher_domain)
             existing = session.scalars(stmt).first()
@@ -94,14 +109,27 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
                 return jsonify({"error": "Publisher already exists"}), 409
 
             # Create new partner
+            # Auto-verify for dev environment or mock adapters (no real adagents.json to check)
             partner = PublisherPartner(
                 tenant_id=tenant_id,
                 publisher_domain=publisher_domain,
                 display_name=display_name or publisher_domain,
-                sync_status="pending",
+                sync_status="success" if should_auto_verify else "pending",
+                is_verified=should_auto_verify,
+                last_synced_at=datetime.now(UTC) if should_auto_verify else None,  # type: ignore[assignment]
             )
             session.add(partner)
             session.commit()
+
+            # Build message
+            message = "Publisher added successfully"
+            if should_auto_verify:
+                reasons = []
+                if is_dev:
+                    reasons.append("development environment")
+                if is_mock:
+                    reasons.append("mock tenant")
+                message += f" (auto-verified for {' and '.join(reasons)})"
 
             return (
                 jsonify(
@@ -110,7 +138,8 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
                         "publisher_domain": partner.publisher_domain,
                         "display_name": partner.display_name,
                         "sync_status": partner.sync_status,
-                        "message": "Publisher added successfully",
+                        "is_verified": partner.is_verified,
+                        "message": message,
                     }
                 ),
                 201,
@@ -163,7 +192,42 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             if not partners:
                 return jsonify({"message": "No publishers to sync"}), 200
 
-            # Fetch authorization for each publisher
+            # For development environment or mock adapters, auto-verify all publishers (skip adagents.json fetching)
+            config = get_config()
+            is_dev = config.environment == "development"
+            is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
+            should_auto_verify = is_dev or is_mock
+
+            if should_auto_verify:
+                reasons = []
+                if is_dev:
+                    reasons.append("development environment")
+                if is_mock:
+                    reasons.append("mock tenant")
+                reason_str = " and ".join(reasons)
+
+                logger.info(f"{reason_str} detected - auto-verifying {len(partners)} publishers")
+                verified_domains = []
+                for partner in partners:
+                    partner.sync_status = "success"
+                    partner.sync_error = None
+                    partner.is_verified = True
+                    partner.last_synced_at = datetime.now(UTC)  # type: ignore[assignment]
+                    verified_domains.append(partner.publisher_domain)
+
+                session.commit()
+
+                return jsonify(
+                    {
+                        "message": f"Sync completed ({reason_str} - auto-verified)",
+                        "synced": len(partners),
+                        "verified": len(partners),
+                        "errors": 0,
+                        "total": len(partners),
+                    }
+                )
+
+            # Fetch authorization for each publisher (real verification for non-mock tenants)
             logger.info(f"Fetching authorizations for {len(partners)} publishers")
 
             synced = 0

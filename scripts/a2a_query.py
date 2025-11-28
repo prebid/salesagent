@@ -11,7 +11,7 @@ import sys
 import requests
 
 
-def query_a2a(message, token="demo_token_123", endpoint="http://localhost:8091"):
+def query_a2a(message, token="demo_token_123", endpoint="http://localhost:8091", tenant_id=None):
     """Send an authenticated query to the A2A server."""
 
     # Construct the URL (no token in query string for security)
@@ -19,6 +19,10 @@ def query_a2a(message, token="demo_token_123", endpoint="http://localhost:8091")
 
     # Set up authentication header (secure method)
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # Add tenant hint if provided (useful for localhost where subdomain detection doesn't work)
+    if tenant_id:
+        headers["x-adcp-tenant"] = tenant_id
 
     # Create the A2A message format
     payload = {"message": {"content": {"text": message}}}
@@ -55,5 +59,6 @@ if __name__ == "__main__":
 
     token = os.getenv("A2A_TOKEN", "demo_token_123")
     endpoint = os.getenv("A2A_ENDPOINT", "http://localhost:8091")
+    tenant_id = os.getenv("A2A_TENANT_ID", None)
 
-    query_a2a(message, token, endpoint)
+    query_a2a(message, token, endpoint, tenant_id)

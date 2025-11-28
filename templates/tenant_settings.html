@@ -1659,9 +1659,14 @@ REJECT - Creative cannot be approved:
                 <p style="margin: 0.25rem 0 0 0; font-size: 0.875rem;">
                     Connect to Google Ad Manager in the Ad Server settings to enable inventory sync.
                 </p>
-                <a href="#" onclick="event.preventDefault(); switchSettingsSection('adserver')" class="btn btn-primary" style="margin-top: 1rem;">
-                    Configure Ad Server
-                </a>
+                <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+                    <a href="#" onclick="event.preventDefault(); switchSettingsSection('adserver')" class="btn btn-primary">
+                        Configure Ad Server
+                    </a>
+                    <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id, type='all') }}" class="btn btn-secondary">
+                        Manage Publishers & Properties
+                    </a>
+                </div>
             </div>
             {% endif %}
         </div>

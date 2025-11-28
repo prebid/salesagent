@@ -316,6 +316,24 @@ def get_principal_from_context(
         else:
             console.print("[yellow]Apx-Incoming-Host header not present[/yellow]")
 
+    # 4. Fallback for localhost in development: use "default" tenant
+    if not requested_tenant_id:
+        host = _get_header_case_insensitive(headers, "host") or ""
+        # Extract hostname without port (handles localhost:8091, 127.0.0.1:8001, etc)
+        hostname = host.split(":")[0]
+        if hostname in ["localhost", "127.0.0.1", "localhost.localdomain"]:
+            console.print("[blue]Localhost detected - checking for 'default' tenant[/blue]")
+            tenant_context = get_tenant_by_subdomain("default")
+            if tenant_context:
+                requested_tenant_id = tenant_context["tenant_id"]
+                detection_method = "localhost fallback (default tenant)"
+                set_current_tenant(tenant_context)
+                console.print(
+                    f"[green]Localhost fallback: Using 'default' tenant → tenant_id: {requested_tenant_id}[/green]"
+                )
+            else:
+                console.print("[yellow]No 'default' tenant found for localhost fallback[/yellow]")
+
     if not requested_tenant_id:
         console.print("[yellow]No tenant detected from headers[/yellow]")
     else:

@@ -314,17 +314,12 @@ def inventory_browser(tenant_id):
         if not row:
             return "Tenant not found", 404
 
-        # Check adapter type - inventory browser is only for GAM
+        # Check adapter type - GAM inventory features (ad units, placements) only for GAM
+        # But Publishers & Properties tab is available for all adapters
         adapter_type = tenant.ad_server or "mock"
-        if adapter_type != "google_ad_manager":
-            from flask import flash, redirect, url_for
+        is_gam = adapter_type == "google_ad_manager"
 
-            flash(
-                f"Inventory browser is only available for Google Ad Manager. "
-                f"Your tenant is using the '{adapter_type}' adapter which does not require inventory sync.",
-                "info",
-            )
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+        # Note: We allow non-GAM tenants to access this page for the Publishers & Properties tab
 
     tenant_dict = {"tenant_id": row[0], "name": row[1], "virtual_host": tenant.virtual_host if tenant else None}
 
@@ -337,6 +332,8 @@ def inventory_browser(tenant_id):
         tenant_id=tenant_id,
         tenant_name=row[1],
         inventory_type=inventory_type,
+        is_gam=is_gam,
+        adapter_type=adapter_type,
     )
 
 
