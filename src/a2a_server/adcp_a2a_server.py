@@ -103,6 +103,22 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# ADCP Discovery Skills: Skills that don't require authentication
+# Per AdCP spec section 3.2, these endpoints allow optional authentication for public discovery.
+# IMPORTANT: This is the single source of truth for auth-optional skills in A2A.
+# Add new skills here ONLY if they meet AdCP discovery endpoint requirements:
+#   1. Return only public/non-sensitive data
+#   2. Support tenant-level access control (e.g., brand_manifest_policy)
+#   3. Never expose user-specific or transactional data
+#   4. Must be safe to call without authentication
+DISCOVERY_SKILLS = frozenset(
+    {
+        "list_creative_formats",  # Creative specifications (always public)
+        "list_authorized_properties",  # Property catalog (always public)
+        "get_products",  # Conditional: depends on tenant brand_manifest_policy setting
+    }
+)
+
 # Context variables for current request (works with async code, unlike threading.local())
 _request_auth_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_auth_token", default=None)
 _request_headers: contextvars.ContextVar[dict | None] = contextvars.ContextVar("request_headers", default=None)
@@ -543,15 +559,12 @@ class AdCPRequestHandler(RequestHandler):
             # Get authentication token
             auth_token = self._get_auth_token()
 
-            # List of skills that don't require authentication (public discovery endpoints)
-            public_skills = {"list_authorized_properties"}
-
             # Check if any requested skills require authentication
             requires_auth = True
             if skill_invocations:
-                # If ALL skills are public, don't require auth
+                # If ALL skills are discovery endpoints, don't require auth
                 requested_skills = {inv["skill"] for inv in skill_invocations}
-                if requested_skills.issubset(public_skills):
+                if requested_skills.issubset(DISCOVERY_SKILLS):
                     requires_auth = False
 
             # Require authentication for non-public skills
@@ -1283,28 +1296,9 @@ class AdCPRequestHandler(RequestHandler):
         """
         logger.info(f"Handling explicit skill: {skill_name} with parameters: {list(parameters.keys())}")
 
-        # Define discovery skills that support optional authentication
-        # Per AdCP spec section 3.2, these endpoints allow anonymous access for public discovery
-        #
-        # IMPORTANT: This is the single source of truth for auth-optional skills.
-        # Add new skills here ONLY if they meet AdCP discovery endpoint requirements:
-        #   1. Return only public/non-sensitive data
-        #   2. Support tenant-level access control via brand_manifest_policy
-        #   3. Never expose user-specific or transactional data
-        #   4. Must be safe to call without authentication
-        #
-        # Current auth-optional skills:
-        #   - list_creative_formats: Always public (creative specifications)
-        #   - list_authorized_properties: Always public (property catalog)
-        #   - get_products: Conditional based on tenant brand_manifest_policy setting
-        discovery_skills = {
-            "list_creative_formats",
-            "list_authorized_properties",
-            "get_products",  # Conditional: depends on tenant brand_manifest_policy
-        }
-
         # Validate auth_token for non-discovery skills
-        if skill_name not in discovery_skills and auth_token is None:
+        # Discovery skills are defined in DISCOVERY_SKILLS constant at module level
+        if skill_name not in DISCOVERY_SKILLS and auth_token is None:
             raise ServerError(InvalidRequestError(message="Authentication token required for skill invocation"))
 
         # Map skill names to handlers
