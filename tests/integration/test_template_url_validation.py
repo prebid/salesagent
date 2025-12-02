@@ -173,6 +173,9 @@ class TestTemplateUrlValidation:
                                 test_params["principal_id"] = "test_principal"
                                 if "delete" in endpoint or "toggle" in endpoint:
                                     test_params["config_id"] = "test_config"
+                                # Delivery webhook endpoints need media_buy_id
+                                if "delivery" in endpoint or "trigger" in endpoint:
+                                    test_params["media_buy_id"] = "test_buy"
 
                             # Add media_buy_id for media buy endpoints
                             if "media_buy" in endpoint:
