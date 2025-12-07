@@ -1484,9 +1484,6 @@ class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
 
     Inherits all AdCP-compliant fields from adcp library,
     ensuring we stay in sync with spec updates.
-
-    Adds internal convenience fields for backward compatibility
-    (marked with exclude=True to prevent leaking to AdCP clients).
     """
 
     # Internal convenience fields (not in AdCP spec, excluded from serialization)
@@ -1496,8 +1493,6 @@ class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
         description="AdCP schema version for this request (e.g., '1.0.0')",
         exclude=True,
     )
-    standard_only: bool | None = Field(None, description="Only return IAB standard formats", exclude=True)
-    category: str | None = Field(None, description="Filter by format category (standard, custom)", exclude=True)
 
     @model_validator(mode="before")
     @classmethod

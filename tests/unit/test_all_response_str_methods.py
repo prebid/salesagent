@@ -129,18 +129,21 @@ class TestResponseStrMethods:
         """ListCreativeFormatsResponse with single format generates appropriate message."""
         fmt = Format(format_id=make_format_id("banner_300x250"), name="Banner", type="display")
         resp = ListCreativeFormatsResponse(formats=[fmt])
-        assert str(resp) == "Found 1 creative format."
+        # Library message: "Found 1 supported creative format."
+        assert str(resp) == "Found 1 supported creative format."
 
     def test_list_creative_formats_response_multiple_formats(self):
         """ListCreativeFormatsResponse with multiple formats generates count."""
         formats = [Format(format_id=make_format_id(f"fmt{i}"), name=f"Format {i}", type="display") for i in range(5)]
         resp = ListCreativeFormatsResponse(formats=formats)
-        assert str(resp) == "Found 5 creative formats."
+        # Library message: "Found N supported creative formats."
+        assert str(resp) == "Found 5 supported creative formats."
 
     def test_list_creative_formats_response_empty(self):
         """ListCreativeFormatsResponse with no formats generates appropriate message."""
         resp = ListCreativeFormatsResponse(formats=[])
-        assert str(resp) == "No creative formats are currently supported."
+        # Library message: "Found 0 supported creative formats."
+        assert str(resp) == "Found 0 supported creative formats."
 
     def test_sync_creatives_response(self):
         """SyncCreativesResponse generates message from creatives list."""
@@ -179,7 +182,8 @@ class TestResponseStrMethods:
             pagination=Pagination(limit=10, offset=0, has_more=False),
             creatives=[creative],
         )
-        assert str(resp) == "Found 1 creative."
+        # Library message: "Found N creatives in the system."
+        assert str(resp) == "Found 1 creative in the system."
 
     def test_activate_signal_response_deployed(self):
         """ActivateSignalResponse with deployed status shows platform ID."""

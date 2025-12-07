@@ -62,8 +62,8 @@ class TestA2ASpecCompliance:
 
         assert extra_fields == set(), f"Response has non-spec fields: {extra_fields}"
 
-        # Verify __str__() works for human-readable message
-        assert str(response) == "Found 1 authorized publisher domain: example.com"
+        # Verify __str__() works for human-readable message (using library's .summary())
+        assert str(response) == "Authorized to represent 1 publisher domain."
 
     def test_get_products_spec_compliance(self):
         """Test get_products returns only spec-defined fields."""
@@ -138,7 +138,8 @@ class TestA2ASpecCompliance:
         extra_fields = response_fields - spec_fields
 
         assert extra_fields == set(), f"Response has non-spec fields: {extra_fields}"
-        assert str(response) == "No creatives found."
+        # Library's .summary() message format
+        assert str(response) == "Found 0 creatives in the system."
 
     def test_list_creative_formats_spec_compliance(self):
         """Test list_creative_formats returns only spec-defined fields."""
@@ -157,7 +158,8 @@ class TestA2ASpecCompliance:
         extra_fields = response_fields - spec_fields
 
         assert extra_fields == set(), f"Response has non-spec fields: {extra_fields}"
-        assert str(response) == "No creative formats are currently supported."
+        # Library's .summary() message format
+        assert str(response) == "Found 0 supported creative formats."
 
     def test_create_media_buy_spec_compliance(self):
         """Test create_media_buy returns only spec-defined fields."""
@@ -250,7 +252,8 @@ class TestA2AArtifactDescriptions:
 
         assert response is not None
         assert isinstance(response, ListAuthorizedPropertiesResponse)
-        assert str(response) == "Found 2 authorized publisher domains."
+        # Library's .summary() message format
+        assert str(response) == "Authorized to represent 2 publisher domains."
 
     def test_artifact_reconstruction_all_skills(self):
         """Test reconstruction works for all supported skills."""
@@ -334,7 +337,8 @@ class TestMCPAndA2AResponseParity:
         mcp_message = str(mcp_response)
         a2a_message = str(ListAuthorizedPropertiesResponse(**a2a_response_data))
         assert mcp_message == a2a_message
-        assert mcp_message == "Found 1 authorized publisher domain: example.com"
+        # Library's .summary() message format
+        assert mcp_message == "Authorized to represent 1 publisher domain."
 
     def test_all_response_types_have_str_method(self):
         """Test that all AdCP response types support __str__() for human-readable messages."""
@@ -351,9 +355,9 @@ class TestMCPAndA2AResponseParity:
 
         for response_cls in response_types:
             # All our response adapters should have __str__
-            assert hasattr(response_cls, "__str__"), (
-                f"{response_cls.__name__} must have __str__() for human-readable messages"
-            )
+            assert hasattr(
+                response_cls, "__str__"
+            ), f"{response_cls.__name__} must have __str__() for human-readable messages"
 
 
 @pytest.mark.integration

@@ -8,11 +8,9 @@ preventing validation errors like the 'brief' is required issue.
 from unittest.mock import Mock, patch
 
 import pytest
+from adcp import ListAuthorizedPropertiesRequest
 
-from src.core.schema_adapters import (
-    GetProductsRequest,
-    ListAuthorizedPropertiesRequest,
-)
+from src.core.schema_adapters import GetProductsRequest
 from src.core.schemas import (
     ActivateSignalRequest,
     CreateMediaBuyRequest,
@@ -67,8 +65,8 @@ class TestMCPContractValidation:
         """Test list_authorized_properties can be called with no parameters."""
         request = ListAuthorizedPropertiesRequest()
 
-        # adcp_version field was removed from AdCP spec
-        assert request.tags is None
+        # 'tags' field was removed in AdCP 2.5 - only 'context' remains as optional
+        assert request.context is None
 
     def test_activate_signal_minimal(self):
         """Test activate_signal with just signal_id."""

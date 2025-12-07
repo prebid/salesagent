@@ -1812,13 +1812,18 @@ class AdCPRequestHandler(RequestHandler):
                 tool_context = MinimalContext.from_request_context()
 
             # Build request from parameters (all optional)
-            from src.core.schema_adapters import ListCreativeFormatsRequest
+            from adcp import ListCreativeFormatsRequest
 
             req = ListCreativeFormatsRequest(
                 type=parameters.get("type"),
-                standard_only=parameters.get("standard_only"),
-                category=parameters.get("category"),
                 format_ids=parameters.get("format_ids"),
+                is_responsive=parameters.get("is_responsive"),
+                name_search=parameters.get("name_search"),
+                asset_types=parameters.get("asset_types"),
+                min_width=parameters.get("min_width"),
+                max_width=parameters.get("max_width"),
+                min_height=parameters.get("min_height"),
+                max_height=parameters.get("max_height"),
                 context=parameters.get("context"),
             )
 
@@ -1867,9 +1872,16 @@ class AdCPRequestHandler(RequestHandler):
                 tool_context = MinimalContext.from_request_context()  # type: ignore[assignment]
 
             # Map A2A parameters to ListAuthorizedPropertiesRequest
-            from src.core.schema_adapters import ListAuthorizedPropertiesRequest as SchemaAdapterRequest
+            from adcp import ListAuthorizedPropertiesRequest
 
-            request = SchemaAdapterRequest(tags=parameters.get("tags", []), context=parameters.get("context"))
+            # Warn about deprecated 'tags' parameter (removed in AdCP 2.5)
+            if "tags" in parameters:
+                logger.warning(
+                    "Deprecated parameter 'tags' passed to list_authorized_properties. "
+                    "This parameter was removed in AdCP 2.5 and will be ignored."
+                )
+
+            request = ListAuthorizedPropertiesRequest(context=parameters.get("context"))
 
             # Call core function directly
             # Context can be None for unauthenticated calls - tenant will be detected from headers

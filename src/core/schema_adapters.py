@@ -23,7 +23,7 @@ from adcp import GetProductsRequest as _GeneratedGetProductsRequest
 from adcp.types.generated_poc.core.context import ContextObject
 from pydantic import BaseModel, Field, model_validator
 
-from src.core.schemas import AdCPBaseModel, FormatId
+from src.core.schemas import AdCPBaseModel
 
 
 class GetProductsRequest(BaseModel):
@@ -380,17 +380,14 @@ from adcp import ListCreativeFormatsResponse as _GeneratedListCreativeFormatsRes
 
 
 class ListCreativeFormatsResponse(AdCPBaseModel):
-    """Adapter for ListCreativeFormatsResponse - adds __str__() for protocol abstraction.
+    """Adapter for ListCreativeFormatsResponse - extends library type.
 
-    The generated schema is spec-compliant but lacks human-readable message generation.
-    This adapter wraps it and adds __str__() for MCP/A2A protocol layer use.
+    Uses library's .summary() for human-readable messages.
 
     Example:
         resp = ListCreativeFormatsResponse(formats=[...])
-        # AdCP payload: spec-compliant (no message field)
-        payload = resp.model_dump()
-        # Protocol message: human-readable via __str__()
-        message = str(resp)  # "Found 5 creative formats."
+        payload = resp.model_dump()  # AdCP-compliant
+        message = str(resp)  # "Found 5 supported creative formats."
     """
 
     model_config = {"arbitrary_types_allowed": True}
@@ -402,18 +399,8 @@ class ListCreativeFormatsResponse(AdCPBaseModel):
     context: dict[str, Any] | ContextObject | None = None
 
     def __str__(self) -> str:
-        """Return human-readable message for protocol layer.
-
-        Used by both MCP (for display) and A2A (for task messages).
-        Provides conversational text without adding non-spec fields to the schema.
-        """
-        count = len(self.formats)
-        if count == 0:
-            return "No creative formats are currently supported."
-        elif count == 1:
-            return "Found 1 creative format."
-        else:
-            return f"Found {count} creative formats."
+        """Delegate to library's .summary() for consistent messaging."""
+        return _GeneratedListCreativeFormatsResponse.model_construct(formats=self.formats).summary()
 
     def to_generated(self) -> _GeneratedListCreativeFormatsResponse:
         """Convert to generated schema for protocol validation."""
@@ -487,18 +474,10 @@ class ListAuthorizedPropertiesResponse(AdCPBaseModel):
         return iter(self.model_dump().items())
 
     def __str__(self) -> str:
-        """Return human-readable message for protocol layer.
-
-        Used by both MCP (for display) and A2A (for task messages).
-        Provides conversational text without adding non-spec fields to the schema.
-        """
-        count = len(self.publisher_domains)
-        if count == 0:
-            return "No authorized publisher domains found."
-        elif count == 1:
-            return f"Found 1 authorized publisher domain: {self.publisher_domains[0]}"
-        else:
-            return f"Found {count} authorized publisher domains."
+        """Delegate to library's .summary() for consistent messaging."""
+        return _GeneratedListAuthorizedPropertiesResponse.model_construct(
+            publisher_domains=self.publisher_domains
+        ).summary()
 
     def to_generated(self) -> _GeneratedListAuthorizedPropertiesResponse:
         """Convert to generated schema for protocol validation."""
@@ -513,46 +492,11 @@ class ListAuthorizedPropertiesResponse(AdCPBaseModel):
 
 
 # ============================================================================
-# Request Adapters (simple pass-through for now)
+# Request Adapters - Use library types directly
 # ============================================================================
-
-from adcp import (
-    ListAuthorizedPropertiesRequest as _GeneratedListAuthorizedPropertiesRequest,
-)
-from adcp import (
-    ListCreativeFormatsRequest as _GeneratedListCreativeFormatsRequest,
-)
-
-
-class ListCreativeFormatsRequest(BaseModel):
-    """Adapter for ListCreativeFormatsRequest - simple pass-through to generated schema."""
-
-    type: str | None = Field(None, description="Filter by format type")
-    standard_only: bool | None = Field(None, description="Only return IAB standard formats")
-    category: str | None = Field(None, description="Filter by category")
-    format_ids: list[FormatId] | None = Field(
-        None, description="Return only these specific format IDs (e.g., from get_products response)"
-    )
-    context: dict[str, Any] | ContextObject | None = Field(
-        None, description="Application-level context provided by the client"
-    )
-
-    def to_generated(self) -> _GeneratedListCreativeFormatsRequest:
-        """Convert to generated schema for protocol validation."""
-        return _GeneratedListCreativeFormatsRequest(**self.model_dump())
-
-
-class ListAuthorizedPropertiesRequest(BaseModel):
-    """Adapter for ListAuthorizedPropertiesRequest - simple pass-through to generated schema."""
-
-    tags: list[str] | None = Field(None, description="Filter properties by specific tags")
-    context: dict[str, Any] | ContextObject | None = Field(
-        None, description="Application-level context provided by the client"
-    )
-
-    def to_generated(self) -> _GeneratedListAuthorizedPropertiesRequest:
-        """Convert to generated schema for protocol validation."""
-        return _GeneratedListAuthorizedPropertiesRequest(**self.model_dump())
+# ListCreativeFormatsRequest and ListAuthorizedPropertiesRequest are now
+# imported directly from the adcp library. No adapters needed since we
+# removed all non-spec convenience fields (standard_only, category, tags).
 
 
 # ============================================================================
@@ -703,9 +647,11 @@ class SyncCreativesResponse(AdCPBaseModel):
 # GetMediaBuyDeliveryResponse Adapter
 # ============================================================================
 
+from adcp import GetMediaBuyDeliveryResponse as _GeneratedGetMediaBuyDeliveryResponse
+
 
 class GetMediaBuyDeliveryResponse(AdCPBaseModel):
-    """Adapter for GetMediaBuyDeliveryResponse - adds __str__()."""
+    """Adapter for GetMediaBuyDeliveryResponse - uses library .summary()."""
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -729,26 +675,21 @@ class GetMediaBuyDeliveryResponse(AdCPBaseModel):
     context: dict[str, Any] | ContextObject | None = None
 
     def __str__(self) -> str:
-        """Return human-readable message for protocol layer."""
-        count = len(self.media_buy_deliveries)
-        if count == 0:
-            return "No delivery data available."
-        elif count == 1:
-            return "Delivery data for 1 media buy."
-        return f"Delivery data for {count} media buys."
+        """Delegate to library's .summary() for consistent messaging."""
+        return _GeneratedGetMediaBuyDeliveryResponse.model_construct(
+            media_buy_deliveries=self.media_buy_deliveries
+        ).summary()
 
 
 # ============================================================================
 # GetSignalsResponse Adapter
 # ============================================================================
 
+from adcp import GetSignalsResponse as _GeneratedGetSignalsResponse
+
 
 class GetSignalsResponse(AdCPBaseModel):
-    """Adapter for GetSignalsResponse - adds __str__().
-
-    Per AdCP PR #113 and official schema, protocol fields (message, context_id)
-    are added by the protocol layer, not the domain response.
-    """
+    """Adapter for GetSignalsResponse - uses library .summary()."""
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -757,14 +698,8 @@ class GetSignalsResponse(AdCPBaseModel):
     context: dict[str, Any] | ContextObject | None = None
 
     def __str__(self) -> str:
-        """Return human-readable summary of signals."""
-        count = len(self.signals)
-        if count == 0:
-            return "No signals found matching your criteria."
-        elif count == 1:
-            return "Found 1 signal matching your criteria."
-        else:
-            return f"Found {count} signals matching your criteria."
+        """Delegate to library's .summary() for consistent messaging."""
+        return _GeneratedGetSignalsResponse.model_construct(signals=self.signals).summary()
 
 
 # ============================================================================
@@ -809,9 +744,11 @@ class ActivateSignalResponse(AdCPBaseModel):
 # ListCreativesResponse Adapter
 # ============================================================================
 
+from adcp import ListCreativesResponse as _GeneratedListCreativesResponse
+
 
 class ListCreativesResponse(AdCPBaseModel):
-    """Adapter for ListCreativesResponse - adds __str__()."""
+    """Adapter for ListCreativesResponse - uses library .summary()."""
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -823,15 +760,8 @@ class ListCreativesResponse(AdCPBaseModel):
     context: dict[str, Any] | ContextObject | None = None
 
     def __str__(self) -> str:
-        """Generate human-readable message from query_summary."""
-        total = self.query_summary.total_matching
-        returned = self.query_summary.returned
-        if total == 0:
-            return "No creatives found."
-        elif returned == total:
-            return f"Found {total} creative{'s' if total != 1 else ''}."
-        else:
-            return f"Found {total} creatives, showing {returned}."
+        """Delegate to library's .summary() for consistent messaging."""
+        return _GeneratedListCreativesResponse.model_construct(creatives=self.creatives).summary()
 
 
 # ============================================================================

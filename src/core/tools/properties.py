@@ -10,14 +10,11 @@ Handles property discovery including:
 import logging
 import time
 
+from adcp import ListAuthorizedPropertiesRequest
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from sqlalchemy import select
-
-from src.core.tool_context import ToolContext
-
-logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_from_context
@@ -25,9 +22,12 @@ from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner
 from src.core.helpers import log_tool_activity
-from src.core.schema_adapters import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
+from src.core.schema_adapters import ListAuthorizedPropertiesResponse
 from src.core.testing_hooks import get_testing_context
+from src.core.tool_context import ToolContext
 from src.core.validation_helpers import safe_parse_json_field
+
+logger = logging.getLogger(__name__)
 
 
 def _list_authorized_properties_impl(
@@ -49,7 +49,7 @@ def _list_authorized_properties_impl(
 
     # Handle missing request object (allows empty calls)
     if req is None:
-        req = ListAuthorizedPropertiesRequest(tags=None, context=None)
+        req = ListAuthorizedPropertiesRequest()
 
     # Get tenant and principal from context
     # Authentication is OPTIONAL for discovery endpoints (returns public inventory)
