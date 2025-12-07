@@ -4,33 +4,39 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
+# All MCP tools - unified mode is now enabled by default
+ALL_TOOLS = [
+    # Core AdCP tools
+    "get_products",
+    "create_media_buy",
+    "update_media_buy",
+    "get_media_buy_delivery",
+    "sync_creatives",
+    "list_creatives",
+    "list_creative_formats",
+    "list_authorized_properties",
+    "update_performance_index",
+    "get_signals",
+    "activate_signal",
+    # Task management tools (HITL - Human-in-the-loop)
+    "list_tasks",
+    "get_task",
+    "complete_task",
+]
+
 
 def test_all_tools_registered():
     """Verify all expected AdCP tools are registered with MCP."""
     from src.core.main import mcp
 
-    expected_tools = [
-        "get_products",
-        "create_media_buy",
-        "update_media_buy",
-        "get_media_buy_delivery",
-        "sync_creatives",
-        "list_creatives",
-        "list_creative_formats",
-        "list_authorized_properties",
-        "update_performance_index",
-        "get_signals",
-        "activate_signal",
-    ]
-
     # Get registered tool names from ToolManager
     registered_tools = list(mcp._tool_manager._tools.keys())
 
-    for tool in expected_tools:
+    for tool in ALL_TOOLS:
         assert tool in registered_tools, f"Tool '{tool}' is not registered with MCP server"
 
     # Verify no unexpected tools
-    unexpected = set(registered_tools) - set(expected_tools)
+    unexpected = set(registered_tools) - set(ALL_TOOLS)
     assert len(unexpected) == 0, f"Unexpected tools registered: {unexpected}"
 
 

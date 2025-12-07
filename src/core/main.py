@@ -643,9 +643,10 @@ async def health_config(request: Request):
         )
 
 
-# Add admin UI routes when running unified
-unified_mode = os.environ.get("ADCP_UNIFIED_MODE")
-logger.info(f"STARTUP: ADCP_UNIFIED_MODE = '{unified_mode}' (type: {type(unified_mode)})")
+# Unified mode: combine Admin UI with MCP server in single process
+# Default to enabled - set ADCP_UNIFIED_MODE=false to disable
+unified_mode = os.environ.get("ADCP_UNIFIED_MODE", "true").lower() not in ("false", "0", "no")
+logger.info(f"STARTUP: ADCP_UNIFIED_MODE = {unified_mode}")
 if unified_mode:
     from fastapi.middleware.wsgi import WSGIMiddleware
     from fastapi.responses import HTMLResponse, RedirectResponse
@@ -733,8 +734,8 @@ if unified_mode:
 
         with get_db_session() as session:
             # Base query for workflow steps in this tenant
-            # TODO: Fix this - Context should not be joined here
-            stmt = select(WorkflowStep).filter(WorkflowStep.tenant_id == tenant["tenant_id"])  # type: ignore[attr-defined]
+            # WorkflowStep links to Context which has tenant_id
+            stmt = select(WorkflowStep).join(DBContext).filter(DBContext.tenant_id == tenant["tenant_id"])
 
             # Apply status filter
             if status:
