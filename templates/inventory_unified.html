@@ -531,9 +531,16 @@ function loadActiveTab() {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
-    // Load initial data
-    loadProfiles();
-    loadInventoryStatus();
+    // Load initial data - only load GAM-specific data if elements exist
+    const isGamTenant = document.getElementById('totalProfiles') !== null;
+
+    if (isGamTenant) {
+        loadProfiles();
+        loadInventoryStatus();
+    }
+
+    // Always load publishers for the Publishers tab (visible for all tenants)
+    loadPublishers();
 
     // Restore active tab from localStorage or URL hash
     loadActiveTab();
@@ -560,17 +567,24 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // Add enter key support for search
-    document.getElementById('searchQuery').addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-            searchInventory();
-        }
-    });
+    // Add enter key support for search (only if search element exists - GAM only)
+    const searchInput = document.getElementById('searchQuery');
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                searchInventory();
+            }
+        });
+    }
 });
 
 // ==================== PROFILES TAB ====================
 
 function loadProfiles() {
+    // Check if profiles list element exists (GAM tenant only)
+    const profilesList = document.getElementById('profilesList');
+    if (!profilesList) return;  // Non-GAM tenant, skip
+
     fetch(API_URLS.profilesList, {
         credentials: 'same-origin'
     })
@@ -589,19 +603,26 @@ function loadProfiles() {
         .catch(error => {
             if (error.message !== 'Session expired') {
                 console.error('Error loading profiles:', error);
-                document.getElementById('profilesList').innerHTML = '<div class="alert alert-danger">Error loading profiles</div>';
+                if (profilesList) {
+                    profilesList.innerHTML = '<div class="alert alert-danger">Error loading profiles</div>';
+                }
             }
         });
 }
 
 function renderProfiles(profiles) {
     const container = document.getElementById('profilesList');
+    if (!container) return;  // Element doesn't exist (non-GAM tenant)
 
-    // Update statistics
-    document.getElementById('totalProfiles').textContent = profiles.length;
+    // Update statistics (only if elements exist)
+    const totalEl = document.getElementById('totalProfiles');
+    const inUseEl = document.getElementById('inUseProfiles');
+    const unusedEl = document.getElementById('unusedProfiles');
+
+    if (totalEl) totalEl.textContent = profiles.length;
     const inUse = profiles.filter(p => p.product_count > 0).length;
-    document.getElementById('inUseProfiles').textContent = inUse;
-    document.getElementById('unusedProfiles').textContent = profiles.length - inUse;
+    if (inUseEl) inUseEl.textContent = inUse;
+    if (unusedEl) unusedEl.textContent = profiles.length - inUse;
 
     if (profiles.length === 0) {
         container.innerHTML = `
@@ -755,6 +776,11 @@ function deleteProfile(profileId, profileName) {
 // ==================== BROWSE INVENTORY TAB ====================
 
 function loadInventoryStatus() {
+    // Check if inventory elements exist (GAM tenant only)
+    const syncStatus = document.getElementById('syncStatus');
+    const stats = document.getElementById('inventoryStats');
+    if (!syncStatus || !stats) return;  // Non-GAM tenant, skip
+
     fetch(API_URLS.inventoryTree, {
         credentials: 'same-origin'
     })
@@ -772,9 +798,6 @@ function loadInventoryStatus() {
             return response.json();
         })
         .then(data => {
-            const syncStatus = document.getElementById('syncStatus');
-            const stats = document.getElementById('inventoryStats');
-
             if (data.last_sync) {
                 const lastSync = new Date(data.last_sync);
                 const timeAgo = getTimeAgo(lastSync);
@@ -800,8 +823,9 @@ function loadInventoryStatus() {
         .catch(error => {
             if (error.message !== 'Session expired') {
                 console.error('Error loading inventory status:', error);
-                document.getElementById('syncStatus').innerHTML =
-                    '<span class="text-danger">Error loading status</span>';
+                if (syncStatus) {
+                    syncStatus.innerHTML = '<span class="text-danger">Error loading status</span>';
+                }
             }
         });
 }
@@ -1252,6 +1276,10 @@ function createProfileFromSelection() {
 // ========================================
 
 async function loadPublishers() {
+    // Check if publishers elements exist
+    const publishersList = document.getElementById('publishersList');
+    if (!publishersList) return;
+
     try {
         const response = await fetch(API_URLS.publishersList, {
             credentials: 'same-origin'
@@ -1261,25 +1289,32 @@ async function loadPublishers() {
 
         const data = await response.json();
 
-        // Update stats
-        document.getElementById('totalPublishers').textContent = data.total || 0;
-        document.getElementById('verifiedPublishers').textContent = data.verified || 0;
-        document.getElementById('pendingPublishers').textContent = data.pending || 0;
+        // Update stats (only if elements exist)
+        const totalEl = document.getElementById('totalPublishers');
+        const verifiedEl = document.getElementById('verifiedPublishers');
+        const pendingEl = document.getElementById('pendingPublishers');
+
+        if (totalEl) totalEl.textContent = data.total || 0;
+        if (verifiedEl) verifiedEl.textContent = data.verified || 0;
+        if (pendingEl) pendingEl.textContent = data.pending || 0;
 
         // Render publishers list
         renderPublishers(data.partners || []);
     } catch (error) {
         console.error('Error loading publishers:', error);
-        document.getElementById('publishersList').innerHTML = `
-            <div class="alert alert-danger">
-                Error loading publishers: ${error.message}
-            </div>
-        `;
+        if (publishersList) {
+            publishersList.innerHTML = `
+                <div class="alert alert-danger">
+                    Error loading publishers: ${error.message}
+                </div>
+            `;
+        }
     }
 }
 
 function renderPublishers(publishers) {
     const container = document.getElementById('publishersList');
+    if (!container) return;
 
     if (publishers.length === 0) {
         container.innerHTML = `
