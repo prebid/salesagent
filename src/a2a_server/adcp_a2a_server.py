@@ -4,6 +4,7 @@ AdCP Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
+import asyncio
 import contextvars
 import logging
 import os
@@ -605,6 +606,14 @@ class AdCPRequestHandler(RequestHandler):
         )
         self.tasks[task_id] = task
 
+        # Send initial "working" webhook if push notification configured
+        # Use create_task() to avoid blocking task processing with webhook latency
+        if task.metadata and "push_notification_config" in task.metadata:
+            asyncio.create_task(
+                self._send_protocol_webhook(task, status="working")
+            )
+            logger.info(f"Dispatched 'working' status webhook for task {task_id}")
+
         try:
             # Get authentication token
             auth_token = self._get_auth_token()
@@ -1027,6 +1036,8 @@ class AdCPRequestHandler(RequestHandler):
         if task:
             task.status = TaskStatus(state=TaskState.canceled)
             self.tasks[task_id] = task
+            # Send protocol-level webhook notification for cancellation
+            await self._send_protocol_webhook(task, status="canceled")
         return task
 
     async def on_resubscribe_to_task(

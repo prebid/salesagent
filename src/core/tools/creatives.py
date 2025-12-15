@@ -1496,6 +1496,14 @@ def _sync_creatives_impl(
                 if push_notification_config:
                     request_data_for_workflow["push_notification_config"] = push_notification_config
 
+                # Store context if provided (for echoing back in webhook)
+                if context:
+                    request_data_for_workflow["context"] = context
+
+                # Store protocol type for webhook payload creation
+                # ToolContext = A2A, Context (FastMCP) = MCP
+                request_data_for_workflow["protocol"] = "a2a" if isinstance(ctx, ToolContext) else "mcp"
+
                 step = ctx_manager.create_workflow_step(
                     context_id=persistent_ctx.context_id,
                     step_type="creative_approval",

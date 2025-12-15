@@ -16,6 +16,9 @@ from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.services.protocol_webhook_service import get_protocol_webhook_service
+from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp.types import SyncCreativesSuccessResponse, CreativeAction, SyncCreativeResult
+from a2a.types import TaskState
 
 # TODO: Missing module - these functions need to be implemented
 # from creative_formats import discover_creative_formats_from_url, parse_creative_spec
@@ -144,17 +147,12 @@ def _cleanup_completed_tasks():
 async def _call_webhook_for_creative_status(
     db_session,
     creative_id,
-    result,
     tenant_id: str | None = None,
 ):
     """Send protocol-level push notification for creative status update.
 
     Checks if all creatives in the sync_creatives task have been reviewed.
     Only fires the webhook when ALL creatives have been reviewed (approved or rejected).
-
-    This implements the semantic that sync_creatives task status should be:
-    - 'submitted' when any creatives are pending review
-    - 'completed' when all creatives have been reviewed
 
     Returns:
         bool: True if webhook delivered successfully, False otherwise (or if no config found)
@@ -209,18 +207,24 @@ async def _call_webhook_for_creative_status(
         logger.info(f"All {len(all_creatives)} creatives in task {step.step_id} have been reviewed; firing webhook")
 
         # Build SyncCreativesResponse with all creative results
-        complete_result = {
-            "creatives": [
-                {
-                    "creative_id": c.creative_id,
-                    "name": c.name,
-                    "format": c.format,
-                    "status": c.status,
-                    "action": "updated",  # They were reviewed/updated
-                }
-                for c in all_creatives
-            ]
-        }
+
+        creatives: list[SyncCreativeResult] = [
+            SyncCreativeResult(
+                creative_id="c.creative_id",
+                platform_id="", # we need to populate this. Currently not storing any internal id of our own per creative
+                name=c.name,
+                format=c.format,
+                action=CreativeAction.failed if c.status != "approved" else CreativeAction.created,
+                errors=[c.data.get("rejection_reason")] if c.data else None  
+            )
+            for c in all_creatives
+        ]
+        
+        complete_result = SyncCreativesSuccessResponse(
+            creatives=creatives,
+            dry_run=False,
+            context=step.request_data.get("context") or {}
+        )
 
         # build push notification config from step request data
         # this is because we don't store push notification config in the database when creating the creative
@@ -262,13 +266,23 @@ async def _call_webhook_for_creative_status(
             logger.info("error: None")
             logger.info(f"push_notification_config: {push_notification_config}")
 
+            # Determine protocol type from workflow step request_data
+            protocol = step.request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
+
+            # Create appropriate webhook payload based on protocol
+            if protocol == "a2a":
+                payload = create_a2a_webhook_payload(step.step_id, TaskState.completed, complete_result)
+            else:
+                payload = create_mcp_webhook_payload(step.step_id, TaskState.completed, complete_result)
+
+            metadata = {
+                "task_type": step.tool_name
+            }
+
             await service.send_notification(
                 push_notification_config=push_notification_config,
-                task_id=step.step_id,
-                task_type=step.tool_name,
-                status="completed",
-                result=complete_result,
-                error=None,
+                payload=payload,
+                metadata=metadata
             )
 
             logger.info(
@@ -480,25 +494,10 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
             db_session.commit()
 
-            # need to make sure this is complient with AdCP standard
-            result = {
-                "creatives": [
-                    {
-                        "creative_id": creative.creative_id,
-                        "name": creative.name,
-                        "format": creative.format,
-                        "status": "approved",
-                        "approved_by": approved_by,
-                        "approved_at": creative.approved_at.isoformat(),
-                    }
-                ]
-            }
-
             asyncio.run(
                 _call_webhook_for_creative_status(
                     db_session=db_session,
                     creative_id=creative_id,
-                    result=result,
                     tenant_id=tenant_id,
                 )
             )
@@ -693,24 +692,9 @@ def reject_creative(tenant_id, creative_id, **kwargs):
 
             db_session.commit()
 
-            # need to make sure this is complient with AdCP standard
-            result = {
-                "creatives": [
-                    {
-                        "creative_id": creative.creative_id,
-                        "name": creative.name,
-                        "format": creative.format,
-                        "status": "rejected",
-                        "rejected_by": rejected_by,
-                        "rejection_reason": rejection_reason,
-                        "rejected_at": creative.data["rejected_at"],
-                    }
-                ]
-            }
-
             asyncio.run(
                 _call_webhook_for_creative_status(
-                    db_session=db_session, creative_id=creative_id, result=result, tenant_id=tenant_id
+                    db_session=db_session, creative_id=creative_id, tenant_id=tenant_id
                 )
             )
 
