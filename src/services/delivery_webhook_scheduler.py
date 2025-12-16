@@ -21,6 +21,8 @@ from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResp
 from src.core.tool_context import ToolContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.protocol_webhook_service import get_protocol_webhook_service
+from adcp import create_mcp_webhook_payload, create_a2a_webhook_payload
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -242,16 +244,12 @@ class DeliveryWebhookScheduler:
             next_expected_at = datetime.combine(next_day, datetime.min.time(), tzinfo=UTC).isoformat()
 
             # Add webhook-specific metadata to the response
-            response_dict = delivery_response.model_dump()
-            response_dict.update(
-                {
-                    "notification_type": "scheduled",
-                    "sequence_number": sequence_number,
-                    "next_expected_at": next_expected_at,
-                    "frequency": raw_freq,
-                    "partial_data": False,  # TODO: Check for reporting_delayed status in media_buy_deliveries
-                    "unavailable_count": 0,  # TODO: Count reporting_delayed/failed deliveries
-                }
+            media_buy_delivery_result = GetMediaBuyDeliveryResponse(
+                **delivery_response.model_dump(),
+                notification_type="scheduled",
+                next_expected_at=next_expected_at,
+                partial_data=False, # TODO: Check for reporting_delayed status in media_buy_deliveries
+                unavailable_count=0 # TODO: Count reporting_delayed/failed deliveries
             )
 
             # Extract webhook URL and authentication
@@ -286,7 +284,7 @@ class DeliveryWebhookScheduler:
                 webhook_config = push_config
             else:
                 # Create a detached temporary config (not attached to session)
-                webhook_config = DBPushNotificationConfig(
+                push_notification_config = DBPushNotificationConfig(
                     id=f"temp_{media_buy.media_buy_id}",
                     tenant_id=media_buy.tenant_id,
                     principal_id=media_buy.principal_id,
@@ -296,17 +294,25 @@ class DeliveryWebhookScheduler:
                     is_active=True,
                 )
 
+                metadata = {
+                    "task_type": "media_buy_delivery",
+                    "tenant_id": media_buy.tenant_id,
+                    "principal_id": media_buy.principal_id
+                }
+
+            
+            media_buy_delivery_payload = create_mcp_webhook_payload(
+                task_id=media_buy.media_buy_id, # TODO: @yusuf - double check if using media buy id is correct for media buy delivery???
+                result=media_buy_delivery_result,
+                status=AdcpTaskStatus.completed      
+            )
+
             # Send webhook notification OUTSIDE the session context
             # This ensures the session is closed before async webhook call
             await self.webhook_service.send_notification(
-                task_type="media_buy_delivery",
-                task_id=media_buy.media_buy_id,
-                status="completed",
-                push_notification_config=webhook_config,
-                result=response_dict,  # Use modified dict with webhook metadata
-                tenant_id=media_buy.tenant_id,
-                principal_id=media_buy.principal_id,
-                media_buy_id=media_buy.media_buy_id,
+                push_notification_config=push_notification_config,
+                payload=media_buy_delivery_payload,
+                metadata=metadata
             )
 
             logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")

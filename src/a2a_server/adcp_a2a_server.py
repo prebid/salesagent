@@ -425,13 +425,16 @@ class AdCPRequestHandler(RequestHandler):
                 is_active=True,
             )
 
+            task.status = TaskState(status=status)
+
+            metadata = {
+                "task_type": task.metadata['skills_requested'][0] if len(task.metadata['skills_requested']) > 0 else 'unknown',
+            }
+            
             await push_notification_service.send_notification(
                 push_notification_config=push_notification_config,
-                task_id=task.id,
-                task_type="task",
-                status=status,
-                result=result,
-                error=error,
+                payload=Task,
+                metadata=metadata
             )
         except Exception as e:
             # Don't fail the task if webhook fails
@@ -928,7 +931,7 @@ class AdCPRequestHandler(RequestHandler):
             task.status = TaskStatus(state=task_state)
 
             # Send protocol-level webhook notification if configured
-            await self._send_protocol_webhook(task, status=task_status_str, result=result_data)
+            await self._send_protocol_webhook(task, status=task_status_str)
 
         except ServerError:
             # Re-raise ServerError as-is (will be caught by JSON-RPC handler)
@@ -960,7 +963,16 @@ class AdCPRequestHandler(RequestHandler):
 
             # Send protocol-level webhook notification for failure if configured
             task.status = TaskStatus(state=TaskState.failed)
-            await self._send_protocol_webhook(task, status="failed", error=str(e))
+            # Attach error to task artifacts
+            task.artifacts = [
+                Artifact(
+                    artifact_id="error_1",
+                    name="processing_error",
+                    parts=[Part(root=DataPart(data={"error": str(e), "error_type": type(e).__name__}))],
+                )
+            ]
+
+            await self._send_protocol_webhook(task, status="failed")
 
             # Raise ServerError instead of creating failed task
             raise ServerError(InternalError(message=f"Message processing failed: {str(e)}"))

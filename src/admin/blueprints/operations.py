@@ -9,6 +9,9 @@ from sqlalchemy import select
 from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.models import MediaBuy, MediaPackage, PushNotificationConfig
 from src.services.protocol_webhook_service import get_protocol_webhook_service
+from a2a.types import TaskState
+from adcp.types import CreateMediaBuySuccessResponse, GeneratedTaskStatus as AdcpTaskStatus, Package
+from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 
 logger = logging.getLogger(__name__)
 
@@ -440,24 +443,41 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             select(MediaPackage).filter_by(media_buy_id=media_buy_id)
                         ).all()
 
-                        # Why this is not compliant with AdCP spec (particularly why status is missing in the protocol)?
-                        webhook_payload = {
-                            "media_buy_id": media_buy_id,
-                            "buyer_ref": media_buy.buyer_ref,
-                            "status": media_buy.status,
-                            "packages": [{"package_id": x.package_id, "status": "approved"} for x in all_packages],
+                        create_media_buy_approved_result = CreateMediaBuySuccessResponse(
+                            buyer_ref=media_buy.buyer_ref,
+                            packages=[Package(package_id=x.package_id) for x in all_packages],
+                            context={}, # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                        )
+                        metadata = {
+                            "task_type": step.tool_name,
+                            # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
+                            # TODO: @yusuf - check if we want to make metadata typed
                         }
+
+                        # Determine protocol type from workflow step request_data
+                        protocol = step.request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
+
+                        # Create appropriate webhook payload based on protocol
+                        if protocol == "a2a":
+                            create_media_buy_approved_payload = create_a2a_webhook_payload(
+                                task_id=step.step_id,
+                                state=TaskState.completed,
+                                result=create_media_buy_approved_result
+                            )
+                        else:
+                            create_media_buy_approved_payload = create_mcp_webhook_payload(
+                                task_id=step.step_id,
+                                result=create_media_buy_approved_result,
+                                status=AdcpTaskStatus.completed
+                            )
 
                         try:
                             service = get_protocol_webhook_service()
                             asyncio.run(
                                 service.send_notification(
                                     push_notification_config=webhook_config,
-                                    task_id=step.step_id,
-                                    task_type=step.tool_name,
-                                    status="completed",
-                                    result=webhook_payload,
-                                    error=None,
+                                    payload=create_media_buy_approved_payload,
+                                    metadata=metadata
                                 )
                             )
                             logger.info(f"Sent webhook notification for approved media buy {media_buy_id}")
@@ -507,24 +527,41 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 if webhook_config:
                     all_packages = db_session.scalars(select(MediaPackage).filter_by(media_buy_id=media_buy_id)).all()
 
-                    # Why this is not compliant with AdCP spec (particularly why status is missing in the protocol)?
-                    webhook_payload = {
-                        "media_buy_id": media_buy_id,
-                        "buyer_ref": media_buy.buyer_ref,
-                        "status": media_buy.status,
-                        "packages": [{"package_id": x.package_id, "status": "rejected"} for x in all_packages],
+                    create_media_buy_rejected_result = CreateMediaBuySuccessResponse(
+                        buyer_ref=media_buy.buyer_ref,
+                        packages=[Package(package_id=x.package_id) for x in all_packages],
+                        context={}, # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                    )
+                    metadata = {
+                        "task_type": step.tool_name,
+                        # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
+                        # TODO: @yusuf - check if we want to make metadata typed
                     }
+
+                    # Determine protocol type from workflow step request_data
+                    protocol = step.request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
+
+                    # Create appropriate webhook payload based on protocol
+                    if protocol == "a2a":
+                        create_media_buy_rejected_payload = create_a2a_webhook_payload(
+                            task_id=step.step_id,
+                            state=TaskState.rejected,
+                            result=create_media_buy_rejected_result
+                        )
+                    else:
+                        create_media_buy_rejected_payload = create_mcp_webhook_payload(
+                            task_id=step.step_id,
+                            result=create_media_buy_rejected_result,
+                            status=AdcpTaskStatus.rejected
+                        )                    
 
                     try:
                         service = get_protocol_webhook_service()
                         asyncio.run(
                             service.send_notification(
                                 push_notification_config=webhook_config,
-                                task_id=step.step_id,
-                                task_type=step.tool_name,
-                                status="rejected",
-                                result=webhook_payload,
-                                error=None,
+                                payload=create_media_buy_rejected_payload,
+                                metadata=metadata
                             )
                         )
                         logger.info(f"Sent webhook notification for rejected media buy {media_buy_id}")

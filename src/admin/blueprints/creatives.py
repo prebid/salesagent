@@ -277,6 +277,8 @@ async def _call_webhook_for_creative_status(
 
             metadata = {
                 "task_type": step.tool_name
+                # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
+                # TODO: @yusuf - check if we want to make metadata typed
             }
 
             await service.send_notification(

@@ -148,21 +148,23 @@ class ProtocolWebhookService:
         # Calculate payload size for metrics
         payload_size_bytes = len(json.dumps(payload).encode("utf-8"))
 
-        task_type=metadata['task_type'],
-        tenant_id=metadata['tenant_id'],
-        principal_id=metadata['principal_id'],
-        media_buy_id=metadata['media_buy_id'],
+        task_type=metadata['task_type'] if 'task_type' in metadata else None,
+        tenant_id=metadata['tenant_id'] if 'tenant_id' in metadata else None,
+        principal_id=metadata['principal_id'] if 'principal_id' in metadata else None,
+        media_buy_id=metadata['media_buy_id'] if 'media_buy_id' in metadata else None,
 
         result = extract_webhook_result_data(payload)
         task_id = ''
-        if isinstance(payload , Task):
+        if isinstance(payload, Task):
             task_id = payload.id
-        else:
+        elif isinstance(payload, TaskStatusUpdateEvent):
             task_id = payload.task_id
-        
+        else:
+            task_id = payload['task_id']
+
         # If we are delivering media buy delivery report
-        notification_type_from_result=result["notification_type_from_request"] if result is not None else None
-        sequence_number_from_result=result["sequence_number_from_result"] if isinstance(sequence_number_from_result, int) else 1
+        notification_type_from_result=result["notification_type"] if result is not None and 'notification_type' in result else None
+        sequence_number_from_result=result["sequence_number"] if result is not None and 'sequence_number' in result else None
         notification_type=notification_type_from_result
         sequence_number=sequence_number_from_result if isinstance(sequence_number_from_result, int) else 1
 

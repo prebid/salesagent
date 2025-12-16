@@ -1338,13 +1338,20 @@ async def _create_media_buy_impl(
             persistent_ctx = ctx_manager.create_context(tenant_id=tenant["tenant_id"], principal_id=principal_id)
 
     # Create workflow step for tracking this operation
+    # Prepare request data with protocol detection
+    request_data_for_workflow = req.model_dump(mode="json")
+
+    # Store protocol type for webhook payload creation
+    # ToolContext = A2A, Context (FastMCP) = MCP
+    request_data_for_workflow["protocol"] = "a2a" if isinstance(ctx, ToolContext) else "mcp"
+
     step = ctx_manager.create_workflow_step(
         context_id=persistent_ctx.context_id,
         step_type="media_buy_creation",
         owner="system",
         status="in_progress",
         tool_name="create_media_buy",
-        request_data=req.model_dump(mode="json"),
+        request_data=request_data_for_workflow,
     )
 
     # Register push notification config if provided (MCP/A2A protocol support)
