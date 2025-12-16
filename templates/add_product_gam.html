@@ -481,7 +481,7 @@ Target users based on local weather conditions for maximum relevance.</div>
 
         {# Enhanced targeting selector with OR/AND operators and include/exclude #}
         {% include 'components/targeting_selector_widget.html' %}
-        <input type="hidden" id="targeting-data" name="targeting_template" value='{{ product.targeting_template | tojson if product and product.targeting_template else "{}" }}'>
+        <input type="hidden" id="targeting-data" name="targeting_template" value='{{ (form_data.targeting_template | e) if form_data and form_data.targeting_template else (product.targeting_template | tojson if product and product.targeting_template else "{}") }}'>
 
         <!-- Product Details (AdCP Compliance) -->
         <h3 style="margin-top: 2rem;">
@@ -1897,13 +1897,13 @@ function addPricingOption(existingData = null) {
                     <select name="pricing_model_${index}" class="pricing-model-select" onchange="updatePricingFields${index}()" required>
                         <option value="">Select...</option>
                         <optgroup label="Guaranteed (Fixed Price)">
-                            <option value="cpm_fixed" ${existingData && existingData.pricing_model === 'cpm' && existingData.is_fixed ? 'selected' : ''}>CPM - Fixed Rate (Cost per 1,000 impressions)</option>
-                            <option value="flat_rate" ${existingData && existingData.pricing_model === 'flat_rate' ? 'selected' : ''}>Flat Rate - Fixed Campaign Cost (Sponsorship)</option>
+                            <option value="cpm_fixed" ${existingData && existingData.pricing_model?.toLowerCase() === 'cpm' && existingData.is_fixed === true ? 'selected' : ''}>CPM - Fixed Rate (Cost per 1,000 impressions)</option>
+                            <option value="flat_rate" ${existingData && existingData.pricing_model?.toLowerCase() === 'flat_rate' ? 'selected' : ''}>Flat Rate - Fixed Campaign Cost (Sponsorship)</option>
                         </optgroup>
                         <optgroup label="Non-Guaranteed (Auction/Bidding)">
-                            <option value="cpm_auction" ${existingData && existingData.pricing_model === 'cpm' && !existingData.is_fixed ? 'selected' : ''}>CPM - Auction (Floor price bidding)</option>
-                            <option value="vcpm" ${existingData && existingData.pricing_model === 'vcpm' ? 'selected' : ''}>VCPM - Auction (Viewable impressions)</option>
-                            <option value="cpc" ${existingData && existingData.pricing_model === 'cpc' ? 'selected' : ''}>CPC - Auction (Cost per click)</option>
+                            <option value="cpm_auction" ${existingData && existingData.pricing_model?.toLowerCase() === 'cpm' && existingData.is_fixed === false ? 'selected' : ''}>CPM - Auction (Floor price bidding)</option>
+                            <option value="vcpm" ${existingData && existingData.pricing_model?.toLowerCase() === 'vcpm' ? 'selected' : ''}>VCPM - Auction (Viewable impressions)</option>
+                            <option value="cpc" ${existingData && existingData.pricing_model?.toLowerCase() === 'cpc' ? 'selected' : ''}>CPC - Auction (Cost per click)</option>
                         </optgroup>
                     </select>
                     <small style="color: #666;">All pricing models shown are supported by Google Ad Manager.</small>
@@ -1949,7 +1949,9 @@ function addPricingOption(existingData = null) {
         const rateGroup = document.getElementById(`rate-group-${index}`);
         const floorGroup = document.getElementById(`floor-group-${index}`);
 
-        const isAuction = modelSelect.value.includes('auction');
+        // vCPM and CPC are always auction-based (no fixed rate option)
+        const value = modelSelect.value;
+        const isAuction = value.includes('auction') || value === 'vcpm' || value === 'cpc';
 
         if (isAuction) {
             rateGroup.style.display = 'none';
@@ -2293,13 +2295,68 @@ function filterGAMFormats() {
 // Edit mode: Load existing pricing options
 const existingOptions = {{ product.pricing_options | tojson if product.pricing_options else '[]' }};
 if (existingOptions.length > 0) {
-    existingOptions.forEach(option => {
+    existingOptions.forEach((option, idx) => {
         addPricingOption(option);
     });
 } else {
     // No existing options, add one empty option
     addPricingOption();
 }
+{% elif form_data %}
+// Validation error: Restore pricing options from form data
+(function() {
+    // Extract pricing options from flat form_data keys
+    const formData = {{ form_data | tojson }};
+    const indices = new Set();
+
+    // Find all pricing option indices from form data
+    for (const key of Object.keys(formData)) {
+        const match = key.match(/^pricing_model_(\d+)$/);
+        if (match) {
+            indices.add(parseInt(match[1]));
+        }
+    }
+
+    if (indices.size > 0) {
+        // Sort indices to add in order
+        const sortedIndices = Array.from(indices).sort((a, b) => a - b);
+        sortedIndices.forEach(idx => {
+            const pricingModel = formData[`pricing_model_${idx}`] || '';
+            const currency = formData[`currency_${idx}`] || 'USD';
+            const rate = formData[`rate_${idx}`] || '';
+            const floor = formData[`floor_${idx}`] || '';
+            const minSpend = formData[`min_spend_${idx}`] || '';
+
+            // Convert form data format to existingData format expected by addPricingOption
+            let existingData = {
+                currency: currency,
+                rate: rate || null,
+                min_spend_per_package: minSpend || null,
+                price_guidance: floor ? { floor: floor } : null
+            };
+
+            // Map pricing model value to expected format
+            if (pricingModel === 'cpm_fixed') {
+                existingData.pricing_model = 'cpm';
+                existingData.is_fixed = true;
+            } else if (pricingModel === 'cpm_auction') {
+                existingData.pricing_model = 'cpm';
+                existingData.is_fixed = false;
+            } else if (pricingModel === 'flat_rate') {
+                existingData.pricing_model = 'flat_rate';
+            } else if (pricingModel === 'vcpm') {
+                existingData.pricing_model = 'vcpm';
+            } else if (pricingModel === 'cpc') {
+                existingData.pricing_model = 'cpc';
+            }
+
+            addPricingOption(existingData);
+        });
+    } else {
+        // No pricing data found, add one empty option
+        addPricingOption();
+    }
+})();
 {% else %}
 // Create mode: Add one empty option
 addPricingOption();

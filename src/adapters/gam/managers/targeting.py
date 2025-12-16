@@ -329,7 +329,7 @@ class GAMTargetingManager:
             ]
         }
 
-        Supports two input formats:
+        Supports three input formats:
 
         Legacy format (dict[str, str]):
             {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
@@ -341,14 +341,31 @@ class GAMTargetingManager:
                 'operator': 'AND' | 'OR'
             }
 
+        Groups format (GAM-style nested groups):
+            {
+                'groups': [
+                    {
+                        'criteria': [
+                            {'keyId': '123', 'values': ['v1', 'v2']},
+                            {'keyId': '456', 'values': ['v3'], 'exclude': True}
+                        ]
+                    }
+                ]
+            }
+            Groups are OR'd together; criteria within groups are AND'd.
+
         Args:
-            custom_targeting_dict: Custom targeting configuration in either format
+            custom_targeting_dict: Custom targeting configuration in any format
             logical_operator: Default operator for combining criteria (AND/OR)
 
         Returns:
             GAM CustomCriteria structure
         """
         children = []
+
+        # Check if this is the groups format (GAM-style nested)
+        if "groups" in custom_targeting_dict:
+            return self._build_groups_custom_targeting_structure(custom_targeting_dict)
 
         # Check if this is the enhanced format with include/exclude
         if "include" in custom_targeting_dict or "exclude" in custom_targeting_dict:
@@ -461,6 +478,96 @@ class GAMTargetingManager:
             "xsi_type": "CustomCriteriaSet",
             "logicalOperator": operator,
             "children": children,
+        }
+
+    def _build_groups_custom_targeting_structure(self, targeting_config: dict[str, Any]) -> dict[str, Any]:
+        """Build GAM targeting structure from groups format (GAM-style nested).
+
+        Groups format supports nested targeting with OR between groups and AND within groups:
+            {
+                'groups': [
+                    {
+                        'criteria': [
+                            {'keyId': '123', 'values': ['v1', 'v2']},
+                            {'keyId': '456', 'values': ['v3'], 'exclude': True}
+                        ]
+                    },
+                    {
+                        'criteria': [
+                            {'keyId': '789', 'values': ['v4']}
+                        ]
+                    }
+                ]
+            }
+
+        This translates to: (key123 IS v1|v2 AND key456 IS_NOT v3) OR (key789 IS v4)
+
+        Values can be either:
+        - Numeric GAM value IDs (e.g., "451005167391") - used directly
+        - Value names (e.g., "sports") - looked up via _get_or_create_custom_targeting_value
+
+        Args:
+            targeting_config: Groups targeting configuration
+
+        Returns:
+            GAM CustomCriteria structure with nested CustomCriteriaSets
+        """
+        groups = targeting_config.get("groups", [])
+        group_children = []
+
+        for group in groups:
+            criteria_list = group.get("criteria", [])
+            criteria_children = []
+
+            for criterion in criteria_list:
+                key_id = criterion.get("keyId")
+                values = criterion.get("values", [])
+                is_exclude = criterion.get("exclude", False)
+
+                if not key_id or not values:
+                    logger.warning(
+                        f"Skipping malformed criterion in groups targeting: " f"keyId={key_id}, values={values}"
+                    )
+                    continue
+
+                # Resolve values to GAM value IDs
+                value_ids = []
+                for value in values:
+                    if str(value).isdigit():
+                        value_ids.append(int(value))
+                    else:
+                        value_id = self._get_or_create_custom_targeting_value(key_id, value)
+                        value_ids.append(value_id)
+
+                if not value_ids:
+                    continue
+
+                criteria_children.append(
+                    {
+                        "xsi_type": "CustomCriteria",
+                        "keyId": int(key_id),
+                        "operator": "IS_NOT" if is_exclude else "IS",
+                        "valueIds": value_ids,
+                    }
+                )
+
+            # Only add groups that have criteria
+            if criteria_children:
+                group_children.append(
+                    {
+                        "xsi_type": "CustomCriteriaSet",
+                        "logicalOperator": "AND",  # Criteria within group are AND'd
+                        "children": criteria_children,
+                    }
+                )
+
+        if not group_children:
+            return {}
+
+        return {
+            "xsi_type": "CustomCriteriaSet",
+            "logicalOperator": "OR",  # Groups are OR'd together
+            "children": group_children,
         }
 
     def _lookup_region_id(self, region_code: str) -> str | None:

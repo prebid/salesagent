@@ -1,17 +1,23 @@
 /**
- * Targeting Widget - Custom key-value targeting selector
+ * Targeting Widget - GAM-style nested groups targeting selector
  *
  * Features:
- * - OR/AND operator support between different keys
- * - Include/Exclude toggle for values
- * - Search functionality for keys and values
+ * - Multiple groups connected by OR logic
+ * - Within each group, criteria connected by AND logic
+ * - Each criterion: key selection, values (OR'd together), optional exclude
+ * - Backward compatible with legacy and enhanced formats
  *
- * Data Structure:
+ * Data Structure (groups format):
  * {
  *   key_value_pairs: {
- *     include: { "key_id": ["value1", "value2"] },  // Values to include (OR within same key)
- *     exclude: { "key_id": ["value3"] },             // Values to exclude
- *     operator: "AND"  // "AND" or "OR" - how to combine different keys
+ *     groups: [
+ *       {
+ *         criteria: [
+ *           { keyId: '123', values: ['v1', 'v2'] },
+ *           { keyId: '456', values: ['v3'], exclude: true }
+ *         ]
+ *       }
+ *     ]
  *   }
  * }
  */
@@ -23,14 +29,14 @@ class TargetingWidget {
         this.scriptRoot = scriptRoot;
         this.selectedTargeting = {
             key_value_pairs: {
-                include: {},
-                exclude: {},
-                operator: 'AND'
+                groups: []
             }
         };
-        this.currentKeyId = null;
-        this.keyMetadata = {};
-        this.valueMetadata = {};  // Cache value names: { keyId: { valueId: displayName } }
+        this.keyMetadata = {};        // { keyId: { name, display_name } }
+        this.valueMetadata = {};      // { keyId: { valueId: displayName } }
+        this.loadedValuesByKey = {};  // { keyId: [values] }
+        this.editingCriterion = null; // { groupIndex, criterionIndex }
+        this.loadedSuccessfully = false; // Track if existing targeting loaded OK
 
         if (!this.container) {
             console.error(`Targeting widget container '#${containerId}' not found`);
@@ -43,7 +49,7 @@ class TargetingWidget {
     async init() {
         try {
             await this.loadTargetingData();
-            this.loadExistingTargeting();  // Load from hidden field if present
+            this.loadExistingTargeting();
             this.render();
             this.attachEventListeners();
             this.updateHiddenField();
@@ -54,12 +60,14 @@ class TargetingWidget {
     }
 
     /**
-     * Load existing targeting from the hidden form field.
-     * Handles both legacy format (keyId: value) and enhanced format (include/exclude/operator).
+     * Load existing targeting from hidden form field.
+     * Handles legacy, enhanced, and groups formats.
      */
     loadExistingTargeting() {
         const hiddenField = document.getElementById('targeting-data');
         if (!hiddenField || !hiddenField.value || hiddenField.value === '{}') {
+            // No existing data - this is OK for new products
+            this.loadedSuccessfully = true;
             return;
         }
 
@@ -68,110 +76,63 @@ class TargetingWidget {
             const kvPairs = existingData.key_value_pairs;
 
             if (!kvPairs || Object.keys(kvPairs).length === 0) {
+                // Empty key_value_pairs - this is OK
+                this.loadedSuccessfully = true;
                 return;
             }
 
-            // Check if this is enhanced format (has include/exclude keys)
-            if ('include' in kvPairs || 'exclude' in kvPairs) {
-                // Enhanced format - use directly
-                this.selectedTargeting.key_value_pairs = {
-                    include: kvPairs.include || {},
-                    exclude: kvPairs.exclude || {},
-                    operator: kvPairs.operator || 'AND'
-                };
-                console.log('[TargetingWidget] Loaded enhanced format targeting:', this.selectedTargeting);
-            } else {
-                // Legacy format: { keyId: value } - convert to enhanced format as includes
-                // Legacy format values are strings, new format uses arrays
-                const include = {};
-                for (const [keyId, value] of Object.entries(kvPairs)) {
-                    // Legacy format has single value as string, convert to array
-                    if (typeof value === 'string') {
-                        include[keyId] = [value];
-                    } else if (Array.isArray(value)) {
-                        include[keyId] = value;
-                    }
-                }
-                this.selectedTargeting.key_value_pairs = {
-                    include: include,
-                    exclude: {},
-                    operator: 'AND'
-                };
-                console.log('[TargetingWidget] Converted legacy format to enhanced:', this.selectedTargeting);
+            // Groups format
+            if ('groups' in kvPairs && Array.isArray(kvPairs.groups)) {
+                this.selectedTargeting.key_value_pairs.groups = kvPairs.groups;
+                this.loadedSuccessfully = true;
+                console.log('[TargetingWidget] Loaded groups format:', this.selectedTargeting);
+                return;
             }
 
-            // Pre-load value metadata for display names in summary
-            // We need to fetch values for each key that has selections
-            this.preloadValueMetadata();
+            // Enhanced format (include/exclude) - convert to groups
+            if ('include' in kvPairs || 'exclude' in kvPairs) {
+                const criteria = [];
+                const include = kvPairs.include || {};
+                const exclude = kvPairs.exclude || {};
+
+                for (const [keyId, values] of Object.entries(include)) {
+                    if (values && values.length > 0) {
+                        criteria.push({ keyId, values: [...values] });
+                    }
+                }
+                for (const [keyId, values] of Object.entries(exclude)) {
+                    if (values && values.length > 0) {
+                        criteria.push({ keyId, values: [...values], exclude: true });
+                    }
+                }
+
+                if (criteria.length > 0) {
+                    this.selectedTargeting.key_value_pairs.groups = [{ criteria }];
+                }
+                this.loadedSuccessfully = true;
+                console.log('[TargetingWidget] Converted enhanced format to groups:', this.selectedTargeting);
+                return;
+            }
+
+            // Legacy format { keyId: value } - convert to groups
+            const criteria = [];
+            for (const [keyId, value] of Object.entries(kvPairs)) {
+                if (typeof value === 'string') {
+                    criteria.push({ keyId, values: [value] });
+                } else if (Array.isArray(value)) {
+                    criteria.push({ keyId, values: value });
+                }
+            }
+            if (criteria.length > 0) {
+                this.selectedTargeting.key_value_pairs.groups = [{ criteria }];
+            }
+            this.loadedSuccessfully = true;
+            console.log('[TargetingWidget] Converted legacy format to groups:', this.selectedTargeting);
 
         } catch (error) {
             console.error('[TargetingWidget] Error loading existing targeting:', error);
+            // Don't set loadedSuccessfully - hidden field will be preserved
         }
-    }
-
-    /**
-     * Pre-load value metadata for keys that have existing selections.
-     * This ensures the summary can show value names instead of IDs.
-     * Also handles legacy format by converting value names to IDs.
-     */
-    async preloadValueMetadata() {
-        const kvPairs = this.selectedTargeting.key_value_pairs;
-        const keyIds = new Set([
-            ...Object.keys(kvPairs.include || {}),
-            ...Object.keys(kvPairs.exclude || {})
-        ]);
-
-        for (const keyId of keyIds) {
-            if (!this.valueMetadata[keyId]) {
-                try {
-                    const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
-                    const response = await fetch(url, { credentials: 'same-origin' });
-                    if (response.ok) {
-                        const data = await response.json();
-                        this.valueMetadata[keyId] = {};
-
-                        // Build both ID->name and name->ID mappings
-                        const nameToId = {};
-                        (data.values || []).forEach(val => {
-                            this.valueMetadata[keyId][val.id] = val.display_name || val.name || val.id;
-                            // Also map by name for legacy format support
-                            if (val.name) {
-                                nameToId[val.name] = val.id;
-                            }
-                        });
-
-                        // Convert legacy value names to IDs if needed
-                        // Legacy format stores value names, new format stores value IDs
-                        const convertValues = (values) => {
-                            return values.map(v => {
-                                // If value is a name (not numeric), try to find its ID
-                                if (!String(v).match(/^\d+$/) && nameToId[v]) {
-                                    console.log(`[TargetingWidget] Converted legacy value name "${v}" to ID "${nameToId[v]}"`);
-                                    return nameToId[v];
-                                }
-                                return v;
-                            });
-                        };
-
-                        if (kvPairs.include[keyId]) {
-                            kvPairs.include[keyId] = convertValues(kvPairs.include[keyId]);
-                        }
-                        if (kvPairs.exclude && kvPairs.exclude[keyId]) {
-                            kvPairs.exclude[keyId] = convertValues(kvPairs.exclude[keyId]);
-                        }
-                    }
-                } catch (error) {
-                    console.warn(`[TargetingWidget] Failed to preload values for key ${keyId}:`, error);
-                }
-            }
-        }
-
-        // Re-render key list to show selection badges
-        const keys = this.targetingData.custom_targeting_keys || [];
-        this.renderKeysList(keys);
-
-        // Re-render summary now that we have value names
-        this.updateSummary();
     }
 
     async loadTargetingData() {
@@ -182,12 +143,10 @@ class TargetingWidget {
         }
         this.targetingData = await response.json();
 
-        // API returns 'customKeys', normalize to 'custom_targeting_keys'
         if (this.targetingData.customKeys && !this.targetingData.custom_targeting_keys) {
             this.targetingData.custom_targeting_keys = this.targetingData.customKeys;
         }
 
-        // Cache key metadata for later use
         (this.targetingData.custom_targeting_keys || []).forEach(key => {
             this.keyMetadata[key.id] = {
                 name: key.name,
@@ -205,359 +164,549 @@ class TargetingWidget {
         }
 
         this.container.innerHTML = `
-            <div class="kv-operator-toggle">
-                <span class="operator-label">Combine keys with:</span>
-                <div class="operator-buttons">
-                    <button type="button" class="operator-btn ${this.selectedTargeting.key_value_pairs.operator === 'AND' ? 'active' : ''}" data-operator="AND">
-                        AND <small>(match all)</small>
-                    </button>
-                    <button type="button" class="operator-btn ${this.selectedTargeting.key_value_pairs.operator === 'OR' ? 'active' : ''}" data-operator="OR">
-                        OR <small>(match any)</small>
-                    </button>
-                </div>
+            <div class="groups-container" id="groups-container">
+                ${this.renderGroups()}
             </div>
-            <div class="kv-selector">
-                <div class="kv-keys">
-                    <h5>Keys</h5>
-                    <input type="search" id="key-search" placeholder="Search keys..." class="search-input">
-                    <div class="kv-keys-list" id="keys-list"></div>
+            <button type="button" class="add-group-btn" id="add-group-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                Or
+            </button>
+            ${this.renderValueSelector()}
+        `;
+    }
+
+    renderGroups() {
+        const groups = this.selectedTargeting.key_value_pairs.groups;
+
+        if (groups.length === 0) {
+            return `
+                <div class="group-card" data-group-index="0">
+                    <div class="group-header">
+                        <span class="group-label">Custom Targeting</span>
+                    </div>
+                    <div class="criteria-list" data-group-index="0">
+                        <div class="add-criterion-row">
+                            <button type="button" class="add-criterion-btn" data-group-index="0">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                </svg>
+                                Add targeting
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <div class="kv-values">
-                    <h5>Values</h5>
-                    <div id="values-container">
-                        <p class="empty-state">Select a key to view available values</p>
+            `;
+        }
+
+        return groups.map((group, groupIndex) => `
+            <div class="group-card" data-group-index="${groupIndex}">
+                ${groupIndex > 0 ? '<div class="or-divider"><span>Or</span></div>' : ''}
+                <div class="group-header">
+                    <span class="group-label">Group ${groupIndex + 1}</span>
+                    ${groups.length > 1 ? `
+                        <button type="button" class="remove-group-btn" data-group-index="${groupIndex}" title="Remove group">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
+                    ` : ''}
+                </div>
+                <div class="criteria-list" data-group-index="${groupIndex}">
+                    ${this.renderCriteria(group.criteria || [], groupIndex)}
+                    <div class="add-criterion-row">
+                        <button type="button" class="add-criterion-btn" data-group-index="${groupIndex}">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="12" y1="5" x2="12" y2="19"></line>
+                                <line x1="5" y1="12" x2="19" y2="12"></line>
+                            </svg>
+                            And
+                        </button>
                     </div>
                 </div>
             </div>
-            <div class="selected-summary" id="targeting-summary" style="display: none;">
-                <h5>Selected Targeting:</h5>
-                <div class="summary-operator" id="summary-operator"></div>
-                <div class="selected-tags" id="targeting-tags"></div>
-            </div>
-        `;
-
-        this.renderKeysList(keys);
+        `).join('');
     }
 
-    renderKeysList(keys) {
-        const keysList = document.getElementById('keys-list');
-        keysList.innerHTML = keys.map(key => {
-            const hasInclude = this.selectedTargeting.key_value_pairs.include[key.id]?.length > 0;
-            const hasExclude = this.selectedTargeting.key_value_pairs.exclude[key.id]?.length > 0;
-            const selectedClass = (hasInclude || hasExclude) ? 'has-selections' : '';
+    renderCriteria(criteria, groupIndex) {
+        return criteria.map((criterion, criterionIndex) => {
+            const keyMeta = this.keyMetadata[criterion.keyId] || { display_name: criterion.keyId };
+            const valueNames = criterion.values.map(v =>
+                this.valueMetadata[criterion.keyId]?.[v] || v
+            );
+            const isEditing = this.editingCriterion &&
+                this.editingCriterion.groupIndex === groupIndex &&
+                this.editingCriterion.criterionIndex === criterionIndex;
 
             return `
-                <div class="kv-key-item ${selectedClass}" data-key-id="${key.id}">
-                    <strong>${key.display_name || key.name}</strong>
-                    ${key.description ? `<small>${key.description}</small>` : ''}
-                    ${hasInclude || hasExclude ? `
-                        <span class="selection-badge">
-                            ${hasInclude ? `<span class="badge-include">${this.selectedTargeting.key_value_pairs.include[key.id].length} included</span>` : ''}
-                            ${hasExclude ? `<span class="badge-exclude">${this.selectedTargeting.key_value_pairs.exclude[key.id].length} excluded</span>` : ''}
-                        </span>
-                    ` : ''}
+                ${criterionIndex > 0 ? '<div class="and-connector"><span>And</span></div>' : ''}
+                <div class="criterion-row ${criterion.exclude ? 'excluded' : ''} ${isEditing ? 'editing' : ''}"
+                     data-group-index="${groupIndex}"
+                     data-criterion-index="${criterionIndex}">
+                    <div class="criterion-key" title="${keyMeta.display_name}">
+                        ${keyMeta.display_name}
+                    </div>
+                    <select class="criterion-operator-select"
+                            data-group-index="${groupIndex}"
+                            data-criterion-index="${criterionIndex}">
+                        <option value="is" ${!criterion.exclude ? 'selected' : ''}>is any of</option>
+                        <option value="is_not" ${criterion.exclude ? 'selected' : ''}>is none of</option>
+                    </select>
+                    <div class="criterion-values" data-group-index="${groupIndex}" data-criterion-index="${criterionIndex}">
+                        ${valueNames.map((name, valIndex) => `
+                            <span class="value-chip ${criterion.exclude ? 'exclude' : 'include'}">
+                                ${name}
+                                <button type="button" class="chip-remove"
+                                        data-group-index="${groupIndex}"
+                                        data-criterion-index="${criterionIndex}"
+                                        data-value-index="${valIndex}">×</button>
+                            </span>
+                        `).join('')}
+                        <button type="button" class="add-value-btn"
+                                data-group-index="${groupIndex}"
+                                data-criterion-index="${criterionIndex}"
+                                title="Add value">+</button>
+                    </div>
+                    <div class="criterion-actions">
+                        <button type="button" class="remove-criterion-btn"
+                                data-group-index="${groupIndex}"
+                                data-criterion-index="${criterionIndex}"
+                                title="Remove criterion">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             `;
         }).join('');
     }
 
-    async loadValuesForKey(keyId) {
-        const valuesContainer = document.getElementById('values-container');
-        valuesContainer.innerHTML = '<p class="loading">Loading values...</p>';
-        this.currentKeyId = keyId;
+    renderValueSelector() {
+        const keys = this.targetingData.custom_targeting_keys || [];
 
-        // Highlight selected key
-        document.querySelectorAll('.kv-key-item').forEach(item => {
-            item.classList.toggle('selected', item.dataset.keyId === keyId);
-        });
-
-        try {
-            const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
-            const response = await fetch(url, { credentials: 'same-origin' });
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
-            const data = await response.json();
-            this.currentValues = data.values || [];
-
-            // Cache value metadata for display names in summary
-            if (!this.valueMetadata[keyId]) {
-                this.valueMetadata[keyId] = {};
-            }
-            this.currentValues.forEach(val => {
-                this.valueMetadata[keyId][val.id] = val.display_name || val.name || val.id;
-            });
-
-            this.renderValuesList(keyId, this.currentValues);
-        } catch (error) {
-            valuesContainer.innerHTML = `<p class="error-state">Failed to load values: ${error.message}</p>`;
-        }
-    }
-
-    renderValuesList(keyId, values) {
-        const valuesContainer = document.getElementById('values-container');
-
-        if (values.length === 0) {
-            valuesContainer.innerHTML = '<p class="empty-state">No values available for this key</p>';
-            return;
-        }
-
-        valuesContainer.innerHTML = `
-            <input type="search" id="value-search" placeholder="Search values..." class="search-input">
-            <div class="values-legend">
-                <span class="legend-item"><span class="legend-color include"></span> Include</span>
-                <span class="legend-item"><span class="legend-color exclude"></span> Exclude</span>
-            </div>
-            <div class="kv-values-grid">
-                ${values.map(val => {
-                    const isIncluded = this.isValueIncluded(keyId, val.id);
-                    const isExcluded = this.isValueExcluded(keyId, val.id);
-                    const stateClass = isIncluded ? 'included' : (isExcluded ? 'excluded' : '');
-
-                    return `
-                        <div class="value-item ${stateClass}" data-key-id="${keyId}" data-value-id="${val.id}" data-value-name="${val.name}">
-                            <span class="value-name">${val.display_name || val.name}</span>
-                            <div class="value-actions">
-                                <button type="button" class="action-btn include-btn ${isIncluded ? 'active' : ''}"
-                                        data-action="include" title="Include this value">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <polyline points="20 6 9 17 4 12"></polyline>
-                                    </svg>
-                                </button>
-                                <button type="button" class="action-btn exclude-btn ${isExcluded ? 'active' : ''}"
-                                        data-action="exclude" title="Exclude this value">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                                    </svg>
-                                </button>
-                            </div>
+        return `
+            <div class="value-selector-modal" id="value-selector-modal" style="display: none;">
+                <div class="value-selector-content">
+                    <div class="value-selector-header">
+                        <h5 id="value-selector-title">Select Values</h5>
+                        <button type="button" class="close-selector-btn" id="close-selector-btn">×</button>
+                    </div>
+                    <div class="value-selector-body">
+                        <div class="key-selector-section">
+                            <label>Key:</label>
+                            <select id="key-selector" class="key-dropdown">
+                                <option value="">Select a key...</option>
+                                ${keys.map(k => `<option value="${k.id}">${k.display_name || k.name}</option>`).join('')}
+                            </select>
                         </div>
-                    `;
-                }).join('')}
+                        <div class="operator-selector-section" id="operator-section" style="display: none; margin-top: 1rem;">
+                            <label>Operator:</label>
+                            <select id="operator-selector" class="key-dropdown">
+                                <option value="is" selected>is any of</option>
+                                <option value="is_not">is none of</option>
+                            </select>
+                        </div>
+                        <div class="values-section" id="values-section" style="display: none;">
+                            <label>Values:</label>
+                            <input type="search" id="value-search" placeholder="Search values..." class="value-search-input">
+                            <div class="values-list" id="values-list"></div>
+                        </div>
+                    </div>
+                    <div class="value-selector-footer">
+                        <button type="button" class="cancel-btn" id="cancel-selector-btn">Cancel</button>
+                        <button type="button" class="apply-btn" id="apply-selector-btn" disabled>Apply</button>
+                    </div>
+                </div>
             </div>
         `;
     }
 
     attachEventListeners() {
-        // Operator toggle
+        // Add group button
         this.container.addEventListener('click', (e) => {
-            const operatorBtn = e.target.closest('.operator-btn');
-            if (operatorBtn) {
-                const operator = operatorBtn.dataset.operator;
-                this.selectedTargeting.key_value_pairs.operator = operator;
-
-                this.container.querySelectorAll('.operator-btn').forEach(btn => {
-                    btn.classList.toggle('active', btn.dataset.operator === operator);
-                });
-
-                this.updateHiddenField();
-                this.updateSummary();
+            if (e.target.closest('#add-group-btn')) {
+                this.addGroup();
             }
         });
 
-        // Key selection
-        this.container.addEventListener('click', async (e) => {
-            const keyItem = e.target.closest('.kv-key-item');
-            if (keyItem && !e.target.closest('.action-btn')) {
-                const keyId = keyItem.dataset.keyId;
-                await this.loadValuesForKey(keyId);
-            }
-        });
-
-        // Value action buttons (include/exclude)
+        // Remove group button
         this.container.addEventListener('click', (e) => {
-            const actionBtn = e.target.closest('.action-btn');
-            if (actionBtn) {
-                const valueItem = actionBtn.closest('.value-item');
-                const keyId = valueItem.dataset.keyId;
-                const valueId = valueItem.dataset.valueId;
-                const action = actionBtn.dataset.action;
-
-                this.handleValueAction(keyId, valueId, action);
+            const btn = e.target.closest('.remove-group-btn');
+            if (btn) {
+                const groupIndex = parseInt(btn.dataset.groupIndex);
+                this.removeGroup(groupIndex);
             }
         });
 
-        // Search
+        // Add criterion button
+        this.container.addEventListener('click', (e) => {
+            const btn = e.target.closest('.add-criterion-btn');
+            if (btn) {
+                const groupIndex = parseInt(btn.dataset.groupIndex);
+                this.openValueSelector(groupIndex, null);
+            }
+        });
+
+        // Add value to existing criterion
+        this.container.addEventListener('click', (e) => {
+            const btn = e.target.closest('.add-value-btn');
+            if (btn) {
+                const groupIndex = parseInt(btn.dataset.groupIndex);
+                const criterionIndex = parseInt(btn.dataset.criterionIndex);
+                this.openValueSelector(groupIndex, criterionIndex);
+            }
+        });
+
+        // Remove value chip
+        this.container.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chip-remove');
+            if (btn) {
+                const groupIndex = parseInt(btn.dataset.groupIndex);
+                const criterionIndex = parseInt(btn.dataset.criterionIndex);
+                const valueIndex = parseInt(btn.dataset.valueIndex);
+                this.removeValue(groupIndex, criterionIndex, valueIndex);
+            }
+        });
+
+        // Operator dropdown change
+        this.container.addEventListener('change', (e) => {
+            if (e.target.classList.contains('criterion-operator-select')) {
+                const groupIndex = parseInt(e.target.dataset.groupIndex);
+                const criterionIndex = parseInt(e.target.dataset.criterionIndex);
+                const isExclude = e.target.value === 'is_not';
+                this.setExclude(groupIndex, criterionIndex, isExclude);
+            }
+        });
+
+        // Remove criterion
+        this.container.addEventListener('click', (e) => {
+            const btn = e.target.closest('.remove-criterion-btn');
+            if (btn) {
+                const groupIndex = parseInt(btn.dataset.groupIndex);
+                const criterionIndex = parseInt(btn.dataset.criterionIndex);
+                this.removeCriterion(groupIndex, criterionIndex);
+            }
+        });
+
+        // Modal close
+        this.container.addEventListener('click', (e) => {
+            if (e.target.closest('#close-selector-btn') || e.target.closest('#cancel-selector-btn')) {
+                this.closeValueSelector();
+            }
+        });
+
+        // Key selector change
+        this.container.addEventListener('change', async (e) => {
+            if (e.target.id === 'key-selector') {
+                const keyId = e.target.value;
+                if (keyId) {
+                    await this.loadValuesForKey(keyId);
+                } else {
+                    document.getElementById('values-section').style.display = 'none';
+                }
+            }
+        });
+
+        // Value search
         this.container.addEventListener('input', (e) => {
-            if (e.target.id === 'key-search') {
-                this.filterKeys(e.target.value);
-            } else if (e.target.id === 'value-search') {
+            if (e.target.id === 'value-search') {
                 this.filterValues(e.target.value);
             }
         });
-    }
 
-    handleValueAction(keyId, valueId, action) {
-        const include = this.selectedTargeting.key_value_pairs.include;
-        const exclude = this.selectedTargeting.key_value_pairs.exclude;
-
-        if (!include[keyId]) include[keyId] = [];
-        if (!exclude[keyId]) exclude[keyId] = [];
-
-        const isCurrentlyIncluded = include[keyId].includes(valueId);
-        const isCurrentlyExcluded = exclude[keyId].includes(valueId);
-
-        if (action === 'include') {
-            if (isCurrentlyIncluded) {
-                include[keyId] = include[keyId].filter(id => id !== valueId);
-            } else {
-                include[keyId].push(valueId);
-                exclude[keyId] = exclude[keyId].filter(id => id !== valueId);
+        // Value checkbox change
+        this.container.addEventListener('change', (e) => {
+            if (e.target.classList.contains('value-checkbox')) {
+                this.updateApplyButton();
             }
-        } else if (action === 'exclude') {
-            if (isCurrentlyExcluded) {
-                exclude[keyId] = exclude[keyId].filter(id => id !== valueId);
-            } else {
-                exclude[keyId].push(valueId);
-                include[keyId] = include[keyId].filter(id => id !== valueId);
-            }
-        }
-
-        if (include[keyId].length === 0) delete include[keyId];
-        if (exclude[keyId].length === 0) delete exclude[keyId];
-
-        this.updateValueItemState(keyId, valueId);
-        this.updateKeySelectionBadges();
-        this.updateHiddenField();
-        this.updateSummary();
-    }
-
-    updateValueItemState(keyId, valueId) {
-        const valueItem = this.container.querySelector(`.value-item[data-key-id="${keyId}"][data-value-id="${valueId}"]`);
-        if (!valueItem) return;
-
-        const isIncluded = this.isValueIncluded(keyId, valueId);
-        const isExcluded = this.isValueExcluded(keyId, valueId);
-
-        valueItem.classList.remove('included', 'excluded');
-        if (isIncluded) valueItem.classList.add('included');
-        if (isExcluded) valueItem.classList.add('excluded');
-
-        valueItem.querySelector('.include-btn').classList.toggle('active', isIncluded);
-        valueItem.querySelector('.exclude-btn').classList.toggle('active', isExcluded);
-    }
-
-    updateKeySelectionBadges() {
-        const keys = this.targetingData.custom_targeting_keys || [];
-        this.renderKeysList(keys);
-
-        if (this.currentKeyId) {
-            const currentKeyItem = this.container.querySelector(`.kv-key-item[data-key-id="${this.currentKeyId}"]`);
-            if (currentKeyItem) {
-                currentKeyItem.classList.add('selected');
-            }
-        }
-    }
-
-    isValueIncluded(keyId, valueId) {
-        return this.selectedTargeting.key_value_pairs.include[keyId]?.includes(valueId) || false;
-    }
-
-    isValueExcluded(keyId, valueId) {
-        return this.selectedTargeting.key_value_pairs.exclude[keyId]?.includes(valueId) || false;
-    }
-
-    filterKeys(query) {
-        const keys = this.container.querySelectorAll('.kv-key-item');
-        const lowerQuery = query.toLowerCase();
-
-        keys.forEach(key => {
-            const text = key.textContent.toLowerCase();
-            key.style.display = text.includes(lowerQuery) ? '' : 'none';
         });
+
+        // Apply button
+        this.container.addEventListener('click', (e) => {
+            if (e.target.closest('#apply-selector-btn')) {
+                this.applyValueSelection();
+            }
+        });
+    }
+
+    addGroup() {
+        const groups = this.selectedTargeting.key_value_pairs.groups;
+        groups.push({ criteria: [] });
+        this.refreshGroups();
+        this.updateHiddenField();
+
+        // Open value selector for the new group
+        this.openValueSelector(groups.length - 1, null);
+    }
+
+    removeGroup(groupIndex) {
+        const groups = this.selectedTargeting.key_value_pairs.groups;
+        groups.splice(groupIndex, 1);
+        this.refreshGroups();
+        this.updateHiddenField();
+    }
+
+    addCriterion(groupIndex, keyId, values, exclude = false) {
+        const groups = this.selectedTargeting.key_value_pairs.groups;
+
+        // Ensure group exists
+        while (groups.length <= groupIndex) {
+            groups.push({ criteria: [] });
+        }
+
+        groups[groupIndex].criteria.push({
+            keyId,
+            values,
+            ...(exclude ? { exclude: true } : {})
+        });
+
+        this.refreshGroups();
+        this.updateHiddenField();
+    }
+
+    removeCriterion(groupIndex, criterionIndex) {
+        const groups = this.selectedTargeting.key_value_pairs.groups;
+        if (groups[groupIndex]) {
+            groups[groupIndex].criteria.splice(criterionIndex, 1);
+
+            // Remove empty groups (but keep at least one)
+            if (groups[groupIndex].criteria.length === 0 && groups.length > 1) {
+                groups.splice(groupIndex, 1);
+            }
+
+            this.refreshGroups();
+            this.updateHiddenField();
+        }
+    }
+
+    removeValue(groupIndex, criterionIndex, valueIndex) {
+        const groups = this.selectedTargeting.key_value_pairs.groups;
+        const criterion = groups[groupIndex]?.criteria[criterionIndex];
+
+        if (criterion && criterion.values.length > valueIndex) {
+            criterion.values.splice(valueIndex, 1);
+
+            // Remove criterion if no values left
+            if (criterion.values.length === 0) {
+                this.removeCriterion(groupIndex, criterionIndex);
+            } else {
+                this.refreshGroups();
+                this.updateHiddenField();
+            }
+        }
+    }
+
+    setExclude(groupIndex, criterionIndex, isExclude) {
+        const groups = this.selectedTargeting.key_value_pairs.groups;
+        const criterion = groups[groupIndex]?.criteria[criterionIndex];
+
+        if (criterion) {
+            if (isExclude) {
+                criterion.exclude = true;
+            } else {
+                delete criterion.exclude;
+            }
+            this.refreshGroups();
+            this.updateHiddenField();
+        }
+    }
+
+    openValueSelector(groupIndex, criterionIndex) {
+        this.editingCriterion = { groupIndex, criterionIndex };
+        const modal = document.getElementById('value-selector-modal');
+        const keySelector = document.getElementById('key-selector');
+        const operatorSelector = document.getElementById('operator-selector');
+        const title = document.getElementById('value-selector-title');
+
+        // Reset state
+        keySelector.value = '';
+        operatorSelector.value = 'is';
+        document.getElementById('values-section').style.display = 'none';
+        document.getElementById('operator-section').style.display = 'none';
+        document.getElementById('apply-selector-btn').disabled = true;
+
+        // If editing existing criterion, pre-select the key and operator
+        if (criterionIndex !== null) {
+            const groups = this.selectedTargeting.key_value_pairs.groups;
+            const criterion = groups[groupIndex]?.criteria[criterionIndex];
+            if (criterion) {
+                keySelector.value = criterion.keyId;
+                operatorSelector.value = criterion.exclude ? 'is_not' : 'is';
+                title.textContent = `Add values to ${this.keyMetadata[criterion.keyId]?.display_name || criterion.keyId}`;
+                // Load values for this key
+                this.loadValuesForKey(criterion.keyId);
+            }
+        } else {
+            title.textContent = 'Add targeting';
+        }
+
+        modal.style.display = 'flex';
+    }
+
+    closeValueSelector() {
+        const modal = document.getElementById('value-selector-modal');
+        modal.style.display = 'none';
+        this.editingCriterion = null;
+    }
+
+    async loadValuesForKey(keyId) {
+        const valuesSection = document.getElementById('values-section');
+        const valuesList = document.getElementById('values-list');
+        const operatorSection = document.getElementById('operator-section');
+
+        valuesSection.style.display = 'block';
+        operatorSection.style.display = 'block';
+        valuesList.innerHTML = '<div class="loading">Loading values...</div>';
+
+        try {
+            // Check cache first
+            if (!this.loadedValuesByKey[keyId]) {
+                const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
+                const response = await fetch(url, { credentials: 'same-origin' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+
+                this.loadedValuesByKey[keyId] = data.values || [];
+
+                // Cache value metadata
+                if (!this.valueMetadata[keyId]) {
+                    this.valueMetadata[keyId] = {};
+                }
+                this.loadedValuesByKey[keyId].forEach(val => {
+                    this.valueMetadata[keyId][val.id] = val.display_name || val.name || val.id;
+                });
+            }
+
+            const values = this.loadedValuesByKey[keyId];
+
+            if (values.length === 0) {
+                valuesList.innerHTML = '<div class="empty-state">No values available for this key</div>';
+                return;
+            }
+
+            // Get currently selected values for this criterion
+            const selectedValues = new Set();
+            if (this.editingCriterion && this.editingCriterion.criterionIndex !== null) {
+                const groups = this.selectedTargeting.key_value_pairs.groups;
+                const criterion = groups[this.editingCriterion.groupIndex]?.criteria[this.editingCriterion.criterionIndex];
+                if (criterion && criterion.keyId === keyId) {
+                    criterion.values.forEach(v => selectedValues.add(v));
+                }
+            }
+
+            valuesList.innerHTML = values.map(val => `
+                <label class="value-option">
+                    <input type="checkbox" class="value-checkbox"
+                           value="${val.id}"
+                           data-name="${val.display_name || val.name}"
+                           ${selectedValues.has(val.id) ? 'checked' : ''}>
+                    <span class="value-label">${val.display_name || val.name}</span>
+                </label>
+            `).join('');
+
+            this.updateApplyButton();
+
+        } catch (error) {
+            valuesList.innerHTML = `<div class="error-state">Failed to load values: ${error.message}</div>`;
+        }
     }
 
     filterValues(query) {
-        const values = this.container.querySelectorAll('.value-item');
+        const items = this.container.querySelectorAll('.value-option');
         const lowerQuery = query.toLowerCase();
 
-        values.forEach(val => {
-            const text = val.querySelector('.value-name').textContent.toLowerCase();
-            val.style.display = text.includes(lowerQuery) ? '' : 'none';
+        items.forEach(item => {
+            const text = item.textContent.toLowerCase();
+            item.style.display = text.includes(lowerQuery) ? '' : 'none';
         });
     }
 
-    updateHiddenField() {
-        const cleanTargeting = {};
+    updateApplyButton() {
+        const checkboxes = this.container.querySelectorAll('.value-checkbox:checked');
+        const applyBtn = document.getElementById('apply-selector-btn');
+        const keySelector = document.getElementById('key-selector');
 
-        const kvPairs = this.selectedTargeting.key_value_pairs;
-        const hasInclude = Object.keys(kvPairs.include).length > 0;
-        const hasExclude = Object.keys(kvPairs.exclude).length > 0;
+        applyBtn.disabled = !keySelector.value || checkboxes.length === 0;
+    }
 
-        if (hasInclude || hasExclude) {
-            cleanTargeting.key_value_pairs = {
-                include: kvPairs.include,
-                exclude: kvPairs.exclude,
-                operator: kvPairs.operator
-            };
+    applyValueSelection() {
+        const keySelector = document.getElementById('key-selector');
+        const operatorSelector = document.getElementById('operator-selector');
+        const keyId = keySelector.value;
+        const isExclude = operatorSelector.value === 'is_not';
+        const checkboxes = this.container.querySelectorAll('.value-checkbox:checked');
+
+        if (!keyId || checkboxes.length === 0) return;
+
+        const values = Array.from(checkboxes).map(cb => cb.value);
+        const { groupIndex, criterionIndex } = this.editingCriterion;
+
+        if (criterionIndex !== null) {
+            // Adding values to existing criterion
+            const groups = this.selectedTargeting.key_value_pairs.groups;
+            const criterion = groups[groupIndex]?.criteria[criterionIndex];
+
+            if (criterion && criterion.keyId === keyId) {
+                // Add only new values
+                const existingValues = new Set(criterion.values);
+                values.forEach(v => {
+                    if (!existingValues.has(v)) {
+                        criterion.values.push(v);
+                    }
+                });
+                // Update the operator based on modal selection
+                if (isExclude) {
+                    criterion.exclude = true;
+                } else {
+                    delete criterion.exclude;
+                }
+            }
+        } else {
+            // Creating new criterion with selected operator
+            this.addCriterion(groupIndex, keyId, values, isExclude);
         }
 
-        const hiddenField = document.getElementById('targeting-data');
-        if (hiddenField) {
-            hiddenField.value = Object.keys(cleanTargeting).length > 0 ? JSON.stringify(cleanTargeting) : '';
+        this.closeValueSelector();
+        this.refreshGroups();
+        this.updateHiddenField();
+    }
+
+    refreshGroups() {
+        const groupsContainer = document.getElementById('groups-container');
+        if (groupsContainer) {
+            groupsContainer.innerHTML = this.renderGroups();
         }
     }
 
-    updateSummary() {
-        const summary = document.getElementById('targeting-summary');
-        const operatorDisplay = document.getElementById('summary-operator');
-        const tagsContainer = document.getElementById('targeting-tags');
-
-        const kvPairs = this.selectedTargeting.key_value_pairs;
-        const hasInclude = Object.keys(kvPairs.include).length > 0;
-        const hasExclude = Object.keys(kvPairs.exclude).length > 0;
-
-        if (!hasInclude && !hasExclude) {
-            summary.style.display = 'none';
+    updateHiddenField() {
+        // Only update hidden field if we successfully loaded existing data
+        // This prevents accidentally clearing targeting if there was a load error
+        if (!this.loadedSuccessfully) {
+            console.warn('[TargetingWidget] Skipping hidden field update - data not loaded successfully');
             return;
         }
 
-        summary.style.display = 'block';
+        const groups = this.selectedTargeting.key_value_pairs.groups;
+        const hiddenField = document.getElementById('targeting-data');
 
-        operatorDisplay.innerHTML = `
-            <span class="operator-display">
-                Keys combined with: <strong>${kvPairs.operator}</strong>
-            </span>
-        `;
+        // Filter out empty groups
+        const nonEmptyGroups = groups.filter(g => g.criteria && g.criteria.length > 0);
 
-        const tags = [];
-
-        for (const [keyId, valueIds] of Object.entries(kvPairs.include)) {
-            const keyName = this.keyMetadata[keyId]?.display_name || keyId;
-            // Get display names for values
-            const valueNames = valueIds.map(vid =>
-                this.valueMetadata[keyId]?.[vid] || vid
-            );
-            const valuesText = valueNames.length > 1
-                ? valueNames.join(' or ')
-                : valueNames[0];
-            tags.push(`
-                <span class="targeting-tag include-tag">
-                    <strong>Include:</strong> ${keyName} = ${valuesText}
-                </span>
-            `);
+        if (hiddenField) {
+            if (nonEmptyGroups.length > 0) {
+                hiddenField.value = JSON.stringify({
+                    key_value_pairs: { groups: nonEmptyGroups }
+                });
+            } else {
+                hiddenField.value = '';
+            }
         }
-
-        for (const [keyId, valueIds] of Object.entries(kvPairs.exclude)) {
-            const keyName = this.keyMetadata[keyId]?.display_name || keyId;
-            // Get display names for values
-            const valueNames = valueIds.map(vid =>
-                this.valueMetadata[keyId]?.[vid] || vid
-            );
-            const valuesText = valueNames.length > 1
-                ? valueNames.join(' or ')
-                : valueNames[0];
-            tags.push(`
-                <span class="targeting-tag exclude-tag">
-                    <strong>Exclude:</strong> ${keyName} = ${valuesText}
-                </span>
-            `);
-        }
-
-        const operator = kvPairs.operator;
-        tagsContainer.innerHTML = tags.join(`<span class="tag-operator">${operator}</span>`);
     }
 }
 

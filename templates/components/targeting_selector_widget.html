@@ -1,9 +1,10 @@
-<!-- Targeting Selector Widget - Custom Key-Value Targeting
+<!-- Targeting Selector Widget - GAM-style nested groups targeting
 
      Features:
-     - OR/AND operator support between different keys
-     - Include/Exclude toggle for values
-     - Search functionality for keys and values
+     - Multiple groups connected by OR logic
+     - Within each group, criteria connected by AND logic
+     - Each criterion: key, operator, values as chips
+     - Include/Exclude toggle for each criterion
 -->
 
 <style>
@@ -22,232 +23,248 @@
     color: #333;
 }
 
-/* Operator Toggle */
-.kv-operator-toggle {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
+/* Groups Container */
+.groups-container {
     margin-bottom: 1rem;
-    padding: 0.75rem 1rem;
+}
+
+/* Group Card */
+.group-card {
     background: white;
     border: 1px solid #dee2e6;
-    border-radius: 4px;
-}
-
-.operator-label {
-    font-weight: 500;
-    color: #333;
-}
-
-.operator-buttons {
-    display: flex;
-    gap: 0.5rem;
-}
-
-.operator-btn {
-    padding: 0.4rem 1rem;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
-    background: white;
-    cursor: pointer;
-    font-weight: 500;
-    color: #666;
-    transition: all 0.2s;
-}
-
-.operator-btn:hover {
-    background: #f8f9fa;
-    border-color: #007bff;
-}
-
-.operator-btn.active {
-    background: #007bff;
-    border-color: #007bff;
-    color: white;
-}
-
-.operator-btn small {
-    font-weight: normal;
-    opacity: 0.8;
-}
-
-/* Key-Value Selector */
-.kv-selector {
-    display: grid;
-    grid-template-columns: 1fr 2fr;
-    gap: 1rem;
-    min-height: 300px;
-}
-
-.kv-keys, .kv-values {
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
-    padding: 1rem;
-    background: white;
-    overflow-y: auto;
-    max-height: 350px;
-}
-
-.kv-keys h5, .kv-values h5 {
-    margin-top: 0;
-    font-size: 0.9rem;
-    text-transform: uppercase;
-    color: #666;
-}
-
-.search-input {
-    width: 100%;
-    padding: 0.5rem;
-    margin-bottom: 1rem;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
-}
-
-.search-input:focus {
-    outline: none;
-    border-color: #007bff;
-    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.1);
-}
-
-/* Key Items */
-.kv-key-item {
-    padding: 0.75rem;
+    border-radius: 6px;
     margin-bottom: 0.5rem;
-    background: #f8f9fa;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.2s;
-    border: 2px solid transparent;
 }
 
-.kv-key-item:hover {
-    background: #e9ecef;
-}
-
-.kv-key-item.selected {
-    background: #e7f1ff;
-    border-color: #007bff;
-}
-
-.kv-key-item.has-selections {
-    background: #f0f7ff;
-}
-
-.kv-key-item strong {
-    display: block;
-    color: #333;
-}
-
-.kv-key-item small {
-    color: #666;
-    font-size: 0.85rem;
-}
-
-.selection-badge {
+.group-header {
     display: flex;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-}
-
-.badge-include, .badge-exclude {
-    display: inline-block;
-    padding: 0.15rem 0.5rem;
-    border-radius: 10px;
-    font-size: 0.75rem;
-    font-weight: 500;
-}
-
-.badge-include {
-    background: #d4edda;
-    color: #155724;
-}
-
-.badge-exclude {
-    background: #f8d7da;
-    color: #721c24;
-}
-
-/* Values Legend */
-.values-legend {
-    display: flex;
-    gap: 1rem;
-    margin-bottom: 0.75rem;
-    padding: 0.5rem;
-    background: #f8f9fa;
-    border-radius: 4px;
-    font-size: 0.85rem;
-}
-
-.legend-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: #666;
-}
-
-.legend-color {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border-radius: 2px;
-}
-
-.legend-color.include {
-    background: #28a745;
-}
-
-.legend-color.exclude {
-    background: #dc3545;
-}
-
-/* Value Items */
-.kv-values-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 0.5rem;
-}
-
-.value-item {
-    display: flex;
-    align-items: center;
     justify-content: space-between;
-    padding: 0.5rem 0.75rem;
+    align-items: center;
+    padding: 0.75rem 1rem;
     background: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    border-radius: 6px 6px 0 0;
+}
+
+.group-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: #495057;
+}
+
+.remove-group-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: #6c757d;
     border-radius: 4px;
-    border: 2px solid transparent;
     transition: all 0.2s;
 }
 
-.value-item:hover {
-    background: #e9ecef;
-}
-
-.value-item.included {
-    background: #d4edda;
-    border-color: #28a745;
-}
-
-.value-item.excluded {
+.remove-group-btn:hover {
     background: #f8d7da;
-    border-color: #dc3545;
+    color: #dc3545;
 }
 
-.value-name {
-    flex: 1;
-    font-size: 0.9rem;
+/* Criteria List */
+.criteria-list {
+    padding: 1rem;
+}
+
+/* Or Divider */
+.or-divider {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0.5rem 0;
+    position: relative;
+}
+
+.or-divider::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #007bff;
+}
+
+.or-divider span {
+    background: #f8f9fa;
+    padding: 0.25rem 0.75rem;
+    font-weight: 600;
+    color: #007bff;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    z-index: 1;
+    border-radius: 4px;
+}
+
+/* And Connector */
+.and-connector {
+    display: flex;
+    align-items: center;
+    margin: 0.5rem 0;
+    padding-left: 1rem;
+}
+
+.and-connector span {
+    font-weight: 500;
+    color: #6c757d;
+    font-size: 0.85rem;
+    text-transform: lowercase;
+}
+
+/* Criterion Row */
+.criterion-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border: 1px solid #dee2e6;
+    flex-wrap: wrap;
+}
+
+.criterion-row.excluded {
+    background: #fff5f5;
+    border-color: #f8d7da;
+}
+
+.criterion-row.editing {
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.15);
+}
+
+.criterion-key {
+    font-weight: 600;
     color: #333;
+    min-width: 120px;
+    max-width: 180px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    padding: 0.4rem 0.75rem;
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
 }
 
-.value-actions {
+/* Operator Dropdown */
+.criterion-operator-select {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: white;
+    font-size: 0.9rem;
+    color: #495057;
+    cursor: pointer;
+    min-width: 110px;
+}
+
+.criterion-operator-select:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.15);
+}
+
+.criterion-row.excluded .criterion-operator-select {
+    border-color: #f8d7da;
+    background: #fff5f5;
+    color: #dc3545;
+}
+
+.criterion-values {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 200px;
+    align-items: center;
+}
+
+/* Value Chips */
+.value-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 16px;
+    font-size: 0.85rem;
+    background: #e7f5ff;
+    color: #1971c2;
+    border: 1px solid #a5d8ff;
+}
+
+.value-chip.include {
+    background: #e6fcf5;
+    color: #0ca678;
+    border-color: #96f2d7;
+}
+
+.value-chip.exclude {
+    background: #fff5f5;
+    color: #e03131;
+    border-color: #ffc9c9;
+}
+
+.chip-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    color: inherit;
+    opacity: 0.7;
+    padding: 0;
+    border-radius: 50%;
+}
+
+.chip-remove:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.add-value-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 1px dashed #adb5bd;
+    background: white;
+    cursor: pointer;
+    font-size: 1rem;
+    color: #6c757d;
+    border-radius: 50%;
+    transition: all 0.2s;
+}
+
+.add-value-btn:hover {
+    border-color: #007bff;
+    color: #007bff;
+    background: #f8f9fa;
+}
+
+/* Criterion Actions */
+.criterion-actions {
     display: flex;
     gap: 0.25rem;
-    margin-left: 0.5rem;
+    margin-left: auto;
 }
 
-.action-btn {
+.remove-criterion-btn {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -257,110 +274,260 @@
     border-radius: 4px;
     background: white;
     cursor: pointer;
-    color: #666;
+    color: #6c757d;
     transition: all 0.2s;
 }
 
-.action-btn:hover {
-    background: #f8f9fa;
-}
-
-.include-btn:hover {
-    border-color: #28a745;
-    color: #28a745;
-}
-
-.exclude-btn:hover {
+.remove-criterion-btn:hover {
     border-color: #dc3545;
+    background: #f8d7da;
     color: #dc3545;
 }
 
-.include-btn.active {
-    background: #28a745;
-    border-color: #28a745;
-    color: white;
+/* Add Criterion Row */
+.add-criterion-row {
+    margin-top: 0.75rem;
 }
 
-.exclude-btn.active {
-    background: #dc3545;
-    border-color: #dc3545;
-    color: white;
+.add-criterion-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border: 1px dashed #adb5bd;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    color: #6c757d;
+    font-size: 0.9rem;
+    transition: all 0.2s;
 }
 
-/* Summary Section */
-.selected-summary {
-    margin-top: 1.5rem;
-    padding: 1rem;
+.add-criterion-btn:hover {
+    border-color: #007bff;
+    color: #007bff;
     background: white;
+}
+
+/* Add Group Button */
+.add-group-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1.25rem;
+    border: none;
+    border-radius: 4px;
+    background: #007bff;
+    cursor: pointer;
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.add-group-btn:hover {
+    background: #0056b3;
+}
+
+/* Value Selector Modal */
+.value-selector-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.value-selector-content {
+    background: white;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+
+.value-selector-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.value-selector-header h5 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: #333;
+}
+
+.close-selector-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 1.5rem;
+    color: #6c757d;
+    border-radius: 4px;
+}
+
+.close-selector-btn:hover {
+    background: #f8f9fa;
+    color: #333;
+}
+
+.value-selector-body {
+    padding: 1.5rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.key-selector-section {
+    margin-bottom: 1.5rem;
+}
+
+.key-selector-section label,
+.values-section label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    color: #333;
+}
+
+.key-dropdown {
+    width: 100%;
+    padding: 0.6rem;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    font-size: 0.95rem;
+    background: white;
+}
+
+.key-dropdown:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.15);
+}
+
+.values-section {
+    margin-top: 1rem;
+}
+
+.value-search-input {
+    width: 100%;
+    padding: 0.6rem;
+    margin-bottom: 1rem;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    font-size: 0.95rem;
+}
+
+.value-search-input:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.15);
+}
+
+.values-list {
+    max-height: 250px;
+    overflow-y: auto;
     border: 1px solid #dee2e6;
     border-radius: 4px;
 }
 
-.selected-summary h5 {
-    margin-top: 0;
-    margin-bottom: 0.5rem;
-    font-size: 0.9rem;
-    text-transform: uppercase;
-    color: #666;
-}
-
-.summary-operator {
-    margin-bottom: 0.75rem;
-}
-
-.operator-display {
-    font-size: 0.85rem;
-    color: #666;
-}
-
-.operator-display strong {
-    color: #007bff;
-}
-
-.selected-tags {
+.value-option {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    cursor: pointer;
+    border-bottom: 1px solid #f1f3f4;
+    transition: background 0.15s;
 }
 
-.targeting-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.35rem 0.75rem;
-    border-radius: 16px;
-    font-size: 0.85rem;
+.value-option:last-child {
+    border-bottom: none;
+}
+
+.value-option:hover {
+    background: #f8f9fa;
+}
+
+.value-checkbox {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.value-label {
+    flex: 1;
+    font-size: 0.95rem;
+    color: #333;
+}
+
+.value-selector-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding: 1rem 1.5rem;
+    border-top: 1px solid #dee2e6;
+    background: #f8f9fa;
+    border-radius: 0 0 8px 8px;
+}
+
+.cancel-btn {
+    padding: 0.6rem 1.25rem;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: white;
+    cursor: pointer;
+    font-size: 0.95rem;
+    color: #333;
+    transition: all 0.2s;
+}
+
+.cancel-btn:hover {
+    background: #f8f9fa;
+    border-color: #adb5bd;
+}
+
+.apply-btn {
+    padding: 0.6rem 1.5rem;
+    border: none;
+    border-radius: 4px;
+    background: #007bff;
+    cursor: pointer;
+    font-size: 0.95rem;
+    color: white;
     font-weight: 500;
+    transition: all 0.2s;
 }
 
-.include-tag {
-    background: #d4edda;
-    color: #155724;
+.apply-btn:hover:not(:disabled) {
+    background: #0056b3;
 }
 
-.exclude-tag {
-    background: #f8d7da;
-    color: #721c24;
-}
-
-.tag-icon {
-    font-weight: bold;
-    font-size: 1rem;
-}
-
-.tag-operator {
-    padding: 0 0.5rem;
-    font-weight: 600;
-    color: #007bff;
-    font-size: 0.85rem;
+.apply-btn:disabled {
+    background: #adb5bd;
+    cursor: not-allowed;
 }
 
 /* Empty and Status States */
 .empty-state, .error-state, .loading {
     padding: 2rem;
     text-align: center;
-    color: #666;
+    color: #6c757d;
 }
 
 .error-state {
@@ -370,12 +537,39 @@
 .loading {
     color: #007bff;
 }
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .criterion-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .criterion-key {
+        min-width: auto;
+        max-width: none;
+        width: 100%;
+    }
+
+    .criterion-values {
+        width: 100%;
+    }
+
+    .criterion-actions {
+        width: 100%;
+        justify-content: flex-end;
+        margin-top: 0.5rem;
+    }
+}
 </style>
 
-<!-- Minimal HTML Structure -->
+<!-- Widget Container -->
 <div class="targeting-widget" id="targeting-widget">
     <h4>Custom Targeting</h4>
-    <p style="margin: 0 0 1rem 0; color: #666; font-size: 0.9rem;">Select key-value pairs. Use Include to match values, Exclude to filter them out.</p>
+    <p style="margin: 0 0 1rem 0; color: #666; font-size: 0.9rem;">
+        Build targeting rules. Use "And" to add criteria within a group, "Or" to add alternate groups.
+    </p>
     <!-- Content will be populated by JavaScript -->
 </div>
 

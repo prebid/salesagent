@@ -365,5 +365,252 @@ class TestEnhancedCustomTargetingNumericValueIds:
         assert 999888777 in criteria["valueIds"]
 
 
+class TestNestedGroupsCustomTargeting:
+    """Test suite for GAM-style nested groups targeting.
+
+    New data model supports:
+    - Multiple groups connected by OR logic
+    - Within each group, criteria connected by AND logic
+    - Each criterion has key, values (OR'd), and optional exclude flag
+
+    Data format:
+    {
+        'groups': [
+            {
+                'criteria': [
+                    {'keyId': '123', 'values': ['v1', 'v2']},
+                    {'keyId': '456', 'values': ['v3'], 'exclude': True}
+                ]
+            },
+            {
+                'criteria': [
+                    {'keyId': '789', 'values': ['v4']}
+                ]
+            }
+        ]
+    }
+
+    Translates to GAM:
+    (key123 IS v1|v2 AND key456 IS_NOT v3) OR (key789 IS v4)
+    """
+
+    def test_single_group_single_criterion(self, targeting_manager):
+        """Test simplest case: one group with one criterion."""
+        groups_dict = {"groups": [{"criteria": [{"keyId": "11111", "values": ["sports"]}]}]}
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        # Single group should still produce OR at top level for consistency
+        assert result["xsi_type"] == "CustomCriteriaSet"
+        assert result["logicalOperator"] == "OR"
+        assert len(result["children"]) == 1
+
+        # The single group child
+        group = result["children"][0]
+        assert group["xsi_type"] == "CustomCriteriaSet"
+        assert group["logicalOperator"] == "AND"
+        assert len(group["children"]) == 1
+
+        # The criterion
+        criterion = group["children"][0]
+        assert criterion["xsi_type"] == "CustomCriteria"
+        assert criterion["keyId"] == 11111
+        assert criterion["operator"] == "IS"
+
+    def test_single_group_multiple_criteria_and_logic(self, targeting_manager):
+        """Test one group with multiple criteria connected by AND."""
+        groups_dict = {
+            "groups": [
+                {"criteria": [{"keyId": "11111", "values": ["sports"]}, {"keyId": "22222", "values": ["premium"]}]}
+            ]
+        }
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        assert result["logicalOperator"] == "OR"
+        assert len(result["children"]) == 1
+
+        group = result["children"][0]
+        assert group["logicalOperator"] == "AND"
+        assert len(group["children"]) == 2
+
+        key_ids = [c["keyId"] for c in group["children"]]
+        assert 11111 in key_ids
+        assert 22222 in key_ids
+
+    def test_multiple_groups_or_logic(self, targeting_manager):
+        """Test multiple groups connected by OR logic."""
+        groups_dict = {
+            "groups": [
+                {"criteria": [{"keyId": "11111", "values": ["sports"]}]},
+                {"criteria": [{"keyId": "22222", "values": ["news"]}]},
+            ]
+        }
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        # Top level OR for groups
+        assert result["logicalOperator"] == "OR"
+        assert len(result["children"]) == 2
+
+        # Each group is AND internally
+        for group in result["children"]:
+            assert group["xsi_type"] == "CustomCriteriaSet"
+            assert group["logicalOperator"] == "AND"
+
+    def test_groups_with_exclude_criteria(self, targeting_manager):
+        """Test groups with excluded criteria."""
+        groups_dict = {
+            "groups": [
+                {
+                    "criteria": [
+                        {"keyId": "11111", "values": ["sports"]},
+                        {"keyId": "22222", "values": ["politics"], "exclude": True},
+                    ]
+                }
+            ]
+        }
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        group = result["children"][0]
+        assert len(group["children"]) == 2
+
+        include_criteria = [c for c in group["children"] if c["operator"] == "IS"]
+        exclude_criteria = [c for c in group["children"] if c["operator"] == "IS_NOT"]
+
+        assert len(include_criteria) == 1
+        assert include_criteria[0]["keyId"] == 11111
+
+        assert len(exclude_criteria) == 1
+        assert exclude_criteria[0]["keyId"] == 22222
+
+    def test_groups_multiple_values_or_within_criterion(self, targeting_manager):
+        """Test that multiple values in a criterion are OR'd together."""
+        groups_dict = {"groups": [{"criteria": [{"keyId": "11111", "values": ["sports", "entertainment", "news"]}]}]}
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        criterion = result["children"][0]["children"][0]
+        assert criterion["keyId"] == 11111
+        assert len(criterion["valueIds"]) == 3
+
+    def test_groups_numeric_value_ids(self, targeting_manager):
+        """Test groups format with numeric GAM value IDs."""
+        groups_dict = {"groups": [{"criteria": [{"keyId": "11111", "values": ["451005167391", "451470637712"]}]}]}
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        criterion = result["children"][0]["children"][0]
+        assert 451005167391 in criterion["valueIds"]
+        assert 451470637712 in criterion["valueIds"]
+
+    def test_groups_complex_gam_style(self, targeting_manager):
+        """Test complex GAM-style targeting: (A AND B) OR (C AND D).
+
+        Matches the GAM UI pattern:
+        Group 1: DAY_OF_WEEK is MONDAY,TUESDAY AND Scope3 is srP
+        Or
+        Group 2: BOK Test is cat
+        """
+        groups_dict = {
+            "groups": [
+                {
+                    "criteria": [
+                        {"keyId": "11111", "values": ["MONDAY", "TUESDAY"]},
+                        {"keyId": "22222", "values": ["srP"]},
+                    ]
+                },
+                {"criteria": [{"keyId": "33333", "values": ["cat"]}]},
+            ]
+        }
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        # Top level: OR between groups
+        assert result["logicalOperator"] == "OR"
+        assert len(result["children"]) == 2
+
+        # Group 1: key1 AND key2
+        group1 = result["children"][0]
+        assert group1["logicalOperator"] == "AND"
+        assert len(group1["children"]) == 2
+
+        # Group 2: key3 only
+        group2 = result["children"][1]
+        assert group2["logicalOperator"] == "AND"
+        assert len(group2["children"]) == 1
+
+    def test_groups_empty_groups_filtered(self, targeting_manager):
+        """Test that empty groups are filtered out."""
+        groups_dict = {
+            "groups": [
+                {"criteria": []},  # Empty group
+                {"criteria": [{"keyId": "11111", "values": ["sports"]}]},
+                {"criteria": []},  # Another empty group
+            ]
+        }
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        # Only one non-empty group should remain
+        assert len(result["children"]) == 1
+
+    def test_groups_empty_criteria_filtered(self, targeting_manager):
+        """Test that criteria with empty values are filtered out."""
+        groups_dict = {
+            "groups": [
+                {
+                    "criteria": [
+                        {"keyId": "11111", "values": []},  # Empty values
+                        {"keyId": "22222", "values": ["sports"]},
+                    ]
+                }
+            ]
+        }
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        group = result["children"][0]
+        assert len(group["children"]) == 1
+        assert group["children"][0]["keyId"] == 22222
+
+    def test_groups_all_empty_returns_empty(self, targeting_manager):
+        """Test that all empty groups returns empty dict."""
+        groups_dict = {"groups": [{"criteria": []}, {"criteria": [{"keyId": "11111", "values": []}]}]}
+
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+
+        assert result == {}
+
+    def test_groups_format_detected(self, targeting_manager):
+        """Test that groups format is detected and routed correctly."""
+        groups_dict = {"groups": [{"criteria": [{"keyId": "11111", "values": ["sports"]}]}]}
+
+        # Should not raise, should detect groups format
+        result = targeting_manager._build_custom_targeting_structure(groups_dict)
+        assert "children" in result
+
+    def test_backward_compat_enhanced_still_works(self, targeting_manager):
+        """Test that enhanced format still works after groups support added."""
+        enhanced_dict = {"include": {"11111": ["sports"]}, "exclude": {"22222": ["politics"]}, "operator": "AND"}
+
+        result = targeting_manager._build_custom_targeting_structure(enhanced_dict)
+
+        # Should still produce flat structure for enhanced format
+        assert result["logicalOperator"] == "AND"
+        assert len(result["children"]) == 2
+
+    def test_backward_compat_legacy_still_works(self, targeting_manager):
+        """Test that legacy format still works after groups support added."""
+        legacy_dict = {"11111": "sports", "22222": "premium"}
+
+        result = targeting_manager._build_custom_targeting_structure(legacy_dict)
+
+        # Should still produce flat structure for legacy format
+        assert result["logicalOperator"] == "AND"
+        assert len(result["children"]) == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

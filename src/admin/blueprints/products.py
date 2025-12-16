@@ -183,17 +183,27 @@ def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
     """Parse pricing options from form data (AdCP PR #88).
 
     Form data uses indexed fields: pricing_model_0, pricing_model_1, etc.
+    Indices may be non-contiguous if user removed and re-added pricing options.
 
     Returns list of pricing option dicts ready for database insertion.
     """
     pricing_options = []
-    index = 0
 
-    # Find all pricing options by looking for pricing_model_{i} fields
-    while f"pricing_model_{index}" in form_data:
+    # Find all pricing option indices by scanning form keys
+    # This handles non-contiguous indices (e.g., 0 removed, only 1 exists)
+    indices = set()
+    for key in form_data.keys():
+        if key.startswith("pricing_model_"):
+            try:
+                idx = int(key.replace("pricing_model_", ""))
+                indices.add(idx)
+            except ValueError:
+                pass
+
+    # Process each found index in order
+    for index in sorted(indices):
         pricing_model_raw = form_data.get(f"pricing_model_{index}")
         if not pricing_model_raw:
-            index += 1
             continue
 
         # Parse pricing model and is_fixed from combined value
@@ -229,7 +239,11 @@ def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
             try:
                 rate = float(rate_str)
             except ValueError:
-                pass
+                raise ValueError(f"Invalid rate value for pricing option {index}")
+
+        # Validate rate is required for fixed pricing
+        if is_fixed and rate is None:
+            raise ValueError(f"Rate is required for fixed pricing (pricing option {index})")
 
         # Parse price_guidance (for auction pricing)
         price_guidance = None
@@ -304,6 +318,85 @@ def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
         index += 1
 
     return pricing_options
+
+
+def create_custom_key_inventory_mappings(db_session, tenant_id: str, product_id: str, custom_keys: dict) -> int:
+    """Create ProductInventoryMapping entries for custom targeting keys.
+
+    Handles three formats:
+    - Groups format: {'groups': [{'criteria': [{'keyId': '123', 'values': ['v1'], 'exclude': False}]}]}
+    - Enhanced format: {'include': {'keyId': ['v1']}, 'exclude': {'keyId': ['v2']}, 'operator': 'AND'}
+    - Legacy format: {'keyId': 'value'}
+
+    Args:
+        db_session: Database session
+        tenant_id: Tenant ID
+        product_id: Product ID
+        custom_keys: Custom targeting configuration in any of the three formats
+
+    Returns:
+        Number of mappings created
+    """
+    mapping_count = 0
+
+    # Groups format (GAM-style nested groups)
+    if isinstance(custom_keys, dict) and "groups" in custom_keys:
+        for group in custom_keys.get("groups", []):
+            for criterion in group.get("criteria", []):
+                key_id = criterion.get("keyId")
+                is_exclude = criterion.get("exclude", False)
+                for value_id in criterion.get("values", []):
+                    prefix = "NOT_" if is_exclude else ""
+                    mapping = ProductInventoryMapping(
+                        tenant_id=tenant_id,
+                        product_id=product_id,
+                        inventory_type="custom_key",
+                        inventory_id=f"{prefix}{key_id}={value_id}",
+                        is_primary=False,
+                    )
+                    db_session.add(mapping)
+                    mapping_count += 1
+
+    # Enhanced format (include/exclude)
+    elif isinstance(custom_keys, dict) and ("include" in custom_keys or "exclude" in custom_keys):
+        for key_id, value_ids in custom_keys.get("include", {}).items():
+            for value_id in value_ids:
+                mapping = ProductInventoryMapping(
+                    tenant_id=tenant_id,
+                    product_id=product_id,
+                    inventory_type="custom_key",
+                    inventory_id=f"{key_id}={value_id}",
+                    is_primary=False,
+                )
+                db_session.add(mapping)
+                mapping_count += 1
+        for key_id, value_ids in custom_keys.get("exclude", {}).items():
+            for value_id in value_ids:
+                mapping = ProductInventoryMapping(
+                    tenant_id=tenant_id,
+                    product_id=product_id,
+                    inventory_type="custom_key",
+                    inventory_id=f"NOT_{key_id}={value_id}",
+                    is_primary=False,
+                )
+                db_session.add(mapping)
+                mapping_count += 1
+
+    # Legacy format ({keyId: value})
+    else:
+        for key, value in custom_keys.items():
+            custom_key_id = f"{key}={value}"
+            mapping = ProductInventoryMapping(
+                tenant_id=tenant_id,
+                product_id=product_id,
+                inventory_type="custom_key",
+                inventory_id=custom_key_id,
+                is_primary=False,
+            )
+            db_session.add(mapping)
+            mapping_count += 1
+
+    return mapping_count
 
 
 @products_bp.route("/")
@@ -663,7 +756,11 @@ def add_product(tenant_id):
                 countries = countries_list if countries_list and "ALL" not in countries_list else None
 
                 # Parse and create pricing options (AdCP PR #88)
-                pricing_options_data = parse_pricing_options_from_form(form_data)
+                try:
+                    pricing_options_data = parse_pricing_options_from_form(form_data)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
                 # CRITICAL: Products MUST have at least one pricing option
                 if not pricing_options_data or len(pricing_options_data) == 0:
@@ -787,10 +884,12 @@ def add_product(tenant_id):
                 if targeting_template.get("key_value_pairs"):
                     if "custom_targeting_keys" not in implementation_config:
                         implementation_config["custom_targeting_keys"] = {}
-                    # Enhanced format with include/exclude and operator
-                    # Pass through to GAM adapter which handles both legacy and enhanced formats
+                    # Handle different targeting formats
                     kv_pairs = targeting_template["key_value_pairs"]
-                    if isinstance(kv_pairs, dict) and ("include" in kv_pairs or "exclude" in kv_pairs):
+                    if isinstance(kv_pairs, dict) and "groups" in kv_pairs:
+                        # Groups format (GAM-style nested) - pass through directly
+                        implementation_config["custom_targeting_keys"] = kv_pairs
+                    elif isinstance(kv_pairs, dict) and ("include" in kv_pairs or "exclude" in kv_pairs):
                         # Enhanced format - pass through directly
                         implementation_config["custom_targeting_keys"] = kv_pairs
                     else:
@@ -1112,51 +1211,12 @@ def add_product(tenant_id):
                     # Save custom targeting key mappings
                     if implementation_config.get("custom_targeting_keys"):
                         custom_keys = implementation_config["custom_targeting_keys"]
-                        # Check if this is enhanced format (has include/exclude keys)
-                        if isinstance(custom_keys, dict) and ("include" in custom_keys or "exclude" in custom_keys):
-                            # Enhanced format: create mappings for each key-value pair
-                            mapping_count = 0
-                            for key_id, value_ids in custom_keys.get("include", {}).items():
-                                for value_id in value_ids:
-                                    mapping = ProductInventoryMapping(
-                                        tenant_id=tenant_id,
-                                        product_id=product.product_id,
-                                        inventory_type="custom_key",
-                                        inventory_id=f"{key_id}={value_id}",
-                                        is_primary=False,
-                                    )
-                                    db_session.add(mapping)
-                                    mapping_count += 1
-                            for key_id, value_ids in custom_keys.get("exclude", {}).items():
-                                for value_id in value_ids:
-                                    mapping = ProductInventoryMapping(
-                                        tenant_id=tenant_id,
-                                        product_id=product.product_id,
-                                        inventory_type="custom_key",
-                                        inventory_id=f"NOT_{key_id}={value_id}",
-                                        is_primary=False,
-                                    )
-                                    db_session.add(mapping)
-                                    mapping_count += 1
-                            logger.info(
-                                f"Created {mapping_count} custom targeting key mappings (enhanced format) for product {product.product_id}"
-                            )
-                        else:
-                            # Legacy format: {keyId: valueName}
-                            logger.info(
-                                f"Creating {len(custom_keys)} custom targeting key mappings for product {product.product_id}"
-                            )
-                            for _idx, (key, value) in enumerate(custom_keys.items()):
-                                # Store as "key=value" format in inventory_id
-                                custom_key_id = f"{key}={value}"
-                                mapping = ProductInventoryMapping(
-                                    tenant_id=tenant_id,
-                                    product_id=product.product_id,
-                                    inventory_type="custom_key",
-                                    inventory_id=custom_key_id,
-                                    is_primary=False,
-                                )
-                                db_session.add(mapping)
+                        mapping_count = create_custom_key_inventory_mappings(
+                            db_session, tenant_id, product.product_id, custom_keys
+                        )
+                        logger.info(
+                            f"Created {mapping_count} custom targeting key mappings for product {product.product_id}"
+                        )
 
                 db_session.commit()
 
@@ -1424,10 +1484,12 @@ def edit_product(tenant_id, product_id):
                     if targeting_template.get("key_value_pairs"):
                         if "custom_targeting_keys" not in base_config:
                             base_config["custom_targeting_keys"] = {}
-                        # Enhanced format with include/exclude and operator
-                        # Pass through to GAM adapter which handles both legacy and enhanced formats
+                        # Handle different targeting formats
                         kv_pairs = targeting_template["key_value_pairs"]
-                        if isinstance(kv_pairs, dict) and ("include" in kv_pairs or "exclude" in kv_pairs):
+                        if isinstance(kv_pairs, dict) and "groups" in kv_pairs:
+                            # Groups format (GAM-style nested) - pass through directly
+                            base_config["custom_targeting_keys"] = kv_pairs
+                        elif isinstance(kv_pairs, dict) and ("include" in kv_pairs or "exclude" in kv_pairs):
                             # Enhanced format - pass through directly
                             base_config["custom_targeting_keys"] = kv_pairs
                         else:
@@ -1484,51 +1546,20 @@ def edit_product(tenant_id, product_id):
                     # Custom targeting keys
                     if base_config.get("custom_targeting_keys"):
                         custom_keys = base_config["custom_targeting_keys"]
-                        # Check if this is enhanced format (has include/exclude keys)
-                        if isinstance(custom_keys, dict) and ("include" in custom_keys or "exclude" in custom_keys):
-                            # Enhanced format: create mappings for each key-value pair
-                            for key_id, value_ids in custom_keys.get("include", {}).items():
-                                for value_id in value_ids:
-                                    mapping = ProductInventoryMapping(
-                                        tenant_id=tenant_id,
-                                        product_id=product_id,
-                                        inventory_type="custom_key",
-                                        inventory_id=f"{key_id}={value_id}",
-                                        is_primary=False,
-                                    )
-                                    db_session.add(mapping)
-                            for key_id, value_ids in custom_keys.get("exclude", {}).items():
-                                for value_id in value_ids:
-                                    mapping = ProductInventoryMapping(
-                                        tenant_id=tenant_id,
-                                        product_id=product_id,
-                                        inventory_type="custom_key",
-                                        inventory_id=f"NOT_{key_id}={value_id}",
-                                        is_primary=False,
-                                    )
-                                    db_session.add(mapping)
-                        else:
-                            # Legacy format: {keyId: valueName}
-                            for key, value in custom_keys.items():
-                                custom_key_id = f"{key}={value}"
-                                mapping = ProductInventoryMapping(
-                                    tenant_id=tenant_id,
-                                    product_id=product_id,
-                                    inventory_type="custom_key",
-                                    inventory_id=custom_key_id,
-                                    is_primary=False,
-                                )
-                                db_session.add(mapping)
+                        create_custom_key_inventory_mappings(db_session, tenant_id, product_id, custom_keys)
 
                 # Update pricing options (AdCP PR #88)
                 # Note: min_spend is now stored in pricing_options[].min_spend_per_package
                 from decimal import Decimal
 
                 # Parse pricing options from form FIRST
-                pricing_options_data = parse_pricing_options_from_form(form_data)
-                logger.info(
-                    f"[DEBUG] Parsed {len(pricing_options_data) if pricing_options_data else 0} pricing options: {pricing_options_data}"
-                )
+                try:
+                    pricing_options_data = parse_pricing_options_from_form(form_data)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+                logger.info(f"Parsed {len(pricing_options_data) if pricing_options_data else 0} pricing options")
 
                 # CRITICAL: Products MUST have at least one pricing option
                 if not pricing_options_data or len(pricing_options_data) == 0:

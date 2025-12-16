@@ -139,8 +139,8 @@
     <table id="list-view">
         <thead>
             <tr>
-                <th>Product ID</th>
                 <th>Name</th>
+                <th>Product ID</th>
                 <th>Countries</th>
                 <th>Type</th>
                 <th>Pricing</th>
@@ -151,7 +151,6 @@
         <tbody>
             {% for product in products %}
             <tr {% if product.is_dynamic %}class="dynamic-template"{% elif product.is_dynamic_variant %}class="dynamic-variant"{% endif %}>
-                <td><code>{{ product.product_id }}</code></td>
                 <td>
                     {% if product.is_dynamic %}
                         <span class="badge" style="background: #9c27b0; color: white;" title="Dynamic product template">
@@ -175,6 +174,7 @@
                         </small>
                     {% endif %}
                 </td>
+                <td><code>{{ product.product_id }}</code></td>
                 <td>
                     {% if product.countries %}
                         {% for country in product.countries[:3] %}
