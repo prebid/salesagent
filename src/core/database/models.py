@@ -1795,7 +1795,7 @@ class WebhookDeliveryLog(Base):
 
     # Relationships
     tenant = relationship("Tenant")
-    principal = relationship("Principal")
+    principal = relationship("Principal", overlaps="tenant")
     media_buy = relationship("MediaBuy")
 
     __table_args__ = (

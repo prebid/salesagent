@@ -10,7 +10,7 @@ import secrets
 import sys
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Tenant, User
+from src.core.database.models import AdapterConfig, Principal, Tenant, User
 
 
 def create_tenant(args):
@@ -121,16 +121,47 @@ def create_tenant(args):
             )
             session.add(currency_limit)
 
+        # Create default principal for immediate MCP/A2A access
+        principal_token = secrets.token_urlsafe(32)
+        principal_id = f"{tenant_id}_default"
+
+        # Build platform_mappings based on adapter type
+        if args.adapter == "mock":
+            platform_mappings = {"mock": {"advertiser_id": f"mock_{tenant_id}"}}
+        elif args.adapter == "google_ad_manager":
+            # GAM advertiser_id will need to be set via Admin UI
+            platform_mappings = {"google_ad_manager": {"advertiser_id": ""}}
+        elif args.adapter == "kevel":
+            platform_mappings = {"kevel": {"advertiser_id": ""}}
+        else:
+            platform_mappings = {}
+
+        default_principal = Principal(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            name=f"{args.name} Default Principal",
+            platform_mappings=json.dumps(platform_mappings),
+            access_token=principal_token,
+        )
+        session.add(default_principal)
+
         session.commit()
 
     # Build access control summary
     access_summary = []
     if authorized_domains:
-        access_summary.append(f"🏢 Authorized domains: {', '.join(authorized_domains)}")
+        access_summary.append(f"   Authorized domains: {', '.join(authorized_domains)}")
     if admin_email:
-        access_summary.append(f"👤 Admin user: {admin_email}")
+        access_summary.append(f"   Admin user: {admin_email}")
 
-    access_info = "\n".join(access_summary) if access_summary else "ℹ️  No domain-based access configured"
+    access_info = "\n".join(access_summary) if access_summary else "   No domain-based access configured"
+
+    # Build adapter-specific note for GAM
+    gam_note = ""
+    if args.adapter == "google_ad_manager":
+        gam_note = """
+   Note: For GAM, you'll need to configure the advertiser mapping in
+   the Admin UI before this principal can create media buys."""
 
     print(
         f"""
@@ -141,31 +172,37 @@ Tenant ID: {tenant_id}
 Subdomain: {subdomain}
 Currencies: USD, EUR, GBP (configured, no minimum budget)
 
-🔐 Access Control:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AUTHENTICATION TOKENS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Principal Token (for MCP/A2A API):
+   {principal_token}
+
+Copy and use with:
+   uvx adcp http://localhost:8080/mcp/ --auth {principal_token} list_tools
+{gam_note}
+
+Token Types Explained:
+   - Principal Token: Used for MCP/A2A API calls (advertisers use this)
+   - Admin Token: Used for Admin UI management (internal use only)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Access Control:
 {access_info}
 
-🌐 Admin UI: http://localhost:8001
+Admin UI: http://localhost:8001
    {f"Login as {admin_email} to manage this publisher" if admin_email else "Login with your Google account to manage this publisher"}
 
-📝 Next Steps:
-1. {"Access the Admin UI with your admin account" if admin_email else "Access the Admin UI to complete setup"}
-2. Configure your ad server integration (if not done)
-3. Add more authorized domains/emails in the Users & Access section
-4. Create principals for each advertiser who will buy inventory
-5. Share API tokens with advertisers to access the MCP API
-6. Add more currencies in Admin UI if needed (EUR, GBP, etc.)
+Next Steps:
+1. Test the MCP API with the principal token above
+2. {"Access the Admin UI with your admin account" if admin_email else "Access the Admin UI to complete setup"}
+3. Create additional principals for each advertiser
+4. Share API tokens with advertisers
 
-💡 Remember: Principals represent advertisers, not the publisher.
-   Each advertiser gets their own principal with unique API access.
-
-🔧 Example with domain access:
-   python setup_tenant.py "Scribd" \\
-     --adapter google_ad_manager \\
-     --authorized-domain scribd.com \\
-     --admin-email john.doe@scribd.com
-
-🚀 Start the server:
-   python scripts/run_server.py
+Remember: Principals represent advertisers, not the publisher.
+Each advertiser gets their own principal with unique API access.
 """
     )
 
