@@ -65,8 +65,8 @@ def setup_products_with_formatid_objects(integration_db):
             is_fixed=True,
             currency="USD",
             format_ids=[
-                {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_300x250"},
-                {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_728x90"},
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
             ],
             targeting_template={},
             delivery_type="guaranteed",
@@ -86,7 +86,7 @@ def setup_products_with_formatid_objects(integration_db):
             is_fixed=True,
             currency="USD",
             format_ids=[
-                {"agent_url": "https://creatives.adcontextprotocol.org", "id": "video_1280x720"},
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_1280x720"},
             ],
             targeting_template={},
             delivery_type="guaranteed",
@@ -124,7 +124,7 @@ async def test_filter_by_format_ids_with_formatid_objects(mock_context):
     request = GetProductsRequest(
         brand_manifest={"name": "Test campaign"},
         filters=ProductFilters(
-            format_ids=[FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250")]
+            format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")]
         ),
     )
 
@@ -157,7 +157,7 @@ async def test_filter_by_format_ids_no_matches(mock_context):
     request = GetProductsRequest(
         brand_manifest={"name": "Test campaign"},
         filters=ProductFilters(
-            format_ids=[FormatId(agent_url="https://creatives.adcontextprotocol.org", id="audio_30s")]
+            format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="audio_30s")]
         ),
     )
 
@@ -175,7 +175,7 @@ async def test_filter_by_format_ids_video_format(mock_context):
     request = GetProductsRequest(
         brand_manifest={"name": "Test campaign"},
         filters=ProductFilters(
-            format_ids=[FormatId(agent_url="https://creatives.adcontextprotocol.org", id="video_1280x720")]
+            format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720")]
         ),
     )
 
@@ -195,8 +195,8 @@ async def test_filter_by_multiple_format_ids(mock_context):
         brand_manifest={"name": "Test campaign"},
         filters=ProductFilters(
             format_ids=[
-                FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
-                FormatId(agent_url="https://creatives.adcontextprotocol.org", id="video_1280x720"),
+                FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+                FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
             ]
         ),
     )

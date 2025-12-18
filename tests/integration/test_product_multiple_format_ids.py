@@ -134,9 +134,9 @@ def test_product_format_ids_migration_compatibility(integration_db, test_tenant)
             name="Legacy Product",
             description="Product with old agent URLs",
             format_ids=[
-                {"agent_url": "https://creatives.adcontextprotocol.org", "id": "format_1"},
-                {"agent_url": "https://creatives.adcontextprotocol.org", "id": "format_2"},
-                {"agent_url": "https://creatives.adcontextprotocol.org", "id": "format_3"},
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "format_1"},
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "format_2"},
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "format_3"},
             ],
         )
         session.add(product)

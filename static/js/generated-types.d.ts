@@ -90,7 +90,7 @@ export interface FormatCardDetailed {
 }
 
 export interface FormatId {
-  /** URL of the agent that defines this format (e.g., 'https://creatives.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
+  /** URL of the agent that defines this format (e.g., 'https://creative.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
   agent_url: string;
   /** Format identifier within the agent's namespace (e.g., 'display_300x250', 'video_standard_30s') */
   id: string;
@@ -156,7 +156,7 @@ export interface Format {
 }
 
 export interface FormatId {
-  /** URL of the agent that defines this format (e.g., 'https://creatives.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
+  /** URL of the agent that defines this format (e.g., 'https://creative.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
   agent_url: string;
   /** Format identifier within the agent's namespace (e.g., 'display_300x250', 'video_standard_30s') */
   id: string;
@@ -290,7 +290,7 @@ export interface FlatRatePricingOption {
 }
 
 export interface FormatId {
-  /** URL of the agent that defines this format (e.g., 'https://creatives.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
+  /** URL of the agent that defines this format (e.g., 'https://creative.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
   agent_url: string;
   /** Format identifier within the agent's namespace (e.g., 'display_300x250', 'video_standard_30s') */
   id: string;
@@ -520,7 +520,7 @@ export interface Creative {
 }
 
 export interface FormatId {
-  /** URL of the agent that defines this format (e.g., 'https://creatives.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
+  /** URL of the agent that defines this format (e.g., 'https://creative.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
   agent_url: string;
   /** Format identifier within the agent's namespace (e.g., 'display_300x250', 'video_standard_30s') */
   id: string;
@@ -647,7 +647,7 @@ export interface Property {
 }
 
 export interface FormatId {
-  /** URL of the agent that defines this format (e.g., 'https://creatives.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
+  /** URL of the agent that defines this format (e.g., 'https://creative.adcontextprotocol.org' for standard formats, or 'https://publisher.com/.well-known/adcp/sales' for custom formats) */
   agent_url: string;
   /** Format identifier within the agent's namespace (e.g., 'display_300x250', 'video_standard_30s') */
   id: string;

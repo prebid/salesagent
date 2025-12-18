@@ -17,7 +17,7 @@ def test_format_ids_from_request_preserved():
     class MockPackage:
         def __init__(self):
             self.product_id = "display_multi_cpm"
-            self.format_ids = [{"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_300x250"}]
+            self.format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
 
     req_package = MockPackage()
 
@@ -115,7 +115,7 @@ def test_format_ids_handles_format_id_objects():
     class MockPackage:
         def __init__(self):
             self.product_id = "display_multi_cpm"
-            self.format_ids = [FormatId("https://creatives.adcontextprotocol.org", "display_300x250")]
+            self.format_ids = [FormatId("https://creative.adcontextprotocol.org", "display_300x250")]
 
     req_package = MockPackage()
 
@@ -166,7 +166,7 @@ def test_format_ids_validation_rejects_unsupported():
     class MockPackage:
         def __init__(self):
             self.product_id = "display_leaderboard_cpm"
-            self.format_ids = [{"agent_url": "https://creatives.adcontextprotocol.org", "id": "video_instream"}]
+            self.format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_instream"}]
 
     req_package = MockPackage()
 
@@ -205,7 +205,7 @@ def test_format_ids_validation_accepts_supported():
     class MockPackage:
         def __init__(self):
             self.product_id = "display_multi_cpm"
-            self.format_ids = [{"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_300x250"}]
+            self.format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
 
     req_package = MockPackage()
 

@@ -125,8 +125,8 @@ class ProductFactory:
 
         # Default: AdCP-compliant FormatId objects
         default_format_ids = [
-            {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_300x250"},
-            {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_728x90"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
         ]
         format_ids = format_ids or default_format_ids
 
@@ -159,8 +159,8 @@ class ProductFactory:
         """Create a video product with video format_ids."""
         video_defaults = {
             "format_ids": [
-                {"agent_url": "https://creatives.adcontextprotocol.org", "id": "video_16x9"},
-                {"agent_url": "https://creatives.adcontextprotocol.org", "id": "video_outstream"},
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_16x9"},
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_outstream"},
             ],
             "inventory_type": "video",
         }

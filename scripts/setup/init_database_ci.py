@@ -290,9 +290,9 @@ def init_db_ci():
                     "name": "Premium Display Advertising",
                     "description": "High-impact display ads across premium content",
                     "formats": [
-                        {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_300x250"},
-                        {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_728x90"},
-                        {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_160x600"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_160x600"},
                     ],
                     "targeting_template": {"geo": ["US"], "device_type": "any"},
                     "delivery_type": "guaranteed",
@@ -303,8 +303,8 @@ def init_db_ci():
                     "name": "Premium Video Advertising",
                     "description": "Pre-roll video ads with guaranteed completion rates",
                     "formats": [
-                        {"agent_url": "https://creatives.adcontextprotocol.org", "id": "video_15s"},
-                        {"agent_url": "https://creatives.adcontextprotocol.org", "id": "video_30s"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_15s"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_30s"},
                     ],
                     "targeting_template": {"geo": ["US"], "device_type": "any"},
                     "delivery_type": "guaranteed",

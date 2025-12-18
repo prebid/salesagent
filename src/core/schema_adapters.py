@@ -104,7 +104,7 @@ class GetProductsRequest(BaseModel):
             # Convert format_ids from strings to FormatId objects if present
             if "format_ids" in filters_dict and filters_dict["format_ids"]:
                 filters_dict["format_ids"] = [
-                    {"agent_url": "https://creatives.adcontextprotocol.org", "id": fmt_id}
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": fmt_id}
                     for fmt_id in filters_dict["format_ids"]
                 ]
 

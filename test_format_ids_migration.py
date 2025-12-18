@@ -31,8 +31,8 @@ def test_product_format_ids_valid():
 
         # Valid format_ids per AdCP spec
         valid_format_ids = [
-            {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_300x250"},
-            {"agent_url": "https://creatives.adcontextprotocol.org", "id": "video_standard_30s"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard_30s"},
         ]
 
         product = Product(
@@ -162,7 +162,7 @@ def test_product_format_ids_additional_properties():
         # Invalid: extra property
         invalid_format_ids = [
             {
-                "agent_url": "https://creatives.adcontextprotocol.org",
+                "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
                 "extra_field": "not_allowed",
             }
@@ -209,7 +209,7 @@ def test_inventory_profile_format_ids_valid():
         session.flush()
 
         valid_format_ids = [
-            {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_728x90"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
         ]
 
         profile = InventoryProfile(
@@ -279,11 +279,11 @@ def test_effective_format_ids_property():
         session.flush()
 
         product_format_ids = [
-            {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_300x250"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         ]
 
         profile_format_ids = [
-            {"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_728x90"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
         ]
 
         # Create inventory profile

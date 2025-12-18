@@ -25,7 +25,7 @@ class TestImpressionTrackerFlow:
         creative = Creative(
             creative_id="cr_image_123",
             name="Test Image Creative",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
                 "banner_image": {
                     "url": "https://cdn.example.com/banner.jpg",
@@ -61,7 +61,7 @@ class TestImpressionTrackerFlow:
         creative = Creative(
             creative_id="cr_tag_123",
             name="Test Third-Party Tag",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
                 "javascript_tag": {
                     "content": '<script src="https://ad.example.com/tag.js"></script>',
@@ -88,7 +88,7 @@ class TestImpressionTrackerFlow:
         creative = Creative(
             creative_id="cr_native_123",
             name="Test Native Creative",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="native_1x1"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="native_1x1"),
             assets={
                 "headline": {
                     "content": "Amazing Product",
@@ -121,7 +121,7 @@ class TestImpressionTrackerFlow:
         creative = Creative(
             creative_id="cr_simple_123",
             name="Test Simple Creative",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_728x90"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
             assets={
                 "banner_image": {
                     "url": "https://cdn.example.com/banner.jpg",
@@ -148,7 +148,7 @@ class TestImpressionTrackerFlow:
         creative_with_tracking = Creative(
             creative_id="cr_tracked_123",
             name="Tracked Image Creative",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
                 "banner_image": {
                     "url": "https://cdn.example.com/tracked.jpg",
@@ -190,7 +190,7 @@ class TestImpressionTrackerFlow:
         creative = Creative(
             creative_id="cr_video_123",
             name="Test Video Creative",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="video_640x480"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_640x480"),
             assets={
                 "video_file": {
                     "url": "https://cdn.example.com/video.mp4",
@@ -221,7 +221,7 @@ class TestImpressionTrackerFlow:
         creative = Creative(
             creative_id="cr_multi_track_123",
             name="Multi-Tracker Creative",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
                 "banner_image": {
                     "url": "https://cdn.example.com/ad.jpg",
@@ -272,7 +272,7 @@ class TestImpressionTrackerFlow:
         creative = Creative(
             creative_id="cr_full_settings_123",
             name="Full Settings Creative",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
                 "banner_image": {
                     "url": "https://cdn.example.com/ad.jpg",

@@ -138,7 +138,7 @@ def init_db(exit_on_error=False):
                     description="Premium display advertising across news and sports sections",
                     format_ids=[
                         {
-                            "agent_url": "https://creatives.adcontextprotocol.org",
+                            "agent_url": "https://creative.adcontextprotocol.org",
                             "id": "display_300x250",
                         }
                     ],
@@ -159,7 +159,7 @@ def init_db(exit_on_error=False):
                     description="Pre-roll video ads for sports content",
                     format_ids=[
                         {
-                            "agent_url": "https://creatives.adcontextprotocol.org",
+                            "agent_url": "https://creative.adcontextprotocol.org",
                             "id": "video_preroll",
                         }
                     ],
@@ -238,7 +238,7 @@ def init_db(exit_on_error=False):
                         "description": "Premium news site display inventory",
                         "formats": [
                             {
-                                "agent_url": "https://creatives.adcontextprotocol.org",
+                                "agent_url": "https://creative.adcontextprotocol.org",
                                 "id": "display_300x250",
                             }
                         ],
@@ -263,7 +263,7 @@ def init_db(exit_on_error=False):
                         "description": "Run of site display inventory",
                         "formats": [
                             {
-                                "agent_url": "https://creatives.adcontextprotocol.org",
+                                "agent_url": "https://creative.adcontextprotocol.org",
                                 "id": "display_728x90",
                             }
                         ],

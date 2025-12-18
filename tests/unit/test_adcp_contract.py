@@ -642,7 +642,7 @@ class TestAdCPContract:
         creative = Creative(
             creative_id="test_creative_123",
             name="Test AdCP Creative",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
                 "banner_image": {
                     "url": "https://example.com/creative.jpg",
@@ -1190,7 +1190,7 @@ class TestAdCPContract:
         creative = Creative(
             creative_id="creative_123",
             name="Test Creative",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
                 "banner_image": {
                     "url": "https://example.com/creative.jpg",
@@ -1401,7 +1401,7 @@ class TestAdCPContract:
         creative1 = Creative(
             creative_id="creative_123",
             name="Test Creative 1",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
                 "banner_image": {
                     "url": "https://example.com/creative1.jpg",
@@ -1421,7 +1421,7 @@ class TestAdCPContract:
         creative2 = Creative(
             creative_id="creative_456",
             name="Test Creative 2",
-            format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="video_1280x720"),
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
             assets={
                 "video_file": {
                     "url": "https://example.com/creative2.mp4",

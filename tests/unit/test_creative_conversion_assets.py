@@ -17,7 +17,7 @@ def test_convert_image_creative_from_assets():
     creative = Creative(
         creative_id="test_123",
         name="Test Banner",
-        format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_300x250"),
+        format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
         assets={
             "banner_image": {
                 "url": "https://example.com/banner.jpg",
@@ -56,7 +56,7 @@ def test_convert_video_creative_from_assets():
     creative = Creative(
         creative_id="video_456",
         name="Test Video",
-        format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="video_1280x720"),
+        format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
         assets={
             "video_file": {
                 "url": "https://example.com/video.mp4",
@@ -90,7 +90,7 @@ def test_convert_html_creative_from_assets():
     creative = Creative(
         creative_id="html_789",
         name="HTML Ad",
-        format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="html_300x250"),
+        format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="html_300x250"),
         assets={
             "main": {
                 "content": "<div>Ad content</div>",
@@ -118,7 +118,7 @@ def test_convert_creative_with_tracking_urls():
     creative = Creative(
         creative_id="tracked_123",
         name="Tracked Creative",
-        format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_728x90"),
+        format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
         assets={
             "banner_image": {"url": "https://example.com/banner.jpg"},
             "impression_tracker_1": {
@@ -155,7 +155,7 @@ def test_convert_javascript_creative_from_assets():
     creative = Creative(
         creative_id="js_101",
         name="JavaScript Ad",
-        format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="js_widget"),
+        format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="js_widget"),
         assets={
             "javascript_tag": {
                 "content": "(function() { console.log('Ad loaded'); })()",
@@ -184,7 +184,7 @@ def test_convert_vast_url_creative():
     creative = Creative(
         creative_id="vast_202",
         name="VAST Video Ad",
-        format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="video_vast"),
+        format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_vast"),
         assets={
             "vast_tag": {
                 "url": "https://example.com/vast.xml",
@@ -216,7 +216,7 @@ def test_convert_vast_xml_creative():
     creative = Creative(
         creative_id="vast_303",
         name="VAST XML Ad",
-        format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="video_vast"),
+        format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_vast"),
         assets={
             "vast_xml": {
                 "content": vast_xml,
@@ -243,7 +243,7 @@ def test_convert_creative_without_url_type_fallback():
     creative = Creative(
         creative_id="fallback_404",
         name="Legacy Click URL Format",
-        format_id=FormatId(agent_url="https://creatives.adcontextprotocol.org", id="display_468x60"),
+        format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_468x60"),
         assets={
             "banner_image": {"url": "https://example.com/banner.jpg"},
             "click": {"url": "https://example.com/landing"},  # No url_type field

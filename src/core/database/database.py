@@ -220,7 +220,7 @@ def init_db(exit_on_error=False):
                         "description": "Premium news site display inventory",
                         "formats": [
                             {
-                                "agent_url": "https://creatives.adcontextprotocol.org",
+                                "agent_url": "https://creative.adcontextprotocol.org",
                                 "id": "display_300x250",
                             }
                         ],
@@ -244,7 +244,7 @@ def init_db(exit_on_error=False):
                         "description": "General display inventory across all properties",
                         "formats": [
                             {
-                                "agent_url": "https://creatives.adcontextprotocol.org",
+                                "agent_url": "https://creative.adcontextprotocol.org",
                                 "id": "display_728x90",
                             }
                         ],

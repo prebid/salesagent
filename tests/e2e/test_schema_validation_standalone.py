@@ -46,7 +46,7 @@ async def test_valid_get_products_response():
                     ],  # Required: publisher properties covered by this product
                     "format_ids": [
                         {
-                            "agent_url": "https://creatives.adcontextprotocol.org",
+                            "agent_url": "https://creative.adcontextprotocol.org",
                             "id": "display_300x250",
                         }
                     ],  # format_ids must be array of format-id objects
