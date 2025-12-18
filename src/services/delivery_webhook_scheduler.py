@@ -285,13 +285,12 @@ class DeliveryWebhookScheduler:
                 DBPushNotificationConfig.url == webhook_url,
                 DBPushNotificationConfig.is_active,
             )
-            push_config = session.scalars(config_stmt).first()
+            push_notification_config = session.scalars(config_stmt).first()
 
             # Extract webhook config data before session closes
-            if push_config:
+            if push_notification_config:
                 # Detach from session and extract data
-                session.expunge(push_config)
-                webhook_config = push_config
+                session.expunge(push_notification_config)
             else:
                 # Create a detached temporary config (not attached to session)
                 push_notification_config = DBPushNotificationConfig(
@@ -304,12 +303,11 @@ class DeliveryWebhookScheduler:
                     is_active=True,
                 )
 
-                metadata = {
-                    "task_type": "media_buy_delivery",
-                    "tenant_id": media_buy.tenant_id,
-                    "principal_id": media_buy.principal_id
-                }
-
+            metadata = {
+                "task_type": "media_buy_delivery",
+                "tenant_id": media_buy.tenant_id,
+                "principal_id": media_buy.principal_id
+            }
             
             media_buy_delivery_payload = create_mcp_webhook_payload(
                 task_id=media_buy.media_buy_id, # TODO: @yusuf - double check if using media buy id is correct for media buy delivery???
