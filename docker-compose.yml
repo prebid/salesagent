@@ -17,37 +17,21 @@ services:
 
   adcp-server:
     build: .
+    env_file:
+      - .env
     environment:
-      # Database configuration
+      # Override DATABASE_URL to use docker internal hostname
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
 
-      # Secrets (loaded from host environment or .env.secrets file via shell)
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
-      GAM_OAUTH_CLIENT_ID: ${GAM_OAUTH_CLIENT_ID:-}
-      GAM_OAUTH_CLIENT_SECRET: ${GAM_OAUTH_CLIENT_SECRET:-}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
-      APPROXIMATED_API_KEY: ${APPROXIMATED_API_KEY:-}
-      APPROXIMATED_PROXY_IP: ${APPROXIMATED_PROXY_IP:-37.16.24.200}
-      APPROXIMATED_BACKEND_URL: ${APPROXIMATED_BACKEND_URL:-adcp-sales-agent.fly.dev}
-
-      # Skip nginx for standalone service
+      # Docker-specific defaults
       SKIP_NGINX: "true"
 
-      # Optional: Dry run mode
-      # ADCP_DRY_RUN: true
-
-      # Testing mode (for E2E tests - relaxes validation)
-      ADCP_TESTING: ${ADCP_TESTING:-false}
-
-      # Create sample data for E2E tests (products, etc.)
-      CREATE_SAMPLE_DATA: ${CREATE_SAMPLE_DATA:-true}
-
-      # Delivery webhook scheduler interval (default 1 hour)
-      DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-3600}
+      # Pass through from host environment (for CI and shell-set variables)
+      # These override .env values when set in the host environment
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      ADCP_TESTING: ${ADCP_TESTING:-}
+      DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
 
     depends_on:
       postgres:
@@ -76,34 +60,22 @@ services:
   admin-ui:
     build: .
     command: python -m src.admin.server
+    env_file:
+      - .env
     environment:
+      # Override DATABASE_URL to use docker internal hostname
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
-      ADMIN_UI_PORT: ${ADMIN_UI_PORT:-8001}
-      FLASK_ENV: production
-      FLASK_DEBUG: ${FLASK_DEBUG:-0}
-      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-dev-secret-key-change-in-production}
-      # Test mode
-      ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-false}
 
-      # Secrets (loaded from host environment or .env.secrets file via shell)
+      # Docker-specific defaults
+      SKIP_NGINX: "true"
+
+      # Pass through from host environment (for CI and shell-set variables)
+      # These override .env values when set in the host environment
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
-      GAM_OAUTH_CLIENT_ID: ${GAM_OAUTH_CLIENT_ID:-}
-      GAM_OAUTH_CLIENT_SECRET: ${GAM_OAUTH_CLIENT_SECRET:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
-      APPROXIMATED_API_KEY: ${APPROXIMATED_API_KEY:-}
-      APPROXIMATED_PROXY_IP: ${APPROXIMATED_PROXY_IP:-37.16.24.200}
-      APPROXIMATED_BACKEND_URL: ${APPROXIMATED_BACKEND_URL:-adcp-sales-agent.fly.dev}
-
-      # Server ports - external ports for agent cards
-      ADCP_SALES_PORT: ${ADCP_SALES_PORT:-8080}
-      A2A_PORT: ${A2A_PORT:-8091}
-
-      # Skip nginx for standalone service
-      SKIP_NGINX: "true"
+      ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-}
 
     depends_on:
       postgres:

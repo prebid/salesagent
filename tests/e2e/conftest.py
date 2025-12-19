@@ -10,6 +10,7 @@ import socket
 import subprocess
 import time
 import uuid
+from pathlib import Path
 
 import httpx
 import pytest
@@ -91,6 +92,13 @@ def docker_services_e2e(request):
         # Explicitly remove volumes in case docker-compose down -v didn't work
         print("Explicitly removing Docker volumes...")
         subprocess.run(["docker", "volume", "prune", "-f"], capture_output=True, check=False)
+
+        # Ensure .env file exists (docker-compose env_file requires it)
+        # In CI, environment variables are set directly, but .env file must exist
+        env_file = Path(".env")
+        if not env_file.exists():
+            print("Creating empty .env file for docker-compose...")
+            env_file.touch()
 
         # Use environment variable ports if set, otherwise allocate dynamic ports
         mcp_port = int(os.getenv("ADCP_SALES_PORT")) if os.getenv("ADCP_SALES_PORT") else find_free_port(10000, 20000)
