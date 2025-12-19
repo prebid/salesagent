@@ -11,37 +11,40 @@ The AdCP Sales Agent is a server that:
 - **Provides an admin interface** for managing inventory and monitoring campaigns
 - **Handles the full campaign lifecycle** from discovery to reporting
 
-## Quick Start - Choose Your Setup Path
+## Quick Start (3 commands)
 
-### Path 1: Mock Adapter (5 min) - Recommended First Step
+```bash
+git clone https://github.com/adcontextprotocol/salesagent.git && cd salesagent
+cp .env.template .env && docker-compose up -d
+uvx adcp http://localhost:8080/mcp/ --auth test-token list_tools
+```
+
+A default tenant with `test-token` is created automatically. No setup required.
+
+```bash
+# CLI syntax: uvx adcp <url> --auth <token> <tool_name> '<json_args>'
+uvx adcp http://localhost:8080/mcp/ --auth test-token get_products '{"brief":"video"}'
+```
+
+**Admin UI:** http://localhost:8001 (login: `test_super_admin@example.com` / `test123`)
+
+---
+
+## Setup Paths
+
+### Path 1: Mock Adapter (Recommended First Step)
 
 **Perfect for:** Learning AdCP, testing integrations, development
 
+The quick start above uses the mock adapter. To create your own tenant:
+
 ```bash
-# 1. Clone and configure
-git clone https://github.com/adcontextprotocol/salesagent.git
-cd salesagent
-cp .env.template .env
-
-# 2. Set your Gemini API key in .env:
-#    GEMINI_API_KEY=get-free-at-https://aistudio.google.com/apikey
-#    (Test mode is enabled by default - no OAuth setup needed)
-
-# 3. Start services
-docker-compose up -d
-
-# 4. Create test tenant (note the token output!)
-docker-compose exec adcp-server python -m scripts.setup.setup_tenant "Test Publisher" \
+docker-compose exec adcp-server python -m scripts.setup.setup_tenant "My Publisher" \
   --adapter mock \
   --admin-email your-email@example.com
-
-# 5. Test the MCP server with AdCP CLI (use token from step 4)
-uvx adcp http://localhost:8080/mcp/ --auth YOUR_TOKEN list_tools
-
-# 6. Access Admin UI
-open http://localhost:8001
-# Login with: test_super_admin@example.com / test123
 ```
+
+This outputs a principal token you can use immediately.
 
 **Using with Claude Desktop:** Add to your Claude config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 ```json
@@ -49,7 +52,7 @@ open http://localhost:8001
   "mcpServers": {
     "adcp": {
       "command": "uvx",
-      "args": ["mcp-remote", "http://localhost:8080/mcp/", "--header", "x-adcp-auth: YOUR_TOKEN"]
+      "args": ["mcp-remote", "http://localhost:8080/mcp/", "--header", "x-adcp-auth: test-token"]
     }
   }
 }

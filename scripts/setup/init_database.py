@@ -119,15 +119,16 @@ def init_db(exit_on_error=False):
             adapter_config = AdapterConfig(tenant_id="default", adapter_type="mock", mock_dry_run=False)
             session.add(adapter_config)
 
-            # Always create a demo principal for testing (used by ADK agent)
-            demo_principal = Principal(
+            # Create default principal with well-known token for easy testing
+            # This token is documented and can be used immediately after docker-compose up
+            default_principal = Principal(
                 tenant_id="default",
-                principal_id="demo_advertiser",
-                name="Demo Advertiser",
-                platform_mappings={"mock": {"advertiser_id": "mock-demo"}},
-                access_token="demo_token_123",
+                principal_id="default_principal",
+                name="Default Principal",
+                platform_mappings={"mock": {"advertiser_id": "mock-default"}},
+                access_token="test-token",  # Well-known token for easy testing
             )
-            session.add(demo_principal)
+            session.add(default_principal)
 
             # Always create basic products for demo/testing
             basic_products = [
@@ -343,37 +344,50 @@ def init_db(exit_on_error=False):
                 )
             else:
                 print(
-                    f"""
-╔══════════════════════════════════════════════════════════════════╗
-║                 🚀 ADCP SALES AGENT INITIALIZED                  ║
-╠══════════════════════════════════════════════════════════════════╣
-║                                                                  ║
-║  A default tenant has been created for quick start:              ║
-║                                                                  ║
-║  🏢 Tenant: Default Publisher                                    ║
-║  🌐 Admin UI: http://localhost:8001/tenant/default/login         ║
-║                                                                  ║
-║  🔑 Admin Token (for legacy API access):                         ║
-║     {admin_token}  ║
-║                                                                  ║
-║  ⚡ Next Steps:                                                  ║
-║     1. Log in to the Admin UI                                    ║
-║     2. Set up your ad server (Ad Server Setup tab)              ║
-║     3. Create principals for your advertisers                    ║
-║                                                                  ║
-║  💡 To create additional tenants:                                ║
-║     python scripts/setup/setup_tenant.py "Publisher Name"        ║
-║                                                                  ║
-╚══════════════════════════════════════════════════════════════════╝
+                    """
+╔══════════════════════════════════════════════════════════════════════════╗
+║                        🚀 ADCP SALES AGENT READY                         ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║                                                                          ║
+║  ⚡ TEST IT NOW:                                                         ║
+║                                                                          ║
+║  # List available tools                                                  ║
+║  uvx adcp http://localhost:8080/mcp/ --auth test-token list_tools        ║
+║                                                                          ║
+║  # Search for products (syntax: <url> --auth <token> <tool> '<json>')    ║
+║  uvx adcp http://localhost:8080/mcp/ --auth test-token \\                ║
+║    get_products '{"brief":"video"}'                                      ║
+║                                                                          ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║                                                                          ║
+║  🏢 Default Tenant: Default Publisher                                    ║
+║  🔑 Principal Token: test-token                                          ║
+║  🌐 Admin UI: http://localhost:8001                                      ║
+║     Login: test_super_admin@example.com / test123                        ║
+║                                                                          ║
+║  📚 Create your own tenant:                                              ║
+║     docker-compose exec adcp-server python \\                            ║
+║       -m scripts.setup.setup_tenant "My Publisher" --adapter mock        ║
+║                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════╝
                 """
                 )
         else:
-            # Tenant already exists - just report readiness
+            # Tenant already exists - show ready message with quick-start info
             from sqlalchemy import func, select
 
             stmt = select(func.count()).select_from(Tenant)
             tenant_count = session.scalar(stmt)
-            print(f"✅ Database ready (default tenant already exists, {tenant_count} tenant(s) total)")
+            print(
+                f"""
+✅ Database ready ({tenant_count} tenant(s))
+
+⚡ Quick test: uvx adcp http://localhost:8080/mcp/ --auth test-token list_tools
+
+🌐 Admin UI: http://localhost:8001
+   Login: test_super_admin@example.com / test123
+"""
+            )
 
 
 if __name__ == "__main__":

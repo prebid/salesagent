@@ -40,8 +40,11 @@ def create_tenant(args):
     }
 
     with get_db_session() as session:
-        # Check if tenant exists
-        existing = session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+        # Check if tenant exists (use SQLAlchemy 2.0 syntax)
+        from sqlalchemy import select
+
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        existing = session.scalars(stmt).first()
         if existing:
             print(f"Error: Tenant '{tenant_id}' already exists")
             sys.exit(1)

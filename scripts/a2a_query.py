@@ -11,7 +11,7 @@ import sys
 import requests
 
 
-def query_a2a(message, token="demo_token_123", endpoint="http://localhost:8091", tenant_id=None):
+def query_a2a(message, token="test-token", endpoint="http://localhost:8091", tenant_id=None):
     """Send an authenticated query to the A2A server."""
 
     # Construct the URL (no token in query string for security)
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     # You can override these with environment variables
     import os
 
-    token = os.getenv("A2A_TOKEN", "demo_token_123")
+    token = os.getenv("A2A_TOKEN", "test-token")
     endpoint = os.getenv("A2A_ENDPOINT", "http://localhost:8091")
     tenant_id = os.getenv("A2A_TENANT_ID", None)
 
