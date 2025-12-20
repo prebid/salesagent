@@ -217,6 +217,58 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
                 session.commit()
 
+                # Create mock properties for verified publishers (only for mock adapters - they don't have real adagents.json)
+                properties_created = 0
+                tags_created = 0
+                if is_mock and verified_domains:
+                    from src.core.database.models import AuthorizedProperty, PropertyTag
+
+                    # Ensure 'all_inventory' tag exists
+                    tag_stmt = select(PropertyTag).where(
+                        PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == "all_inventory"
+                    )
+                    all_inventory_tag = session.scalars(tag_stmt).first()
+                    if not all_inventory_tag:
+                        all_inventory_tag = PropertyTag(
+                            tag_id="all_inventory",
+                            tenant_id=tenant_id,
+                            name="All Inventory",
+                            description="Default tag that applies to all properties.",
+                            created_at=datetime.now(UTC),
+                            updated_at=datetime.now(UTC),
+                        )
+                        session.add(all_inventory_tag)
+                        tags_created += 1
+                        logger.info(f"Created 'all_inventory' tag for tenant {tenant_id}")
+
+                    # Create a mock property for each publisher domain
+                    for domain in verified_domains:
+                        property_id = f"website_{domain.replace('.', '_').replace('-', '_')}"
+                        prop_stmt = select(AuthorizedProperty).where(
+                            AuthorizedProperty.tenant_id == tenant_id,
+                            AuthorizedProperty.property_id == property_id,
+                        )
+                        existing = session.scalars(prop_stmt).first()
+                        if not existing:
+                            mock_property = AuthorizedProperty(
+                                tenant_id=tenant_id,
+                                property_id=property_id,
+                                property_type="website",
+                                name=domain,
+                                publisher_domain=domain,
+                                identifiers=[{"type": "domain", "value": domain}],
+                                tags=["all_inventory"],
+                                verification_status="verified",
+                                verification_checked_at=datetime.now(UTC),
+                                created_at=datetime.now(UTC),
+                                updated_at=datetime.now(UTC),
+                            )
+                            session.add(mock_property)
+                            properties_created += 1
+                            logger.info(f"Created mock property for {domain}")
+
+                    session.commit()
+
                 return jsonify(
                     {
                         "message": f"Sync completed ({reason_str} - auto-verified)",
@@ -224,6 +276,8 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                         "verified": len(partners),
                         "errors": 0,
                         "total": len(partners),
+                        "properties_created": properties_created,
+                        "tags_created": tags_created,
                     }
                 )
 

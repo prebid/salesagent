@@ -23,7 +23,7 @@ from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 logger = logging.getLogger(__name__)
 
 # Configurable via env var - default 60 seconds
-STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL", "60"))
+STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL") or "60")
 
 
 class MediaBuyStatusScheduler:

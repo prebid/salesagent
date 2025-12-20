@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # 1 hour because AdCP protocol has frequency options hourly, daily and monthly
 # Configurable via env var for testing
-SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL", "3600"))
+SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
 
 
 class DeliveryWebhookScheduler:
