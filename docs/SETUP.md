@@ -2,6 +2,29 @@
 
 ## Quick Start (Docker)
 
+### Option A: Pre-built Images (Fastest)
+
+```bash
+# 1. Download compose file
+curl -O https://raw.githubusercontent.com/adcontextprotocol/salesagent/main/docker-compose.prod.yml
+
+# 2. Start services
+docker compose -f docker-compose.prod.yml up -d
+
+# 3. Test the MCP endpoint
+uvx adcp http://localhost:8080/mcp/ --auth test-token list_tools
+
+# 4. Access Admin UI (test login: test_super_admin@example.com / test123)
+open http://localhost:8001
+```
+
+For production, pin to a specific version:
+```bash
+IMAGE_TAG=0.1.0 docker compose -f docker-compose.prod.yml up -d
+```
+
+### Option B: Build from Source (For Development)
+
 ```bash
 # 1. Clone the repository
 git clone https://github.com/adcontextprotocol/salesagent.git

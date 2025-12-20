@@ -5,9 +5,10 @@
 The AdCP Sales Agent reference implementation is designed to be hosted anywhere. This guide covers several deployment options.
 
 **Deployment Flexibility:**
+- **Pre-built Docker images** available at `ghcr.io/adcontextprotocol/salesagent`
 - This is a **standard Python application** that can run on any infrastructure
 - **Docker recommended** but not required
-- **Database agnostic** - works with PostgreSQL (production) or SQLite (dev/testing)
+- **PostgreSQL required** for production deployments
 - We'll support your deployment approach as best we can
 
 **Common Deployment Options:**
@@ -21,20 +22,83 @@ The AdCP Sales Agent reference implementation is designed to be hosted anywhere.
 **Reference Implementation:**
 The reference implementation at https://adcp-sales-agent.fly.dev is hosted on Fly.io, but this is just one option.
 
+## Docker Images
+
+Pre-built Docker images are published to GitHub Container Registry on every release.
+
+### Available Tags
+
+| Tag | Description | Use Case |
+|-----|-------------|----------|
+| `latest` | Most recent release | Quick evaluation |
+| `0` | Latest major version 0.x.x | Auto-update within major |
+| `0.1` | Latest minor version 0.1.x | Auto-update within minor |
+| `0.1.0` | Specific patch version | Production (recommended) |
+
+### Pulling Images
+
+```bash
+# Latest release
+docker pull ghcr.io/adcontextprotocol/salesagent:latest
+
+# Pin to specific version (recommended for production)
+docker pull ghcr.io/adcontextprotocol/salesagent:0.1.0
+
+# Pin to minor version (gets patch updates)
+docker pull ghcr.io/adcontextprotocol/salesagent:0.1
+```
+
+### Version Pinning Strategy
+
+| Environment | Recommended Tag | Rationale |
+|-------------|-----------------|-----------|
+| **Production** | `0.1.0` (specific version) | Predictable, tested deployments |
+| **Staging** | `0.1` (minor version) | Test patch updates before prod |
+| **Development** | `latest` or build from source | Latest features |
+
+See all available versions: https://github.com/adcontextprotocol/salesagent/pkgs/container/salesagent
+
 ## Docker Deployment (Recommended)
 
 ### Prerequisites
 - Docker and Docker Compose installed
-- Environment variables configured
-- Google OAuth credentials (for Admin UI)
+- Environment variables configured (optional for evaluation)
+- Google OAuth credentials (for Admin UI in production)
 
-### Quick Start
+### Option A: Pre-built Images (Recommended)
+
+The fastest way to get started using published images:
+
+```bash
+# Download the production compose file
+curl -O https://raw.githubusercontent.com/adcontextprotocol/salesagent/main/docker-compose.prod.yml
+
+# Start services
+docker compose -f docker-compose.prod.yml up -d
+
+# Verify it's running
+curl http://localhost:8080/health
+```
+
+**Pin to a specific version for production:**
+```bash
+IMAGE_TAG=0.1.0 docker compose -f docker-compose.prod.yml up -d
+```
+
+**Access services:**
+- MCP Server: http://localhost:8080/mcp/
+- Admin UI: http://localhost:8001 (test login: `test_super_admin@example.com` / `test123`)
+- PostgreSQL: localhost:5432
+
+### Option B: Build from Source
+
+For development or customization:
 
 1. **Clone and configure:**
    ```bash
    git clone https://github.com/adcontextprotocol/salesagent.git
    cd salesagent
-   cp .env.example .env
+   cp .env.template .env
    # Edit .env with your configuration
    ```
 
@@ -43,13 +107,7 @@ The reference implementation at https://adcp-sales-agent.fly.dev is hosted on Fl
    docker-compose up -d
    ```
 
-3. **Initialize database:**
-   ```bash
-   docker-compose exec adcp-server python migrate.py
-   docker-compose exec adcp-server python init_database.py
-   ```
-
-4. **Access services:**
+3. **Access services:**
    - MCP Server: http://localhost:8080/mcp/
    - Admin UI: http://localhost:8001
    - PostgreSQL: localhost:5432

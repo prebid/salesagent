@@ -14,8 +14,8 @@ The AdCP Sales Agent is a server that:
 ## Quick Start (3 commands)
 
 ```bash
-git clone https://github.com/adcontextprotocol/salesagent.git && cd salesagent
-cp .env.template .env && docker-compose up -d
+curl -O https://raw.githubusercontent.com/adcontextprotocol/salesagent/main/docker-compose.prod.yml
+docker compose -f docker-compose.prod.yml up -d
 uvx adcp http://localhost:8080/mcp/ --auth test-token list_tools
 ```
 
@@ -28,6 +28,16 @@ uvx adcp http://localhost:8080/mcp/ --auth test-token get_products '{"brief":"vi
 
 **Admin UI:** http://localhost:8001 (login: `test_super_admin@example.com` / `test123`)
 
+### Using a Specific Version
+
+For production, pin to a specific version:
+
+```bash
+# Available at ghcr.io/adcontextprotocol/salesagent
+# Tags: latest, 0, 0.1, 0.1.0 (see all versions at GitHub Packages)
+docker pull ghcr.io/adcontextprotocol/salesagent:0.1.0
+```
+
 ---
 
 ## Setup Paths
@@ -39,7 +49,8 @@ uvx adcp http://localhost:8080/mcp/ --auth test-token get_products '{"brief":"vi
 The quick start above uses the mock adapter. To create your own tenant:
 
 ```bash
-docker-compose exec adcp-server python -m scripts.setup.setup_tenant "My Publisher" \
+docker compose -f docker-compose.prod.yml exec adcp-server \
+  python -m scripts.setup.setup_tenant "My Publisher" \
   --adapter mock \
   --admin-email your-email@example.com
 ```

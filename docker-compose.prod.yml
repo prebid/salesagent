@@ -1,0 +1,76 @@
+# Production Docker Compose - uses pre-built images from GitHub Container Registry
+#
+# Quick start:
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Pin to a specific version for production:
+#   IMAGE_TAG=0.1.0 docker compose -f docker-compose.prod.yml up -d
+#
+# Available tags: latest, 0, 0.1, 0.1.0
+# See all versions: https://github.com/adcontextprotocol/salesagent/pkgs/container/salesagent
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: adcp
+      POSTGRES_USER: adcp_user
+      POSTGRES_PASSWORD: secure_password_change_me
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adcp_user -d adcp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  adcp-server:
+    image: ghcr.io/adcontextprotocol/salesagent:${IMAGE_TAG:-latest}
+    environment:
+      DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      SKIP_NGINX: "true"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${ADCP_SALES_PORT:-8080}:8080"
+      - "${A2A_PORT:-8091}:8091"
+    volumes:
+      - ./audit_logs:/app/audit_logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  admin-ui:
+    image: ghcr.io/adcontextprotocol/salesagent:${IMAGE_TAG:-latest}
+    command: python -m src.admin.server
+    environment:
+      DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      SKIP_NGINX: "true"
+      ADMIN_UI_PORT: ${ADMIN_UI_PORT:-8001}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${ADMIN_UI_PORT:-8001}:${ADMIN_UI_PORT:-8001}"
+    volumes:
+      - ./audit_logs:/app/audit_logs
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:${ADMIN_UI_PORT:-8001}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
