@@ -6,15 +6,14 @@ Tests the _ai_review_creative_impl function with:
 - Sensitive category detection
 - Missing configuration handling
 - API error handling
-- Invalid JSON responses
 """
 
-import json
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 from src.core.database.models import Creative, Tenant
+from src.services.ai.agents.review_agent import CreativeReviewResult
 
 
 class TestAIReviewCreative:
@@ -26,6 +25,7 @@ class TestAIReviewCreative:
         tenant = Mock(spec=Tenant)
         tenant.tenant_id = "test_tenant"
         tenant.gemini_api_key = "test-api-key"
+        tenant.ai_config = None  # Explicitly set to None to use gemini_api_key fallback
         tenant.creative_review_criteria = "Approve if creative is brand-safe and follows guidelines."
         tenant.ai_policy = {
             "auto_approve_threshold": 0.90,
@@ -74,19 +74,36 @@ class TestAIReviewCreative:
         session.close = Mock()
         return session
 
+    def _create_mock_review_result(self, decision, reason, confidence):
+        """Helper to create mock review result."""
+        return CreativeReviewResult(
+            decision=decision,
+            reason=reason,
+            confidence=confidence,
+        )
+
     # Decision Path 1: Auto-approve with high confidence
-    @patch("google.generativeai.GenerativeModel")
-    def test_auto_approve_high_confidence(self, mock_model, mock_db_session, mock_tenant, mock_creative):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_auto_approve_high_confidence(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_tenant, mock_creative
+    ):
         """Test auto-approval when AI is confident (≥0.90)."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        # Mock Gemini API response
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps(
-            {"decision": "APPROVE", "reason": "Creative is brand-safe", "confidence": "high"}
+        # Mock factory
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        # Mock review_creative_async to return review result
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="Creative is brand-safe",
+            confidence="high",
         )
-        mock_instance.generate_content.return_value = mock_response
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -97,17 +114,23 @@ class TestAIReviewCreative:
         assert "brand-safe" in result["reason"].lower()
 
     # Decision Path 2: Low confidence approval → requires human review
-    @patch("google.generativeai.GenerativeModel")
-    def test_low_confidence_approval(self, mock_model, mock_db_session):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_low_confidence_approval(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
         """Test that low confidence approval requires human review."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps(
-            {"decision": "APPROVE", "reason": "Seems okay", "confidence": "medium"}  # 0.6 < 0.9
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="Seems okay",
+            confidence="medium",  # 0.6 < 0.9
         )
-        mock_instance.generate_content.return_value = mock_response
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -120,18 +143,28 @@ class TestAIReviewCreative:
         assert "90%" in result["reason"]  # Check threshold is shown
 
     # Decision Path 3: Sensitive category requires human review
-    @patch("google.generativeai.GenerativeModel")
-    def test_sensitive_category_requires_human(self, mock_model, mock_db_session, mock_creative):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_sensitive_category_requires_human(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_creative
+    ):
         """Test that sensitive categories always require human review."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         # Mark creative as political (sensitive category)
         mock_creative.data = {"category": "political", "tags": ["election", "candidate"]}
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps({"decision": "APPROVE", "reason": "Looks good", "confidence": "high"})
-        mock_instance.generate_content.return_value = mock_response
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="Looks good",
+            confidence="high",
+        )
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -141,17 +174,23 @@ class TestAIReviewCreative:
         assert "requires human review" in result["reason"]
 
     # Decision Path 4: Low confidence rejection requires human review
-    @patch("google.generativeai.GenerativeModel")
-    def test_low_confidence_rejection(self, mock_model, mock_db_session):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_low_confidence_rejection(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
         """Test that low confidence rejections require human review."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps(
-            {"decision": "REJECT", "reason": "Violates brand safety", "confidence": "low"}  # 0.3 < 0.9 threshold
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="REJECT",
+            reason="Violates brand safety",
+            confidence="low",  # 0.3 < 0.9 threshold
         )
-        mock_instance.generate_content.return_value = mock_response
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -161,17 +200,23 @@ class TestAIReviewCreative:
         assert result["ai_recommendation"] == "reject"
 
     # Decision Path 5: Uncertain rejection → requires human review
-    @patch("google.generativeai.GenerativeModel")
-    def test_uncertain_rejection(self, mock_model, mock_db_session):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_uncertain_rejection(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
         """Test that uncertain rejections require human review."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps(
-            {"decision": "REJECT", "reason": "Possibly problematic", "confidence": "medium"}  # 0.6 > 0.1
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="REJECT",
+            reason="Possibly problematic",
+            confidence="medium",  # 0.6 < 0.9
         )
-        mock_instance.generate_content.return_value = mock_response
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -183,21 +228,25 @@ class TestAIReviewCreative:
         assert "90%" in result["reason"]  # Check threshold is shown
 
     # Decision Path 6: Explicit "REQUIRE HUMAN APPROVAL"
-    @patch("google.generativeai.GenerativeModel")
-    def test_explicit_human_approval_required(self, mock_model, mock_db_session):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_explicit_human_approval_required(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session
+    ):
         """Test explicit 'REQUIRE HUMAN APPROVAL' decision."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps(
-            {
-                "decision": "REQUIRE HUMAN APPROVAL",
-                "reason": "Edge case needs human judgment",
-                "confidence": "medium",
-            }
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="REQUIRE HUMAN APPROVAL",
+            reason="Edge case needs human judgment",
+            confidence="medium",
         )
-        mock_instance.generate_content.return_value = mock_response
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -205,25 +254,36 @@ class TestAIReviewCreative:
         assert result["policy_triggered"] == "uncertain"
         assert "could not make confident decision" in result["reason"].lower()
 
-    # Edge Case: Missing Gemini API key
-    def test_missing_gemini_api_key(self, mock_db_session, mock_tenant):
-        """Test behavior when Gemini API key is not configured."""
+    # Edge Case: Missing Gemini API key (and no ai_config)
+    @patch("src.services.ai.AIServiceFactory")
+    def test_missing_gemini_api_key(self, mock_factory_class, mock_db_session, mock_tenant):
+        """Test behavior when AI is not configured."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_tenant.gemini_api_key = None
+        mock_tenant.ai_config = None
+
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = False
+        mock_factory_class.return_value = mock_factory
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
         assert result["status"] == "pending_review"
-        assert result["error"] == "Gemini API key not configured"
+        assert result["error"] == "AI not configured"
         assert "AI review unavailable" in result["reason"]
 
     # Edge Case: Missing review criteria
-    def test_missing_review_criteria(self, mock_db_session, mock_tenant):
+    @patch("src.services.ai.AIServiceFactory")
+    def test_missing_review_criteria(self, mock_factory_class, mock_db_session, mock_tenant):
         """Test behavior when creative review criteria is not configured."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_tenant.creative_review_criteria = None
+
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory_class.return_value = mock_factory
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -231,31 +291,20 @@ class TestAIReviewCreative:
         assert result["error"] == "Creative review criteria not configured"
         assert "AI review unavailable" in result["reason"]
 
-    # Edge Case: Invalid JSON response
-    @patch("google.generativeai.GenerativeModel")
-    def test_invalid_json_response(self, mock_model, mock_db_session):
-        """Test handling of invalid JSON from Gemini API."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
-
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = "This is not valid JSON"
-        mock_instance.generate_content.return_value = mock_response
-
-        result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
-
-        assert result["status"] == "pending_review"
-        assert "error" in result
-        assert "AI review failed" in result["reason"]
-
     # Edge Case: API error
-    @patch("google.generativeai.GenerativeModel")
-    def test_api_error(self, mock_model, mock_db_session):
-        """Test handling of Gemini API errors."""
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_api_error(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
+        """Test handling of AI API errors."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        mock_instance = mock_model.return_value
-        mock_instance.generate_content.side_effect = Exception("API rate limit exceeded")
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.side_effect = Exception("API rate limit exceeded")
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -264,17 +313,25 @@ class TestAIReviewCreative:
         assert "API rate limit exceeded" in str(result["error"])
 
     # Edge Case: Confidence threshold at exact boundary (0.90)
-    @patch("google.generativeai.GenerativeModel")
-    def test_confidence_threshold_exact_boundary_high(self, mock_model, mock_db_session):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_confidence_threshold_exact_boundary_high(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session
+    ):
         """Test confidence score exactly at 0.90 threshold."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps(
-            {"decision": "APPROVE", "reason": "Borderline case", "confidence": "high"}  # Exactly 0.9
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="Borderline case",
+            confidence="high",  # Exactly 0.9
         )
-        mock_instance.generate_content.return_value = mock_response
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -283,18 +340,25 @@ class TestAIReviewCreative:
         assert result["confidence_score"] == 0.9
 
     # Edge Case: Confidence threshold just below boundary (0.89)
-    @patch("google.generativeai.GenerativeModel")
-    def test_confidence_threshold_below_boundary(self, mock_model, mock_db_session, mock_tenant):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_confidence_threshold_below_boundary(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_tenant
+    ):
         """Test confidence score just below 0.90 threshold."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        # Create custom confidence value (0.89)
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps(
-            {"decision": "APPROVE", "reason": "Almost there", "confidence": "medium"}  # 0.6 < 0.9
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="Almost there",
+            confidence="medium",  # 0.6 < 0.9
         )
-        mock_instance.generate_content.return_value = mock_response
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -302,42 +366,59 @@ class TestAIReviewCreative:
         assert result["status"] == "pending_review"
         assert result["policy_triggered"] == "low_confidence_approval"
 
-    # Edge Case: Confidence threshold at reject boundary (0.10)
-    @patch("google.generativeai.GenerativeModel")
-    def test_confidence_threshold_exact_reject_boundary(self, mock_model, mock_db_session, mock_tenant):
-        """Test confidence score exactly at 0.10 reject threshold."""
+    # Edge Case: Confidence threshold at reject boundary (0.30)
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_confidence_threshold_exact_reject_boundary(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_tenant
+    ):
+        """Test confidence score exactly at reject threshold."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        # Need to mock a very low confidence score (0.1)
-        # Since we can't set arbitrary confidence values, test with "low" = 0.3
-        mock_tenant.ai_policy["auto_reject_threshold"] = 0.30  # Adjust threshold for test
+        # Adjust threshold to match "low" confidence (0.3)
+        mock_tenant.ai_policy["auto_reject_threshold"] = 0.30
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps(
-            {"decision": "REJECT", "reason": "Clearly problematic", "confidence": "low"}  # 0.3
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="REJECT",
+            reason="Clearly problematic",
+            confidence="low",  # 0.3
         )
-        mock_instance.generate_content.return_value = mock_response
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
-        # At 0.30 with threshold 0.30, should auto-reject (<= threshold)
+        # At 0.30 with threshold 0.30, should auto-reject (>= threshold)
         assert result["status"] == "rejected"
         assert result["confidence_score"] == 0.3
 
     # Edge Case: Healthcare sensitive category (tag-based detection)
-    @patch("google.generativeai.GenerativeModel")
-    def test_healthcare_tag_triggers_human_review(self, mock_model, mock_db_session, mock_creative):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_healthcare_tag_triggers_human_review(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_creative
+    ):
         """Test that healthcare tag triggers human review."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         # Tag-based category detection
         mock_creative.data = {"tags": ["healthcare", "wellness"], "category": None}
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps({"decision": "APPROVE", "reason": "Looks good", "confidence": "high"})
-        mock_instance.generate_content.return_value = mock_response
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="Looks good",
+            confidence="high",
+        )
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -346,17 +427,27 @@ class TestAIReviewCreative:
         assert "healthcare" in result["reason"].lower()
 
     # Edge Case: Financial sensitive category
-    @patch("google.generativeai.GenerativeModel")
-    def test_financial_category_requires_human(self, mock_model, mock_db_session, mock_creative):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_financial_category_requires_human(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_creative
+    ):
         """Test that financial category requires human review."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_creative.data = {"category": "financial", "tags": ["banking", "investment"]}
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps({"decision": "APPROVE", "reason": "Compliant", "confidence": "high"})
-        mock_instance.generate_content.return_value = mock_response
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="Compliant",
+            confidence="high",
+        )
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
@@ -365,38 +456,32 @@ class TestAIReviewCreative:
         assert "financial" in result["reason"].lower()
 
     # Edge Case: Empty creative data
-    @patch("google.generativeai.GenerativeModel")
-    def test_empty_creative_data(self, mock_model, mock_db_session, mock_creative):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_empty_creative_data(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_creative
+    ):
         """Test handling of creative with empty data field."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_creative.data = {}
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps({"decision": "APPROVE", "reason": "No issues found", "confidence": "high"})
-        mock_instance.generate_content.return_value = mock_response
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="No issues found",
+            confidence="high",
+        )
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
         # Should still work, just no category detection
         assert result["status"] == "approved"
-
-    # Edge Case: JSON response with code fences
-    @patch("google.generativeai.GenerativeModel")
-    def test_json_response_with_code_fences(self, mock_model, mock_db_session):
-        """Test parsing JSON response wrapped in code fences."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
-
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = '```json\n{"decision": "APPROVE", "reason": "All good", "confidence": "high"}\n```'
-        mock_instance.generate_content.return_value = mock_response
-
-        result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
-
-        assert result["status"] == "approved"
-        assert result["reason"] == "All good"
 
     # Edge Case: Tenant not found
     def test_tenant_not_found(self):
@@ -422,9 +507,14 @@ class TestAIReviewCreative:
         assert result["reason"] == "Configuration error"
 
     # Edge Case: Creative not found
-    def test_creative_not_found(self, mock_tenant):
+    @patch("src.services.ai.AIServiceFactory")
+    def test_creative_not_found(self, mock_factory_class, mock_tenant):
         """Test behavior when creative is not found."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
+
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory_class.return_value = mock_factory
 
         # Create session that returns tenant first, then None for creative
         session = MagicMock()
@@ -454,17 +544,27 @@ class TestAIReviewCreative:
         assert result["reason"] == "Configuration error"
 
     # Edge Case: Missing ai_policy (uses defaults)
-    @patch("google.generativeai.GenerativeModel")
-    def test_missing_ai_policy_uses_defaults(self, mock_model, mock_db_session, mock_tenant):
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_missing_ai_policy_uses_defaults(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_tenant
+    ):
         """Test that missing ai_policy uses default thresholds."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_tenant.ai_policy = None  # No policy configured
 
-        mock_instance = mock_model.return_value
-        mock_response = Mock()
-        mock_response.text = json.dumps({"decision": "APPROVE", "reason": "Looks good", "confidence": "high"})
-        mock_instance.generate_content.return_value = mock_response
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="Looks good",
+            confidence="high",
+        )
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 

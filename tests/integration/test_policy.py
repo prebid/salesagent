@@ -1,6 +1,6 @@
 """Tests for policy check functionality."""
 
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -25,11 +25,11 @@ def policy_service():
 
 @pytest.fixture
 def policy_service_with_ai():
-    """Create a policy service with mocked AI."""
+    """Create a policy service with mocked AI via Pydantic AI."""
+    # The service needs AI enabled. We'll patch the check_policy_compliance function
+    # to return mock responses in each test.
     with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
         service = PolicyCheckService()
-        # Mock the AI model with synchronous mock that returns the right structure
-        service.model = Mock()
         return service
 
 
@@ -58,17 +58,18 @@ class TestAIPolicyAnalysis:
     @pytest.mark.asyncio
     async def test_ai_blocks_subtle_violations(self, policy_service_with_ai):
         """Test that AI catches subtle policy violations."""
+        from src.services.ai.agents.policy_agent import PolicyAnalysis
 
-        # Mock AI response
-        # Create a coroutine that returns a mock response
-        async def mock_generate(*args, **kwargs):
-            mock_response = Mock()
-            mock_response.text = '{"status": "blocked", "reason": "Targets vulnerable elderly population with predatory financial services", "restrictions": [], "warnings": []}'
-            return mock_response
+        # Mock the check_policy_compliance function to return a blocked response
+        mock_analysis = PolicyAnalysis(
+            status="blocked",
+            reason="Targets vulnerable elderly population with predatory financial services",
+            restrictions=[],
+            warnings=[],
+        )
 
-        policy_service_with_ai.model.generate_content_async = mock_generate
-
-        result = await policy_service_with_ai.check_brief_compliance("Reverse mortgage solutions for seniors")
+        with patch("src.services.policy_check_service.check_policy_compliance", return_value=mock_analysis):
+            result = await policy_service_with_ai.check_brief_compliance("Reverse mortgage solutions for seniors")
 
         assert result.status == PolicyStatus.BLOCKED
         assert "elderly population" in result.reason
@@ -76,6 +77,8 @@ class TestAIPolicyAnalysis:
     @pytest.mark.asyncio
     async def test_ai_with_tenant_policies(self, policy_service_with_ai):
         """Test AI respects tenant-specific policies."""
+        from src.services.ai.agents.policy_agent import PolicyAnalysis
+
         tenant_policies = {
             "custom_rules": {
                 "prohibited_advertisers": ["badcompany.com"],
@@ -84,31 +87,35 @@ class TestAIPolicyAnalysis:
             }
         }
 
-        # Create a coroutine that returns a mock response
-        async def mock_generate(*args, **kwargs):
-            mock_response = Mock()
-            mock_response.text = '{"status": "blocked", "reason": "Contains prohibited advertiser: badcompany.com", "restrictions": [], "warnings": []}'
-            return mock_response
-
-        policy_service_with_ai.model.generate_content_async = mock_generate
-
-        result = await policy_service_with_ai.check_brief_compliance(
-            "Compare our product to competitor_brand", tenant_policies=tenant_policies
+        # Mock the check_policy_compliance function to return a blocked response
+        mock_analysis = PolicyAnalysis(
+            status="blocked",
+            reason="Contains prohibited advertiser: badcompany.com",
+            restrictions=[],
+            warnings=[],
         )
+
+        with patch("src.services.policy_check_service.check_policy_compliance", return_value=mock_analysis):
+            result = await policy_service_with_ai.check_brief_compliance(
+                "Compare our product to competitor_brand", tenant_policies=tenant_policies
+            )
 
         assert result.status == PolicyStatus.BLOCKED
 
     @pytest.mark.asyncio
     async def test_ai_fallback_on_error(self, policy_service_with_ai):
         """Test graceful fallback when AI fails."""
+        from src.services.ai.agents.policy_agent import PolicyAnalysis
 
-        # Create a coroutine that raises an exception
-        async def mock_generate_error(*args, **kwargs):
-            raise Exception("API error")
+        # Mock the check_policy_compliance function to return allowed with warning (graceful fallback)
+        # The policy_agent itself handles exceptions and returns allowed with warning
+        mock_analysis = PolicyAnalysis(
+            status="allowed",
+            warnings=["AI policy check unavailable: API error"],
+        )
 
-        policy_service_with_ai.model.generate_content_async = mock_generate_error
-
-        result = await policy_service_with_ai.check_brief_compliance("Normal product advertisement")
+        with patch("src.services.policy_check_service.check_policy_compliance", return_value=mock_analysis):
+            result = await policy_service_with_ai.check_brief_compliance("Normal product advertisement")
 
         # When AI fails, it should still return allowed with warning
         assert result.status == PolicyStatus.ALLOWED

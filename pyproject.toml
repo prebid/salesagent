@@ -41,6 +41,8 @@ dependencies = [
     "types-Markdown>=3.4.2.10",
     "freezegun>=1.5.5",
     "babel>=2.17.0",
+    "logfire>=4.16.0",
+    "pydantic-ai>=0.3.0",
 ]
 
 

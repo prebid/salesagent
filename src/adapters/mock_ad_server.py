@@ -380,7 +380,7 @@ class MockAdServer(AdServerAdapter):
         Returns:
             CreateMediaBuyResponse with simulated media buy
         """
-        from src.adapters.ai_test_orchestrator import AITestOrchestrator
+        from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
         # Log pricing model info if provided (AdCP PR #88)
         if package_pricing_info:
@@ -390,8 +390,8 @@ class MockAdServer(AdServerAdapter):
                     f"({pricing['currency']}, {'fixed' if pricing['is_fixed'] else 'auction'})"
                 )
 
-        # AI-powered test orchestration (check promoted_offering/brief for test instructions)
-        # For mock adapter, buyers put test directives in brand_manifest.name field
+        # Keyword-based test orchestration (check brand_manifest.name for test instructions)
+        # Keywords: [REJECT:reason], [DELAY:N], [ASYNC], [HITL:Nm:outcome], [ERROR:msg], [QUESTION:text]
         scenario = None
         test_message = None
         if request.brand_manifest:
@@ -402,30 +402,15 @@ class MockAdServer(AdServerAdapter):
             elif isinstance(request.brand_manifest, dict):
                 test_message = request.brand_manifest.get("name")
 
-        if test_message and isinstance(test_message, str) and test_message.strip():
-            try:
-                orchestrator = AITestOrchestrator()
-                scenario = orchestrator.interpret_message(test_message, "create_media_buy")
-                self.log(f"🤖 AI Test Scenario: {scenario}")
-            except Exception as e:
-                # If AI orchestrator fails, log and continue with normal processing
-                # Don't block legitimate media buy creation just because AI is unavailable
-                self.log(f"⚠️ AI orchestrator unavailable: {e}")
-                scenario = None
+        if test_message and isinstance(test_message, str) and has_test_keywords(test_message):
+            scenario = parse_test_scenario(test_message, "create_media_buy")
+            self.log(f"🧪 Test Scenario: {scenario}")
 
-        # Execute AI scenario if present
+        # Execute test scenario if present
         if scenario:
-            # Handle error simulation - ONLY if explicitly requested
+            # Handle error simulation
             if scenario.error_message:
-                # Double-check this looks like an intentional test directive
-                # If the promoted_offering is just a normal business name, ignore error_message
-                test_message_lower = test_message.lower() if test_message else ""
-                if any(keyword in test_message_lower for keyword in ["error", "fail", "reject", "throw", "raise"]):
-                    raise Exception(scenario.error_message)
-                else:
-                    # This is likely a false positive from AI - log and ignore
-                    self.log(f"⚠️ Ignoring AI error_message for non-test promoted_offering: {test_message}")
-                    scenario.error_message = None
+                raise Exception(scenario.error_message)
 
             # Handle rejection
             if scenario.should_reject:
@@ -933,16 +918,7 @@ class MockAdServer(AdServerAdapter):
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets immediately (original behavior)."""
-        from src.adapters.ai_test_orchestrator import AITestOrchestrator
-
-        # AI-powered test orchestration - each creative's name controls its own outcome
-        orchestrator = None
-        try:
-            from src.adapters.ai_test_orchestrator import AITestOrchestrator
-
-            orchestrator = AITestOrchestrator()
-        except Exception as e:
-            self.log(f"⚠️ AI orchestrator unavailable: {e}")
+        from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
         # Log operation
         self.audit_logger.log_operation(
@@ -977,47 +953,37 @@ class MockAdServer(AdServerAdapter):
             self._media_buys[media_buy_id]["creatives"].extend(assets)
             self.log(f"✓ Successfully uploaded {len(assets)} creatives")
 
-        # Process each creative individually with AI interpretation
+        # Process each creative individually with keyword-based test scenarios
+        # Keywords: [APPROVE], [REJECT:reason], [ASK:field needed]
         results = []
         for asset in assets:
             creative_name = asset.get("name", "")
 
-            # Try AI orchestration first (if available and name has content)
-            if orchestrator and creative_name and creative_name.strip():
-                try:
-                    scenario = orchestrator.interpret_message(creative_name, "sync_creatives")
+            # Check for test keywords in creative name
+            if creative_name and has_test_keywords(creative_name):
+                scenario = parse_test_scenario(creative_name, "sync_creatives")
 
-                    # Check if AI returned a specific action
-                    if scenario.should_reject or (
-                        scenario.creative_actions
-                        and any(a.get("action") == "reject" for a in scenario.creative_actions)
-                    ):
-                        reason = scenario.rejection_reason or "Test rejection"
-                        self.log(f"   ❌ AI: Rejecting creative '{creative_name}' - {reason}")
-                        results.append(AssetStatus(creative_id=asset["id"], status="rejected"))
-                        continue
-                    elif scenario.creative_actions:
-                        # Check for other actions (request_changes, ask_for_field)
-                        action = scenario.creative_actions[0] if scenario.creative_actions else {}
-                        action_type = action.get("action", "approve")
-                        reason = action.get("reason", "")
-
-                        if action_type == "request_changes":
-                            self.log(f"   🔄 AI: Requesting changes for creative '{creative_name}' - {reason}")
-                            results.append(AssetStatus(creative_id=asset["id"], status="pending"))
-                            continue
-                        elif action_type == "ask_for_field":
-                            self.log(f"   ❓ AI: Asking for field in creative '{creative_name}' - {reason}")
-                            results.append(AssetStatus(creative_id=asset["id"], status="pending"))
-                            continue
-
-                    # AI didn't specify rejection/changes - approve
-                    self.log(f"   ✅ AI: Approving creative '{creative_name}'")
-                    results.append(AssetStatus(creative_id=asset["id"], status="approved"))
+                # Handle rejection
+                if scenario.should_reject:
+                    reason = scenario.rejection_reason or "Test rejection"
+                    self.log(f"   ❌ Rejecting creative '{creative_name}' - {reason}")
+                    results.append(AssetStatus(creative_id=asset["id"], status="rejected"))
                     continue
 
-                except Exception as e:
-                    self.log(f"   ⚠️ AI interpretation failed for '{creative_name}': {e}, auto-approving")
+                # Handle creative-specific actions
+                if scenario.creative_actions:
+                    action = scenario.creative_actions[0]
+                    action_type = action.get("action", "approve")
+                    reason = action.get("reason", "")
+
+                    if action_type == "ask_for_field":
+                        self.log(f"   ❓ Asking for field in creative '{creative_name}' - {reason}")
+                        results.append(AssetStatus(creative_id=asset["id"], status="pending"))
+                        continue
+                    elif action_type == "approve":
+                        self.log(f"   ✅ Approving creative '{creative_name}'")
+                        results.append(AssetStatus(creative_id=asset["id"], status="approved"))
+                        continue
 
             # Default behavior - auto-approve
             results.append(AssetStatus(creative_id=asset["id"], status="approved"))
@@ -1094,8 +1060,8 @@ class MockAdServer(AdServerAdapter):
             start_time = buy["start_time"]
             end_time = buy["end_time"]
 
-            # Load AI test scenario if present
-            from src.adapters.ai_test_orchestrator import TestScenario
+            # Load test scenario if present (stored as dict from creation)
+            from src.adapters.test_scenario_parser import TestScenario
 
             test_scenario_data = buy.get("test_scenario")
             test_scenario = None
@@ -1116,10 +1082,10 @@ class MockAdServer(AdServerAdapter):
             elapsed_duration = (today - start_time).total_seconds() / 86400  # days
             current_day = int(elapsed_duration) + 1  # Day 1, 2, 3, etc.
 
-            # Check for AI scenario outage simulation
+            # Check for test scenario outage simulation
             if test_scenario and test_scenario.simulate_outage:
-                self.log(f"🚨 AI Test Scenario: Simulating platform outage on day {current_day}")
-                raise Exception(f"Simulated platform outage on day {current_day} (AI test scenario)")
+                self.log(f"🚨 Test Scenario: Simulating platform outage on day {current_day}")
+                raise Exception(f"Simulated platform outage on day {current_day} (test scenario)")
 
             if elapsed_duration <= 0:
                 # Campaign hasn't started
@@ -1140,7 +1106,7 @@ class MockAdServer(AdServerAdapter):
                         test_scenario.delivery_profile, current_day, int(campaign_duration)
                     )
                     self.log(
-                        f"📋 AI Test Scenario delivery profile '{test_scenario.delivery_profile}': "
+                        f"📋 Test scenario delivery profile '{test_scenario.delivery_profile}': "
                         f"{delivery_progress * 100:.1f}% complete on day {current_day}"
                     )
                     spend = total_budget * delivery_progress
@@ -1149,7 +1115,7 @@ class MockAdServer(AdServerAdapter):
                 elif test_scenario and test_scenario.delivery_percentage is not None:
                     # Override with specific percentage
                     delivery_progress = test_scenario.delivery_percentage / 100.0
-                    self.log(f"📋 AI Test Scenario delivery override: {test_scenario.delivery_percentage}% complete")
+                    self.log(f"📋 Test scenario delivery override: {test_scenario.delivery_percentage}% complete")
                     spend = total_budget * delivery_progress
                     impressions = int(spend / 0.01)  # $10 CPM
                 else:

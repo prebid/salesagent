@@ -503,9 +503,12 @@ def update_slack(tenant_id):
 @log_admin_action("update_ai")
 @require_tenant_access()
 def update_ai(tenant_id):
-    """Update AI services settings (Gemini API key)."""
+    """Update AI services settings (multi-provider configuration)."""
     try:
-        gemini_api_key = request.form.get("gemini_api_key", "").strip()
+        provider = request.form.get("ai_provider", "gemini").strip()
+        model = request.form.get("ai_model", "").strip()
+        api_key = request.form.get("ai_api_key", "").strip()
+        logfire_token = request.form.get("logfire_token", "").strip()
 
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -513,22 +516,274 @@ def update_ai(tenant_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            # Update Gemini API key (encrypted via property setter)
-            if gemini_api_key:
-                tenant.gemini_api_key = gemini_api_key
-                flash("Gemini API key saved successfully. AI-powered creative review is now enabled.", "success")
-            else:
-                tenant.gemini_api_key = None
-                flash("Gemini API key removed. AI-powered creative review is now disabled.", "warning")
+            # Build ai_config from existing config (if any) merged with form data
+            existing_config = tenant.ai_config or {}
 
+            # Start with existing config to preserve any fields not in form
+            new_config = {
+                "provider": provider,
+                "model": model,
+            }
+
+            # Handle API key: use new one if provided, otherwise keep existing
+            if api_key:
+                new_config["api_key"] = api_key
+            elif existing_config.get("api_key"):
+                new_config["api_key"] = existing_config["api_key"]
+            elif tenant.gemini_api_key and provider == "gemini":
+                # Migrate legacy gemini_api_key to new ai_config
+                new_config["api_key"] = tenant.gemini_api_key
+
+            # Preserve settings if they exist
+            if existing_config.get("settings"):
+                new_config["settings"] = existing_config["settings"]
+
+            # Handle Logfire token: use new one if provided, otherwise keep existing
+            # Skip placeholder value that indicates existing token
+            if logfire_token and logfire_token != "••••••••":
+                new_config["logfire_token"] = logfire_token
+            elif existing_config.get("logfire_token"):
+                new_config["logfire_token"] = existing_config["logfire_token"]
+
+            # Update the tenant
+            tenant.ai_config = new_config
             tenant.updated_at = datetime.now(UTC)
             db_session.commit()
+
+            provider_name = provider.title()
+            if new_config.get("api_key"):
+                flash(f"AI settings saved. {provider_name} ({model}) is now configured.", "success")
+            else:
+                flash(
+                    f"AI provider set to {provider_name}, but no API key configured. AI features will be disabled.",
+                    "warning",
+                )
 
     except Exception as e:
         logger.error(f"Error updating AI settings: {e}", exc_info=True)
         flash(f"Error updating AI settings: {str(e)}", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
+
+
+@settings_bp.route("/ai/test", methods=["POST"])
+@require_tenant_access(api_mode=True)
+def test_ai_connection(tenant_id):
+    """Test AI connection with current configuration."""
+    import asyncio
+    import concurrent.futures
+
+    from pydantic import BaseModel
+    from pydantic_ai import Agent
+
+    from src.services.ai import AIServiceFactory
+
+    try:
+        data = request.get_json() or {}
+        provider = data.get("provider", "gemini")
+        model = data.get("model", "gemini-2.0-flash")
+        api_key = data.get("api_key", "").strip()
+
+        # Build config for testing
+        test_config = {"provider": provider, "model": model}
+
+        # Use provided API key, or fall back to saved config
+        with get_db_session() as db_session:
+            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if not tenant:
+                return jsonify({"success": False, "error": "Tenant not found"}), 404
+
+            if api_key:
+                test_config["api_key"] = api_key
+            elif tenant.ai_config and tenant.ai_config.get("api_key"):
+                test_config["api_key"] = tenant.ai_config["api_key"]
+            elif tenant.gemini_api_key and provider == "gemini":
+                test_config["api_key"] = tenant.gemini_api_key
+
+        if not test_config.get("api_key"):
+            return jsonify({"success": False, "error": "No API key provided"}), 400
+
+        # Create factory and set up credentials
+        factory = AIServiceFactory()
+        model_string = factory.create_model(test_config)
+
+        # Simple test: ask the model to respond with a single word
+        class TestResponse(BaseModel):
+            word: str
+
+        agent = Agent(model=model_string, output_type=TestResponse, system_prompt="Respond with exactly one word.")
+
+        def run_in_thread():
+            """Run async code in a new thread with its own event loop."""
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+
+                async def run_test():
+                    result = await agent.run("Say hello")
+                    # pydantic-ai 1.x uses .output for structured data
+                    return result.output
+
+                return loop.run_until_complete(run_test())
+            finally:
+                loop.close()
+
+        # Run in a separate thread to avoid event loop conflicts
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_in_thread)
+            response = future.result(timeout=30)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Connection successful! Model responded: {response.word}",
+                "provider": provider,
+                "model": model,
+            }
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+        # Clean up error messages for common issues
+        if "expired" in error_msg.lower():
+            error_msg = "API key expired. Please renew your API key."
+        elif "401" in error_msg or "authentication" in error_msg.lower() or "api_key_invalid" in error_msg.lower():
+            error_msg = "Invalid API key. Please check your credentials."
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            error_msg = f"Model '{model}' not found. Please check the model name."
+        elif "rate" in error_msg.lower() or "quota" in error_msg.lower():
+            error_msg = "Rate limit exceeded. Please try again later."
+
+        logger.error(f"AI test connection failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": error_msg}), 400
+
+
+@settings_bp.route("/ai/test-logfire", methods=["POST"])
+@require_tenant_access(api_mode=True)
+def test_logfire_connection(tenant_id):
+    """Test Logfire connection with provided token."""
+    try:
+        data = request.get_json() or {}
+        logfire_token = data.get("logfire_token", "").strip()
+
+        if not logfire_token:
+            return jsonify({"success": False, "error": "No Logfire token provided"}), 400
+
+        # Try to configure logfire with the token
+        import logfire
+
+        # Create a test configuration
+        try:
+            # Use send_to_logfire=False for validation, then test with actual send
+            logfire.configure(
+                token=logfire_token,
+                service_name="adcp-sales-agent-test",
+            )
+
+            # Send a test span to verify the token works
+            with logfire.span("test_connection", _level="info") as span:
+                span.set_attribute("test", True)
+                span.set_attribute("tenant_id", tenant_id)
+
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "Logfire connection successful! Check your Logfire dashboard for the test span.",
+                }
+            )
+
+        except Exception as config_error:
+            error_msg = str(config_error)
+            if "401" in error_msg or "unauthorized" in error_msg.lower() or "invalid" in error_msg.lower():
+                error_msg = "Invalid Logfire token. Please check your credentials."
+            elif "403" in error_msg or "forbidden" in error_msg.lower():
+                error_msg = "Token does not have permission to send data."
+
+            return jsonify({"success": False, "error": error_msg}), 400
+
+    except ImportError:
+        return jsonify({"success": False, "error": "Logfire package not installed"}), 400
+    except Exception as e:
+        logger.error(f"Logfire test connection failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@settings_bp.route("/ai/models", methods=["GET"])
+@require_tenant_access(api_mode=True)
+def get_ai_models(tenant_id):
+    """Get available AI models from Pydantic AI.
+
+    Returns models grouped by provider, extracted from pydantic_ai.models.KnownModelName.
+    """
+    from pydantic_ai.models import KnownModelName
+
+    # Extract all model strings from KnownModelName Literal type
+    all_models = KnownModelName.__value__.__args__
+
+    # Group by provider and organize
+    by_provider = {}
+    for model_string in all_models:
+        if ":" not in model_string:
+            continue
+
+        provider, model_name = model_string.split(":", 1)
+
+        # Skip test model
+        if provider == "test":
+            continue
+
+        if provider not in by_provider:
+            by_provider[provider] = []
+        by_provider[provider].append(model_name)
+
+    # Sort models within each provider
+    for provider in by_provider:
+        by_provider[provider] = sorted(set(by_provider[provider]))
+
+    # Define provider metadata for UI
+    provider_info = {
+        "google-gla": {"name": "Google Gemini", "key_url": "https://aistudio.google.com/app/apikey"},
+        "anthropic": {"name": "Anthropic Claude", "key_url": "https://console.anthropic.com/settings/keys"},
+        "openai": {"name": "OpenAI", "key_url": "https://platform.openai.com/api-keys"},
+        "groq": {"name": "Groq", "key_url": "https://console.groq.com/keys"},
+        "mistral": {"name": "Mistral AI", "key_url": "https://console.mistral.ai/api-keys"},
+        "deepseek": {"name": "DeepSeek", "key_url": "https://platform.deepseek.com/api_keys"},
+        "grok": {"name": "xAI Grok", "key_url": "https://console.x.ai"},
+        "cohere": {"name": "Cohere", "key_url": "https://dashboard.cohere.com/api-keys"},
+        "bedrock": {"name": "AWS Bedrock", "key_url": "https://console.aws.amazon.com/bedrock"},
+        "google-vertex": {"name": "Google Vertex AI", "key_url": "https://console.cloud.google.com/vertex-ai"},
+        "huggingface": {"name": "Hugging Face", "key_url": "https://huggingface.co/settings/tokens"},
+        "cerebras": {"name": "Cerebras", "key_url": "https://cloud.cerebras.ai"},
+        "moonshotai": {"name": "Moonshot AI", "key_url": "https://platform.moonshot.cn"},
+        "heroku": {"name": "Heroku AI", "key_url": "https://dashboard.heroku.com"},
+        # Gateway providers (uses Pydantic AI Gateway)
+        "gateway/anthropic": {
+            "name": "Gateway: Anthropic",
+            "key_url": "https://ai.pydantic.dev/gateway",
+            "gateway": True,
+        },
+        "gateway/openai": {"name": "Gateway: OpenAI", "key_url": "https://ai.pydantic.dev/gateway", "gateway": True},
+        "gateway/bedrock": {"name": "Gateway: Bedrock", "key_url": "https://ai.pydantic.dev/gateway", "gateway": True},
+        "gateway/google-vertex": {
+            "name": "Gateway: Vertex",
+            "key_url": "https://ai.pydantic.dev/gateway",
+            "gateway": True,
+        },
+        "gateway/groq": {"name": "Gateway: Groq", "key_url": "https://ai.pydantic.dev/gateway", "gateway": True},
+    }
+
+    # Build response with provider info
+    result = {}
+    for provider, models in by_provider.items():
+        info = provider_info.get(provider, {"name": provider.replace("-", " ").title(), "key_url": None})
+        result[provider] = {
+            "name": info["name"],
+            "key_url": info.get("key_url"),
+            "gateway": info.get("gateway", False),
+            "models": models,
+        }
+
+    return jsonify(result)
 
 
 # Domain and Email Management Routes

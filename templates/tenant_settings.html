@@ -1928,38 +1928,316 @@ REJECT - Creative cannot be approved:
             <div class="form-section">
                 <h3>AI Services</h3>
                 <p class="form-section-description">
-                    Configure AI-powered features like creative review. Each tenant must provide their own API keys.
+                    Configure AI-powered features like creative review, policy checks, and auto-naming.
+                    Choose your preferred AI provider and model.
                 </p>
 
-                {% if not tenant.gemini_api_key %}
+                {% set ai_config = tenant.ai_config or {} %}
+                {% set has_ai = ai_config.get('api_key') or tenant.gemini_api_key %}
+                {% set current_provider = ai_config.get('provider', 'gemini') %}
+                {% set current_model = ai_config.get('model', '') %}
+
+                {% if not has_ai %}
                 <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                    <strong>⚠️ Gemini API Key Required</strong>
-                    <p style="margin: 0.5rem 0 0;">AI-powered creative review is not available without a Gemini API key. Please add your key below.</p>
+                    <strong>API Key Required</strong>
+                    <p style="margin: 0.5rem 0 0;">AI-powered features are not available without an API key. Configure your preferred provider below.</p>
                 </div>
                 {% else %}
                 <div class="alert alert-success" style="padding: 0.75rem; background: #d1fae5; border: 1px solid #34d399; border-radius: 6px; margin-bottom: 1rem;">
-                    <strong>✅ Gemini API Key Configured</strong>
-                    <p style="margin: 0.5rem 0 0;">AI-powered creative review is enabled.</p>
+                    <strong>AI Services Configured</strong>
+                    <p id="ai-status-text" style="margin: 0.5rem 0 0;">
+                        Provider: <strong id="ai-status-provider">{{ current_provider | title }}</strong>
+                        {% if current_model %} | Model: <strong>{{ current_model }}</strong>{% endif %}
+                    </p>
+                </div>
+                {% endif %}
+
+                {% if tenant.gemini_api_key and not ai_config.get('api_key') %}
+                <div class="alert alert-info" style="padding: 0.75rem; background: #dbeafe; border: 1px solid #3b82f6; border-radius: 6px; margin-bottom: 1rem;">
+                    <strong>Legacy Gemini Key Detected</strong>
+                    <p style="margin: 0.5rem 0 0;">Your existing Gemini API key will continue to work. Save the form below to migrate to the new multi-provider system.</p>
                 </div>
                 {% endif %}
 
                 <form method="POST" action="/tenant/{{ tenant.tenant_id }}/settings/ai">
                     <div class="form-group">
-                        <label for="gemini_api_key">Gemini API Key <span style="color: #ef4444;">*</span></label>
-                        <input type="password" id="gemini_api_key" name="gemini_api_key"
-                               value="{{ tenant.gemini_api_key or '' }}"
-                               placeholder="Enter your Gemini API key"
-                               required>
+                        <label for="ai_provider">AI Provider</label>
+                        <select id="ai_provider" name="ai_provider" onchange="updateModelOptions()">
+                            <option value="">Loading providers...</option>
+                        </select>
+                        <small>Select your preferred AI provider. <span id="provider-count"></span></small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai_model">Model</label>
+                        <select id="ai_model" name="ai_model">
+                            <option value="">Select a provider first</option>
+                        </select>
+                        <small>Select the specific model to use. <span id="model-count"></span></small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai_api_key">API Key</label>
+                        <input type="password" id="ai_api_key" name="ai_api_key"
+                               placeholder="Enter your API key (leave blank to keep existing)"
+                               autocomplete="new-password">
                         <small>
-                            Required for AI-powered creative review. Each tenant provides their own key for usage tracking and billing.
-                            <a href="https://aistudio.google.com/app/apikey" target="_blank">Get an API key from Google AI Studio</a>
+                            Leave blank to keep existing key.
+                            <a id="api-key-link" href="#" target="_blank" style="display: none;">Get API key</a>
                         </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="logfire_token">Logfire Token (Optional)</label>
+                        <div style="display: flex; gap: 0.5rem; align-items: flex-start;">
+                            <input type="password" id="logfire_token" name="logfire_token"
+                                   placeholder="Enter Logfire token for AI observability"
+                                   autocomplete="new-password"
+                                   style="flex: 1;"
+                                   {% if has_logfire %}value="••••••••"{% endif %}>
+                            <button type="button" onclick="testLogfireConnection()" class="btn btn-secondary btn-sm" style="white-space: nowrap;">Test Logfire</button>
+                        </div>
+                        <small>
+                            Optional. Enable <a href="https://logfire.pydantic.dev/" target="_blank">Logfire</a> for AI request tracing and observability.
+                            {% if has_logfire %}<span style="color: #10b981;">Configured</span>{% endif %}
+                        </small>
+                        <div id="logfire-test-result" style="display: none; margin-top: 0.5rem; padding: 0.5rem; border-radius: 4px; font-size: 0.875rem;"></div>
                     </div>
 
                     <div class="button-group">
                         <button type="submit" class="btn btn-primary">Save AI Settings</button>
+                        <button type="button" onclick="testAIConnection()" class="btn btn-secondary">Test AI Connection</button>
                     </div>
                 </form>
+
+                <div id="ai-test-result" style="display: none; margin-top: 1rem; padding: 0.75rem; border-radius: 6px;"></div>
+
+                <script>
+                const scriptRoot = '{{ request.script_root }}' || '';
+                const currentProvider = '{{ current_provider }}';
+                const currentModel = '{{ current_model }}';
+                let aiModelsData = null;
+
+                // Preferred order for providers (most common first)
+                const providerOrder = [
+                    'google-gla', 'anthropic', 'openai', 'groq', 'mistral', 'deepseek', 'grok',
+                    'cohere', 'bedrock', 'google-vertex', 'huggingface', 'cerebras', 'moonshotai', 'heroku',
+                    // Gateway providers at the end
+                    'gateway/anthropic', 'gateway/openai', 'gateway/bedrock', 'gateway/google-vertex', 'gateway/groq'
+                ];
+
+                async function loadAIModels() {
+                    try {
+                        const response = await fetch(scriptRoot + '/tenant/{{ tenant.tenant_id }}/settings/ai/models', {
+                            credentials: 'same-origin'
+                        });
+                        aiModelsData = await response.json();
+
+                        // Populate provider dropdown
+                        const providerSelect = document.getElementById('ai_provider');
+                        providerSelect.innerHTML = '';
+
+                        // Sort providers by preferred order
+                        const sortedProviders = Object.keys(aiModelsData).sort((a, b) => {
+                            const aIdx = providerOrder.indexOf(a);
+                            const bIdx = providerOrder.indexOf(b);
+                            if (aIdx === -1 && bIdx === -1) return a.localeCompare(b);
+                            if (aIdx === -1) return 1;
+                            if (bIdx === -1) return -1;
+                            return aIdx - bIdx;
+                        });
+
+                        // Add optgroups for regular and gateway providers
+                        let regularGroup = document.createElement('optgroup');
+                        regularGroup.label = 'Direct Providers';
+                        let gatewayGroup = document.createElement('optgroup');
+                        gatewayGroup.label = 'Pydantic AI Gateway';
+
+                        sortedProviders.forEach(provider => {
+                            const info = aiModelsData[provider];
+                            const option = document.createElement('option');
+                            option.value = provider;
+                            option.textContent = info.name + ' (' + info.models.length + ' models)';
+                            if (provider === currentProvider || (currentProvider === 'gemini' && provider === 'google-gla')) {
+                                option.selected = true;
+                            }
+                            if (info.gateway) {
+                                gatewayGroup.appendChild(option);
+                            } else {
+                                regularGroup.appendChild(option);
+                            }
+                        });
+
+                        providerSelect.appendChild(regularGroup);
+                        if (gatewayGroup.children.length > 0) {
+                            providerSelect.appendChild(gatewayGroup);
+                        }
+
+                        document.getElementById('provider-count').textContent = sortedProviders.length + ' providers available';
+
+                        // Initialize model options
+                        updateModelOptions();
+
+                        // Update status bar with friendly provider name
+                        updateStatusBar();
+                    } catch (error) {
+                        console.error('Failed to load AI models:', error);
+                        document.getElementById('ai_provider').innerHTML = '<option value="">Failed to load providers</option>';
+                    }
+                }
+
+                function updateModelOptions() {
+                    if (!aiModelsData) return;
+
+                    const provider = document.getElementById('ai_provider').value;
+                    const modelSelect = document.getElementById('ai_model');
+                    const apiKeyLink = document.getElementById('api-key-link');
+
+                    if (!provider || !aiModelsData[provider]) {
+                        modelSelect.innerHTML = '<option value="">Select a provider first</option>';
+                        return;
+                    }
+
+                    const providerInfo = aiModelsData[provider];
+                    modelSelect.innerHTML = '';
+
+                    providerInfo.models.forEach(model => {
+                        const option = document.createElement('option');
+                        option.value = model;
+                        option.textContent = model;
+                        if (model === currentModel) {
+                            option.selected = true;
+                        }
+                        modelSelect.appendChild(option);
+                    });
+
+                    document.getElementById('model-count').textContent = providerInfo.models.length + ' models available';
+
+                    // Update API key link
+                    if (providerInfo.key_url) {
+                        apiKeyLink.href = providerInfo.key_url;
+                        apiKeyLink.style.display = 'inline';
+                        apiKeyLink.textContent = 'Get ' + providerInfo.name + ' key';
+                    } else {
+                        apiKeyLink.style.display = 'none';
+                    }
+                }
+
+                function updateStatusBar() {
+                    // Update status bar provider name to friendly name
+                    const statusProvider = document.getElementById('ai-status-provider');
+                    if (!statusProvider || !aiModelsData) return;
+
+                    // Map the current provider to its friendly name
+                    let providerKey = currentProvider;
+                    // Handle legacy "gemini" provider name
+                    if (providerKey === 'gemini') {
+                        providerKey = 'google-gla';
+                    }
+
+                    if (aiModelsData[providerKey]) {
+                        statusProvider.textContent = aiModelsData[providerKey].name;
+                    }
+                }
+
+                async function testAIConnection() {
+                    const resultDiv = document.getElementById('ai-test-result');
+                    const provider = document.getElementById('ai_provider').value;
+                    const model = document.getElementById('ai_model').value;
+                    const apiKey = document.getElementById('ai_api_key').value;
+
+                    resultDiv.style.display = 'block';
+                    resultDiv.style.background = '#f3f4f6';
+                    resultDiv.style.border = '1px solid #d1d5db';
+                    resultDiv.innerHTML = '<strong>Testing connection...</strong> This may take a few seconds.';
+
+                    try {
+                        const response = await fetch(scriptRoot + '/tenant/{{ tenant.tenant_id }}/settings/ai/test', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'same-origin',
+                            body: JSON.stringify({ provider, model, api_key: apiKey })
+                        });
+
+                        // Handle authentication errors
+                        if (response.status === 401) {
+                            resultDiv.style.background = '#fef3c7';
+                            resultDiv.style.border = '1px solid #fbbf24';
+                            resultDiv.innerHTML = '<strong>Session expired.</strong> Please <a href="' + scriptRoot + '/login">log in again</a>.';
+                            return;
+                        }
+
+                        const data = await response.json();
+
+                        if (data.success) {
+                            resultDiv.style.background = '#d1fae5';
+                            resultDiv.style.border = '1px solid #34d399';
+                            resultDiv.innerHTML = '<strong>Success!</strong> ' + data.message;
+                        } else {
+                            resultDiv.style.background = '#fee2e2';
+                            resultDiv.style.border = '1px solid #f87171';
+                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + data.error;
+                        }
+                    } catch (error) {
+                        resultDiv.style.background = '#fee2e2';
+                        resultDiv.style.border = '1px solid #f87171';
+                        resultDiv.innerHTML = '<strong>Error:</strong> ' + error.message;
+                    }
+                }
+
+                async function testLogfireConnection() {
+                    const resultDiv = document.getElementById('logfire-test-result');
+                    const logfireToken = document.getElementById('logfire_token').value;
+
+                    if (!logfireToken || logfireToken === '••••••••') {
+                        resultDiv.style.display = 'block';
+                        resultDiv.style.background = '#fef3c7';
+                        resultDiv.style.border = '1px solid #fbbf24';
+                        resultDiv.innerHTML = 'Enter a Logfire token to test, or save first to test the existing token.';
+                        return;
+                    }
+
+                    resultDiv.style.display = 'block';
+                    resultDiv.style.background = '#f3f4f6';
+                    resultDiv.style.border = '1px solid #d1d5db';
+                    resultDiv.innerHTML = 'Testing Logfire connection...';
+
+                    try {
+                        const response = await fetch(scriptRoot + '/tenant/{{ tenant.tenant_id }}/settings/ai/test-logfire', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'same-origin',
+                            body: JSON.stringify({ logfire_token: logfireToken })
+                        });
+
+                        if (response.status === 401) {
+                            resultDiv.style.background = '#fef3c7';
+                            resultDiv.style.border = '1px solid #fbbf24';
+                            resultDiv.innerHTML = '<strong>Session expired.</strong> Please <a href="' + scriptRoot + '/login">log in again</a>.';
+                            return;
+                        }
+
+                        const data = await response.json();
+
+                        if (data.success) {
+                            resultDiv.style.background = '#d1fae5';
+                            resultDiv.style.border = '1px solid #34d399';
+                            resultDiv.innerHTML = '<strong>Success!</strong> ' + data.message;
+                        } else {
+                            resultDiv.style.background = '#fee2e2';
+                            resultDiv.style.border = '1px solid #f87171';
+                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + data.error;
+                        }
+                    } catch (error) {
+                        resultDiv.style.background = '#fee2e2';
+                        resultDiv.style.border = '1px solid #f87171';
+                        resultDiv.innerHTML = '<strong>Error:</strong> ' + error.message;
+                    }
+                }
+
+                // Initialize on page load
+                document.addEventListener('DOMContentLoaded', loadAIModels);
+                </script>
             </div>
 
             <div class="form-section">

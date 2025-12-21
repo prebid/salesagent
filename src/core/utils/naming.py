@@ -9,12 +9,13 @@ Supports variable substitution with fallback syntax:
 - {month_year} - Month and year (e.g., "Oct 2025")
 - {brand_name} - Brand from brand_manifest
 - {buyer_ref} - Buyer's reference ID
-- {auto_name} - AI-generated name from full context (requires Gemini API key)
+- {auto_name} - AI-generated name from full context (requires AI configuration)
 - {product_name} - Product name (for line items)
 - {package_count} - Number of packages in order
 - {package_index} - Package position number (1, 2, 3...)
 """
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -45,150 +46,123 @@ def format_month_year(start_time: datetime) -> str:
     return start_time.strftime("%b %Y")
 
 
+def _extract_brand_name(request) -> str | None:
+    """Extract brand name from request's brand_manifest."""
+    if not hasattr(request, "brand_manifest") or not request.brand_manifest:
+        return None
+
+    manifest = request.brand_manifest
+    if isinstance(manifest, str):
+        return manifest
+    elif hasattr(manifest, "name"):
+        return manifest.name
+    elif isinstance(manifest, dict):
+        return manifest.get("name")
+    return None
+
+
+def _get_fallback_name(request) -> str:
+    """Get fallback name when AI is unavailable."""
+    brand_name = _extract_brand_name(request)
+    return brand_name or request.campaign_name or "Campaign"
+
+
 def generate_auto_name(
     request,
     packages: list,
     start_time: datetime,
     end_time: datetime,
-    tenant_gemini_key: str | None = None,
+    tenant_ai_config=None,
+    tenant_gemini_key: str | None = None,  # Deprecated: use tenant_ai_config
     max_length: int = 150,
 ) -> str:
-    """Generate AI-powered order name using Gemini.
+    """Generate AI-powered order name using Pydantic AI.
 
     Args:
         request: CreateMediaBuyRequest object
         packages: List of MediaPackage objects
         start_time: Order start datetime
         end_time: Order end datetime
-        tenant_gemini_key: Tenant's Gemini API key (if configured)
+        tenant_ai_config: Tenant's AI configuration (TenantAIConfig or dict)
+        tenant_gemini_key: Deprecated - Tenant's Gemini API key
         max_length: Maximum length for generated name
 
     Returns:
-        AI-generated name, or falls back to brand_name if Gemini unavailable
+        AI-generated name, or falls back to brand_name if AI unavailable
 
     Example output:
         "Nike Air Max Campaign - Q4 Holiday Push"
         "Acme Corp Brand Awareness - Premium Video"
     """
-    # Fallback if Gemini not configured
-    if not tenant_gemini_key:
-        logger.debug("No Gemini API key configured, falling back to brand_name")
-        # Extract brand name from brand_manifest
-        brand_name = None
-        if hasattr(request, "brand_manifest") and request.brand_manifest:
-            manifest = request.brand_manifest
-            if isinstance(manifest, str):
-                brand_name = manifest
-            elif hasattr(manifest, "name"):
-                brand_name = manifest.name
-            elif isinstance(manifest, dict):
-                brand_name = manifest.get("name")
-        return brand_name or request.campaign_name or "Campaign"
+    from src.services.ai import AIServiceFactory
+
+    factory = AIServiceFactory()
+
+    # Handle backward compatibility: convert gemini_api_key to ai_config
+    effective_config = tenant_ai_config
+    if effective_config is None and tenant_gemini_key:
+        effective_config = {
+            "provider": "gemini",
+            "api_key": tenant_gemini_key,
+        }
+
+    # Check if AI is enabled
+    if not factory.is_ai_enabled(effective_config):
+        logger.debug("No AI configuration available, falling back to brand_name")
+        return _get_fallback_name(request)
 
     try:
-        import google.generativeai as genai
-        from pydantic import BaseModel, Field
+        from src.services.ai.agents.naming_agent import (
+            create_naming_agent,
+            generate_name_async,
+        )
 
-        class OrderNameResponse(BaseModel):
-            name: str = Field(..., max_length=max_length, description="Concise, professional order name")
+        # Create the model and agent
+        model_string = factory.create_model(effective_config)
+        agent = create_naming_agent(model_string, max_length=max_length)
 
-        # Configure Gemini
-        genai.configure(api_key=tenant_gemini_key)
-        model = genai.GenerativeModel("gemini-2.0-flash-lite")
+        # Extract context for AI
+        brand_name = _extract_brand_name(request) or "N/A"
 
-        # Build context for AI
-        # Extract brand name from brand_manifest
-        brand_name = "N/A"
-        if hasattr(request, "brand_manifest") and request.brand_manifest:
-            manifest = request.brand_manifest
-            if isinstance(manifest, str):
-                brand_name = manifest
-            elif hasattr(manifest, "name"):
-                brand_name = manifest.name
-            elif isinstance(manifest, dict):
-                brand_name = manifest.get("name", "N/A")
-
-        context_parts = [
-            f"Buyer Reference: {request.buyer_ref}",
-            f"Campaign: {request.campaign_name or 'N/A'}",
-            f"Brand: {brand_name}",
-        ]
-
-        # Add budget info (AdCP v2.2.0: sum package budgets)
+        # Build budget info
+        budget_info = None
         budget_amount = request.get_total_budget()
         if budget_amount > 0:
-            # Get currency from first package with currency, or default to USD
             currency = "USD"
             if request.packages:
                 for pkg in request.packages:
                     if hasattr(pkg, "currency") and pkg.currency:
                         currency = pkg.currency
                         break
-            context_parts.append(f"Budget: ${budget_amount:,.2f} {currency}")
+            budget_info = f"${budget_amount:,.2f} {currency}"
 
-        context_parts.extend(
-            [
-                f"Duration: {format_date_range(start_time, end_time)}",
-                f"Products: {', '.join([pkg.product_id for pkg in packages])}",
-            ]
-        )
-
-        # Add brand manifest if available
+        # Extract objectives from brand_manifest
+        objectives = None
         if hasattr(request, "brand_manifest") and request.brand_manifest:
             manifest = request.brand_manifest
-            if hasattr(manifest, "brand_name") and manifest.brand_name:
-                context_parts.insert(0, f"Brand: {manifest.brand_name}")
             if hasattr(manifest, "campaign_objectives") and manifest.campaign_objectives:
-                context_parts.append(f"Objectives: {', '.join(manifest.campaign_objectives[:2])}")
+                objectives = manifest.campaign_objectives
 
-        context = "\n".join(context_parts)
-
-        prompt = f"""Generate a concise, professional order name for this advertising campaign.
-
-Requirements:
-- Maximum {max_length} characters
-- Include buyer reference "{request.buyer_ref}" somewhere in the name
-- Professional and scannable
-- Captures the essence of the campaign
-
-Campaign Details:
-{context}
-
-Return ONLY the order name, nothing else."""
-
-        # Call Gemini with timeout
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
-                max_output_tokens=100,
-                temperature=0.3,  # Fairly deterministic
-            ),
-            request_options={"timeout": 2.0},  # 2 second timeout
+        # Run async agent synchronously
+        generated_name = asyncio.run(
+            generate_name_async(
+                agent=agent,
+                buyer_ref=request.buyer_ref,
+                campaign_name=request.campaign_name,
+                brand_name=brand_name if brand_name != "N/A" else None,
+                budget_info=budget_info,
+                date_range=format_date_range(start_time, end_time),
+                products=[pkg.product_id for pkg in packages],
+                objectives=objectives,
+                max_length=max_length,
+            )
         )
 
-        generated_name = response.text.strip().strip('"').strip("'")
-
-        # Validate length
-        if len(generated_name) > max_length:
-            logger.warning(f"Generated name too long ({len(generated_name)} > {max_length}), truncating")
-            generated_name = generated_name[:max_length].rsplit(" ", 1)[0] + "..."
-
-        logger.info(f"Generated auto_name: {generated_name}")
         return generated_name
 
     except Exception as e:
-        logger.warning(f"Failed to generate auto_name with Gemini: {e}, falling back")
-        # Fallback to brand name or campaign_name
-        brand_name = None
-        if hasattr(request, "brand_manifest") and request.brand_manifest:
-            manifest = request.brand_manifest
-            if isinstance(manifest, str):
-                brand_name = manifest
-            elif hasattr(manifest, "name"):
-                brand_name = manifest.name
-            elif isinstance(manifest, dict):
-                brand_name = manifest.get("name")
-        return brand_name or request.campaign_name or "Campaign"
+        logger.warning(f"Failed to generate auto_name with AI: {e}, falling back")
+        return _get_fallback_name(request)
 
 
 def apply_naming_template(
@@ -256,7 +230,8 @@ def build_order_name_context(
     packages: list,
     start_time: datetime,
     end_time: datetime,
-    tenant_gemini_key: str | None = None,
+    tenant_ai_config=None,
+    tenant_gemini_key: str | None = None,  # Deprecated: use tenant_ai_config
 ) -> dict:
     """Build context dictionary for order name template.
 
@@ -265,7 +240,8 @@ def build_order_name_context(
         packages: List of MediaPackage objects
         start_time: Order start datetime
         end_time: Order end datetime
-        tenant_gemini_key: Optional Gemini API key for auto_name generation
+        tenant_ai_config: Tenant's AI configuration (TenantAIConfig or dict)
+        tenant_gemini_key: Deprecated - Tenant's Gemini API key
 
     Returns:
         Dictionary of variables available for template substitution
@@ -277,19 +253,12 @@ def build_order_name_context(
         packages=packages,
         start_time=start_time,
         end_time=end_time,
+        tenant_ai_config=tenant_ai_config,
         tenant_gemini_key=tenant_gemini_key,
     )
 
     # Extract brand name from brand_manifest
-    brand_name = None
-    if hasattr(request, "brand_manifest") and request.brand_manifest:
-        manifest = request.brand_manifest
-        if isinstance(manifest, str):
-            brand_name = manifest
-        elif hasattr(manifest, "name"):
-            brand_name = manifest.name
-        elif isinstance(manifest, dict):
-            brand_name = manifest.get("name")
+    brand_name = _extract_brand_name(request)
 
     return {
         "campaign_name": request.campaign_name,

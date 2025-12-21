@@ -361,6 +361,12 @@ def tenant_settings(tenant_id, section=None):
             # Check for Gemini API key (tenant-specific only - no environment fallback in production)
             has_gemini_key = bool(tenant.gemini_api_key)
 
+            # Get AI configuration for template
+            ai_config = tenant.ai_config or {}
+            current_provider = ai_config.get("provider", "")
+            current_model = ai_config.get("model", "")
+            has_logfire = bool(ai_config.get("logfire_token"))
+
             # Get setup checklist status
             setup_status = None
             try:
@@ -379,6 +385,9 @@ def tenant_settings(tenant_id, section=None):
                 "tenant_settings.html",
                 tenant=tenant,
                 has_gemini_key=has_gemini_key,
+                current_provider=current_provider,
+                current_model=current_model,
+                has_logfire=has_logfire,
                 tenant_id=tenant_id,
                 section=section or "general",
                 active_adapter=active_adapter,

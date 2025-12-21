@@ -82,6 +82,14 @@ class Tenant(Base, JSONValidatorMixin):
         comment="Advertising policy configuration with prohibited categories, tactics, and advertisers",
     )
 
+    # Pydantic AI configuration for multi-model support
+    # Structure: {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "encrypted:...", ...}
+    ai_config: Mapped[dict | None] = mapped_column(
+        JSONType,
+        nullable=True,
+        comment="Pydantic AI configuration: provider, model, api_key (encrypted), logfire_token, settings",
+    )
+
     # Naming templates (business rules - shared across all adapters)
     order_name_template: Mapped[str | None] = mapped_column(
         String(500), nullable=True, server_default="{campaign_name|brand_name} - {buyer_ref} - {date_range}"

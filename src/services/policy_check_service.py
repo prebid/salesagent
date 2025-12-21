@@ -1,13 +1,16 @@
 """Policy check service for analyzing advertising briefs."""
 
-import json
 import logging
-import os
 from datetime import UTC, datetime
 from enum import Enum
 
-import google.generativeai as genai
 from pydantic import BaseModel, Field
+
+from src.services.ai import AIServiceFactory, TenantAIConfig
+from src.services.ai.agents.policy_agent import (
+    check_policy_compliance,
+    create_policy_agent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,29 +37,51 @@ class PolicyCheckResult(BaseModel):
 
 
 class PolicyCheckService:
-    """Service for checking advertising briefs against policy compliance rules."""
+    """Service for checking advertising briefs against policy compliance rules.
 
-    def __init__(self, gemini_api_key: str | None | object = _UNSET):
+    Uses Pydantic AI for multi-model support. Configuration priority:
+    1. Explicit tenant_ai_config parameter
+    2. Platform defaults from environment variables
+    """
+
+    def __init__(
+        self,
+        tenant_ai_config: dict | TenantAIConfig | None = None,
+        gemini_api_key: str | None | object = _UNSET,  # Deprecated, kept for backward compatibility
+    ):
         """Initialize the policy check service.
 
         Args:
-            gemini_api_key: Optional API key for Gemini. If not provided, uses GEMINI_API_KEY env var.
-                           Pass explicit None to disable AI even if env var is set.
+            tenant_ai_config: Tenant AI configuration for model selection.
+            gemini_api_key: DEPRECATED - Use tenant_ai_config instead. Kept for backward compatibility.
         """
-        # If no argument provided, check environment
-        if gemini_api_key is _UNSET:
-            self.api_key: str | None = os.getenv("GEMINI_API_KEY")
-        else:
-            # Explicit argument provided (could be None or a key)
-            self.api_key = gemini_api_key if isinstance(gemini_api_key, str | type(None)) else None
+        self._factory = AIServiceFactory()
 
-        if not self.api_key:
-            logger.warning("No Gemini API key provided. Policy checks will use basic rules only.")
+        # Handle backward compatibility with gemini_api_key parameter
+        if gemini_api_key is not _UNSET and gemini_api_key is not None:
+            # Legacy usage - create a minimal config with just the API key
+            if isinstance(gemini_api_key, str):
+                tenant_ai_config = TenantAIConfig(
+                    provider="gemini",
+                    model="gemini-2.0-flash",
+                    api_key=gemini_api_key,
+                )
+        elif gemini_api_key is None:
+            # Explicit None means disable AI
             self.ai_enabled = False
+            self._agent = None
+            return
+
+        # Get effective configuration
+        effective_config = self._factory.get_effective_config(tenant_ai_config)
+        self.ai_enabled = effective_config["has_api_key"]
+
+        if self.ai_enabled:
+            model_string = self._factory.create_model(tenant_ai_config)
+            self._agent = create_policy_agent(model_string)
         else:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel("gemini-flash-latest")
-            self.ai_enabled = True
+            logger.warning("No AI API key configured. Policy checks will use basic rules only.")
+            self._agent = None
 
     async def check_brief_compliance(
         self,
@@ -97,9 +122,15 @@ class PolicyCheckService:
         if brand_info:
             full_context = f"Brief: {brief}\n\nAdvertiser/Product: {brand_info}"
 
-        # Always use AI analysis when available
-        if self.ai_enabled:
-            return await self._check_with_ai(full_context, tenant_policies)
+        # Use AI analysis when available
+        if self.ai_enabled and self._agent:
+            analysis = await check_policy_compliance(self._agent, full_context, tenant_policies)
+            return PolicyCheckResult(
+                status=PolicyStatus(analysis.status),
+                reason=analysis.reason,
+                restrictions=analysis.restrictions,
+                warnings=analysis.warnings,
+            )
         else:
             # Fallback if no AI is available - allow with warning
             return PolicyCheckResult(
@@ -118,93 +149,6 @@ class PolicyCheckService:
         # This method is deprecated since we always use AI analysis
         # Return allowed by default
         return PolicyCheckResult(status=PolicyStatus.ALLOWED, warnings=[])
-
-    async def _check_with_ai(self, text: str, tenant_policies: dict | None = None) -> PolicyCheckResult:
-        """Use AI to perform deep policy analysis.
-
-        Args:
-            text: Text to analyze
-            tenant_policies: Optional tenant-specific policies
-
-        Returns:
-            PolicyCheckResult
-        """
-        system_prompt = """You are a policy compliance checker for advertising content.
-Analyze the provided advertising brief and determine if it violates any advertising policies.
-
-You must check for:
-1. Targeting of vulnerable populations (children, elderly, disabled)
-2. Discriminatory content based on protected characteristics
-3. Illegal or heavily regulated products/services
-4. Misleading or deceptive claims
-5. Harmful content that could exploit users
-6. Content that violates platform brand safety guidelines
-
-Respond with a JSON object containing:
-{
-    "status": "allowed" | "restricted" | "blocked",
-    "reason": "explanation if blocked",
-    "restrictions": ["list of restrictions if status is restricted"],
-    "warnings": ["list of policy warnings even if allowed"]
-}
-
-Be strict in your analysis. When in doubt, mark as restricted rather than allowed."""
-
-        # Add tenant-specific policies if provided
-        if tenant_policies:
-            rules_text = []
-
-            # Default prohibited categories and tactics are enforced for all
-            default_categories = tenant_policies.get("default_prohibited_categories", [])
-            default_tactics = tenant_policies.get("default_prohibited_tactics", [])
-
-            # Combine default and custom policies
-            all_prohibited_advertisers = tenant_policies.get("prohibited_advertisers", [])
-            all_prohibited_categories = default_categories + tenant_policies.get("prohibited_categories", [])
-            all_prohibited_tactics = default_tactics + tenant_policies.get("prohibited_tactics", [])
-
-            if all_prohibited_advertisers:
-                rules_text.append(f"Prohibited advertisers/domains: {', '.join(all_prohibited_advertisers)}")
-
-            if all_prohibited_categories:
-                rules_text.append(f"Prohibited content categories: {', '.join(all_prohibited_categories)}")
-
-            if all_prohibited_tactics:
-                rules_text.append(f"Prohibited advertising tactics: {', '.join(all_prohibited_tactics)}")
-
-            if rules_text:
-                system_prompt += "\n\nPolicy rules to enforce:\n" + "\n".join(rules_text)
-
-        try:
-            # Use async version of generate_content
-            response = await self.model.generate_content_async(
-                [
-                    {"role": "user", "parts": [{"text": system_prompt}]},
-                    {"role": "user", "parts": [{"text": f"Analyze this advertising brief:\n\n{text}"}]},
-                ]
-            )
-
-            # Parse the JSON response
-            result_text = response.text.strip()
-            # Extract JSON from markdown if present
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
-
-            result_data = json.loads(result_text)
-
-            return PolicyCheckResult(
-                status=PolicyStatus(result_data.get("status", "allowed")),
-                reason=result_data.get("reason"),
-                restrictions=result_data.get("restrictions", []),
-                warnings=result_data.get("warnings", []),
-            )
-
-        except Exception as e:
-            logger.error(f"AI policy check failed: {str(e)}")
-            # Fall back to allowed with warning
-            return PolicyCheckResult(status=PolicyStatus.ALLOWED, warnings=[f"AI policy check unavailable: {str(e)}"])
 
     def check_product_eligibility(
         self, policy_result: PolicyCheckResult, product: dict, advertiser_category: str | None = None

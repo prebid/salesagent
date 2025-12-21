@@ -1,7 +1,6 @@
 """Creative formats management blueprint for admin UI."""
 
 import asyncio
-import json
 import logging
 import threading
 import uuid
@@ -1002,6 +1001,12 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
         ai_review_errors,
         ai_review_total,
     )
+    from src.services.ai import AIServiceFactory
+    from src.services.ai.agents.review_agent import (
+        create_review_agent,
+        parse_confidence_score,
+        review_creative_async,
+    )
 
     start_time = time.time()
     active_ai_reviews.labels(tenant_id=tenant_id).inc()
@@ -1019,10 +1024,23 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
             if not tenant:
                 return {"status": "pending_review", "error": "Tenant not found", "reason": "Configuration error"}
 
-            if not tenant.gemini_api_key:
+            # Check AI availability - use factory to check tenant + platform config
+            factory = AIServiceFactory()
+
+            # Build effective config from tenant settings
+            tenant_ai_config = tenant.ai_config if hasattr(tenant, "ai_config") else None
+
+            # Backward compatibility: use gemini_api_key if no ai_config
+            if not tenant_ai_config and tenant.gemini_api_key:
+                tenant_ai_config = {
+                    "provider": "gemini",
+                    "api_key": tenant.gemini_api_key,
+                }
+
+            if not factory.is_ai_enabled(tenant_ai_config):
                 return {
                     "status": "pending_review",
-                    "error": "Gemini API key not configured",
+                    "error": "AI not configured",
                     "reason": "AI review unavailable - requires manual approval",
                 }
 
@@ -1057,54 +1075,37 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                                 if product:
                                     promoted_offering = product.name
 
-            # Build review prompt with three-state instructions
-            review_prompt = f"""You are reviewing a creative asset for approval.
+            # Create Pydantic AI agent and run review
+            model_string = factory.create_model(tenant_ai_config)
+            agent = create_review_agent(model_string)
 
-Review Criteria:
-{tenant.creative_review_criteria}
+            # Run async agent in a separate thread to avoid event loop conflicts with Flask
+            def run_review_in_thread():
+                """Run async review code in a new thread with its own event loop."""
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    return loop.run_until_complete(
+                        review_creative_async(
+                            agent=agent,
+                            review_criteria=tenant.creative_review_criteria,
+                            creative_name=creative.name,
+                            creative_format=creative.format,
+                            promoted_offering=promoted_offering,
+                            creative_data=creative.data,
+                        )
+                    )
+                finally:
+                    loop.close()
 
-Creative Details:
-- Name: {creative.name}
-- Format: {creative.format}
-- Promoted Offering: {promoted_offering}
-- Creative Data: {json.dumps(creative.data, indent=2)}
+            with ThreadPoolExecutor() as executor:
+                future = executor.submit(run_review_in_thread)
+                review_result = future.result(timeout=60)
 
-Based on the review criteria, determine the appropriate action for this creative.
-You MUST respond with one of three decisions:
-- APPROVE: Creative clearly meets all criteria
-- REQUIRE HUMAN APPROVAL: Unsure or needs human judgment
-- REJECT: Creative clearly violates criteria
-
-Respond with a JSON object containing:
-{{
-    "decision": "APPROVE" or "REQUIRE HUMAN APPROVAL" or "REJECT",
-    "reason": "brief explanation of the decision",
-    "confidence": "high/medium/low"
-}}
-"""
-
-            # Call Gemini API
-            import google.generativeai as genai
-
-            genai.configure(api_key=tenant.gemini_api_key)
-            model = genai.GenerativeModel("gemini-2.5-flash-lite")
-
-            response = model.generate_content(review_prompt)
-            response_text = response.text.strip()
-
-            # Parse JSON response
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
-
-            review_result = json.loads(response_text)
-
-            # Parse confidence as float (map string values to numeric)
-            confidence_str = review_result.get("confidence", "medium").lower()
-            confidence_map = {"low": 0.3, "medium": 0.6, "high": 0.9}
-            confidence_score = confidence_map.get(confidence_str, 0.6)
+            # Extract results from structured output
+            decision = review_result.decision
+            confidence_str = review_result.confidence
+            confidence_score = parse_confidence_score(confidence_str)
 
             # Get AI policy from tenant (with defaults)
             ai_policy_data = tenant.ai_policy if tenant.ai_policy else {}
@@ -1149,14 +1150,14 @@ Respond with a JSON object containing:
                 return result_dict
 
             # Apply confidence-based thresholds
-            decision = review_result.get("decision", "REQUIRE HUMAN APPROVAL").upper()
+            # decision is already extracted from review_result.decision above
 
             if "APPROVE" in decision and "REQUIRE" not in decision:
                 # AI wants to approve - check confidence threshold
                 if confidence_score >= auto_approve_threshold:
                     result_dict = {
                         "status": "approved",
-                        "reason": review_result.get("reason", ""),
+                        "reason": review_result.reason,
                         "confidence": confidence_str,
                         "confidence_score": confidence_score,
                         "policy_triggered": "auto_approve",
@@ -1181,7 +1182,7 @@ Respond with a JSON object containing:
                         "confidence_score": confidence_score,
                         "policy_triggered": "low_confidence_approval",
                         "ai_recommendation": "approve",
-                        "ai_reason": review_result.get("reason", ""),
+                        "ai_reason": review_result.reason,
                     }
                     _create_review_record(
                         db_session,
@@ -1203,7 +1204,7 @@ Respond with a JSON object containing:
                 if confidence_score >= auto_reject_threshold:
                     result_dict = {
                         "status": "rejected",
-                        "reason": review_result.get("reason", ""),
+                        "reason": review_result.reason,
                         "confidence": confidence_str,
                         "confidence_score": confidence_score,
                         "policy_triggered": "auto_reject",
@@ -1228,7 +1229,7 @@ Respond with a JSON object containing:
                         "confidence_score": confidence_score,
                         "policy_triggered": "uncertain_rejection",
                         "ai_recommendation": "reject",
-                        "ai_reason": review_result.get("reason", ""),
+                        "ai_reason": review_result.reason,
                     }
                     _create_review_record(
                         db_session,
@@ -1252,7 +1253,7 @@ Respond with a JSON object containing:
                 "confidence": confidence_str,
                 "confidence_score": confidence_score,
                 "policy_triggered": "uncertain",
-                "ai_reason": review_result.get("reason", ""),
+                "ai_reason": review_result.reason,
             }
             _create_review_record(
                 db_session,
