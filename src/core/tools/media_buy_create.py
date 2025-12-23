@@ -2400,18 +2400,17 @@ async def _create_media_buy_impl(
             if matching_package and hasattr(matching_package, "format_ids") and matching_package.format_ids:
                 # Validate that requested formats are supported by product
                 # Format is composite key: (agent_url, id) per AdCP spec
-                # FormatId objects have agent_url (AnyUrl) and id (str) fields
                 product_format_keys: set[tuple[str | None, str]] = set()
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
-                        # Normalize agent_url by removing trailing slash for consistent comparison
-                        normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
-                        product_format_keys.add((normalized_url, fmt.id))
+                        # pkg_product.format_ids are dicts from database JSONB (type annotation says FormatId but runtime is dict)
+                        agent_url = fmt["agent_url"]  # type: ignore[index]
+                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
+                        product_format_keys.add((normalized_url, fmt["id"]))  # type: ignore[index]
 
                 # Build set of requested format keys for comparison
                 requested_format_keys: set[tuple[str | None, str]] = set()
                 for fmt in matching_package.format_ids:
-                    # Normalize agent_url by removing trailing slash for consistent comparison
                     normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
                     requested_format_keys.add((normalized_url, fmt.id))
 
