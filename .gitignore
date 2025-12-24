@@ -50,12 +50,17 @@ Thumbs.db
 *.pyc
 
 # Diagnostic scripts (one-off debugging tools)
-# BUT: Allow pre-commit hooks
+# BUT: Allow pre-commit hooks and scripts/ directory
 check_*.py
 !.pre-commit-hooks/check_*.py
 diagnose_*.py
 fix_*.py
+sync_*.py
+!scripts/sync_*.py
 test_sync.py
+
+# One-off test scripts in root (proper tests belong in tests/)
+/test_*.py
 *.pyo
 *.pyd
 .Python
@@ -83,15 +88,22 @@ tmp/
 test_auth_state.json
 screenshots/
 
+# Review/planning documents (use issues/PRs instead)
+*-review.md
+*-plan.md
+
+# Generated PR summaries
+.git-pr-summary.md
+
+# Local symlinks to external repos
+adcp-spec
+
 # Runtime files
 *.pid
 server.pid
 
 # Conductor workspace files
 conductor_ports.json
-conductor_ports.lock
-
-# Conductor workspace
 conductor_ports.lock
 
 # AdCP Schema Cache (downloaded on demand by E2E tests)
