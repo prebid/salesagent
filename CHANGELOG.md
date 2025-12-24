@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/adcontextprotocol/salesagent/compare/v0.1.0...v0.2.0) (2025-12-24)
+
+
+### Features
+
+* Improve Docker quickstart - ARM64 support, better docs, fail-fast validation ([#859](https://github.com/adcontextprotocol/salesagent/issues/859)) ([ba3f81a](https://github.com/adcontextprotocol/salesagent/commit/ba3f81a4e82010ad0d129269fea1086323829cb4))
+* Improve single-tenant mode UX and Docker quickstart ([#868](https://github.com/adcontextprotocol/salesagent/issues/868)) ([8559f8d](https://github.com/adcontextprotocol/salesagent/commit/8559f8d4cb201f9bc83f744ea2660d9a832bb58a))
+* Pydantic AI multi-provider integration with admin UI ([#860](https://github.com/adcontextprotocol/salesagent/issues/860)) ([1ff0366](https://github.com/adcontextprotocol/salesagent/commit/1ff03663fdc6514d74869fadc0601b3bd427b6d3))
+* show access token directly in advertisers table ([#867](https://github.com/adcontextprotocol/salesagent/issues/867)) ([ceac7b0](https://github.com/adcontextprotocol/salesagent/commit/ceac7b070ec6098caa1a26dc58a908a94b484de8))
+
+
+### Bug Fixes
+
+* enforce tenant human_review_required for media buy approval ([#866](https://github.com/adcontextprotocol/salesagent/issues/866)) ([92c562e](https://github.com/adcontextprotocol/salesagent/commit/92c562e8ccd0680a0daf08851a63affa662e74ab))
+* Fix/format ids type handling for the format_ids in the products table ([#864](https://github.com/adcontextprotocol/salesagent/issues/864)) ([bd65beb](https://github.com/adcontextprotocol/salesagent/commit/bd65beb8763f6ec0ca1af6333031b12fbee2e139))
+* Update release-please to use manifest mode (v4 config) ([925a1b2](https://github.com/adcontextprotocol/salesagent/commit/925a1b2c9bbfc7231049f6da13bed403d9ff13ca))
+
+
+### Code Refactoring
+
+* align schemas with AdCP library specifications ([#856](https://github.com/adcontextprotocol/salesagent/issues/856)) ([3c60413](https://github.com/adcontextprotocol/salesagent/commit/3c6041302cd6921ea3c26bdf960198b3c974d3ad))
+
+
+### Documentation
+
+* Add Conventional Commits guidance to CLAUDE.md ([4578eab](https://github.com/adcontextprotocol/salesagent/commit/4578eabdf6f5511c8b0e26bd23a6f9268642e121))
+* Add platform-specific deployment guides and Cloud SQL improvements ([#869](https://github.com/adcontextprotocol/salesagent/issues/869)) ([38626f8](https://github.com/adcontextprotocol/salesagent/commit/38626f891916c27adb4efd783ee74a23bc8ac86e))
+* Update quickstart to use published Docker images ([#857](https://github.com/adcontextprotocol/salesagent/issues/857)) ([435d6d2](https://github.com/adcontextprotocol/salesagent/commit/435d6d287a55f3ebae057e5e47a045560bfe66fd))
+* Update quickstart to use published Docker images ([#857](https://github.com/adcontextprotocol/salesagent/issues/857)) ([#861](https://github.com/adcontextprotocol/salesagent/issues/861)) ([7db5c94](https://github.com/adcontextprotocol/salesagent/commit/7db5c94331c61d2945a419790e30f01df4cefd05))
+
 ## 0.1.0 (2025-12-20)
 
 
