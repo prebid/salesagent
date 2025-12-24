@@ -1779,8 +1779,9 @@ REJECT - Creative cannot be approved:
                                 <tr>
                                     <th>Name</th>
                                     <th>Principal ID</th>
+                                    <th>Access Token</th>
                                     <th>Platform Mappings</th>
-                                    <th>Created</th>
+                                    <th>Copy Config</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
@@ -1789,6 +1790,21 @@ REJECT - Creative cannot be approved:
                                 <tr>
                                     <td><strong>{{ principal.name }}</strong></td>
                                     <td><code>{{ principal.principal_id }}</code></td>
+                                    <td>
+                                        <div class="d-flex align-items-center gap-1">
+                                            <code class="token-display" data-full="{{ principal.access_token }}" data-truncated="{{ principal.access_token[:12] }}...">{{ principal.access_token[:12] }}...</code>
+                                            <button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                                                    onclick="toggleTokenVisibility(this)"
+                                                    title="Show/hide full token">
+                                                👁
+                                            </button>
+                                            <button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                                                    onclick="copyAccessToken('{{ principal.access_token }}')"
+                                                    title="Copy token">
+                                                📋
+                                            </button>
+                                        </div>
+                                    </td>
                                     <td>
                                         {% if principal.platform_mappings %}
                                             {% set mappings = principal.platform_mappings | from_json %}
@@ -1816,30 +1832,25 @@ REJECT - Creative cannot be approved:
                                         {% endif %}
                                     </td>
                                     <td>
-                                        <small class="text-muted">
-                                            {% if principal.created_at %}
-                                            {{ principal.created_at.strftime('%Y-%m-%d') }}
-                                            {% else %}
-                                            Unknown
-                                            {% endif %}
-                                        </small>
-                                    </td>
-                                    <td>
                                         <div class="btn-group btn-group-sm">
                                             <button class="btn btn-outline-primary btn-sm"
                                                     onclick="copyA2AConfig('{{ principal.principal_id }}', '{{ principal.name }}', '{{ principal.access_token }}')"
                                                     title="Copy A2A Configuration">
-                                                📋 A2A
+                                                A2A
                                             </button>
                                             <button class="btn btn-outline-primary btn-sm"
                                                     onclick="copyMCPConfig('{{ principal.principal_id }}', '{{ principal.name }}', '{{ principal.access_token }}')"
                                                     title="Copy MCP Configuration">
-                                                📋 MCP
+                                                MCP
                                             </button>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="btn-group btn-group-sm">
                                             <a href="{{ url_for('principals.edit_principal', tenant_id=tenant_id, principal_id=principal.principal_id) }}"
                                                class="btn btn-outline-secondary btn-sm"
                                                title="Edit Advertiser">
-                                                ✏️ Edit
+                                                ✏️
                                             </a>
                                             <button class="btn btn-outline-danger btn-sm"
                                                     onclick="deletePrincipal('{{ principal.principal_id }}', '{{ principal.name }}')"

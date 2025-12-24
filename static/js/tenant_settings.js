@@ -980,6 +980,47 @@ function generateA2ACode() {
     document.getElementById('a2a-code-output').textContent = code;
 }
 
+// Toggle token visibility between truncated and full
+function toggleTokenVisibility(button) {
+    const tokenDisplay = button.parentElement.querySelector('.token-display');
+    const isShowingFull = tokenDisplay.textContent === tokenDisplay.dataset.full;
+
+    if (isShowingFull) {
+        tokenDisplay.textContent = tokenDisplay.dataset.truncated;
+        button.textContent = '👁';
+        button.title = 'Show full token';
+    } else {
+        tokenDisplay.textContent = tokenDisplay.dataset.full;
+        button.textContent = '👁‍🗨';
+        button.title = 'Hide full token';
+    }
+}
+
+// Copy access token to clipboard
+function copyAccessToken(token) {
+    const button = event.target.closest('button');
+    if (!button) {
+        alert('Failed to copy to clipboard');
+        return;
+    }
+
+    const originalText = button.textContent;
+
+    navigator.clipboard.writeText(token).then(() => {
+        button.textContent = '✓';
+        button.classList.add('btn-success');
+        button.classList.remove('btn-outline-secondary');
+
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.classList.remove('btn-success');
+            button.classList.add('btn-outline-secondary');
+        }, 2000);
+    }).catch(err => {
+        alert('Failed to copy to clipboard: ' + err.message);
+    });
+}
+
 // Delete principal
 function deletePrincipal(principalId, principalName) {
     if (!confirm(`Are you sure you want to delete ${principalName}? This action cannot be undone.`)) {
@@ -1797,14 +1838,14 @@ function resolveTemplate(template, context) {
     return template.replace(/\{([^}]+)\}/g, (match, key) => {
         // Handle fallbacks like {campaign_name|promoted_offering}
         const options = key.split('|');
-        
+
         for (const option of options) {
             const val = context[option.trim()];
             if (val !== undefined && val !== null && val !== '') {
                 return val;
             }
         }
-        
+
         // If no value found, keep the placeholder
         return match;
     });
@@ -1813,7 +1854,7 @@ function resolveTemplate(template, context) {
 function updateNamingPreview() {
     const orderTemplate = document.getElementById('order_name_template')?.value || '';
     const lineItemTemplate = document.getElementById('line_item_name_template')?.value || '';
-    
+
     // Sample data matching the HTML description
     const context = {
         campaign_name: '', // null/empty
@@ -1827,22 +1868,22 @@ function updateNamingPreview() {
         package_count: 3,
         auto_name: 'Nike Shoes Q1 Campaign'
     };
-    
+
     // 1. Resolve Order Name
     const orderName = resolveTemplate(orderTemplate, context);
-    
+
     const orderPreviewEl = document.getElementById('order-preview');
     if (orderPreviewEl) {
         orderPreviewEl.textContent = orderName;
     }
-    
+
     // 2. Resolve Line Items
     const products = [
         { name: 'Display 300x250', index: 1 },
         { name: 'Video Pre-roll', index: 2 },
         { name: 'Native Article', index: 3 }
     ];
-    
+
     const lineItemNames = products.map(p => {
         const itemContext = {
             ...context,
@@ -1853,7 +1894,7 @@ function updateNamingPreview() {
         const name = resolveTemplate(lineItemTemplate, itemContext);
         return `${p.index}. ${name}`;
     });
-    
+
     const lineItemPreviewEl = document.getElementById('lineitem-preview');
     if (lineItemPreviewEl) {
         lineItemPreviewEl.innerHTML = lineItemNames.join('<br>');
@@ -1893,7 +1934,7 @@ function useNamingPreset(presetName) {
     if (lineItemField) {
         lineItemField.value = preset.lineItem;
     }
-    
+
     // Update preview immediately
     updateNamingPreview();
 }
