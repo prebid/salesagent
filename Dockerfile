@@ -111,8 +111,9 @@ RUN --mount=type=cache,target=/cache/uv \
     --mount=type=cache,target=/root/.cache/pip \
     uv sync --python=/usr/local/bin/python3.12 --frozen
 
-# Add .venv to PATH
+# Add .venv to PATH and set PYTHONPATH for module imports
 ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app"
 ENV PYTHONUNBUFFERED=1
 
 # Default port
@@ -127,5 +128,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Use ENTRYPOINT to ensure the script runs
-ENTRYPOINT ["/bin/bash", "./scripts/deploy/entrypoint.sh"]
+# Use venv Python directly as entrypoint (prepares for hardened images that lack bash)
+ENTRYPOINT ["/app/.venv/bin/python", "scripts/deploy/run_all_services.py"]

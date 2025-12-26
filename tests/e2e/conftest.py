@@ -123,6 +123,9 @@ def docker_services_e2e(request):
             env["ADCP_TESTING"] = os.environ["ADCP_TESTING"]
         else:
             env["ADCP_TESTING"] = "true"  # Default to testing mode in E2E tests
+        # Ensure SUPER_ADMIN_EMAILS is set (required by run_all_services.py)
+        if not env.get("SUPER_ADMIN_EMAILS"):
+            env["SUPER_ADMIN_EMAILS"] = "e2e-test@example.com"
 
         print("Building and starting Docker services with dynamic ports...")
         print("This may take 2-3 minutes for initial build...")

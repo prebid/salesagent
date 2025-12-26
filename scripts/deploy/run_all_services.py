@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-Run all AdCP services in a single process for Fly.io deployment.
-This allows us to run MCP server, Admin UI, and ADK agent together.
+Run all AdCP services in a single process for container deployment.
+This is the main entrypoint for Docker containers.
+
+Handles:
+- Environment validation
+- Database connectivity checks
+- Database migrations and initialization
+- Starting MCP server, Admin UI, A2A server, nginx, and cron
 """
 
 import os
@@ -13,6 +19,160 @@ import time
 
 # Store process references for cleanup
 processes = []
+
+
+def validate_required_env():
+    """Validate required environment variables."""
+    print("🔍 Validating required environment variables...")
+
+    missing = []
+
+    # Super admin access - at least one must be set
+    if not os.environ.get("SUPER_ADMIN_EMAILS") and not os.environ.get("SUPER_ADMIN_DOMAINS"):
+        missing.append("SUPER_ADMIN_EMAILS or SUPER_ADMIN_DOMAINS")
+
+    # Database URL is required
+    if not os.environ.get("DATABASE_URL"):
+        missing.append("DATABASE_URL")
+
+    if missing:
+        print("❌ Missing required environment variables:")
+        for var in missing:
+            print(f"   - {var}")
+        print("")
+        print("📖 See docs/deployment.md for configuration details.")
+        print("")
+        print("Quick fix for Fly.io:")
+        print('  fly secrets set SUPER_ADMIN_EMAILS="your-email@example.com"')
+        print("")
+        sys.exit(1)
+
+    print("✅ Required environment variables are set")
+
+
+def check_database_health():
+    """Check if database is accessible."""
+    print("🔍 Checking database connectivity...")
+
+    # Import here to avoid issues if database modules aren't available
+    try:
+        from src.core.database.db_config import DatabaseConfig, get_db_connection
+    except ImportError as e:
+        print(f"❌ Failed to import database modules: {e}")
+        sys.exit(1)
+
+    # Show parsed connection info (without password)
+    db_url = os.environ.get("DATABASE_URL", "")
+    print(f"DATABASE_URL set: {bool(db_url)}")
+
+    if db_url:
+        try:
+            config = DatabaseConfig.get_db_config()
+            print(f'Parsed host: {config.get("host", "NOT SET")}')
+            print(f'Parsed port: {config.get("port", "NOT SET")}')
+            print(f'Parsed database: {config.get("database", "NOT SET")}')
+        except Exception as e:
+            print(f"⚠️ Could not parse database config: {e}")
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.execute("SELECT 1")
+        cursor.fetchone()
+        conn.close()
+        print("✅ Database connection successful")
+    except Exception as e:
+        error_str = str(e)
+        print(f"❌ Database connection failed: {e}")
+        print("")
+
+        # Provide specific guidance based on error
+        if "No such file or directory" in error_str and "/var/run/postgresql" in error_str:
+            print("💡 This error means the DATABASE_URL is missing a host.")
+            print("")
+            print("   For Cloud Run with Cloud SQL, use one of these formats:")
+            print("")
+            print("   Option 1 - Public IP (simpler but less secure):")
+            print("     DATABASE_URL=postgresql://USER:PASS@IP_ADDRESS:5432/DATABASE")
+            print("     Example: postgresql://postgres:YOUR_PASSWORD@YOUR_IP:5432/postgres")
+            print("")
+            print("   Option 2 - Cloud SQL Connector (recommended):")
+            print("     1. Add Cloud SQL connection in Cloud Run service settings")
+            print("     2. Use: DATABASE_URL=postgresql://USER:PASS@/DATABASE?host=/cloudsql/PROJECT:REGION:INSTANCE")
+            print("")
+        elif "could not connect to server" in error_str or "Connection refused" in error_str:
+            print("💡 Database server is unreachable. Check:")
+            print("   - Is the IP address correct?")
+            print("   - Is Cloud SQL instance running?")
+            print("   - Are authorized networks configured? (Cloud SQL > Connections > Authorized networks)")
+            print("")
+        elif "password authentication failed" in error_str:
+            print("💡 Wrong password. Check:")
+            print("   - Password in DATABASE_URL matches Cloud SQL user password")
+            print("   - Special characters are URL-encoded (& -> %26, = -> %3D, etc.)")
+            print("")
+        elif "database" in error_str and "does not exist" in error_str:
+            print("💡 Database does not exist. Either:")
+            print('   - Use the default "postgres" database')
+            print("   - Create your database: CREATE DATABASE yourdb;")
+            print("")
+
+        sys.exit(1)
+
+
+def check_schema_issues():
+    """Check for known schema issues (report only, don't fail)."""
+    print("🔍 Checking for known schema issues...")
+
+    try:
+        from src.core.database.db_config import get_db_connection
+
+        conn = get_db_connection()
+        issues = []
+
+        # Check for commonly missing columns
+        checks = [
+            ("media_buys", "context_id"),
+            ("creative_formats", "updated_at"),
+        ]
+
+        for table, column in checks:
+            cursor = conn.execute(
+                f"""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = '{table}' AND column_name = '{column}'
+            """
+            )
+            if not cursor.fetchone():
+                issues.append(f"Missing column: {table}.{column}")
+
+        if issues:
+            print("⚠️  Schema issues detected (non-critical):")
+            for issue in issues:
+                print(f"   - {issue}")
+        else:
+            print("✅ No known schema issues detected")
+
+        conn.close()
+    except Exception as e:
+        print(f"⚠️  Could not check schema: {e}")
+
+
+def init_database():
+    """Initialize database schema and default data."""
+    print("📦 Initializing database schema and default data...")
+    print(
+        "ℹ️  Note: init_db() is safe - it only creates tables (IF NOT EXISTS) and default tenant (if no tenants exist)"
+    )
+
+    try:
+        from src.core.database.database import init_db
+
+        init_db(exit_on_error=True)
+        print("✅ Database initialization complete")
+    except Exception as e:
+        print(f"❌ Database initialization failed: {e}")
+        sys.exit(1)
 
 
 def cleanup(signum=None, frame=None):
@@ -35,20 +195,26 @@ signal.signal(signal.SIGTERM, cleanup)
 
 def run_migrations():
     """Run database migrations before starting services."""
-    print("Running database migrations...")
+    print("📦 Running database migrations...")
     try:
         result = subprocess.run(
             [sys.executable, "scripts/ops/migrate.py"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
         if result.returncode == 0:
             print("✅ Migrations complete")
         else:
-            print(f"⚠️ Migration warnings: {result.stderr}")
+            print(f"❌ Migration failed: {result.stderr}")
+            print(result.stdout)
+            sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("❌ Migration timed out after 60 seconds")
+        sys.exit(1)
     except Exception as e:
-        print(f"⚠️ Migration error (non-fatal): {e}")
+        print(f"❌ Migration error: {e}")
+        sys.exit(1)
 
 
 def run_mcp_server():
@@ -197,16 +363,25 @@ def run_cron():
 
 def main():
     """Main entry point to run all services."""
+    print("🚀 Starting AdCP Sales Agent...")
     print("=" * 60)
     print("AdCP Sales Agent - Starting All Services")
     print("=" * 60)
 
-    # Run migrations first
-    try:
-        run_migrations()
-    except Exception as e:
-        print(f"❌ Migration failed: {e}")
-        sys.exit(1)
+    # Validate environment variables
+    validate_required_env()
+
+    # Check database connectivity
+    check_database_health()
+
+    # Run migrations
+    run_migrations()
+
+    # Check for schema issues (non-blocking)
+    check_schema_issues()
+
+    # Initialize database
+    init_database()
 
     # Start services in threads
     threads = []

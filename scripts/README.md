@@ -36,7 +36,7 @@ This directory contains utility scripts for testing, development, deployment, an
 - `sync_api_curl_examples.sh` - API testing with curl
 
 ### `/deploy/` - Deployment Scripts
-- `entrypoint.sh` - Main Docker container entrypoint
+- `run_all_services.py` - Main Docker container entrypoint (starts all services)
 - `entrypoint_admin.sh` - Admin UI container entrypoint
 - `fly-proxy.py` - Fly.io proxy configuration
 - `fly-set-secrets.sh` - Set secrets for Fly.io deployment
