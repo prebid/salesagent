@@ -24,9 +24,9 @@ def init_db(exit_on_error=False):
         run_migrations(exit_on_error=exit_on_error)
 
     # Check if demo tenant should be created
-    # CREATE_DEMO_TENANT=true (default) creates a fully configured demo with mock adapter
-    # CREATE_DEMO_TENANT=false creates a blank tenant requiring setup
-    create_demo_tenant = os.environ.get("CREATE_DEMO_TENANT", "true").lower() == "true"
+    # CREATE_DEMO_TENANT=false (default) for production deployments
+    # CREATE_DEMO_TENANT=true creates a fully configured demo with mock adapter
+    create_demo_tenant = os.environ.get("CREATE_DEMO_TENANT", "false").lower() == "true"
 
     # Check if we need to create a default tenant
     with get_db_session() as db_session:

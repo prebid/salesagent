@@ -13,8 +13,9 @@ Get the AdCP Sales Agent running locally in under 5 minutes.
 # 1. Download the compose file
 curl -O https://raw.githubusercontent.com/adcontextprotocol/salesagent/main/docker-compose.yml
 
-# 2. Create environment file (optional - works without this)
+# 2. Create environment file with demo mode enabled
 cat > .env << 'EOF'
+CREATE_DEMO_TENANT=true
 SUPER_ADMIN_EMAILS=your-email@example.com
 GEMINI_API_KEY=your-gemini-key
 EOF
@@ -36,13 +37,15 @@ In local development mode, use the test login:
 
 ## What Gets Created
 
-On first startup, the system creates:
+With `CREATE_DEMO_TENANT=true`, the system creates:
 - A default tenant with the **Mock adapter** (simulates an ad server)
 - Sample currencies (USD, EUR, GBP)
 - A test principal/advertiser for API access
 - Sample products
 
 This demo data lets you explore all features without configuring a real ad server.
+
+> **Production deployments**: Omit `CREATE_DEMO_TENANT=true` to start with a clean slate and create your tenant via the Admin UI signup flow.
 
 ## Services
 

@@ -74,7 +74,7 @@ docker pull ghcr.io/adcontextprotocol/salesagent:latest
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CREATE_DEMO_TENANT` | Create demo tenant with sample data | `true` |
+| `CREATE_DEMO_TENANT` | Create demo tenant with sample data | `false` |
 | `ENCRYPTION_KEY` | For encrypting sensitive data | Auto-generated |
 | `ADCP_AUTH_TEST_MODE` | Enable test login (no OAuth required) | `false` |
 
@@ -200,10 +200,9 @@ docker compose exec -T postgres psql -U adcp_user adcp < backup.sql
 ## First-Time Setup
 
 On first startup:
-1. A default tenant is created automatically
-2. Super admins (from `SUPER_ADMIN_EMAILS`) get automatic access
-3. With `CREATE_DEMO_TENANT=true` (default): Mock adapter and sample data for evaluation
-4. With `CREATE_DEMO_TENANT=false`: Blank tenant for production setup
+1. Super admins (from `SUPER_ADMIN_EMAILS`) get automatic access
+2. With `CREATE_DEMO_TENANT=false` (default): Clean slate - create your tenant via Admin UI signup
+3. With `CREATE_DEMO_TENANT=true`: Creates a "Default Publisher" tenant with mock adapter for evaluation
 
 ## Next Steps
 

@@ -290,7 +290,8 @@ jobs:
         COMPOSE_DOCKER_CLI_BUILD: 1
       run: |
         # Let pytest manage Docker Compose via conftest.py
-        uv run pytest tests/e2e/ -v --tb=short --timeout=120
+        # Timeout is 300s (5 min) to allow for Docker build + startup + health checks + test execution
+        uv run pytest tests/e2e/ -v --tb=short --timeout=300
 
     - name: Cleanup Docker services
       if: always()

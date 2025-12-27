@@ -64,8 +64,8 @@ def init_db(exit_on_error=False):
                 session.commit()
                 print(f"✅ Updated tenant management domains: {tenant_management_domains}")
 
-        # Check if demo tenant creation is enabled (default: true for backwards compatibility)
-        create_demo_tenant = os.environ.get("CREATE_DEMO_TENANT", "true").lower() == "true"
+        # Check if demo tenant creation is enabled (default: false for production deployments)
+        create_demo_tenant = os.environ.get("CREATE_DEMO_TENANT", "false").lower() == "true"
 
         # Check if default tenant already exists (idempotent for CI/testing)
         from sqlalchemy import select
