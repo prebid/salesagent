@@ -800,6 +800,7 @@
                         <!-- Hidden fields for JS operations -->
                         <input type="hidden" id="gam_refresh_token" value="{{ adapter_config.get('refresh_token') }}">
                         <input type="hidden" id="gam_network_code" value="{{ adapter_config.get('network_code') }}">
+                        <input type="hidden" id="gam_trafficker_id" value="{{ adapter_config.get('trafficker_id') }}">
 
                         <h4>✅ Configuration Complete</h4>
                         <ul style="list-style: none; padding: 0; margin: 0.5rem 0;">
@@ -808,16 +809,28 @@
                             {% if adapter_config.get('trafficker_id') %}
                             <li>✅ Trafficker ID: {{ adapter_config.get('trafficker_id') }}</li>
                             {% endif %}
+                            {% if adapter_config.get('network_currency') %}
+                            <li>💱 Network Currency: {{ adapter_config.get('network_currency') }}</li>
+                            {% endif %}
+                            {% if adapter_config.get('secondary_currencies') %}
+                            <li>💱 Secondary Currencies: {{ adapter_config.get('secondary_currencies')|join(', ') }}</li>
+                            {% endif %}
+                            {% if adapter_config.get('network_timezone') %}
+                            <li>🕐 Network Timezone: {{ adapter_config.get('network_timezone') }}</li>
+                            {% endif %}
                         </ul>
                         <div style="margin-top: 0.5rem;">
                             <button onclick="testGAMConnection()" class="btn btn-secondary btn-sm">
                                 Test Connection
                             </button>
+                            <button onclick="refreshGAMInfo()" class="btn btn-secondary btn-sm" style="margin-left: 0.5rem;">
+                                Refresh GAM Info
+                            </button>
                             <button onclick="initiateGAMAuth()" class="btn btn-secondary btn-sm" style="margin-left: 0.5rem;">
                                 Refresh OAuth Token
                             </button>
                             <button onclick="editGAMConfig()" class="btn btn-warning btn-sm" style="margin-left: 0.5rem;">
-                                ✏️ Edit Configuration
+                                Edit Configuration
                             </button>
                         </div>
                     </div>
@@ -877,16 +890,21 @@
                             <div style="flex: 1;">
                                 <input type="text" id="gam_network_code" class="form-control"
                                        value="{{ adapter_config.get('network_code', '') if adapter_config else '' }}"
-                                       placeholder="Click button to auto-detect →" readonly>
+                                       placeholder="Enter network code or click auto-detect">
                             </div>
                             <button onclick="detectGAMNetwork()" class="btn btn-primary" id="detect-network-btn">
                                 Auto-detect Network
                             </button>
                         </div>
-                        <small class="form-text text-muted">Uses your OAuth token to automatically retrieve your GAM network code and trafficker ID.</small>
+                        <small class="form-text text-muted">Enter your GAM network code manually (found in GAM Admin → Network settings), or use auto-detect to retrieve it automatically.</small>
 
-                        <input type="hidden" id="gam_trafficker_id"
-                               value="{{ adapter_config.get('trafficker_id', '') if adapter_config else '' }}">
+                        <div style="margin-top: 1rem;">
+                            <label for="gam_trafficker_id" class="form-label">Trafficker ID (optional)</label>
+                            <input type="text" id="gam_trafficker_id" class="form-control"
+                                   value="{{ adapter_config.get('trafficker_id', '') if adapter_config else '' }}"
+                                   placeholder="Auto-detected or enter manually">
+                            <small class="form-text text-muted">Your GAM user ID for order trafficking. Auto-detected during network detection, or find it in GAM Admin → Users.</small>
+                        </div>
                         {% endif %}
                     </div>
                     {% endif %}
@@ -1071,6 +1089,21 @@
                         Configure budget limits per currency. At least one currency is required for media buys.
                     </p>
 
+                    {% if adapter_config and adapter_config.get('network_currency') %}
+                    <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem;">
+                        <strong style="color: #1e40af;">GAM Network Currencies:</strong>
+                        <span style="color: #1e3a8a;">{{ adapter_config.get('network_currency') }}</span>
+                        {% if adapter_config.get('secondary_currencies') %}
+                            {% for currency in adapter_config.get('secondary_currencies') %}
+                            , <span style="color: #1e3a8a;">{{ currency }}</span>
+                            {% endfor %}
+                        {% endif %}
+                        <small style="display: block; color: #3b82f6; margin-top: 0.25rem;">
+                            These currencies are enabled in your GAM network and can be used for orders.
+                        </small>
+                    </div>
+                    {% endif %}
+
                     <!-- Currency Limits Management -->
                     <div id="currency-limits-container" style="margin-bottom: 1.5rem;">
                         {% if currency_limits %}
@@ -1081,8 +1114,18 @@
                                         <!-- Currency Code -->
                                         <div>
                                             <label style="display: block; font-weight: 600; color: #1f2937; margin-bottom: 0.25rem;">Currency</label>
-                                            <input type="text" readonly value="{{ limit.currency_code }}"
-                                                   style="padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; background: #f3f4f6; width: 100%; font-weight: 600;">
+                                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                                <input type="text" readonly value="{{ limit.currency_code }}"
+                                                       style="padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; background: #f3f4f6; width: 80px; font-weight: 600;">
+                                                {% if adapter_config and adapter_config.get('network_currency') %}
+                                                    {% set gam_currencies = [adapter_config.get('network_currency')] + (adapter_config.get('secondary_currencies') or []) %}
+                                                    {% if limit.currency_code not in gam_currencies %}
+                                                    <span style="background: #fef3c7; color: #92400e; padding: 0.125rem 0.5rem; border-radius: 4px; font-size: 0.75rem; white-space: nowrap;" title="This currency is not enabled in your GAM network">
+                                                        Not in GAM
+                                                    </span>
+                                                    {% endif %}
+                                                {% endif %}
+                                            </div>
                                         </div>
 
                                         <!-- Min Package Budget -->
@@ -3099,6 +3142,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
+                {% if adapter_config and adapter_config.get('network_currency') %}
+                <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 0.75rem; margin-bottom: 1rem;">
+                    <strong style="color: #166534;">Recommended (GAM Network):</strong>
+                    <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                        <button type="button" class="btn btn-sm btn-outline-success"
+                                onclick="document.getElementById('new-currency-code').value='{{ adapter_config.get('network_currency') }}'">
+                            {{ adapter_config.get('network_currency') }} (Primary)
+                        </button>
+                        {% for currency in adapter_config.get('secondary_currencies', []) %}
+                        <button type="button" class="btn btn-sm btn-outline-success"
+                                onclick="document.getElementById('new-currency-code').value='{{ currency }}'">
+                            {{ currency }}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
                 <div class="form-group">
                     <label for="new-currency-code">Currency Code (3 letters)</label>
                     <input type="text" class="form-control" id="new-currency-code" list="currency-list" placeholder="e.g., EUR, GBP, CAD" maxlength="3" style="text-transform: uppercase;">

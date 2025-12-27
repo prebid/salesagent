@@ -287,13 +287,19 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
             super_admin_domains = os.environ.get("SUPER_ADMIN_DOMAINS", "")
             authorized_domains = [d.strip() for d in super_admin_domains.split(",") if d.strip()]
 
+            from datetime import UTC, datetime
+
+            now = datetime.now(UTC)
             default_tenant = Tenant(
                 tenant_id="default",
                 name="Default Publisher",
+                subdomain="default",  # Required field for routing
                 ad_server="mock",  # Start with mock adapter, user can configure later
                 authorized_emails=authorized_emails,
                 authorized_domains=authorized_domains,
                 is_active=True,
+                created_at=now,
+                updated_at=now,
             )
 
             db_session.add(default_tenant)

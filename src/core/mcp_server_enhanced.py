@@ -74,10 +74,11 @@ class EnhancedMCPServer(FastMCP):
         if context_id and isinstance(result, BaseModel):
             # For BaseModel responses, we need to handle this at serialization
             # Store context_id as metadata that the transport can use
-            # Note: Using setattr to add dynamic metadata to Pydantic models
+            # Note: Using object.__setattr__/getattr to add dynamic metadata to Pydantic models
             if not hasattr(result, "__mcp_metadata__"):
-                setattr(result, "__mcp_metadata__", {})
-            metadata = getattr(result, "__mcp_metadata__")
+                object.__setattr__(result, "__mcp_metadata__", {})
+            # Access the dynamically-set attribute through vars() to satisfy mypy
+            metadata = vars(result).get("__mcp_metadata__", {})
             metadata["context_id"] = context_id
 
         return result

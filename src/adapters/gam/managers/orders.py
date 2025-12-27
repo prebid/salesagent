@@ -47,6 +47,7 @@ class GAMOrdersManager:
         total_budget: float,
         start_time: datetime,
         end_time: datetime,
+        currency: str = "USD",
         applied_team_ids: list[str] | None = None,
         po_number: str | None = None,
     ) -> str:
@@ -54,9 +55,10 @@ class GAMOrdersManager:
 
         Args:
             order_name: Name for the order
-            total_budget: Total budget in USD
+            total_budget: Total budget amount
             start_time: Order start datetime
             end_time: Order end datetime
+            currency: Currency code for budget (ISO 4217, default: USD)
             applied_team_ids: Optional list of team IDs to apply
             po_number: Optional PO number
 
@@ -80,7 +82,7 @@ class GAMOrdersManager:
             "advertiserId": self.advertiser_id,
             "traffickerId": self.trafficker_id,
             "status": "DRAFT",  # Start as DRAFT - will approve after line items are created
-            "totalBudget": {"currencyCode": "USD", "microAmount": int(total_budget * 1_000_000)},
+            "totalBudget": {"currencyCode": currency, "microAmount": int(total_budget * 1_000_000)},
             "startDateTime": {
                 "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
                 "hour": start_time.hour,

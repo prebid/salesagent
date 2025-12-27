@@ -53,9 +53,9 @@ class TestSetupChecklistMockAdapter:
             # Verify inventory sync task exists and is marked complete for mock adapter
             assert inventory_task is not None, "Inventory sync task should exist"
             assert inventory_task["is_complete"] is True, "Mock adapter should have inventory sync complete"
-            assert "built-in inventory" in inventory_task["description"].lower(), (
-                "Description should mention built-in inventory"
-            )
+            assert (
+                "built-in inventory" in inventory_task["description"].lower()
+            ), "Description should mention built-in inventory"
 
     def test_gam_adapter_inventory_sync_requires_database_records(self):
         """GAM adapter should require GAMInventory records to be synced."""
@@ -188,9 +188,9 @@ class TestSetupChecklistMockAdapter:
 
             # Verify inventory sync is incomplete when no adapter selected
             assert inventory_task is not None, "Inventory sync task should exist"
-            assert inventory_task["is_complete"] is False, (
-                "Inventory sync should be incomplete when no adapter selected"
-            )
+            assert (
+                inventory_task["is_complete"] is False
+            ), "Inventory sync should be incomplete when no adapter selected"
             assert "Configure ad server" in inventory_task["description"], "Should indicate need to configure ad server"
 
     def test_validate_setup_complete_allows_mock_adapter_without_inventory(self):

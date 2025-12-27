@@ -279,6 +279,9 @@ def tenant_settings(tenant_id, section=None):
                     "trafficker_id": adapter_config_obj.gam_trafficker_id or "",
                     "application_name": getattr(adapter_config_obj, "gam_application_name", "") or "",
                     "service_account_email": adapter_config_obj.gam_service_account_email or "",
+                    "network_currency": adapter_config_obj.gam_network_currency or "",
+                    "secondary_currencies": adapter_config_obj.gam_secondary_currencies or [],
+                    "network_timezone": adapter_config_obj.gam_network_timezone or "",
                 }
 
             # Get environment info for URL generation

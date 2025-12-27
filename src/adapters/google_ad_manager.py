@@ -579,13 +579,23 @@ class GoogleAdManager(AdServerAdapter):
 
         order_name_template = "{campaign_name|brand_name} - {date_range}"  # Default
         tenant_gemini_key = None
+
+        # Get currency from the request's package pricing (validated upstream in media_buy_create.py)
+        # All packages in a media buy use the same currency
+        order_currency = "USD"  # Default fallback
+        if package_pricing_info:
+            for pricing in package_pricing_info.values():
+                order_currency = pricing.get("currency", "USD")
+                break  # All packages have same currency
+
         with get_db_session() as db_session:
             from src.core.database.models import Tenant
 
             adapter_stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
             adapter_config = db_session.scalars(adapter_stmt).first()
-            if adapter_config and adapter_config.gam_order_name_template:
-                order_name_template = adapter_config.gam_order_name_template
+            if adapter_config:
+                if adapter_config.gam_order_name_template:
+                    order_name_template = adapter_config.gam_order_name_template
 
             # Get tenant's Gemini key for auto_name generation
             tenant_stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
@@ -612,6 +622,7 @@ class GoogleAdManager(AdServerAdapter):
             total_budget=total_budget_amount,
             start_time=start_time,
             end_time=end_time,
+            currency=order_currency,
         )
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
@@ -661,7 +672,11 @@ class GoogleAdManager(AdServerAdapter):
                     webhook_url = None
                     push_config = getattr(request, "push_notification_config", None)
                     if push_config:
-                        webhook_url = push_config.get("url") if isinstance(push_config, dict) else getattr(push_config, "url", None)
+                        webhook_url = (
+                            push_config.get("url")
+                            if isinstance(push_config, dict)
+                            else getattr(push_config, "url", None)
+                        )
 
                     # Get principal_id from adapter's principal object
                     principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"

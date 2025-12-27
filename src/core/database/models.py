@@ -378,9 +378,7 @@ class Product(Base, JSONValidatorMixin):
                             )
                         else:
                             # Convert to all variant (default - when legacy IDs/tags are invalid)
-                            converted.append(
-                                {"publisher_domain": publisher_domain, "selection_type": "all"}
-                            )
+                            converted.append({"publisher_domain": publisher_domain, "selection_type": "all"})
                 else:
                     # Unknown format, skip
                     pass
@@ -908,6 +906,21 @@ class AdapterConfig(Base):
     )
     gam_auth_method: Mapped[str] = mapped_column(String(50), nullable=False, server_default="oauth")
     gam_trafficker_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    gam_network_currency: Mapped[str | None] = mapped_column(
+        String(3),
+        nullable=True,
+        comment="Primary currency code from GAM network (ISO 4217). Auto-populated on connection test.",
+    )
+    gam_secondary_currencies: Mapped[list | None] = mapped_column(
+        JSONType,
+        nullable=True,
+        comment="Secondary currency codes enabled in GAM network (ISO 4217 array). Auto-populated on connection test.",
+    )
+    gam_network_timezone: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Timezone of the GAM network (e.g., 'America/New_York'). Auto-populated on connection test.",
+    )
     gam_manual_approval_required: Mapped[bool] = mapped_column(Boolean, default=False)
     gam_order_name_template: Mapped[str | None] = mapped_column(String(500), nullable=True)
     gam_line_item_name_template: Mapped[str | None] = mapped_column(String(500), nullable=True)

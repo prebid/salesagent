@@ -287,9 +287,9 @@ class TestDailyDeliveryWebhookFlow:
                 sleep(poll_interval)
                 elapsed += poll_interval
 
-            assert received, (
-                "Expected at least one delivery report webhook. Check connectivity and DELIVERY_WEBHOOK_INTERVAL."
-            )
+            assert (
+                received
+            ), "Expected at least one delivery report webhook. Check connectivity and DELIVERY_WEBHOOK_INTERVAL."
 
             if received:
                 webhook_payload = received[0]

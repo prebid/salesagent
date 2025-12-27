@@ -1,8 +1,11 @@
-import pytest
 from datetime import datetime
+
+import pytest
 from sqlalchemy import select
-from src.core.database.models import SyncJob, Tenant
+
 from src.core.database.database_session import get_db_session
+from src.core.database.models import SyncJob, Tenant
+
 
 @pytest.mark.requires_db
 def test_sync_job_id_length(integration_db):
@@ -10,10 +13,7 @@ def test_sync_job_id_length(integration_db):
     with get_db_session() as session:
         # Create a tenant first (FK dependency)
         tenant = Tenant(
-            tenant_id="tenant_1",
-            name="Test Tenant",
-            subdomain="test-tenant",
-            virtual_host="test.example.com"
+            tenant_id="tenant_1", name="Test Tenant", subdomain="test-tenant", virtual_host="test.example.com"
         )
         session.add(tenant)
         session.commit()
@@ -21,7 +21,7 @@ def test_sync_job_id_length(integration_db):
         # Create SyncJob with long ID
         # sync_id length = 5 + 36 + 1 + 10 = 52 chars is what failed
         # Let's test with 60 chars
-        long_sync_id = "sync_" + "a" * 55 
+        long_sync_id = "sync_" + "a" * 55
         assert len(long_sync_id) == 60
 
         sync_job = SyncJob(
@@ -31,7 +31,7 @@ def test_sync_job_id_length(integration_db):
             sync_type="inventory",
             status="running",
             started_at=datetime.now(),
-            triggered_by="test"
+            triggered_by="test",
         )
         session.add(sync_job)
         session.commit()
@@ -41,4 +41,3 @@ def test_sync_job_id_length(integration_db):
         saved_job = session.scalars(stmt).first()
         assert saved_job is not None
         assert saved_job.sync_id == long_sync_id
-

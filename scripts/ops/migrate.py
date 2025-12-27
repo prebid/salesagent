@@ -46,6 +46,28 @@ def run_migrations(exit_on_error=True):
         error_msg = str(e)
         print(f"❌ Error running migrations: {error_msg}")
 
+        # Handle race condition where another container already created alembic_version
+        if "pg_type_typname_nsp_index" in error_msg and "alembic_version" in error_msg:
+            print("⚠️ alembic_version table already exists (race condition with another container)")
+            print("🔄 Retrying migration...")
+            try:
+                command.upgrade(alembic_cfg, "heads")
+                print("✅ Database migrations completed successfully on retry!")
+
+                # In single-tenant mode, ensure default tenant exists
+                try:
+                    from src.core.config_loader import ensure_default_tenant_exists
+
+                    tenant = ensure_default_tenant_exists()
+                    if tenant:
+                        print(f"✅ Default tenant ready: {tenant.get('name', 'Unknown')}")
+                except Exception as tenant_error:
+                    print(f"⚠️ Could not ensure default tenant: {tenant_error}")
+                return
+            except Exception as retry_error:
+                print(f"❌ Migration retry also failed: {retry_error}")
+                # Fall through to other error handlers
+
         # Handle specific case of missing revision f7e503a712cf
         if "f7e503a712cf" in error_msg:
             print("🔧 Detected broken migration chain - attempting to fix...")

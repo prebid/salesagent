@@ -49,6 +49,17 @@ def validate_gam_user_response(user) -> tuple[bool, str | None]:
     return True, None
 
 
+def safe_get(obj, key, default=None):
+    """Get value from dict or zeep SOAP object.
+
+    GAM API returns zeep objects which support bracket notation (obj["key"])
+    but not .get() method. This helper handles both dict and zeep objects.
+    """
+    if hasattr(obj, "get"):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def validate_gam_config(data: dict) -> list | None:
     """Validate GAM configuration data."""
     errors = []
@@ -166,7 +177,7 @@ def detect_gam_network(tenant_id):
         client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent")
 
         # If network_code provided (user selected from multiple networks),
-        # just get trafficker ID for that network
+        # get trafficker ID and network currency for that network
         if network_code_provided:
             try:
                 client.network_code = network_code_provided
@@ -181,7 +192,25 @@ def detect_gam_network(tenant_id):
                     else:
                         logger.warning(f"Invalid user response: {error_msg}")
 
-                return jsonify({"success": True, "network_code": network_code_provided, "trafficker_id": trafficker_id})
+                # Also get network info for currency and timezone
+                network_service = client.GetService("NetworkService", version=GAM_API_VERSION)
+                current_network = network_service.getCurrentNetwork()
+                currency_code = safe_get(current_network, "currencyCode", "USD") if current_network else "USD"
+                secondary_currencies = (
+                    safe_get(current_network, "secondaryCurrencyCodes") or [] if current_network else []
+                )
+                timezone = safe_get(current_network, "timeZone") if current_network else None
+
+                return jsonify(
+                    {
+                        "success": True,
+                        "network_code": network_code_provided,
+                        "trafficker_id": trafficker_id,
+                        "currency_code": currency_code,
+                        "secondary_currencies": secondary_currencies,
+                        "timezone": timezone,
+                    }
+                )
             except Exception as e:
                 return jsonify({"success": False, "error": f"Error getting trafficker ID: {str(e)}"}), 500
 
@@ -192,6 +221,7 @@ def detect_gam_network(tenant_id):
             # Try getAllNetworks first (doesn't require network_code)
             try:
                 all_networks = network_service.getAllNetworks()
+                logger.info(f"getAllNetworks() returned: {all_networks}")
                 if all_networks and len(all_networks) > 0:
                     # Validate all networks
                     validated_networks = []
@@ -203,6 +233,9 @@ def detect_gam_network(tenant_id):
                                     "network_code": str(network["networkCode"]),
                                     "network_name": network["displayName"],
                                     "network_id": str(network["id"]),
+                                    "currency_code": safe_get(network, "currencyCode", "USD"),
+                                    "secondary_currencies": safe_get(network, "secondaryCurrencyCodes") or [],
+                                    "timezone": safe_get(network, "timeZone"),
                                 }
                             )
                         else:
@@ -253,18 +286,23 @@ def detect_gam_network(tenant_id):
                             "network_id": str(network["id"]),
                             "network_count": 1,
                             "trafficker_id": trafficker_id,
+                            "currency_code": safe_get(network, "currencyCode", "USD"),
+                            "secondary_currencies": safe_get(network, "secondaryCurrencyCodes") or [],
+                            "timezone": safe_get(network, "timeZone"),
                         }
                     )
-            except AttributeError:
+            except AttributeError as e:
                 # getAllNetworks might not be available in this GAM version
+                logger.info(f"getAllNetworks AttributeError: {e}")
                 pass
 
             # If getAllNetworks didn't work, we can't get the network without a network_code
+            logger.warning("getAllNetworks() returned empty/None or AttributeError - cannot auto-detect network")
             return (
                 jsonify(
                     {
                         "success": False,
-                        "error": "Unable to retrieve network information. The getAllNetworks() API is not available and getCurrentNetwork() requires a network code.",
+                        "error": "Unable to retrieve network information. The getAllNetworks() API returned no networks. Please enter your network code manually (found in GAM Admin → Network settings).",
                     }
                 ),
                 400,
@@ -335,10 +373,22 @@ def configure_gam(tenant_id):
         trafficker_id = str(data.get("trafficker_id", "")).strip() if data.get("trafficker_id") else None
         order_name_template = data.get("order_name_template", "").strip() or None
         line_item_name_template = data.get("line_item_name_template", "").strip() or None
+        network_currency = (
+            str(data.get("network_currency", "")).strip()[:3].upper() if data.get("network_currency") else None
+        )
+        secondary_currencies = data.get("secondary_currencies", [])
+        # Validate and sanitize secondary currencies (should be list of 3-char codes)
+        if isinstance(secondary_currencies, list):
+            secondary_currencies = [str(c).strip()[:3].upper() for c in secondary_currencies if c]
+        else:
+            secondary_currencies = []
+        network_timezone = str(data.get("network_timezone", "")).strip()[:100] if data.get("network_timezone") else None
 
         # Log what we received (without exposing sensitive credentials)
         logger.info(
-            f"GAM config save - auth_method: {auth_method}, network_code: {network_code}, trafficker_id: {trafficker_id}"
+            f"GAM config save - auth_method: {auth_method}, network_code: {network_code}, "
+            f"trafficker_id: {trafficker_id}, network_currency: {network_currency}, "
+            f"secondary_currencies: {secondary_currencies}, network_timezone: {network_timezone}"
         )
 
         # If network code or trafficker_id not provided, try to auto-detect them
@@ -365,6 +415,9 @@ def configure_gam(tenant_id):
             adapter_config.gam_network_code = network_code
             adapter_config.gam_auth_method = auth_method
             adapter_config.gam_trafficker_id = trafficker_id
+            adapter_config.gam_network_currency = network_currency
+            adapter_config.gam_secondary_currencies = secondary_currencies if secondary_currencies else None
+            adapter_config.gam_network_timezone = network_timezone
             adapter_config.gam_order_name_template = order_name_template
             adapter_config.gam_line_item_name_template = line_item_name_template
 
@@ -380,6 +433,24 @@ def configure_gam(tenant_id):
 
             # Also update tenant's ad_server field
             tenant.ad_server = "google_ad_manager"
+
+            # Auto-create CurrencyLimit for GAM primary currency if it doesn't exist
+            if network_currency:
+                from decimal import Decimal
+
+                from src.core.database.models import CurrencyLimit
+
+                stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id, currency_code=network_currency)
+                existing_limit = db_session.scalars(stmt).first()
+                if not existing_limit:
+                    currency_limit = CurrencyLimit(
+                        tenant_id=tenant_id,
+                        currency_code=network_currency,
+                        max_daily_package_spend=Decimal("10000.00"),
+                        min_package_budget=Decimal("1.00"),
+                    )
+                    db_session.add(currency_limit)
+                    logger.info(f"Auto-created CurrencyLimit for GAM currency {network_currency}")
 
             db_session.commit()
 
@@ -904,6 +975,9 @@ def test_gam_connection(tenant_id):
                         "id": current_network["id"],
                         "displayName": current_network["displayName"],
                         "networkCode": current_network["networkCode"],
+                        "currencyCode": safe_get(current_network, "currencyCode", "USD"),
+                        "secondaryCurrencyCodes": safe_get(current_network, "secondaryCurrencyCodes") or [],
+                        "timeZone": safe_get(current_network, "timeZone"),
                     }
                 ]
             else:
@@ -920,6 +994,9 @@ def test_gam_connection(tenant_id):
                                 "id": network["id"],
                                 "displayName": network["displayName"],
                                 "networkCode": network["networkCode"],
+                                "currencyCode": safe_get(network, "currencyCode", "USD"),
+                                "secondaryCurrencyCodes": safe_get(network, "secondaryCurrencyCodes") or [],
+                                "timeZone": safe_get(network, "timeZone"),
                             }
                         )
                 else:
@@ -935,6 +1012,9 @@ def test_gam_connection(tenant_id):
                         "id": current_network["id"],
                         "displayName": current_network["displayName"],
                         "networkCode": current_network["networkCode"],
+                        "currencyCode": safe_get(current_network, "currencyCode", "USD"),
+                        "secondaryCurrencyCodes": safe_get(current_network, "secondaryCurrencyCodes") or [],
+                        "timeZone": safe_get(current_network, "timeZone"),
                     }
                 ]
             except Exception as e:

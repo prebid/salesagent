@@ -1582,6 +1582,26 @@ async def _create_media_buy_impl(
                 )
                 raise ValueError(error_msg)
 
+            # Check if currency is supported by GAM network (if GAM is configured)
+            # GAM only accepts: primary currency OR enabled secondary currencies
+            from src.core.database.models import AdapterConfig
+
+            adapter_config_stmt = select(AdapterConfig).where(AdapterConfig.tenant_id == tenant["tenant_id"])
+            adapter_config = session.scalars(adapter_config_stmt).first()
+            if adapter_config and adapter_config.gam_network_currency:
+                # Build list of supported currencies: primary + any secondary
+                supported_currencies = {adapter_config.gam_network_currency}
+                if adapter_config.gam_secondary_currencies:
+                    supported_currencies.update(adapter_config.gam_secondary_currencies)
+
+                if request_currency not in supported_currencies:
+                    error_msg = (
+                        f"Currency {request_currency} is not supported by the GAM network. "
+                        f"Supported currencies: {', '.join(sorted(supported_currencies))}. "
+                        f"Contact the publisher to enable this currency in GAM."
+                    )
+                    raise ValueError(error_msg)
+
             # NEW: Validate pricing_model selections (AdCP PR #88)
             # Store validated pricing info for later use in adapter
             # Use index-based keys since package IDs aren't generated yet

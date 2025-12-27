@@ -120,7 +120,12 @@ class GAMHealthChecker:
                 status=HealthStatus.HEALTHY,
                 check_name="authentication",
                 message="Successfully authenticated with GAM",
-                details={"network_code": network.get("networkCode"), "display_name": network.get("displayName")},
+                details={
+                    "network_code": network.get("networkCode"),
+                    "display_name": network.get("displayName"),
+                    "currency_code": network.get("currencyCode"),
+                    "secondary_currency_codes": network.get("secondaryCurrencyCodes", []),
+                },
                 duration_ms=(time.time() - start_time) * 1000,
             )
 

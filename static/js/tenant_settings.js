@@ -266,6 +266,11 @@ function detectGAMNetwork() {
                     document.getElementById('gam_trafficker_id').value = data.trafficker_id;
                 }
 
+                // Store currency/timezone info for save
+                window.gamDetectedCurrency = data.currency_code || 'USD';
+                window.gamSecondaryCurrencies = data.secondary_currencies || [];
+                window.gamDetectedTimezone = data.timezone || null;
+
                 alert(`✅ Network code detected: ${data.network_code}`);
             }
         } else {
@@ -354,6 +359,11 @@ function confirmNetworkSelection(refreshToken) {
                 document.getElementById('gam_trafficker_id').value = data.trafficker_id;
             }
 
+            // Store currency/timezone info for save (use the selected network's values)
+            window.gamDetectedCurrency = selectedNetwork.currency_code || 'USD';
+            window.gamSecondaryCurrencies = selectedNetwork.secondary_currencies || [];
+            window.gamDetectedTimezone = selectedNetwork.timezone || null;
+
             alert(`✅ Network selected: ${selectedNetwork.network_name} (${selectedNetworkCode})`);
         } else {
             alert('❌ Error getting trafficker ID: ' + (data.error || 'Unknown error'));
@@ -426,6 +436,11 @@ function saveGAMConfig() {
     const orderNameTemplate = (document.getElementById('gam_order_name_template') || document.getElementById('order_name_template'))?.value || '';
     const lineItemNameTemplate = (document.getElementById('gam_line_item_name_template') || document.getElementById('line_item_name_template'))?.value || '';
 
+    // Get detected currency/timezone info (stored when network was detected)
+    const networkCurrency = window.gamDetectedCurrency || null;
+    const secondaryCurrencies = window.gamSecondaryCurrencies || [];
+    const networkTimezone = window.gamDetectedTimezone || null;
+
     if (!refreshToken) {
         alert('Please provide a Refresh Token');
         return;
@@ -447,7 +462,10 @@ function saveGAMConfig() {
             gam_refresh_token: refreshToken,
             gam_trafficker_id: traffickerId,
             order_name_template: orderNameTemplate,
-            line_item_name_template: lineItemNameTemplate
+            line_item_name_template: lineItemNameTemplate,
+            network_currency: networkCurrency,
+            secondary_currencies: secondaryCurrencies,
+            network_timezone: networkTimezone
         })
     })
     .then(response => response.json())
@@ -466,6 +484,67 @@ function saveGAMConfig() {
         button.disabled = false;
         button.textContent = originalText;
         alert('❌ Error: ' + error.message);
+    });
+}
+
+// Refresh GAM info (currencies, etc.) from GAM API and save to config
+function refreshGAMInfo() {
+    const refreshToken = document.getElementById('gam_refresh_token').value;
+    const networkCode = document.getElementById('gam_network_code').value;
+
+    if (!refreshToken) {
+        alert('Please configure OAuth first');
+        return;
+    }
+
+    const button = event.target;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Refreshing...';
+
+    // First, call test-connection to get current GAM network info
+    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/test-connection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success && data.networks && data.networks.length > 0) {
+            const network = data.networks[0];
+            // Save updated currency/timezone info via configure endpoint
+            // Note: test-connection returns currencyCode/secondaryCurrencyCodes/timeZone (camelCase from GAM API)
+            return fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/configure`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    auth_method: 'oauth',
+                    network_code: networkCode || network.networkCode,
+                    refresh_token: refreshToken,
+                    trafficker_id: document.getElementById('gam_trafficker_id')?.value,
+                    network_currency: network.currencyCode,
+                    secondary_currencies: network.secondaryCurrencyCodes || [],
+                    network_timezone: network.timeZone
+                })
+            });
+        }
+        throw new Error(data.error || 'Failed to fetch GAM info');
+    })
+    .then(response => response.json())
+    .then(data => {
+        button.disabled = false;
+        button.textContent = originalText;
+        if (data.success) {
+            alert('GAM info refreshed successfully');
+            location.reload();
+        } else {
+            alert('Failed to save: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        button.disabled = false;
+        button.textContent = originalText;
+        alert('Error: ' + error.message);
     });
 }
 

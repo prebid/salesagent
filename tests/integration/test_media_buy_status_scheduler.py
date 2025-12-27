@@ -593,4 +593,3 @@ async def test_scheduler_idempotent(integration_db):
     # Run scheduler third time - still no-op
     await scheduler._update_statuses()
     assert _get_media_buy_status(tenant_id, media_buy_id) == "active"
-

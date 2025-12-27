@@ -11,9 +11,9 @@ class TestCompatibilityMatrix:
     def test_cpm_compatible_with_all_types(self):
         """CPM should work with all line item types."""
         for line_item_type in ["STANDARD", "SPONSORSHIP", "NETWORK", "PRICE_PRIORITY", "BULK", "HOUSE"]:
-            assert PricingCompatibility.is_compatible(line_item_type, "cpm"), (
-                f"CPM should be compatible with {line_item_type}"
-            )
+            assert PricingCompatibility.is_compatible(
+                line_item_type, "cpm"
+            ), f"CPM should be compatible with {line_item_type}"
 
     def test_vcpm_compatible_with_standard_only(self):
         """VCPM should only work with STANDARD line items."""
@@ -21,9 +21,9 @@ class TestCompatibilityMatrix:
 
         # VCPM NOT compatible with other types
         for line_item_type in ["SPONSORSHIP", "NETWORK", "PRICE_PRIORITY", "BULK", "HOUSE"]:
-            assert not PricingCompatibility.is_compatible(line_item_type, "vcpm"), (
-                f"VCPM should NOT be compatible with {line_item_type}"
-            )
+            assert not PricingCompatibility.is_compatible(
+                line_item_type, "vcpm"
+            ), f"VCPM should NOT be compatible with {line_item_type}"
 
     def test_cpc_compatible_types(self):
         """CPC should work with STANDARD, SPONSORSHIP, NETWORK, PRICE_PRIORITY."""
@@ -31,14 +31,14 @@ class TestCompatibilityMatrix:
         incompatible = {"BULK", "HOUSE"}
 
         for line_item_type in compatible:
-            assert PricingCompatibility.is_compatible(line_item_type, "cpc"), (
-                f"CPC should be compatible with {line_item_type}"
-            )
+            assert PricingCompatibility.is_compatible(
+                line_item_type, "cpc"
+            ), f"CPC should be compatible with {line_item_type}"
 
         for line_item_type in incompatible:
-            assert not PricingCompatibility.is_compatible(line_item_type, "cpc"), (
-                f"CPC should NOT be compatible with {line_item_type}"
-            )
+            assert not PricingCompatibility.is_compatible(
+                line_item_type, "cpc"
+            ), f"CPC should NOT be compatible with {line_item_type}"
 
     def test_flat_rate_compatible_types(self):
         """FLAT_RATE (→CPD) should work with SPONSORSHIP and NETWORK only."""
@@ -46,14 +46,14 @@ class TestCompatibilityMatrix:
         incompatible = {"STANDARD", "PRICE_PRIORITY", "BULK", "HOUSE"}
 
         for line_item_type in compatible:
-            assert PricingCompatibility.is_compatible(line_item_type, "flat_rate"), (
-                f"FLAT_RATE should be compatible with {line_item_type}"
-            )
+            assert PricingCompatibility.is_compatible(
+                line_item_type, "flat_rate"
+            ), f"FLAT_RATE should be compatible with {line_item_type}"
 
         for line_item_type in incompatible:
-            assert not PricingCompatibility.is_compatible(line_item_type, "flat_rate"), (
-                f"FLAT_RATE should NOT be compatible with {line_item_type}"
-            )
+            assert not PricingCompatibility.is_compatible(
+                line_item_type, "flat_rate"
+            ), f"FLAT_RATE should NOT be compatible with {line_item_type}"
 
 
 class TestLineItemTypeSelection:

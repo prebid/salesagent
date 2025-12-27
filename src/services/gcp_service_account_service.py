@@ -161,10 +161,10 @@ class GCPServiceAccountService:
             # - Must start with letter, end with letter or digit
             sanitized_tenant_id = tenant_id.replace("_", "-")
             account_id = f"adcp-sales-{sanitized_tenant_id}".lower()
-            
+
             # Ensure account_id doesn't end with hyphen (GCP requirement)
             account_id = account_id.rstrip("-")
-            
+
             if len(account_id) > 30:
                 # Truncate if too long, but ensure we don't end with hyphen after truncation
                 account_id = account_id[:30].rstrip("-")

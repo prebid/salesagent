@@ -391,6 +391,22 @@ def update_adapter(tenant_id):
                         else ""
                     )
                     manual_approval = request.json.get("gam_manual_approval", False)
+                    network_currency = (
+                        request.json.get("network_currency", "").strip()[:3].upper()
+                        if request.json.get("network_currency")
+                        else None
+                    )
+                    secondary_currencies = request.json.get("secondary_currencies", [])
+                    # Validate and sanitize secondary currencies
+                    if isinstance(secondary_currencies, list):
+                        secondary_currencies = [str(c).strip()[:3].upper() for c in secondary_currencies if c]
+                    else:
+                        secondary_currencies = []
+                    network_timezone = (
+                        request.json.get("network_timezone", "").strip()[:100]
+                        if request.json.get("network_timezone")
+                        else None
+                    )
 
                     # Special handler for "Edit Configuration" action from UI
                     # When action == "edit_config", we want to clear the stored GAM network code
@@ -407,6 +423,10 @@ def update_adapter(tenant_id):
                     order_name_template = request.form.get("order_name_template", "").strip()
                     line_item_name_template = request.form.get("line_item_name_template", "").strip()
                     manual_approval = request.form.get("gam_manual_approval") == "on"
+                    # Currency/timezone info not typically sent via form (comes from detect-network)
+                    network_currency = None
+                    secondary_currencies = []
+                    network_timezone = None
 
                 if network_code:
                     adapter_config_obj.gam_network_code = network_code
@@ -418,6 +438,13 @@ def update_adapter(tenant_id):
                     adapter_config_obj.gam_order_name_template = order_name_template
                 if line_item_name_template:
                     adapter_config_obj.gam_line_item_name_template = line_item_name_template
+                # Save detected currency/timezone info from GAM network
+                if network_currency:
+                    adapter_config_obj.gam_network_currency = network_currency
+                if secondary_currencies:
+                    adapter_config_obj.gam_secondary_currencies = secondary_currencies
+                if network_timezone:
+                    adapter_config_obj.gam_network_timezone = network_timezone
                 adapter_config_obj.gam_manual_approval_required = manual_approval
             elif new_adapter == "mock":
                 if request.is_json:

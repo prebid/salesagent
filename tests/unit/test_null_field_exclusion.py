@@ -212,9 +212,9 @@ class TestAdCPComplianceViaExamples:
         }, "Should only have AdCP spec fields for auction pricing"
 
         # Verify price_guidance structure
-        assert dump["price_guidance"] == {"floor": 5.0}, (
-            "price_guidance should only have floor when percentiles are null"
-        )
+        assert dump["price_guidance"] == {
+            "floor": 5.0
+        }, "price_guidance should only have floor when percentiles are null"
 
     def test_cpm_fixed_response_structure(self):
         """Test that CPM fixed pricing matches AdCP cpm-fixed-option.json schema.
