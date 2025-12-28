@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/adcontextprotocol/salesagent/compare/v0.3.0...v0.4.0) (2025-12-28)
+
+
+### Features
+
+* Add GAM currency detection and Budget Controls integration ([#887](https://github.com/adcontextprotocol/salesagent/issues/887)) ([f7539e3](https://github.com/adcontextprotocol/salesagent/commit/f7539e33d77d4fbe589301f9cb095b30a8298a5a))
+* Consolidate Docker entrypoint to use Python directly ([#880](https://github.com/adcontextprotocol/salesagent/issues/880)) ([a12b19d](https://github.com/adcontextprotocol/salesagent/commit/a12b19dc7e39b0017fa4a7fd90941ff08eebdaf3))
+* Default to production setup, make demo mode opt-in ([#883](https://github.com/adcontextprotocol/salesagent/issues/883)) ([580bcfe](https://github.com/adcontextprotocol/salesagent/commit/580bcfe90b655f702349c77631c1999355238b65))
+* Restrict currency selection to GAM-supported currencies ([#890](https://github.com/adcontextprotocol/salesagent/issues/890)) ([1076539](https://github.com/adcontextprotocol/salesagent/commit/10765399d45d1a9705fee38f48ec8ccf76c01c95))
+
+
+### Bug Fixes
+
+* Only set SESSION_COOKIE_DOMAIN in multi-tenant mode ([#886](https://github.com/adcontextprotocol/salesagent/issues/886)) ([dfbb577](https://github.com/adcontextprotocol/salesagent/commit/dfbb577532ef30301613cd2ddf86f3519b483375))
+
+
+### Code Refactoring
+
+* Reorganize admin settings navigation and elevate publisher management ([#892](https://github.com/adcontextprotocol/salesagent/issues/892)) ([2f5e9e6](https://github.com/adcontextprotocol/salesagent/commit/2f5e9e6c638e7bbf0ceca1d9bd3b547b8406fa68))
+
+
+### Documentation
+
+* Reorganize documentation with automatic link checking ([#879](https://github.com/adcontextprotocol/salesagent/issues/879)) ([a8f57a6](https://github.com/adcontextprotocol/salesagent/commit/a8f57a65967214b483aa927603bfdd23341437f2))
+
 ## [0.3.0](https://github.com/adcontextprotocol/salesagent/compare/v0.2.1...v0.3.0) (2025-12-26)
 
 
