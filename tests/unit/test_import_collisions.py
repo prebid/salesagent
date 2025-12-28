@@ -19,7 +19,6 @@ def test_no_import_collisions():
         "adapters/base.py",
         "adapters/kevel.py",
         "adapters/triton_digital.py",
-        "tools/simulations/simulation_full.py",
     ]
 
     base_path = Path(__file__).parent.parent.parent
@@ -117,7 +116,6 @@ def test_wildcard_imports_documented():
         "adapters/base.py",
         "adapters/kevel.py",
         "adapters/triton_digital.py",
-        "tools/simulations/simulation_full.py",
     ]
 
     issues = []

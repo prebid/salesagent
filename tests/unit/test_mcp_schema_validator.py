@@ -9,8 +9,8 @@ These tests ensure the validator catches parameter mismatch bugs where:
 import sys
 from pathlib import Path
 
-# Add tools directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tools"))
+# Add scripts/hooks directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "hooks"))
 
 from validate_mcp_schemas import ToolSchemaValidator
 

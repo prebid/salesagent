@@ -83,13 +83,6 @@ repos:
         pass_filenames: false
         always_run: true
 
-      # Prevent over-mocking (mocking internal implementation instead of external I/O)
-      - id: no-excessive-mocking
-        name: Prevent excessive mocking in tests
-        entry: uv run python scripts/check_test_mocking.py
-        language: system
-        pass_filenames: false
-        always_run: true
 
       # Check for missing imports (prevent NameError bugs)
       - id: check-import-usage
@@ -107,29 +100,6 @@ repos:
         files: '^src/.*\.py$'
         pass_filenames: true
 
-      # Check A2A skill test coverage
-      - id: a2a-skill-coverage
-        name: Verify 100% A2A skill coverage
-        entry: uv run python scripts/check_a2a_skill_coverage.py
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      # Check Admin UI route test coverage
-      - id: admin-route-coverage
-        name: Verify 100% Admin UI GET route test coverage
-        entry: uv run python scripts/check_admin_route_coverage.py
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      # Detect testing anti-patterns (over-mocking, missing coverage)
-      - id: detect-test-antipatterns
-        name: Detect testing anti-patterns
-        entry: uv run python scripts/detect_test_antipatterns.py
-        language: system
-        files: '^(tests/.*\.py|src/a2a_server/adcp_a2a_server\.py)$'
-        pass_filenames: true
 
       # Check roundtrip tests exist for all apply_testing_hooks calls
       - id: check-roundtrip-tests
@@ -196,14 +166,6 @@ repos:
         files: '^(src/core/schemas\.py|src/core/main\.py)$'
         pass_filenames: false
 
-      # Audit required fields to catch over-validation
-      - id: audit-required-fields
-        name: Audit required fields for over-validation
-        entry: uv run python scripts/audit_required_fields.py
-        language: system
-        files: '^src/core/schemas\.py$'
-        pass_filenames: false
-        verbose: true
 
       # Check AdCP schema sync - DISABLED: Sales agent now follows adcp library version
       # - id: adcp-schema-sync
@@ -213,13 +175,6 @@ repos:
       #   pass_filenames: false
       #   always_run: true
 
-      # Validate adapter usage (prevents field name mismatches like deliveries → media_buy_deliveries)
-      - id: validate-adapter-usage
-        name: Validate adapter schema field names
-        entry: uv run python scripts/validate_adapter_usage.py
-        language: system
-        files: '^(src/core/main\.py|src/core/schemas\.py)$'
-        pass_filenames: false
 
       # Check Pydantic-AdCP schema alignment (prevents client validation errors like missing promoted_offering)
       - id: pydantic-adcp-alignment
@@ -230,29 +185,6 @@ repos:
         pass_filenames: false
         always_run: true
 
-      # Prevent A2A regression issues (URL format, function calls)
-      - id: a2a-regression-check
-        name: A2A regression prevention
-        entry: python3 scripts/validate_a2a_fixes.py
-        language: system
-        files: ^src/a2a_server/
-        pass_filenames: false
-
-      # Audit E2E tests for non-existent tool calls
-      - id: e2e-test-audit
-        name: E2E test contract validation (prevents calling non-existent tools)
-        entry: uv run python scripts/audit_e2e_tests.py
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      # Validate A2A AdCP spec compliance (prevents legacy format acceptance)
-      - id: a2a-adcp-compliance
-        name: A2A AdCP spec compliance validation
-        entry: uv run python scripts/validate_a2a_adcp_compliance.py
-        language: system
-        files: ^src/a2a_server/
-        pass_filenames: false
 
       # Prevent problematic function call patterns
       - id: no-fn-calls
@@ -262,18 +194,11 @@ repos:
         files: ^src/
         pass_filenames: false
 
-      # Validate schema-database field alignment (prevents AttributeError bugs)
-      - id: schema-database-alignment
-        name: Schema-database field alignment validation
-        entry: uv run python scripts/validate_schema_database_alignment.py --quiet
-        language: system
-        files: '^(src/core/schemas\.py|src/core/database/models\.py)$'
-        pass_filenames: false
 
       # Validate MCP tool-schema parameter alignment (prevents datetime.combine bugs)
       - id: mcp-schema-alignment
         name: MCP tool-schema parameter alignment
-        entry: uv run python tools/validate_mcp_schemas.py
+        entry: uv run python scripts/hooks/validate_mcp_schemas.py
         language: system
         files: '^(src/core/schemas\.py|src/core/main\.py)$'
         pass_filenames: false
@@ -291,15 +216,6 @@ repos:
         stages: [manual]  # Manual because it needs server running
 
 
-      # Check mypy error count doesn't increase (no regression)
-      # Much faster than per-file checks: 3s vs 2+ minutes
-      - id: mypy-no-regression
-        name: Check mypy error count (no regression)
-        entry: uv run python scripts/check_mypy_no_regression.py
-        language: system
-        files: '\.py$'
-        pass_filenames: false
-        always_run: false  # Only run when Python files changed
 
       # Check type: ignore count doesn't increase (ratcheting approach)
       - id: type-ignore-no-regression

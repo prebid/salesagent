@@ -9,7 +9,7 @@ Usage:
     uv run python scripts/generate_frontend_types.py
 
 Output:
-    templates/static/js/generated-types.d.ts
+    static/js/generated-types.d.ts
 """
 
 from pathlib import Path
@@ -140,7 +140,7 @@ def generate_types():
         output.append("")
 
     # Write to file
-    output_path = Path(__file__).parent.parent / "templates" / "static" / "js" / "generated-types.d.ts"
+    output_path = Path(__file__).parent.parent / "static" / "js" / "generated-types.d.ts"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, "w") as f:
