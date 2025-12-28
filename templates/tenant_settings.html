@@ -3142,26 +3142,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                {% if adapter_config and adapter_config.get('network_currency') %}
-                <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 0.75rem; margin-bottom: 1rem;">
-                    <strong style="color: #166534;">Recommended (GAM Network):</strong>
-                    <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                        <button type="button" class="btn btn-sm btn-outline-success"
-                                onclick="document.getElementById('new-currency-code').value='{{ adapter_config.get('network_currency') }}'">
-                            {{ adapter_config.get('network_currency') }} (Primary)
-                        </button>
-                        {% for currency in adapter_config.get('secondary_currencies', []) %}
-                        <button type="button" class="btn btn-sm btn-outline-success"
-                                onclick="document.getElementById('new-currency-code').value='{{ currency }}'">
-                            {{ currency }}
-                        </button>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% endif %}
-
                 <div class="form-group">
-                    <label for="new-currency-code">Currency Code (3 letters)</label>
+                    <label for="new-currency-code">Currency</label>
+                    {% if adapter_config and adapter_config.get('network_currency') %}
+                    {# GAM tenant: show dropdown with only GAM-supported currencies #}
+                    {% set gam_currencies = [adapter_config.get('network_currency')] + (adapter_config.get('secondary_currencies') or []) %}
+                    <select class="form-control" id="new-currency-code">
+                        <option value="">Select a currency...</option>
+                        {% for currency in gam_currencies %}
+                        <option value="{{ currency }}">{{ currency }}{% if loop.first %} (Primary){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    <small class="form-text text-muted">Currencies supported by your GAM network</small>
+                    {% else %}
+                    {# Non-GAM tenant (mock adapter): show text input with autocomplete #}
                     <input type="text" class="form-control" id="new-currency-code" list="currency-list" placeholder="e.g., EUR, GBP, CAD" maxlength="3" style="text-transform: uppercase;">
                     <datalist id="currency-list">
                         {% for currency in available_currencies %}
@@ -3169,6 +3163,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         {% endfor %}
                     </datalist>
                     <small class="form-text text-muted">Start typing to see available currencies (ISO 4217 codes)</small>
+                    {% endif %}
                 </div>
                 <div class="form-group mt-3">
                     <label for="new-currency-min">Min Package Budget (optional)</label>
