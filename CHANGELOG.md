@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1](https://github.com/adcontextprotocol/salesagent/compare/v0.4.0...v0.4.1) (2025-12-29)
+
+
+### Documentation
+
+* Add Fly Managed Postgres option to deployment guide ([#894](https://github.com/adcontextprotocol/salesagent/issues/894)) ([6bf6ce9](https://github.com/adcontextprotocol/salesagent/commit/6bf6ce91041b372de20513acdd6019b3096a46c1))
+* Fix GCP Cloud Run deployment walkthrough ([#896](https://github.com/adcontextprotocol/salesagent/issues/896)) ([10a9674](https://github.com/adcontextprotocol/salesagent/commit/10a96743080a6767e1936d41da9cb7845b304f6c))
+
 ## [0.4.0](https://github.com/adcontextprotocol/salesagent/compare/v0.3.0...v0.4.0) (2025-12-28)
 
 
