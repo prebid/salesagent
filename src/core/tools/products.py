@@ -604,10 +604,10 @@ async def _get_products_impl(
 
             # Filter by channels
             if req.filters.channels:
-                # Check if product has a channel field
-                product_channel: str | None = None
-                if hasattr(product, "channel") and product.channel:
-                    product_channel = product.channel.lower()
+                # Check if product has channels field
+                product_channels: set[str] = set()
+                if hasattr(product, "channels") and product.channels:
+                    product_channels = {c.lower() for c in product.channels}
 
                 # Extract channel values from filter (enum values)
                 request_channels: set[str] = set()
@@ -618,12 +618,12 @@ async def _get_products_impl(
                         # Enum - access .value
                         request_channels.add(channel.value.lower())
 
-                if product_channel:
-                    # Product has explicit channel - must match
-                    if product_channel not in request_channels:
+                if product_channels:
+                    # Product has explicit channels - must have at least one match
+                    if not product_channels.intersection(request_channels):
                         continue
                 else:
-                    # Product has no channel - use adapter defaults
+                    # Product has no channels - use adapter defaults
                     # Get adapter type from tenant config
                     ad_server_config = tenant.get("ad_server", {})
                     adapter_type = (

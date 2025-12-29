@@ -251,8 +251,8 @@ def convert_product_model_to_schema(product_model) -> Product:
     # These are marked as exclude=True in our extended Product schema
     if hasattr(product_model, "countries") and product_model.countries:
         product_data["countries"] = product_model.countries
-    if hasattr(product_model, "channel") and product_model.channel:
-        product_data["channel"] = product_model.channel
+    if hasattr(product_model, "channels") and product_model.channels:
+        product_data["channels"] = product_model.channels
 
     if product_model.product_card:
         product_data["product_card"] = product_model.product_card

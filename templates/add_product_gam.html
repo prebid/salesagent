@@ -221,20 +221,9 @@ Target users based on local weather conditions for maximum relevance.</div>
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
             <div class="form-group">
-                <label for="channel">Advertising Channel</label>
-                <select id="channel" name="channel">
-                    <option value="" {% if not product or not product.channel %}selected{% endif %}>Use Adapter Default (display/video/native)</option>
-                    <option value="display" {% if product and product.channel == 'display' %}selected{% endif %}>Display</option>
-                    <option value="video" {% if product and product.channel == 'video' %}selected{% endif %}>Video</option>
-                    <option value="audio" {% if product and product.channel == 'audio' %}selected{% endif %}>Audio</option>
-                    <option value="native" {% if product and product.channel == 'native' %}selected{% endif %}>Native</option>
-                    <option value="dooh" {% if product and product.channel == 'dooh' %}selected{% endif %}>DOOH (Digital Out-of-Home)</option>
-                    <option value="ctv" {% if product and product.channel == 'ctv' %}selected{% endif %}>CTV (Connected TV)</option>
-                    <option value="podcast" {% if product and product.channel == 'podcast' %}selected{% endif %}>Podcast</option>
-                    <option value="retail" {% if product and product.channel == 'retail' %}selected{% endif %}>Retail Media</option>
-                    <option value="social" {% if product and product.channel == 'social' %}selected{% endif %}>Social</option>
-                </select>
-                <small style="color: #666;">Select the advertising channel. GAM defaults to display/video/native.</small>
+                <label for="channels">Advertising Channels</label>
+                {% set selected_channels = product.channels if product and product.channels else [] %}
+                {% include 'components/channel_selector.html' %}
             </div>
 
             <div class="form-group">

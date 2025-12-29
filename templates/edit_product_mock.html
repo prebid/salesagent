@@ -215,23 +215,12 @@
 
         <!-- Channel Selection (AdCP 2.5) -->
         <h3 style="margin-top: 2rem;">
-            <i class="fas fa-broadcast-tower"></i> Advertising Channel
+            <i class="fas fa-broadcast-tower"></i> Advertising Channels
         </h3>
         <div class="form-group">
-            <label for="channel">Channel</label>
-            <select id="channel" name="channel">
-                <option value="" {% if not product.channel %}selected{% endif %}>Use Adapter Default</option>
-                <option value="display" {% if product.channel == 'display' %}selected{% endif %}>Display</option>
-                <option value="video" {% if product.channel == 'video' %}selected{% endif %}>Video</option>
-                <option value="audio" {% if product.channel == 'audio' %}selected{% endif %}>Audio</option>
-                <option value="native" {% if product.channel == 'native' %}selected{% endif %}>Native</option>
-                <option value="dooh" {% if product.channel == 'dooh' %}selected{% endif %}>DOOH (Digital Out-of-Home)</option>
-                <option value="ctv" {% if product.channel == 'ctv' %}selected{% endif %}>CTV (Connected TV)</option>
-                <option value="podcast" {% if product.channel == 'podcast' %}selected{% endif %}>Podcast</option>
-                <option value="retail" {% if product.channel == 'retail' %}selected{% endif %}>Retail Media</option>
-                <option value="social" {% if product.channel == 'social' %}selected{% endif %}>Social</option>
-            </select>
-            <small style="color: #666;">Select the advertising channel for this product. Leave blank to use adapter defaults (mock: display/video/audio/native).</small>
+            <label for="channels">Channels</label>
+            {% set selected_channels = product.channels if product.channels else [] %}
+            {% include 'components/channel_selector.html' %}
         </div>
 
         <!-- Principal Access Control -->

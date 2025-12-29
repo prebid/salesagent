@@ -1,0 +1,26 @@
+<!-- Channel Selector Component
+
+     Reusable multi-select advertising channel picker.
+
+     Usage (in parent template):
+     1. Set selected_channels variable before including
+     2. Include this component
+
+     Expects:
+     - selected_channels: list of channel codes (optional, defaults to empty)
+-->
+
+{% set selected = selected_channels if selected_channels is defined else [] %}
+
+<select id="channels" name="channels" multiple style="height: 150px; width: 100%;">
+    <option value="display" {% if 'display' in selected %}selected{% endif %}>Display</option>
+    <option value="video" {% if 'video' in selected %}selected{% endif %}>Video</option>
+    <option value="audio" {% if 'audio' in selected %}selected{% endif %}>Audio</option>
+    <option value="native" {% if 'native' in selected %}selected{% endif %}>Native</option>
+    <option value="dooh" {% if 'dooh' in selected %}selected{% endif %}>DOOH (Digital Out-of-Home)</option>
+    <option value="ctv" {% if 'ctv' in selected %}selected{% endif %}>CTV (Connected TV)</option>
+    <option value="podcast" {% if 'podcast' in selected %}selected{% endif %}>Podcast</option>
+    <option value="retail" {% if 'retail' in selected %}selected{% endif %}>Retail Media</option>
+    <option value="social" {% if 'social' in selected %}selected{% endif %}>Social</option>
+</select>
+<small style="color: #666;">Hold Ctrl/Cmd to select multiple channels. Leave empty to use adapter defaults.</small>

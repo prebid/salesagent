@@ -54,13 +54,13 @@ class TestNewProductFiltersLogic:
         self,
         product_id: str,
         countries: list[str] | None = None,
-        channel: str | None = None,
+        channels: list[str] | None = None,
     ):
         """Create a mock product for testing filters."""
         product = Mock()
         product.product_id = product_id
         product.countries = countries
-        product.channel = channel
+        product.channels = channels
         return product
 
     def test_countries_filter_includes_matching_country(self):
@@ -105,44 +105,44 @@ class TestNewProductFiltersLogic:
         # Empty product_countries means global - should pass through
         assert len(product_countries) == 0
 
-    def test_channels_filter_matches_product_channel(self):
-        """Test that channel filter matches product's channel field."""
+    def test_channels_filter_matches_product_channels(self):
+        """Test that channel filter matches product's channels field."""
         product = self._create_mock_product(
             product_id="test_product",
-            channel="display",
+            channels=["display"],
         )
 
         # Test filter logic: request for display should match product with display channel
         request_channels = {"display"}
-        product_channel = product.channel.lower() if product.channel else None
+        product_channels = {c.lower() for c in product.channels} if product.channels else set()
 
-        matches = product_channel in request_channels if product_channel else True
+        matches = bool(product_channels.intersection(request_channels)) if product_channels else True
         assert matches is True
 
     def test_channels_filter_excludes_non_matching_channel(self):
         """Test that channel filter excludes products with different channel."""
         product = self._create_mock_product(
             product_id="test_product",
-            channel="video",
+            channels=["video"],
         )
 
         # Test filter logic: request for display should NOT match product with video channel
         request_channels = {"display"}
-        product_channel = product.channel.lower() if product.channel else None
+        product_channels = {c.lower() for c in product.channels} if product.channels else set()
 
-        matches = product_channel in request_channels if product_channel else True
+        matches = bool(product_channels.intersection(request_channels)) if product_channels else True
         assert matches is False
 
     def test_channels_filter_with_adapter_defaults(self):
-        """Test that products without channel use adapter default channels.
+        """Test that products without channels use adapter default channels.
 
-        When a product has no channel set, the filter should check against
-        the adapter's default channels. A GAM product without channel will
+        When a product has no channels set, the filter should check against
+        the adapter's default channels. A GAM product without channels will
         match display/video/native requests but not audio/podcast.
         """
         product = self._create_mock_product(
             product_id="test_product",
-            channel=None,  # No channel - uses adapter defaults
+            channels=None,  # No channels - uses adapter defaults
         )
 
         # For GAM adapter, default channels are display, video, native
@@ -157,17 +157,17 @@ class TestNewProductFiltersLogic:
         assert not request_audio.intersection(gam_defaults)
 
     def test_channels_filter_multiple_channels(self):
-        """Test that channel filter matches when product's channel is in list."""
+        """Test that channel filter matches when product's channels overlap with request."""
         product = self._create_mock_product(
             product_id="test_product",
-            channel="audio",
+            channels=["audio"],
         )
 
         # Test filter logic: request for display, video, audio should match audio
         request_channels = {"display", "video", "audio"}
-        product_channel = product.channel.lower() if product.channel else None
+        product_channels = {c.lower() for c in product.channels} if product.channels else set()
 
-        matches = product_channel in request_channels if product_channel else True
+        matches = bool(product_channels.intersection(request_channels)) if product_channels else True
         assert matches is True
 
     def test_product_filters_schema_has_countries_and_channels(self):
@@ -193,7 +193,7 @@ class TestNewProductFiltersLogic:
         product = self._create_mock_product(
             product_id="test_product",
             countries=["US"],
-            channel="display",
+            channels=["display"],
         )
 
         # Request for US and display - should match
@@ -201,10 +201,35 @@ class TestNewProductFiltersLogic:
         request_channels = {"display"}
 
         product_countries = set(product.countries) if product.countries else set()
-        product_channel = product.channel.lower() if product.channel else None
+        product_channels = {c.lower() for c in product.channels} if product.channels else set()
 
         countries_match = len(product_countries) == 0 or bool(product_countries.intersection(request_countries))
-        channel_match = product_channel in request_channels if product_channel else True
+        channels_match = bool(product_channels.intersection(request_channels)) if product_channels else True
 
         assert countries_match is True
-        assert channel_match is True
+        assert channels_match is True
+
+    def test_multi_channel_product_matches_any_channel(self):
+        """Test that multi-channel product matches when any of its channels is requested."""
+        # Product with display, native, and social channels
+        product = self._create_mock_product(
+            product_id="test_product",
+            channels=["display", "native", "social"],
+        )
+
+        # Request for just display - should match because product includes display
+        request_channels = {"display"}
+        product_channels = {c.lower() for c in product.channels} if product.channels else set()
+
+        matches = bool(product_channels.intersection(request_channels)) if product_channels else True
+        assert matches is True
+
+        # Request for video - should NOT match because product doesn't include video
+        request_channels = {"video"}
+        matches = bool(product_channels.intersection(request_channels)) if product_channels else True
+        assert matches is False
+
+        # Request for native or audio - should match because product includes native
+        request_channels = {"native", "audio"}
+        matches = bool(product_channels.intersection(request_channels)) if product_channels else True
+        assert matches is True

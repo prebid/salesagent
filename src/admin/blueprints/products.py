@@ -941,10 +941,10 @@ def add_product(tenant_id):
                 if countries is not None:
                     product_kwargs["countries"] = countries
 
-                # Handle channel field (AdCP 2.5 - advertising channel)
-                channel = form_data.get("channel", "").strip()
-                if channel:
-                    product_kwargs["channel"] = channel
+                # Handle channels field (AdCP 2.5 - advertising channels)
+                channels = request.form.getlist("channels")
+                if channels:
+                    product_kwargs["channels"] = channels
 
                 # Handle principal access control (allowed_principal_ids)
                 # Empty list or no selection means visible to all (default)
@@ -1454,12 +1454,15 @@ def edit_product(tenant_id, product_id):
 
                     attributes.flag_modified(product, "countries")
 
-                # Handle channel field (AdCP 2.5 - advertising channel)
-                channel = form_data.get("channel", "").strip()
-                if channel:
-                    product.channel = channel
+                # Handle channels field (AdCP 2.5 - advertising channels)
+                from sqlalchemy.orm import attributes
+
+                channels = request.form.getlist("channels")
+                if channels:
+                    product.channels = channels
                 else:
-                    product.channel = None
+                    product.channels = None
+                attributes.flag_modified(product, "channels")
 
                 # Handle principal access control (allowed_principal_ids)
                 # Empty list or no selection means visible to all (default)
@@ -1940,7 +1943,7 @@ def edit_product(tenant_id, product_id):
                 "placements": product.placements,
                 "reporting_capabilities": product.reporting_capabilities,
                 # AdCP 2.5 fields
-                "channel": product.channel,
+                "channels": product.channels or [],
                 # Principal access control
                 "allowed_principal_ids": product.allowed_principal_ids or [],
             }

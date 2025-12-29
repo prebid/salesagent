@@ -1131,9 +1131,9 @@ class Product(LibraryProduct):
         description="Internal: Country codes (ISO 3166-1 alpha-2) where this product is available",
         exclude=True,  # Exclude from serialization by default
     )
-    channel: str | None = Field(
+    channels: list[str] | None = Field(
         default=None,
-        description="Internal: Advertising channel (display, video, audio, native, dooh, ctv, podcast, retail, social)",
+        description="Internal: Advertising channels (display, video, audio, native, dooh, ctv, podcast, retail, social)",
         exclude=True,  # Exclude from serialization by default
     )
 

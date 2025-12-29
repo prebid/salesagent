@@ -224,8 +224,8 @@ class Product(Base, JSONValidatorMixin):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Type hint: countries list
     countries: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
-    # Advertising channel (e.g., display, video, audio, native, dooh, ctv, podcast, retail, social)
-    channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Advertising channels (e.g., ["display", "video", "native"])
+    channels: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: implementation config dict
     implementation_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # AdCP property authorization fields (at least one required per spec)
