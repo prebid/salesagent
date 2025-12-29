@@ -38,7 +38,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.helpers import (
-    _extract_format_namespace,
+    _extract_format_info,
     _validate_creative_assets,
     get_principal_id_from_context,
     log_tool_activity,
@@ -307,11 +307,20 @@ def _sync_creatives_impl(
                             if name_value is not None:
                                 existing_creative.name = str(name_value)
                             changes.append("name")
-                        # Use validated format_value (already auto-upgraded from string)
-                        new_agent_url, new_format = _extract_format_namespace(format_value)
-                        if new_agent_url != existing_creative.agent_url or new_format != existing_creative.format:
+                        # Extract complete format info including parameters (AdCP 2.5)
+                        format_info = _extract_format_info(format_value)
+                        new_agent_url = format_info["agent_url"]
+                        new_format = format_info["format_id"]
+                        new_params = format_info["parameters"]
+                        if (
+                            new_agent_url != existing_creative.agent_url
+                            or new_format != existing_creative.format
+                            or new_params != existing_creative.format_parameters
+                        ):
                             existing_creative.agent_url = new_agent_url
                             existing_creative.format = new_format
+                            # Cast TypedDict to dict for SQLAlchemy column type
+                            existing_creative.format_parameters = cast(dict | None, new_params)
                             changes.append("format")
 
                         # Determine creative status based on approval mode
@@ -1124,16 +1133,18 @@ def _sync_creatives_impl(
                         creative_status = CreativeStatusEnum.pending_review.value
                         needs_approval = False
 
-                        # Extract agent_url and format ID from format_id field
+                        # Extract complete format info including parameters (AdCP 2.5)
                         # Use validated format_value (already auto-upgraded from string)
-                        agent_url, format_id = _extract_format_namespace(format_value)
+                        format_info = _extract_format_info(format_value)
 
                         db_creative = DBCreative(
                             tenant_id=tenant["tenant_id"],
                             creative_id=creative.get("creative_id") or str(uuid.uuid4()),
                             name=creative.get("name"),
-                            agent_url=agent_url,
-                            format=format_id,
+                            agent_url=format_info["agent_url"],
+                            format=format_info["format_id"],
+                            # Cast TypedDict to dict for SQLAlchemy column type
+                            format_parameters=cast(dict | None, format_info["parameters"]),
                             principal_id=principal_id,
                             status=creative_status,
                             created_at=datetime.now(UTC),
@@ -1967,10 +1978,22 @@ def _list_creatives_impl(
             # Build Creative directly with explicit types to satisfy mypy
             from src.core.schemas import FormatId, url
 
-            format_obj = FormatId(
-                agent_url=url(db_creative.agent_url),  # agent_url is nullable=False in DB
-                id=db_creative.format or "",
-            )
+            # Build FormatId with optional parameters (AdCP 2.5 format templates)
+            format_kwargs: dict[str, Any] = {
+                "agent_url": url(db_creative.agent_url),
+                "id": db_creative.format or "",
+            }
+            # Add format parameters if present
+            if db_creative.format_parameters:
+                params = db_creative.format_parameters
+                if "width" in params:
+                    format_kwargs["width"] = params["width"]
+                if "height" in params:
+                    format_kwargs["height"] = params["height"]
+                if "duration_ms" in params:
+                    format_kwargs["duration_ms"] = params["duration_ms"]
+
+            format_obj = FormatId(**format_kwargs)
 
             # Ensure datetime fields are datetime (not SQLAlchemy DateTime)
             created_at_dt: datetime = (

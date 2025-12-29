@@ -11,8 +11,11 @@ from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.context_helpers import get_principal_id_from_context
 from src.core.helpers.creative_helpers import (
+    FormatInfo,
+    FormatParameters,
     _convert_creative_to_adapter_asset,
     _detect_snippet_type,
+    _extract_format_info,
     _extract_format_namespace,
     _normalize_format_value,
     _validate_creative_assets,
@@ -23,10 +26,13 @@ __all__ = [
     "get_adapter",
     "log_tool_activity",
     "get_principal_id_from_context",
+    "_extract_format_info",
     "_extract_format_namespace",
     "_normalize_format_value",
     "_validate_creative_assets",
     "_convert_creative_to_adapter_asset",
     "_detect_snippet_type",
     "validate_creative_format_against_product",
+    "FormatInfo",
+    "FormatParameters",
 ]

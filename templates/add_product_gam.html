@@ -353,84 +353,24 @@ Target users based on local weather conditions for maximum relevance.</div>
         <!-- Section 3: Creative Formats (only shown in custom mode) -->
         <div id="creative-formats-section" style="display: {% if (form_data and form_data.inventory_profile_id) or (product and product.inventory_profile_id) %}none{% else %}block{% endif %};">
             <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Creative Formats</h3>
-        <p style="color: #666; margin-bottom: 1rem;">Choose creative formats for this product. Click the ⓘ icon on each format to learn more.</p>
+            <p style="color: #666; margin-bottom: 1rem;">
+                Select format templates and configure sizes. Creative type (image, JS, HTML5) is auto-detected when advertisers upload creatives.
+                <br><small>Note: Audio formats are not supported by Google Ad Manager.</small>
+            </p>
 
-        <!-- Search box for formats -->
-        <div id="format-search-box" style="margin-bottom: 1rem;">
-            <input type="text" id="format-search-input" placeholder="Search formats by name, type, or size..."
-                   style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;"
-                   onkeyup="filterGAMFormats()">
-        </div>
-
-        <!-- Size filter panel (shown when inventory selected) -->
-        <div id="size-filter-panel" style="display: none; margin-bottom: 1rem; padding: 1rem; background: #f0f7ff; border: 2px solid #d0e7ff; border-radius: 6px;">
-            <strong style="color: #1976d2; margin-bottom: 0.75rem; display: block;">💡 Sizes from your selected inventory:</strong>
-            <div id="size-chips-container" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;">
-                <!-- Size chips populated by JavaScript -->
+            <!-- Format Template Picker Container -->
+            <div id="format-template-picker-container">
+                <div style="text-align: center; padding: 2rem; color: #666;">
+                    Loading format templates...
+                </div>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span id="matching-formats-count" style="color: #666; font-size: 0.9rem;">0 matching / 0 total formats</span>
-                <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; cursor: pointer;">
-                    <input type="checkbox" id="show-only-matching-toggle" onchange="toggleShowOnlyMatching()">
-                    <span style="font-size: 0.9rem;">Show only matching</span>
-                </label>
-            </div>
-        </div>
 
-        <!-- Size-type combos being searched (shown after ad units selected) -->
-        <div id="format-search-targets" style="display: none; padding: 1rem; background: #e7f3ff; border: 1px solid #90caf9; border-radius: 4px; margin-bottom: 1rem;">
-            <strong style="color: #1565c0;">Looking for formats:</strong>
-            <div id="search-target-list" style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
-        </div>
-
-        <!-- Format selection actions (shown with formats) -->
-        <div id="format-actions" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap;">
-            <button type="button" id="select-all-formats-btn" class="btn btn-secondary btn-sm" onclick="selectAllFormats()">
-                ✓ Select All
-            </button>
-            <button type="button" id="select-matching-formats-btn" class="btn btn-primary btn-sm" onclick="selectAllMatchingFormats()" style="display: none;">
-                ✓ Select All Matching
-            </button>
-            <button type="button" id="deselect-all-formats-btn" class="btn btn-secondary btn-sm" onclick="deselectAllFormats()">
-                ✗ Deselect All
-            </button>
-            <span style="color: #666; font-size: 0.85rem; margin-left: 0.5rem;">Select formats that match your inventory</span>
-        </div>
-
-        <!-- Formats container (always visible) -->
-        <div id="formats-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 1rem; max-height: 500px; overflow-y: auto; padding: 1rem; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
-            {% for format in formats %}
-            <label class="format-card"
-                   data-format-id="{{ format.id }}"
-                   data-dimensions="{{ format.dimensions or '' }}"
-                   data-type="{{ format.type }}"
-                   data-description="{{ format.description or '' }}"
-                   data-preview-url="{{ format.preview_url or '' }}"
-                   data-agent-url="{{ format.agent_url or '' }}"
-                   data-search="{{ format.name|lower }} {{ format.type|lower }} {{ format.dimensions or '' }}"
-                   style="border: 2px solid #ddd; border-radius: 4px; padding: 1rem; cursor: pointer; transition: all 0.2s; background: white; position: relative;">
-                <input type="checkbox" class="format-checkbox" value="{{ format.form_value }}" data-format-id="{{ format.id }}" data-agent-url="{{ format.agent_url }}" {% if selected_format_ids and (format.agent_url, format.id) in selected_format_ids %}checked{% endif %} style="margin-right: 0.5rem;">
-                <strong>{{ format.name }}</strong>
-                <span class="format-info-icon" onclick="event.preventDefault(); event.stopPropagation(); showFormatInfo({{ format.name | tojson }}, {{ (format.description or 'No description available') | tojson }}, {{ (format.preview_url or '') | tojson }}, {{ (format.agent_url or '') | tojson }}, {{ format.id | tojson }});" style="cursor: help; color: #007bff; font-size: 0.9rem; margin-left: 0.3rem; float: right;">ⓘ</span>
-                <br>
-                <small style="color: #666;">
-                    {{ format.type }}
-                    {% if format.dimensions %} - {{ format.dimensions }}{% endif %}
-                    {% if format.duration %} - {{ format.duration }}{% endif %}
-                </small>
-            </label>
-            {% endfor %}
-        </div>
-
-        <!-- Format selection summary -->
-        <div id="format-summary" style="display: {% if product and product.formats %}block{% else %}none{% endif %}; padding: 1rem; background: #d4edda; border: 1px solid #28a745; border-radius: 4px; margin-top: 1rem;">
-            <strong style="color: #155724;">✓ Selected:</strong>
-            <span id="format-count" style="font-weight: 600;">{% if product and product.formats %}{{ product.formats|length }}{% else %}0{% endif %}</span> format(s)
-        </div>
-
-        <!-- Hidden input for formats JSON (populated on submit) -->
-        <input type="hidden" id="formats-data" name="formats" value="[]">
+            <!-- Hidden input for formats JSON (populated by picker) -->
+            <input type="hidden" id="formats-data" name="formats" value="[]">
         </div><!-- end creative-formats-section -->
+
+        <!-- Load Format Template Picker JS -->
+        <script src="{{ request.script_root }}/static/js/format-template-picker.js"></script>
 
         <!-- Section 4: Pricing Options (AdCP PR #88) -->
         <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Pricing Options</h3>
@@ -688,15 +628,7 @@ async function extractSizesFromInventory() {
     // Helper function to recursively extract sizes from an ad unit and its children
     const extractSizesFromUnit = (unitId) => {
         const item = inventoryCache.adUnits.get(unitId);
-        if (!item) {
-            console.log('extractSizesFromUnit: unit not found in cache:', unitId);
-            return;
-        }
-
-        console.log('extractSizesFromUnit: processing unit', unitId, item);
-        console.log('extractSizesFromUnit: item.children =', item.children);
-        console.log('extractSizesFromUnit: item.sizes =', item.sizes);
-        console.log('extractSizesFromUnit: item.metadata?.sizes =', item.metadata?.sizes);
+        if (!item) return;
 
         // Extract sizes from this unit using helper function
         // Check both item.sizes (raw API format) and item.metadata.sizes (normalized format)
@@ -708,9 +640,7 @@ async function extractSizesFromInventory() {
         // Recursively extract sizes from children (for hierarchical ad units)
         // Children are stored as full objects from the tree API
         if (item.children && Array.isArray(item.children)) {
-            console.log('extractSizesFromUnit: found', item.children.length, 'children');
             item.children.forEach(child => {
-                console.log('extractSizesFromUnit: processing child', child.id, 'sizes:', child.sizes);
                 // Child has sizes directly from tree API - use helper function
                 addSizesToCache(child.sizes);
                 // Recursively process grandchildren if they exist
@@ -784,9 +714,16 @@ async function extractSizesFromInventory() {
         }
     }
 
-    // Update UI
+    // Update legacy UI (size chips panel)
     updateSizeChipsPanel();
     updateFormatMatchIndicators();
+
+    // Pass extracted sizes to format template picker (AdCP 2.5 parameterized formats)
+    if (window.formatPickerIntegration && inventoryCache && inventoryCache.extractedSizes.size > 0) {
+        const sizesArray = Array.from(inventoryCache.extractedSizes);
+        console.log('[FormatPicker] Auto-selecting sizes from inventory:', sizesArray);
+        window.formatPickerIntegration.addSizesFromInventory(sizesArray);
+    }
 }
 
 /**
@@ -795,8 +732,11 @@ async function extractSizesFromInventory() {
 function updateSizeChipsPanel() {
     const panel = document.getElementById('size-filter-panel');
 
+    // Early return if panel doesn't exist (e.g., when using format template picker instead)
+    if (!panel) return;
+
     if (!inventoryCache || inventoryCache.extractedSizes.size === 0) {
-        if (panel) panel.style.display = 'none';
+        panel.style.display = 'none';
         return;
     }
 
@@ -811,6 +751,8 @@ function updateSizeChipsPanel() {
     });
 
     const chipsContainer = document.getElementById('size-chips-container');
+    if (!chipsContainer) return;
+
     chipsContainer.innerHTML = sortedSizes.map(sizeKey => {
         const count = inventoryCache.sizeUnitCounts.get(sizeKey) || 0;
         const displaySize = sizeKey.replace('x', '×');
@@ -1981,25 +1923,41 @@ function removePricingOption(index) {
 
 // Populate formats JSON before form submission
 function prepareFormSubmission(event) {
-    // Convert checked format checkboxes to JSON for backend
-    const formatCheckboxes = document.querySelectorAll('.format-checkbox:checked');
-    const formatsJson = Array.from(formatCheckboxes).map(cb => ({
-        agent_url: cb.dataset.agentUrl || '',
-        format_id: cb.dataset.formatId || ''
-    }));
-
-    // Populate the hidden field with JSON
+    // Check if format picker has already populated the field
     const formatsField = document.getElementById('formats-data');
-    if (formatsField) {
-        formatsField.value = JSON.stringify(formatsJson);
+    const existingValue = formatsField ? formatsField.value : '';
+    let hasFormatPickerData = false;
+
+    try {
+        const parsed = JSON.parse(existingValue);
+        hasFormatPickerData = Array.isArray(parsed) && parsed.length > 0;
+    } catch (e) {
+        hasFormatPickerData = false;
     }
 
-    console.log('[DEBUG] Form submission - formats JSON:', formatsJson);
-    console.log('[DEBUG] Form submission - total checked:', formatsJson.length);
+    if (hasFormatPickerData) {
+        // Format picker already populated - don't overwrite
+        console.log('[DEBUG] Form submission - using format picker data:', existingValue);
+    } else {
+        // Legacy path: Convert checked format checkboxes to JSON for backend
+        const formatCheckboxes = document.querySelectorAll('.format-checkbox:checked');
+        const formatsJson = Array.from(formatCheckboxes).map(cb => ({
+            agent_url: cb.dataset.agentUrl || '',
+            format_id: cb.dataset.formatId || ''
+        }));
 
-    if (formatsJson.length === 0) {
-        console.log('[DEBUG] NO FORMATS CHECKED ON SUBMIT');
-        // Don't prevent submission, just log
+        // Populate the hidden field with JSON
+        if (formatsField) {
+            formatsField.value = JSON.stringify(formatsJson);
+        }
+
+        console.log('[DEBUG] Form submission - formats JSON (legacy):', formatsJson);
+        console.log('[DEBUG] Form submission - total checked:', formatsJson.length);
+
+        if (formatsJson.length === 0) {
+            console.log('[DEBUG] NO FORMATS CHECKED ON SUBMIT');
+            // Don't prevent submission, just log
+        }
     }
 
     // Debug targeting data
@@ -2372,6 +2330,40 @@ if (existingOptions.length > 0) {
 // Create mode: Add one empty option
 addPricingOption();
 {% endif %}
+
+// Initialize format template picker
+// Use window.formatPicker for global access (needed for form submission and testing)
+(function() {
+    // Get existing formats from product (edit mode) or form_data (validation error)
+    const existingFormats = {% if product and product.formats %}{{ product.formats | tojson }}{% elif form_data and form_data.formats %}{{ form_data.formats | tojson }}{% else %}[]{% endif %};
+
+    window.formatPicker = new FormatTemplatePicker({
+        containerId: 'format-template-picker-container',
+        hiddenInputId: 'formats-data',
+        tenantId: '{{ tenant_id }}',
+        adapterType: 'gam',  // GAM adapter - hides audio formats
+        scriptRoot: '{{ request.script_root }}' || '',
+        initialFormats: existingFormats,
+        onSelectionChange: function(formats) {
+            console.log('Formats updated:', formats.length, 'formats selected');
+        }
+    });
+
+    // Integration with inventory picker: auto-populate sizes from selected inventory
+    // Hook into inventory selection callbacks to extract sizes
+    window.formatPickerIntegration = {
+        addSizesFromInventory: function(sizes) {
+            if (formatPicker && sizes && sizes.length > 0) {
+                formatPicker.addSizesFromInventory(sizes);
+            }
+        },
+        clearInventorySizes: function() {
+            if (formatPicker) {
+                formatPicker.clearInventorySizes();
+            }
+        }
+    };
+})();
 
 // Format info modal functionality
 function showFormatInfo(name, description, previewUrl, agentUrl, formatId) {

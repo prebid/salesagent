@@ -1261,3 +1261,101 @@ def get_inventory_list(tenant_id):
     except Exception as e:
         logger.error(f"Error fetching inventory list: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
+@inventory_bp.route("/api/tenant/<tenant_id>/inventory/sizes", methods=["GET"])
+@require_tenant_access(api_mode=True)
+def get_inventory_sizes(tenant_id):
+    """Get unique creative sizes from selected inventory items.
+
+    Extracts sizes from inventory metadata (ad units and placements) for
+    auto-populating the format template picker with available sizes.
+
+    Query Parameters:
+        ids: Comma-separated list of inventory_ids (ad units or placements)
+        profile_id: Inventory profile ID (alternative to ids)
+
+    Returns:
+        JSON object with unique sizes sorted by width, e.g.:
+        {
+            "sizes": ["300x250", "728x90", "970x250"],
+            "count": 3
+        }
+    """
+    try:
+        ids_param = request.args.get("ids", "").strip()
+        profile_id = request.args.get("profile_id", "").strip()
+
+        inventory_ids = []
+
+        # Get inventory IDs from profile if provided
+        if profile_id:
+            from src.core.database.models import InventoryProfile
+
+            with get_db_session() as db_session:
+                profile = db_session.scalars(
+                    select(InventoryProfile).filter_by(tenant_id=tenant_id, profile_id=profile_id)
+                ).first()
+
+                if not profile:
+                    return jsonify({"error": "Inventory profile not found"}), 404
+
+                # Extract inventory IDs from profile configuration
+                profile_config = profile.config or {}
+                inventory_ids = profile_config.get("inventory_ids", [])
+                # Also check for ad_units and placements in the config
+                if "ad_units" in profile_config:
+                    inventory_ids.extend(profile_config["ad_units"])
+                if "placements" in profile_config:
+                    inventory_ids.extend(profile_config["placements"])
+
+        # Also parse any directly provided IDs
+        if ids_param:
+            direct_ids = [id.strip() for id in ids_param.split(",") if id.strip()]
+            inventory_ids.extend(direct_ids)
+
+        if not inventory_ids:
+            return jsonify({"sizes": [], "count": 0})
+
+        # Query inventory items
+        with get_db_session() as db_session:
+            stmt = select(GAMInventory).filter(
+                GAMInventory.tenant_id == tenant_id,
+                GAMInventory.inventory_id.in_(inventory_ids),
+            )
+            items = db_session.scalars(stmt).all()
+
+            # Extract sizes from inventory metadata
+            sizes = set()
+            for item in items:
+                metadata = item.inventory_metadata or {}
+                if not isinstance(metadata, dict):
+                    continue
+
+                # Get sizes from metadata (array of "WxH" strings)
+                item_sizes = metadata.get("sizes", [])
+                if isinstance(item_sizes, list):
+                    for size in item_sizes:
+                        if isinstance(size, str) and "x" in size:
+                            sizes.add(size)
+
+            # Sort sizes by width, then height
+            def size_sort_key(s):
+                try:
+                    w, h = s.split("x")
+                    return (int(w), int(h))
+                except (ValueError, AttributeError):
+                    return (0, 0)
+
+            sorted_sizes = sorted(sizes, key=size_sort_key)
+
+            logger.info(
+                f"Extracted {len(sorted_sizes)} unique sizes from "
+                f"{len(items)} inventory items for tenant {tenant_id}"
+            )
+
+            return jsonify({"sizes": sorted_sizes, "count": len(sorted_sizes)})
+
+    except Exception as e:
+        logger.error(f"Error fetching inventory sizes: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500

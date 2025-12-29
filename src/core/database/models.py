@@ -610,6 +610,10 @@ class Creative(Base):
     # Data field stores creative content and metadata as JSON
     data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
 
+    # Format parameters for parameterized FormatId (AdCP 2.5 format templates)
+    # Stores width, height, duration_ms when format is parameterized
+    format_parameters: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+
     # Relationships and metadata
     group_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(

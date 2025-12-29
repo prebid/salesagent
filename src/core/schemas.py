@@ -686,19 +686,30 @@ class Format(LibraryFormat):
         return None
 
     def get_primary_dimensions(self) -> tuple[int, int] | None:
-        """Extract primary dimensions from renders array.
+        """Extract primary dimensions from renders array or format_id parameters.
+
+        Checks in order:
+        1. Parameterized format_id (AdCP 2.5) - width/height on FormatId
+        2. Renders array - first render's dimensions
+        3. Requirements field (legacy, internal)
 
         Returns:
             Tuple of (width, height) in pixels, or None if not available.
         """
-        # Try renders field first (AdCP spec - renders is list of Render objects)
+        # Try format_id parameters first (AdCP 2.5 parameterized formats)
+        if hasattr(self.format_id, "get_dimensions"):
+            dims = self.format_id.get_dimensions()
+            if dims is not None:
+                return dims
+
+        # Try renders field (AdCP spec - renders is list of Render objects)
         if self.renders and len(self.renders) > 0:
             primary_render = self.renders[0]  # First render is typically primary
             if hasattr(primary_render, "dimensions") and primary_render.dimensions:
-                dims = primary_render.dimensions
+                render_dims = primary_render.dimensions
                 # dimensions is a Dimensions object with width/height attributes
-                if dims.width is not None and dims.height is not None:
-                    return (int(dims.width), int(dims.height))
+                if render_dims.width is not None and render_dims.height is not None:
+                    return (int(render_dims.width), int(render_dims.height))
 
         # Fallback to requirements field (legacy, internal field)
         if self.requirements:
@@ -1547,6 +1558,8 @@ class FormatId(LibraryFormatId):
     Note: The inherited agent_url field has type AnyUrl, but Pydantic accepts strings
     at runtime and automatically validates/converts them. This causes mypy warnings
     (str vs AnyUrl) which are safe to ignore - the code works correctly at runtime.
+
+    AdCP 2.5+ supports parameterized format IDs with width/height/duration_ms fields.
     """
 
     def __str__(self) -> str:
@@ -1556,6 +1569,24 @@ class FormatId(LibraryFormatId):
     def __repr__(self) -> str:
         """Return representation for debugging."""
         return f"FormatId(id='{self.id}', agent_url='{self.agent_url}')"
+
+    def get_dimensions(self) -> tuple[int, int] | None:
+        """Get dimensions from parameterized FormatId (AdCP 2.5).
+
+        Returns:
+            Tuple of (width, height) in pixels, or None if not specified.
+        """
+        if self.width is not None and self.height is not None:
+            return (self.width, self.height)
+        return None
+
+    def get_duration_ms(self) -> float | None:
+        """Get duration from parameterized FormatId (AdCP 2.5).
+
+        Returns:
+            Duration in milliseconds, or None if not specified.
+        """
+        return self.duration_ms
 
 
 class Creative(LibraryCreative):

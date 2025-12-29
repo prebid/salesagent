@@ -161,6 +161,101 @@ def list_all_formats():
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/templates", methods=["GET"])
+@require_auth()
+def get_format_templates():
+    """Get format templates for the template picker UI.
+
+    Returns format templates with metadata for parameterized format selection.
+    Templates represent base formats (display_static, video_hosted, native)
+    that can be configured with width/height/duration parameters.
+
+    Query parameters:
+        adapter_type: Optional adapter type filter ('gam' or 'mock')
+
+    Returns:
+        JSON object with templates and common sizes from GAM_STANDARD_SIZES
+    """
+    adapter_type = request.args.get("adapter_type", "mock")
+
+    # Import GAM standard sizes for common size quick-picks
+    try:
+        from src.adapters.gam.utils.constants import GAM_STANDARD_SIZES
+    except ImportError:
+        GAM_STANDARD_SIZES = {}
+
+    # Format templates definition
+    templates = {
+        "display_static": {
+            "id": "display_static",
+            "name": "Static Display",
+            "description": "Display banner ads (image, JS, or HTML5 - auto-detected at upload)",
+            "type": "display",
+            "parameter_type": "dimensions",
+            "gam_supported": True,
+        },
+        "video_hosted": {
+            "id": "video_hosted",
+            "name": "Hosted Video",
+            "description": "Video ads hosted on creative agent (MP4, WebM)",
+            "type": "video",
+            "parameter_type": "both",
+            "gam_supported": True,
+        },
+        "video_vast": {
+            "id": "video_vast",
+            "name": "VAST Tag",
+            "description": "Video ads served via VAST XML redirect",
+            "type": "video",
+            "parameter_type": "both",
+            "gam_supported": True,
+        },
+        "native": {
+            "id": "native",
+            "name": "Native Ad",
+            "description": "Native content ads that match the look of the site",
+            "type": "native",
+            "parameter_type": "none",
+            "gam_supported": True,
+        },
+        "audio": {
+            "id": "audio",
+            "name": "Audio Ad",
+            "description": "Audio-only ads for podcasts and streaming",
+            "type": "audio",
+            "parameter_type": "duration",
+            "gam_supported": False,
+        },
+    }
+
+    # Filter for GAM adapter (no audio support)
+    if adapter_type == "gam":
+        templates = {k: v for k, v in templates.items() if v.get("gam_supported", True)}
+
+    # Convert GAM_STANDARD_SIZES to list format
+    common_sizes = []
+    for name, dims in GAM_STANDARD_SIZES.items():
+        if isinstance(dims, tuple) and len(dims) == 2:
+            common_sizes.append(
+                {
+                    "name": name.replace("_", " ").title(),
+                    "width": dims[0],
+                    "height": dims[1],
+                }
+            )
+
+    # Sort by width then height
+    common_sizes.sort(key=lambda s: (s["width"], s["height"]))
+
+    return jsonify(
+        {
+            "templates": templates,
+            "common_sizes": common_sizes,
+            "default_agent_url": "https://creative.adcontextprotocol.org",
+        }
+    )
+
+
 @bp.route("/agents", methods=["GET"])
 @require_auth()
 def list_creative_agents():

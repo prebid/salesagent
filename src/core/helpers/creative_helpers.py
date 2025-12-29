@@ -1,6 +1,6 @@
 """Creative format parsing and asset conversion helpers."""
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
     from fastmcp import Context
@@ -11,6 +11,88 @@ if TYPE_CHECKING:
     from src.core.tool_context import ToolContext
 
 from src.core.schemas import Creative
+
+
+class FormatParameters(TypedDict, total=False):
+    """Optional format parameters for parameterized FormatId (AdCP 2.5)."""
+
+    width: int
+    height: int
+    duration_ms: float
+
+
+class FormatInfo(TypedDict):
+    """Complete format information extracted from FormatId."""
+
+    agent_url: str
+    format_id: str
+    parameters: FormatParameters | None
+
+
+def _extract_format_info(format_value: Any) -> FormatInfo:
+    """Extract complete format information from format_id field (AdCP 2.5).
+
+    Args:
+        format_value: FormatId dict/object with agent_url, id, and optional parameters
+
+    Returns:
+        FormatInfo with agent_url, format_id, and optional parameters (width, height, duration_ms)
+
+    Raises:
+        ValueError: If format_value doesn't have required agent_url and id fields
+
+    Note:
+        This function supports parameterized format templates (AdCP 2.5).
+        Parameters are only included if they are present and non-None.
+    """
+    agent_url: str
+    format_id: str
+    parameters: FormatParameters | None = None
+
+    if isinstance(format_value, dict):
+        agent_url_val = format_value.get("agent_url")
+        format_id_val = format_value.get("id")
+        if not agent_url_val or not format_id_val:
+            raise ValueError(f"format_id must have both 'agent_url' and 'id' fields. Got: {format_value}")
+        agent_url = str(agent_url_val)
+        format_id = format_id_val
+
+        # Extract optional parameters
+        params: FormatParameters = {}
+        if format_value.get("width") is not None:
+            params["width"] = int(format_value["width"])
+        if format_value.get("height") is not None:
+            params["height"] = int(format_value["height"])
+        if format_value.get("duration_ms") is not None:
+            params["duration_ms"] = float(format_value["duration_ms"])
+        if params:
+            parameters = params
+
+    elif hasattr(format_value, "agent_url") and hasattr(format_value, "id"):
+        agent_url = str(format_value.agent_url)
+        format_id = format_value.id
+
+        # Extract optional parameters from object
+        params = {}
+        if getattr(format_value, "width", None) is not None:
+            params["width"] = int(format_value.width)
+        if getattr(format_value, "height", None) is not None:
+            params["height"] = int(format_value.height)
+        if getattr(format_value, "duration_ms", None) is not None:
+            params["duration_ms"] = float(format_value.duration_ms)
+        if params:
+            parameters = params
+
+    elif isinstance(format_value, str):
+        raise ValueError(
+            f"format_id must be an object with 'agent_url' and 'id' fields (AdCP v2.4). "
+            f"Got string: '{format_value}'. "
+            f"String format_id is no longer supported - all formats must be namespaced."
+        )
+    else:
+        raise ValueError(f"Invalid format_id format. Expected object with agent_url and id, got: {type(format_value)}")
+
+    return {"agent_url": agent_url, "format_id": format_id, "parameters": parameters}
 
 
 def _extract_format_namespace(format_value: Any) -> tuple[str, str]:
@@ -121,6 +203,7 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
     """Convert AdCP v1 Creative object to format expected by ad server adapters.
 
     Extracts data from the assets dict to build adapter-compatible format.
+    Supports parameterized format templates (AdCP 2.5) for dimensions.
     """
 
     # Base asset object with common fields
@@ -134,6 +217,17 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
         "format": format_str,  # Adapter expects string format ID
         "package_assignments": package_assignments,
     }
+
+    # Extract dimensions from FormatId parameters (AdCP 2.5 format templates)
+    # This is the primary source of truth for parameterized formats
+    format_id_obj = creative.format_id
+    if hasattr(format_id_obj, "width") and format_id_obj.width is not None:
+        asset["width"] = format_id_obj.width
+    if hasattr(format_id_obj, "height") and format_id_obj.height is not None:
+        asset["height"] = format_id_obj.height
+    if hasattr(format_id_obj, "duration_ms") and format_id_obj.duration_ms is not None:
+        # Convert to seconds for adapter compatibility
+        asset["duration"] = format_id_obj.duration_ms / 1000.0
 
     # Extract data from assets dict (AdCP v1 spec)
     assets_dict = creative.assets if isinstance(creative.assets, dict) else {}

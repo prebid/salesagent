@@ -38,359 +38,40 @@
         <h3 style="margin-top: 2rem;">Creative Formats</h3>
 
         <div class="form-group">
-            <label>Search and select supported formats:</label>
+            <label>Select format templates and configure sizes:</label>
+            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
+                Choose format templates and specify which sizes this product supports. Creative type (image, JS, HTML5)
+                is auto-detected when advertisers upload creatives.
+            </p>
 
-            <!-- Search box -->
-            <div style="margin-top: 1rem; margin-bottom: 1rem;">
-                <input type="text" id="format-search" placeholder="Search formats (e.g., 300x250, video, generative)..." style="width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem;">
-                <small style="color: #666; display: block; margin-top: 0.5rem;">
-                    💡 Tip: Search by dimensions (300x250), type (video, display), or keyword (generative)
-                </small>
-            </div>
-
-            <!-- Native format warning -->
-            <div class="alert" style="background: #fff3cd; border-color: #ffc107; color: #856404; margin-bottom: 1rem;">
-                <strong>⚠️ Note:</strong> Native ad formats (1×1) are not yet supported. Standard display, video, and audio formats work with all ad server sizes.
-                <a href="https://github.com/adcontextprotocol/salesagent/issues/363" target="_blank" style="color: #856404; text-decoration: underline;">Track native support progress →</a>
-            </div>
-
-            <!-- Selected formats (tags) -->
-            <div id="selected-formats" style="margin-bottom: 1rem; padding: 1rem; background: #f0f7ff; border: 1px solid #d0e7ff; border-radius: 4px; min-height: 50px; display: none;">
-                <div style="font-weight: 600; margin-bottom: 0.5rem; color: #0066cc;">Selected Formats:</div>
-                <div id="selected-formats-list" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
-            </div>
-
-            <!-- Format list -->
-            <div id="format-list" style="margin-top: 1rem;">
-                <div id="format-loading" style="text-align: center; padding: 2rem; color: #666;">
-                    Loading formats from creative agents...
+            <!-- Format Template Picker Container -->
+            <div id="format-template-picker-container">
+                <div style="text-align: center; padding: 2rem; color: #666;">
+                    Loading format templates...
                 </div>
-                <div id="format-results" style="display: none;"></div>
             </div>
         </div>
 
         <!-- Hidden input to store selected format data -->
         <input type="hidden" id="formats-data" name="formats" value="[]">
 
-        <!-- Format Preview Modal -->
-        <div id="format-preview-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
-            <div style="background: white; border-radius: 8px; max-width: 600px; max-height: 80vh; overflow-y: auto; padding: 2rem; position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
-                <button onclick="closeFormatPreview()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666;">&times;</button>
-                <div id="format-preview-content"></div>
-            </div>
-        </div>
-
+        <!-- Load Format Template Picker JS -->
+        <script src="{{ request.script_root }}/static/js/format-template-picker.js"></script>
         <script>
-        // Format selection state
-        let selectedFormats = new Set();
-        let allFormats = [];
-
-        // Load formats from API on page load
+        // Initialize format template picker on page load
+        // Use window.formatPicker for global access (needed for form submission and testing)
         document.addEventListener('DOMContentLoaded', function() {
-            loadFormats();
-            setupSearch();
-        });
-
-        async function loadFormats() {
-            try {
-                const scriptRoot = '{{ request.script_root }}' || '';
-                const response = await fetch(`${scriptRoot}/api/formats/list?tenant_id={{ tenant_id }}`);
-                const data = await response.json();
-
-                // Check for errors from API
-                if (data.error) {
-                    console.error('API returned error:', data);
-                    document.getElementById('format-loading').innerHTML = `
-                        <div style="color: #e74c3c; padding: 1rem; background: #fee; border: 1px solid #fcc; border-radius: 4px;">
-                            <strong>⚠️ Error loading formats:</strong> ${data.message || data.error}<br>
-                            <small style="display: block; margin-top: 0.5rem;">Error type: ${data.error_type || 'Unknown'}</small>
-                            <small style="display: block; margin-top: 0.5rem;">Check server logs for details or contact support.</small>
-                        </div>
-                    `;
-                    return;
-                }
-
-                // Check for warnings (empty results)
-                if (data.warning) {
-                    console.warn('API returned warning:', data.warning);
-                    document.getElementById('format-loading').innerHTML = `
-                        <div style="color: #856404; padding: 1rem; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">
-                            <strong>⚠️ No formats available:</strong> ${data.warning}<br>
-                            <small style="display: block; margin-top: 0.5rem;">
-                                Creative agents may be unreachable. Check your network connection or creative agent configuration.
-                            </small>
-                        </div>
-                    `;
-                    return;
-                }
-
-                // Flatten formats from all agents
-                allFormats = [];
-                for (const [agentUrl, formats] of Object.entries(data.agents || {})) {
-                    formats.forEach(fmt => {
-                        allFormats.push({...fmt, agent_url: agentUrl});
-                    });
-                }
-
-                console.log(`✅ Loaded ${allFormats.length} formats from ${Object.keys(data.agents || {}).length} agent(s)`);
-
-                document.getElementById('format-loading').style.display = 'none';
-                displayFormats(allFormats);
-            } catch (error) {
-                console.error('Error loading formats:', error);
-                document.getElementById('format-loading').innerHTML = `
-                    <div style="color: #e74c3c; padding: 1rem; background: #fee; border: 1px solid #fcc; border-radius: 4px;">
-                        <strong>⚠️ Network error loading formats:</strong> ${error.message}<br>
-                        <small style="display: block; margin-top: 0.5rem;">
-                            Cannot reach the formats API. Please check your connection and try refreshing the page.
-                        </small>
-                    </div>
-                `;
-            }
-        }
-
-        function setupSearch() {
-            const searchBox = document.getElementById('format-search');
-            let searchTimeout;
-
-            searchBox.addEventListener('input', function(e) {
-                clearTimeout(searchTimeout);
-                searchTimeout = setTimeout(() => {
-                    const query = e.target.value.toLowerCase().trim();
-                    if (query.length === 0) {
-                        displayFormats(allFormats);
-                    } else {
-                        const filtered = allFormats.filter(fmt =>
-                            fmt.format_id.toLowerCase().includes(query) ||
-                            fmt.name.toLowerCase().includes(query) ||
-                            (fmt.description && fmt.description.toLowerCase().includes(query)) ||
-                            fmt.type.toLowerCase().includes(query) ||
-                            (fmt.category && fmt.category.toLowerCase().includes(query))
-                        );
-                        displayFormats(filtered);
-                    }
-                }, 300);
-            });
-        }
-
-        // Helper function to escape strings for use in HTML attributes
-        function escapeForHtmlAttr(str) {
-            if (!str) return '';
-            return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-        }
-
-        // Helper function to escape strings for display in HTML
-        function escapeHtml(str) {
-            if (!str) return '';
-            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        }
-
-        // Helper to extract format_id string from format object
-        // API returns format_id as nested object: {id: "...", agent_url: "..."} or as string
-        function getFormatIdString(format) {
-            if (!format.format_id) return '';
-            if (typeof format.format_id === 'string') return format.format_id;
-            if (format.format_id.id) return format.format_id.id;
-            return String(format.format_id);
-        }
-
-        function displayFormats(formats) {
-            const container = document.getElementById('format-results');
-
-            if (formats.length === 0) {
-                container.innerHTML = '<div style="text-align: center; padding: 2rem; color: #666;">No formats found</div>';
-                container.style.display = 'block';
-                return;
-            }
-
-            // Group by type
-            const grouped = {};
-            formats.forEach(fmt => {
-                if (!grouped[fmt.type]) {
-                    grouped[fmt.type] = [];
-                }
-                grouped[fmt.type].push(fmt);
-            });
-
-            let html = '';
-            for (const [type, typeFormats] of Object.entries(grouped)) {
-                html += `
-                    <div style="margin-bottom: 2rem;">
-                        <h4 style="margin-bottom: 1rem; text-transform: capitalize; color: #2c3e50; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem;">${escapeHtml(type)}</h4>
-                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
-                `;
-
-                typeFormats.forEach(format => {
-                    const formatIdStr = getFormatIdString(format);
-                    const isSelected = selectedFormats.has(formatIdStr);
-                    const borderColor = isSelected ? '#0066cc' : '#e0e0e0';
-                    const bgColor = isSelected ? '#f0f7ff' : '#f9f9f9';
-                    const checkIcon = isSelected ? '✓ ' : '';
-
-                    // Check if format has preview info
-                    const hasPreview = format.preview_image || format.example_url || format.description;
-
-                    // Escape values for safe use in onclick handlers
-                    const safeFormatId = escapeForHtmlAttr(formatIdStr);
-                    const safeName = escapeForHtmlAttr(format.name);
-                    const safeAgentUrl = escapeForHtmlAttr(format.agent_url || '');
-
-                    html += `
-                        <div style="border: 2px solid ${borderColor}; border-radius: 4px; padding: 0.75rem; background: ${bgColor}; min-height: 120px; cursor: pointer; transition: all 0.2s;"
-                             onclick="toggleFormat('${safeFormatId}', '${safeName}', '${safeAgentUrl}')">
-                            <div style="display: flex; gap: 0.5rem;">
-                                <div style="flex: 1;">
-                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                        <div style="font-weight: 600; color: #333;">${checkIcon}${escapeHtml(format.name)}</div>
-                                        ${hasPreview ? `<span class="info-icon" onclick="event.stopPropagation(); showFormatPreview('${safeFormatId}')" style="cursor: pointer; color: #0066cc; font-size: 1rem;" title="Show preview">ℹ️</span>` : ''}
-                                    </div>
-                                    ${format.description ? `<div style="color: #777; font-size: 0.85rem; margin-top: 0.25rem; line-height: 1.3;">${escapeHtml(format.description)}</div>` : ''}
-                                    ${format.category === 'generative' ? '<span style="background: #9b59b6; color: white; font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 3px; margin-top: 0.5rem; display: inline-block;">AI Generated</span>' : ''}
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                });
-
-                html += '</div></div>';
-            }
-
-            container.innerHTML = html;
-            container.style.display = 'block';
-        }
-
-        function toggleFormat(formatId, formatName, agentUrl) {
-            if (selectedFormats.has(formatId)) {
-                selectedFormats.delete(formatId);
-            } else {
-                selectedFormats.add(formatId);
-            }
-
-            updateSelectedFormatsDisplay();
-            updateHiddenInput();
-            displayFormats(allFormats); // Refresh display to show selection state
-        }
-
-        function updateSelectedFormatsDisplay() {
-            const container = document.getElementById('selected-formats');
-            const list = document.getElementById('selected-formats-list');
-
-            if (selectedFormats.size === 0) {
-                container.style.display = 'none';
-                return;
-            }
-
-            container.style.display = 'block';
-
-            let html = '';
-            selectedFormats.forEach(formatId => {
-                const format = allFormats.find(f => getFormatIdString(f) === formatId);
-                if (format) {
-                    const safeFormatId = escapeForHtmlAttr(formatId);
-                    const safeName = escapeForHtmlAttr(format.name);
-                    const safeAgentUrl = escapeForHtmlAttr(format.agent_url || '');
-                    html += `
-                        <span style="background: #0066cc; color: white; padding: 0.5rem 0.75rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.5rem;">
-                            ${escapeHtml(format.name)}
-                            <span style="cursor: pointer; font-weight: bold;" onclick="toggleFormat('${safeFormatId}', '${safeName}', '${safeAgentUrl}')">×</span>
-                        </span>
-                    `;
+            window.formatPicker = new FormatTemplatePicker({
+                containerId: 'format-template-picker-container',
+                hiddenInputId: 'formats-data',
+                tenantId: '{{ tenant_id }}',
+                adapterType: 'mock',  // Mock adapter supports all formats including audio
+                scriptRoot: '{{ request.script_root }}' || '',
+                initialFormats: [],
+                onSelectionChange: function(formats) {
+                    console.log('Formats updated:', formats.length, 'formats selected');
                 }
             });
-
-            list.innerHTML = html;
-        }
-
-        function updateHiddenInput() {
-            // Store format references as JSON
-            const formatRefs = [];
-            selectedFormats.forEach(formatId => {
-                const format = allFormats.find(f => getFormatIdString(f) === formatId);
-                if (format) {
-                    formatRefs.push({
-                        agent_url: format.agent_url || 'https://creative.adcontextprotocol.org',
-                        format_id: formatId
-                    });
-                }
-            });
-
-            document.getElementById('formats-data').value = JSON.stringify(formatRefs);
-        }
-
-        function showFormatPreview(formatId) {
-            const format = allFormats.find(f => getFormatIdString(f) === formatId);
-            if (!format) return;
-
-            const modal = document.getElementById('format-preview-modal');
-            const content = document.getElementById('format-preview-content');
-
-            let html = `
-                <h3 style="margin-top: 0; margin-bottom: 1rem; color: #333;">${format.name}</h3>
-            `;
-
-            // Description
-            if (format.description) {
-                html += `
-                    <div style="margin-bottom: 1rem;">
-                        <strong style="display: block; margin-bottom: 0.5rem; color: #555;">Description:</strong>
-                        <p style="margin: 0; color: #666; line-height: 1.5;">${format.description}</p>
-                    </div>
-                `;
-            }
-
-            // Preview Image (400x300 per AdCP spec)
-            if (format.preview_image) {
-                html += `
-                    <div style="margin-bottom: 1rem;">
-                        <strong style="display: block; margin-bottom: 0.5rem; color: #555;">Preview:</strong>
-                        <img src="${format.preview_image}" alt="${format.name} preview" style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px;">
-                    </div>
-                `;
-            }
-
-            // Example URL
-            if (format.example_url) {
-                html += `
-                    <div style="margin-bottom: 1rem;">
-                        <a href="${format.example_url}" target="_blank" class="btn btn-primary" style="display: inline-block;">
-                            View Interactive Demo →
-                        </a>
-                    </div>
-                `;
-            }
-
-            // Format details
-            html += `
-                <div style="margin-top: 1.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
-                    <strong style="display: block; margin-bottom: 0.5rem; color: #555;">Format Details:</strong>
-                    <div style="font-size: 0.9rem; color: #666;">
-                        <div><strong>Format ID:</strong> <code>${format.format_id}</code></div>
-                        <div><strong>Type:</strong> ${format.type}</div>
-                        ${format.agent_url ? `<div><strong>Agent:</strong> ${format.agent_url}</div>` : ''}
-                    </div>
-                </div>
-            `;
-
-            content.innerHTML = html;
-            modal.style.display = 'flex';
-        }
-
-        function closeFormatPreview() {
-            document.getElementById('format-preview-modal').style.display = 'none';
-        }
-
-        // Close modal when clicking outside
-        document.getElementById('format-preview-modal').addEventListener('click', function(e) {
-            if (e.target === this) {
-                closeFormatPreview();
-            }
-        });
-
-        // Close modal on Escape key
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                closeFormatPreview();
-            }
         });
         </script>
 

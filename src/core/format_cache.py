@@ -14,6 +14,8 @@ Design principles:
 import json
 from pathlib import Path
 
+from adcp.types import FormatId as LibraryFormatId
+
 from src.core.schemas import FormatId, url
 
 # Default agent URL for AdCP reference implementation
@@ -79,9 +81,24 @@ def upgrade_legacy_format_id(format_id_value: str | dict | FormatId) -> FormatId
         >>> upgrade_legacy_format_id({"agent_url": "...", "id": "..."})
         FormatId(agent_url="...", id="...")
     """
-    # Already a FormatId object
+    # Already a FormatId object (check both our FormatId and library's FormatId)
     if isinstance(format_id_value, FormatId):
         return format_id_value
+
+    # Library FormatId (not our subclass) - convert to our FormatId
+    if isinstance(format_id_value, LibraryFormatId):
+        # Extract parameters for parameterized formats (AdCP 2.5)
+        kwargs = {
+            "agent_url": format_id_value.agent_url,
+            "id": format_id_value.id,
+        }
+        if format_id_value.width is not None:
+            kwargs["width"] = format_id_value.width
+        if format_id_value.height is not None:
+            kwargs["height"] = format_id_value.height
+        if format_id_value.duration_ms is not None:
+            kwargs["duration_ms"] = format_id_value.duration_ms
+        return FormatId(**kwargs)
 
     # Already a dict with agent_url
     if isinstance(format_id_value, dict):
