@@ -469,17 +469,38 @@ def google_callback():
         # Use a dict to track tenants by tenant_id to avoid duplicates
         tenant_dict = {}
 
-        if tenant_access["domain_tenant"]:
-            domain_tenant = tenant_access["domain_tenant"]
-            tenant_dict[domain_tenant.tenant_id] = {
-                "tenant_id": domain_tenant.tenant_id,
-                "name": domain_tenant.name,
-                "subdomain": domain_tenant.subdomain,
-                "is_admin": True,  # Domain users get admin access
+        # Process user_tenants first (primary authorization method via User records)
+        for tenant in tenant_access.get("user_tenants", []):
+            with get_db_session() as db_session:
+                from sqlalchemy import select
+
+                from src.core.database.models import User
+
+                stmt = select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
+                existing_user = db_session.scalars(stmt).first()
+                is_admin = existing_user.role == "admin" if existing_user else False
+
+            tenant_dict[tenant.tenant_id] = {
+                "tenant_id": tenant.tenant_id,
+                "name": tenant.name,
+                "subdomain": tenant.subdomain,
+                "is_admin": is_admin,
             }
 
+        # Process domain_tenant (bulk org access)
+        if tenant_access["domain_tenant"]:
+            domain_tenant = tenant_access["domain_tenant"]
+            if domain_tenant.tenant_id not in tenant_dict:
+                tenant_dict[domain_tenant.tenant_id] = {
+                    "tenant_id": domain_tenant.tenant_id,
+                    "name": domain_tenant.name,
+                    "subdomain": domain_tenant.subdomain,
+                    "is_admin": True,  # Domain users get admin access
+                }
+
+        # Process email_tenants (legacy backwards compatibility)
         for tenant in tenant_access["email_tenants"]:
-            # Skip if already added via domain access
+            # Skip if already added via user record or domain access
             if tenant.tenant_id in tenant_dict:
                 continue
 

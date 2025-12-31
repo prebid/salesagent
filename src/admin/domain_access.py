@@ -98,6 +98,43 @@ def find_tenants_by_authorized_email(email: str) -> list[Tenant]:
         return matching_tenants
 
 
+def find_tenants_by_user_record(email: str) -> list[Tenant]:
+    """
+    Find tenants where this email has an active User record.
+
+    This is the primary authorization mechanism for individual users.
+    User records are created via the Admin UI "Add User" functionality.
+
+    Args:
+        email: Email address to look up
+
+    Returns:
+        List of Tenant objects where this email has an active User record
+    """
+    if not email:
+        return []
+
+    email_lower = email.lower()
+
+    with get_db_session() as session:
+        # Find all active users with this email
+        user_stmt = select(User).where(User.email == email_lower, User.is_active == True)  # noqa: E712
+        users = session.scalars(user_stmt).all()
+
+        if not users:
+            return []
+
+        # Get the corresponding active tenants
+        tenant_ids = [user.tenant_id for user in users]
+        tenant_stmt = select(Tenant).where(Tenant.tenant_id.in_(tenant_ids), Tenant.is_active == True)  # noqa: E712
+        tenants = session.scalars(tenant_stmt).all()
+
+        for tenant in tenants:
+            logger.info(f"Found tenant {tenant.tenant_id} for user record {email}")
+
+        return list(tenants)
+
+
 def ensure_user_in_tenant(email: str, tenant_id: str, role: str = "admin", name: str = None) -> User:
     """
     Create or update user record in tenant.
@@ -151,7 +188,10 @@ def ensure_user_in_tenant(email: str, tenant_id: str, role: str = "admin", name:
 
 def get_user_tenant_access(email: str) -> dict:
     """
-    Get all tenant access for a user based on email domain and explicit authorization.
+    Get all tenant access for a user based on:
+    1. User records (primary method for individual users)
+    2. authorized_domains (bulk organization access)
+    3. authorized_emails (legacy, for backwards compatibility)
 
     Args:
         email: User's email address
@@ -160,7 +200,8 @@ def get_user_tenant_access(email: str) -> dict:
         Dict with access information:
         {
             "domain_tenant": Tenant object or None,
-            "email_tenants": List of Tenant objects,
+            "email_tenants": List of Tenant objects (from authorized_emails, legacy),
+            "user_tenants": List of Tenant objects (from User records),
             "is_super_admin": bool,
             "total_access": int
         }
@@ -172,22 +213,40 @@ def get_user_tenant_access(email: str) -> dict:
     result: dict[str, Tenant | list[Tenant] | bool | int | None] = {
         "domain_tenant": None,
         "email_tenants": [],
+        "user_tenants": [],
         "is_super_admin": email_domain == super_admin_domain,
         "total_access": 0,
     }
 
-    # Check domain-based access
+    # Track unique tenant IDs to avoid double-counting
+    seen_tenant_ids: set[str] = set()
     total_access = 0
-    if email_domain and email_domain != super_admin_domain:
-        domain_tenant = find_tenant_by_authorized_domain(email_domain)
-        if domain_tenant:
-            result["domain_tenant"] = domain_tenant
+
+    # Check User record-based access (primary method)
+    user_tenants = find_tenants_by_user_record(email)
+    result["user_tenants"] = user_tenants
+    for tenant in user_tenants:
+        if tenant.tenant_id not in seen_tenant_ids:
+            seen_tenant_ids.add(tenant.tenant_id)
             total_access += 1
 
-    # Check email-based access
+    # Check domain-based access
+    if email_domain and email_domain != super_admin_domain:
+        domain_tenant = find_tenant_by_authorized_domain(email_domain)
+        if domain_tenant and domain_tenant.tenant_id not in seen_tenant_ids:
+            result["domain_tenant"] = domain_tenant
+            seen_tenant_ids.add(domain_tenant.tenant_id)
+            total_access += 1
+
+    # Check email-based access (legacy, for backwards compatibility)
     email_tenants = find_tenants_by_authorized_email(email)
-    result["email_tenants"] = email_tenants
-    total_access += len(email_tenants)
+    # Filter out tenants we've already counted
+    unique_email_tenants = [t for t in email_tenants if t.tenant_id not in seen_tenant_ids]
+    result["email_tenants"] = unique_email_tenants
+    for tenant in unique_email_tenants:
+        seen_tenant_ids.add(tenant.tenant_id)
+        total_access += 1
+
     result["total_access"] = total_access
 
     return result

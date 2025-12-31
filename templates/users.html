@@ -523,6 +523,26 @@
         </form>
     </div>
 
+    <!-- Add User -->
+    <div class="card">
+        <div class="card-header">
+            <h2>Add User</h2>
+        </div>
+
+        <p style="color: #6b7280; margin-bottom: 1rem; font-size: 0.875rem;">
+            Add individual users by email address. They'll be able to log in via SSO once added.
+        </p>
+
+        <form method="POST" action="{{ url_for('users.add_user', tenant_id=tenant_id) }}" class="add-form">
+            <div class="form-group" style="flex: 1;">
+                <label for="email">Email Address</label>
+                <input type="email" id="email" name="email" placeholder="user@example.com" required>
+            </div>
+            <input type="hidden" name="role" value="viewer">
+            <button type="submit" class="btn btn-primary">Add User</button>
+        </form>
+    </div>
+
     <!-- Allowed Domains -->
     <div class="card">
         <div class="card-header">
@@ -530,7 +550,7 @@
         </div>
 
         <p style="color: #6b7280; margin-bottom: 1rem; font-size: 0.875rem;">
-            Users from these email domains will automatically gain access when logging in via SSO.
+            Everyone from these email domains can log in via SSO. Use this to allow your entire organization.
         </p>
 
         <form id="add-domain-form" class="add-form">
