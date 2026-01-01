@@ -16,7 +16,7 @@ The AdCP Sales Agent is a server that:
 |--------------|------------|
 | **Deploy my own sales agent** (publisher) | [Quickstart Guide](docs/quickstart.md) |
 | **Evaluate or develop locally** | [Quick Start](#quick-start-evaluation) below |
-| **Run a multi-tenant platform** | [Deployment Guide](docs/deployment.md) |
+| **Run a multi-tenant platform** | [Deployment Guide](docs/deployment/multi-tenant.md) |
 
 ---
 
@@ -49,9 +49,9 @@ Publishers deploy their own sales agent. Choose based on your needs:
 
 | Platform | Time | Difficulty | Guide |
 |----------|------|------------|-------|
-| **Docker** (local/on-prem) | 2 min | Easy | [quickstart-docker.md](docs/quickstart-docker.md) |
-| **Fly.io** (cloud) | 10-15 min | Medium | [quickstart-fly.md](docs/quickstart-fly.md) |
-| **Google Cloud Run** | 15-20 min | Medium | [quickstart-cloud-run.md](docs/quickstart-cloud-run.md) |
+| **Docker** (local/on-prem) | 2 min | Easy | [quickstart.md](docs/quickstart.md) |
+| **Fly.io** (cloud) | 10-15 min | Medium | [fly.md](docs/deployment/walkthroughs/fly.md) |
+| **Google Cloud Run** | 15-20 min | Medium | [gcp.md](docs/deployment/walkthroughs/gcp.md) |
 
 **Docker is the fastest** - it bundles PostgreSQL and just works. Cloud platforms require separate database setup.
 
@@ -110,7 +110,7 @@ For GAM integration, choose your authentication method:
 **Service Account (Recommended for Production):**
 - No OAuth credentials needed
 - Configure service account JSON in Admin UI
-- See [GAM Adapter Guide](docs/adapters/gam.md) for setup
+- See [GAM Adapter Guide](docs/adapters/gam/README.md) for setup
 
 **OAuth (Development/Testing):**
 1. Create OAuth credentials at [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
@@ -153,21 +153,21 @@ docker compose logs adcp-server | head -50
 - Verify `GAM_OAUTH_CLIENT_ID` and `GAM_OAUTH_CLIENT_SECRET` in `.env`
 - Restart: `docker compose restart`
 
-**More help:** [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
+**More help:** [Troubleshooting Guide](docs/development/troubleshooting.md)
 
 ## Documentation
 
 ### Deployment Guides
-- **[Docker Quickstart](docs/quickstart-docker.md)** - Local/on-prem (2 min)
-- **[Fly.io Quickstart](docs/quickstart-fly.md)** - Cloud deployment (10-15 min)
-- **[Cloud Run Quickstart](docs/quickstart-cloud-run.md)** - GCP deployment (15-20 min)
-- **[Full Deployment Guide](docs/deployment.md)** - All options (K8s, AWS, Azure, etc.)
+- **[Quickstart](docs/quickstart.md)** - Docker deployment (2 min)
+- **[Fly.io](docs/deployment/walkthroughs/fly.md)** - Cloud deployment (10-15 min)
+- **[Google Cloud Run](docs/deployment/walkthroughs/gcp.md)** - GCP deployment (15-20 min)
+- **[Single-Tenant](docs/deployment/single-tenant.md)** - Single publisher deployment
+- **[Multi-Tenant](docs/deployment/multi-tenant.md)** - Platform deployment
 
 ### Reference
-- **[Development Guide](docs/DEVELOPMENT.md)** - Local development and contributing
-- **[Testing Guide](docs/testing/README.md)** - Running and writing tests
-- **[Architecture](docs/ARCHITECTURE.md)** - System design and database schema
-- **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Monitoring and debugging
+- **[Development Guide](docs/development/README.md)** - Local development and contributing
+- **[Architecture](docs/development/architecture.md)** - System design and database schema
+- **[Troubleshooting Guide](docs/development/troubleshooting.md)** - Monitoring and debugging
 
 ## Key Features
 
@@ -329,7 +329,7 @@ salesagent/
 
 ## Contributing
 
-We welcome contributions! Please see our [Development Guide](docs/DEVELOPMENT.md) for:
+We welcome contributions! Please see our [Development Guide](docs/development/README.md) for:
 - Setting up your development environment
 - Running tests
 - Code style guidelines
@@ -350,7 +350,7 @@ conn = get_db_connection()
 # operations
 conn.close()  # Prone to leaks
 ```
-See [Database Patterns Guide](docs/database-patterns.md) for details.
+See [Contributing Guide](docs/development/contributing.md) for details.
 
 ## Admin Features
 

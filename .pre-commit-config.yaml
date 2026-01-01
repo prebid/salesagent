@@ -7,7 +7,7 @@ repos:
         name: Check documentation links
         entry: uv run python .pre-commit-hooks/check_docs_links.py
         language: system
-        files: '^docs/.*\.md$'
+        files: '^(docs/.*\.md|[^/]+\.md)$'
         pass_filenames: false
 
       # Check for tenant.config references

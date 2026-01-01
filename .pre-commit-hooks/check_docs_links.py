@@ -69,9 +69,6 @@ def check_link_exists(resolved_path: Path) -> bool:
         return True
     if resolved_path.exists():
         return True
-    # Check if it's a directory reference without trailing slash
-    if resolved_path.with_suffix("").is_dir():
-        return True
     # If path ends with /, check directory
     if str(resolved_path).endswith("/"):
         return resolved_path.is_dir()
@@ -111,14 +108,23 @@ def check_anchor_exists(filepath: Path, anchor: str) -> bool:
 def main() -> int:
     """Main entry point."""
     docs_dir = Path("docs")
-    if not docs_dir.exists():
-        print("No docs/ directory found, skipping link check")
-        return 0
-
     broken_links: list[tuple[Path, int, str, str, str]] = []
 
+    # Collect markdown files to check
+    md_files: list[Path] = []
+
+    # Check all root-level markdown files
+    md_files.extend(Path(".").glob("*.md"))
+
     # Find all markdown files in docs/
-    for md_file in docs_dir.rglob("*.md"):
+    if docs_dir.exists():
+        md_files.extend(docs_dir.rglob("*.md"))
+
+    if not md_files:
+        print("No markdown files found, skipping link check")
+        return 0
+
+    for md_file in md_files:
         links = extract_links_from_file(md_file)
 
         for line_num, link_text, link_path in links:
