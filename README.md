@@ -22,11 +22,12 @@ The AdCP Sales Agent is a server that:
 
 ## Quick Start (Evaluation)
 
-Try the sales agent locally with demo data:
+Try the sales agent locally:
 
 ```bash
-# Download and start
-curl -O https://raw.githubusercontent.com/adcontextprotocol/salesagent/main/docker-compose.yml
+# Clone and start
+git clone https://github.com/adcontextprotocol/salesagent.git
+cd salesagent
 docker compose up -d
 
 # Test the MCP interface
@@ -39,7 +40,7 @@ Access services at http://localhost:8000:
 - **MCP Server:** `/mcp/`
 - **A2A Server:** `/a2a`
 
-This creates a demo tenant with mock data for testing. For production, see the [Quickstart Guide](docs/quickstart.md).
+For production deployment, see the [Quickstart Guide](docs/quickstart.md).
 
 ---
 
@@ -67,22 +68,19 @@ Configure via the Admin UI:
 
 ## Development Setup
 
-For local development with hot-reload and all dependencies:
+For local development with hot-reload:
 
 ```bash
 git clone https://github.com/adcontextprotocol/salesagent.git
 cd salesagent
 cp .env.template .env
 
-# Build and start (builds from source with all dependencies)
-docker compose -f docker-compose.dev.yml build
-docker compose -f docker-compose.dev.yml up -d
-
-# Run database migrations
-docker compose -f docker-compose.dev.yml exec admin-ui python scripts/ops/migrate.py
+# Build and start (builds from source with hot-reload)
+docker compose build
+docker compose up -d
 
 # View logs
-docker compose -f docker-compose.dev.yml logs -f
+docker compose logs -f
 ```
 
 Access at http://localhost:8000:
@@ -90,7 +88,7 @@ Access at http://localhost:8000:
 - **MCP Server:** `/mcp/`
 - **A2A Server:** `/a2a`
 
-**Important:** Use `docker-compose.dev.yml` for development. It builds from local source code, enabling hot-reload and including all dependencies. The standard `docker-compose.yml` uses pre-built images which may not have the latest packages.
+Migrations run automatically on startup.
 
 Run tests:
 ```bash

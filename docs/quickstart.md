@@ -4,25 +4,39 @@ Get the AdCP Sales Agent running locally in under 5 minutes.
 
 ## Prerequisites
 
-- Docker and Docker Compose installed
-- OAuth credentials from your identity provider (Google, Microsoft, Okta, etc.)
-- (Optional) Gemini API key for AI-powered creative review
+- Docker installed
+- (Optional) OAuth credentials from your identity provider for SSO
 
-## Quick Start
+## Option 1: Docker Run (Quickest)
+
+If you have an existing PostgreSQL database:
 
 ```bash
-# 1. Download the compose file
-curl -O https://raw.githubusercontent.com/adcontextprotocol/salesagent/main/docker-compose.yml
+# Generate an encryption key (run once, save the output)
+docker run --rm ghcr.io/adcontextprotocol/salesagent:latest \
+  python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 
-# 2. Create environment file (optional - for local testing only)
-cat > .env << 'EOF'
-GEMINI_API_KEY=your-gemini-key  # Optional
-EOF
+# Run the sales agent (replace YOUR_KEY with the generated key)
+docker run -p 8000:8000 \
+  -e DATABASE_URL=postgresql://user:pass@host:5432/dbname \
+  -e ENCRYPTION_KEY=YOUR_KEY \
+  ghcr.io/adcontextprotocol/salesagent:latest
 
-# 3. Start services
+# Verify it's running
+curl http://localhost:8000/health
+```
+
+## Option 2: Clone and Run (Recommended for Development)
+
+```bash
+# Clone the repository
+git clone https://github.com/adcontextprotocol/salesagent.git
+cd salesagent
+
+# Start all services (includes PostgreSQL)
 docker compose up -d
 
-# 4. Verify it's running
+# Verify it's running
 curl http://localhost:8000/health
 ```
 
@@ -62,13 +76,14 @@ This demo data lets you explore features without configuring Google Ad Manager o
 
 > **Production deployments**: Do NOT set `CREATE_DEMO_TENANT=true`. Start with the default empty tenant, configure your real ad server adapter, set up SSO, and create users through the Admin UI.
 
-## Services
+## Endpoints
 
 All services are accessible through port 8000:
 
 | Service | URL |
 |---------|-----|
-| Admin UI | http://localhost:8000/admin |
+| Admin UI | http://localhost:8000/ |
+| Admin UI (alternate) | http://localhost:8000/admin |
 | MCP Server | http://localhost:8000/mcp/ |
 | A2A Server | http://localhost:8000/a2a |
 | Health Check | http://localhost:8000/health |
@@ -113,17 +128,6 @@ docker compose down -v
 
 # Rebuild after code changes
 docker compose build && docker compose up -d
-```
-
-## Development Mode
-
-For development with hot-reload:
-
-```bash
-git clone https://github.com/adcontextprotocol/salesagent.git
-cd salesagent
-cp .env.template .env
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 ```
 
 ## Troubleshooting

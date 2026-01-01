@@ -1,31 +1,24 @@
-# AdCP Sales Agent - Production/Quickstart Docker Compose
+# AdCP Sales Agent - Docker Compose for Development
 #
-# Quick start:
-#   docker compose up -d
+# For local development with hot-reload.
 #
-# All services accessible through port 8000:
-#   - http://localhost:8000/       -> Admin UI
-#   - http://localhost:8000/admin  -> Admin UI
-#   - http://localhost:8000/mcp    -> MCP Server
-#   - http://localhost:8000/a2a    -> A2A Server
+# Usage:
+#   docker compose up
+#
+# Endpoints (default port 8000):
+#   http://localhost:8000/       - Admin UI (login here)
+#   http://localhost:8000/admin  - Admin UI (alternate path)
+#   http://localhost:8000/mcp    - MCP Server (for AI agents)
+#   http://localhost:8000/a2a    - A2A Server (agent-to-agent)
 #
 # First-time setup:
 #   1. Log in with test credentials (test_super_admin@example.com / test123)
 #   2. Configure SSO in Users & Access
 #   3. Disable Setup Mode once SSO is working
 #
-# Local testing only (not for production):
-#   Add CREATE_DEMO_TENANT=true to .env to create a demo tenant with mock adapter
-#
-# Uses pre-built images from GitHub Container Registry.
-# Pin to a specific version:
-#   IMAGE_TAG=0.1.0 docker compose up -d
-#
-# For development with hot-reload (supports multiple worktrees):
-#   docker compose -f docker-compose.dev.yml up
-#
-# For multi-tenant testing with subdomain routing:
-#   docker compose -f docker-compose.multi-tenant.yml up
+# Environment variables (optional, via .env file):
+#   CONDUCTOR_PORT: Change proxy port (default: 8000, useful for multiple worktrees)
+#   CREATE_DEMO_TENANT=true: Create demo tenant with mock adapter
 
 services:
   postgres:
@@ -43,7 +36,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Nginx proxy for unified routing on port 8000
   proxy:
     image: nginx:stable
     volumes:
@@ -52,7 +44,7 @@ services:
       - adcp-server
       - admin-ui
     ports:
-      - "8000:8000"
+      - "${CONDUCTOR_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -60,7 +52,10 @@ services:
       retries: 3
 
   adcp-server:
-    image: ghcr.io/adcontextprotocol/salesagent:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: []  # Override image entrypoint for local dev
     env_file:
       - path: .env
         required: false
@@ -69,14 +64,26 @@ services:
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
       # Per-tenant Setup Mode enables test credentials for new tenants
-      # Configure SSO and disable Setup Mode for production security
+      # Override .env ports to match nginx-development.conf expectations
+      ADCP_SALES_PORT: "8080"
+      # Development settings
+      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
+      PYTHONUNBUFFERED: "1"
+      FLASK_ENV: development
     depends_on:
       postgres:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
+      # Mount source code for hot reloading
+      - .:/app
+      - /app/.venv
       - ./audit_logs:/app/audit_logs
+      # Shared cache volumes for faster builds
+      - adcp_global_pip_cache:/root/.cache/pip
+      - adcp_global_uv_cache:/cache/uv
+    command: ["python", "scripts/run_server.py"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -84,21 +91,34 @@ services:
       retries: 3
 
   admin-ui:
-    image: ghcr.io/adcontextprotocol/salesagent:${IMAGE_TAG:-latest}
-    command: python -m src.admin.server
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: []  # Override image entrypoint for local dev
     env_file:
       - path: .env
         required: false
     environment:
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       SKIP_NGINX: "true"
+      # Per-tenant Setup Mode enables test credentials for new tenants
+      # Development settings
+      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
+      PYTHONUNBUFFERED: "1"
+      FLASK_ENV: development
+      FLASK_DEBUG: "1"
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
+      # Mount source code for hot reloading
+      - .:/app
+      - /app/.venv
       - ./audit_logs:/app/audit_logs
-      - ./templates:/app/templates:ro
-      - ./src:/app/src:ro
+      # Shared cache volumes for faster builds
+      - adcp_global_pip_cache:/root/.cache/pip
+      - adcp_global_uv_cache:/cache/uv
+    command: ["python", "-m", "src.admin.server"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
@@ -107,3 +127,5 @@ services:
 
 volumes:
   postgres_data:
+  adcp_global_pip_cache:
+  adcp_global_uv_cache:

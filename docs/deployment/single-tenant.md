@@ -71,27 +71,15 @@ For a complete list including GAM integration and all optional settings, see the
 
 ## Docker Compose Deployment
 
-### Option A: Pre-built Images (Recommended)
-
-```bash
-# Download compose file
-curl -O https://raw.githubusercontent.com/adcontextprotocol/salesagent/main/docker-compose.yml
-
-# Start services
-docker compose up -d
-
-# Verify
-curl http://localhost:8000/health
-```
-
-### Option B: Build from Source
-
 ```bash
 git clone https://github.com/adcontextprotocol/salesagent.git
 cd salesagent
 cp .env.template .env
 # Edit .env with your configuration
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+docker compose up -d
+
+# Verify
+curl http://localhost:8000/health
 ```
 
 ## Services and Ports

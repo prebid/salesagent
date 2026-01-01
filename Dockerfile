@@ -44,7 +44,7 @@ FROM python:3.12-slim
 
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.title="AdCP Sales Agent"
-LABEL org.opencontainers.image.description="Reference implementation of an AdCP (Ad Context Protocol) Sales Agent. Deploy with Docker Compose: curl -O https://raw.githubusercontent.com/adcontextprotocol/salesagent/main/docker-compose.yml && docker compose up -d"
+LABEL org.opencontainers.image.description="Reference implementation of an AdCP (Ad Context Protocol) Sales Agent. See docs/quickstart.md for deployment options."
 LABEL org.opencontainers.image.url="https://github.com/adcontextprotocol/salesagent"
 LABEL org.opencontainers.image.source="https://github.com/adcontextprotocol/salesagent"
 LABEL org.opencontainers.image.documentation="https://github.com/adcontextprotocol/salesagent/blob/main/docs/quickstart.md"
@@ -88,12 +88,13 @@ RUN echo "Cache bust: $CACHE_BUST"
 # Copy application code
 COPY . .
 
-# Copy nginx configs for production - run_all_services.py selects based on ADCP_MULTI_TENANT
-# Default: single-tenant (path-based routing)
+# Copy nginx configs - run_all_services.py selects based on ADCP_MULTI_TENANT
+# Default: single-tenant (path-based routing, localhost upstreams)
 # ADCP_MULTI_TENANT=true: multi-tenant (subdomain routing)
-# Note: nginx-development.conf is only used by docker-compose, not copied to image
+# Development config included for docker-compose.yml multi-container setup
 COPY config/nginx/nginx-single-tenant.conf /etc/nginx/nginx-single-tenant.conf
 COPY config/nginx/nginx-multi-tenant.conf /etc/nginx/nginx-multi-tenant.conf
+COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 
 # Create nginx directories with proper permissions
 RUN mkdir -p /var/log/nginx /var/run && \

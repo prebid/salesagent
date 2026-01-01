@@ -25,13 +25,13 @@
 
 3. **Build and start development services:**
    ```bash
-   docker compose -f docker-compose.dev.yml build
-   docker compose -f docker-compose.dev.yml up -d
+   docker compose -f docker-compose.yml build
+   docker compose -f docker-compose.yml up -d
    ```
 
 4. **Run database migrations:**
    ```bash
-   docker compose -f docker-compose.dev.yml exec admin-ui python scripts/ops/migrate.py
+   docker compose -f docker-compose.yml exec admin-ui python scripts/ops/migrate.py
    ```
 
 5. **Install local dependencies (for running tests outside Docker):**
@@ -44,14 +44,14 @@
 **Development (recommended):**
 ```bash
 # Build from source (includes all dependencies, enables hot-reload)
-docker compose -f docker-compose.dev.yml build
-docker compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.yml build
+docker compose -f docker-compose.yml up -d
 
 # View logs
-docker compose -f docker-compose.dev.yml logs -f
+docker compose -f docker-compose.yml logs -f
 
 # Stop services
-docker compose -f docker-compose.dev.yml down
+docker compose -f docker-compose.yml down
 ```
 
 **Production-style (uses pre-built images):**
@@ -66,7 +66,7 @@ Access points (all via nginx proxy on port 8000):
 
 Test login: `test_super_admin@example.com` / `test123`
 
-**Why use `docker-compose.dev.yml`?**
+**Why use `docker-compose.yml`?**
 - Builds from local source code (not pre-built images)
 - Hot-reload for code changes
 - Includes all dependencies (new packages work immediately)
@@ -326,7 +326,7 @@ uv run python simulation_full.py http://localhost:8080 \
 ```bash
 grep -r "Column(" src/core/database/models.py
 # Connect to PostgreSQL in Docker
-docker compose -f docker-compose.dev.yml exec postgres psql -U adcp_user -d adcp -c "\d table_name"
+docker compose -f docker-compose.yml exec postgres psql -U adcp_user -d adcp -c "\d table_name"
 ```
 
 2. Create migration:
@@ -347,7 +347,7 @@ def downgrade():
 4. Run migration:
 ```bash
 # Inside Docker (recommended)
-docker compose -f docker-compose.dev.yml exec admin-ui python scripts/ops/migrate.py
+docker compose -f docker-compose.yml exec admin-ui python scripts/ops/migrate.py
 
 # Or locally with uv
 uv run python scripts/ops/migrate.py

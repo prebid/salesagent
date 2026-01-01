@@ -8,17 +8,17 @@ Documentation for contributors to the AdCP Sales Agent codebase.
 2. Copy `.env.template` to `.env`
 3. Build and start the development environment:
    ```bash
-   docker compose -f docker-compose.dev.yml build
-   docker compose -f docker-compose.dev.yml up -d
+   docker compose -f docker-compose.yml build
+   docker compose -f docker-compose.yml up -d
    ```
 4. Run database migrations:
    ```bash
-   docker compose -f docker-compose.dev.yml exec admin-ui python scripts/ops/migrate.py
+   docker compose -f docker-compose.yml exec admin-ui python scripts/ops/migrate.py
    ```
 5. Access Admin UI at http://localhost:8000/admin
    - Test login: `test_super_admin@example.com` / `test123`
 
-**Why `docker-compose.dev.yml`?** It builds from local source code (not pre-built images), enabling:
+**Why `docker-compose.yml`?** It builds from local source code (not pre-built images), enabling:
 - Hot-reload for code changes
 - All dependencies including newly added packages
 - Source code mounted for live development
@@ -64,7 +64,7 @@ uv run mypy src/core/your_file.py --config-file=mypy.ini
 
 ```bash
 # Inside Docker (recommended for dev)
-docker compose -f docker-compose.dev.yml exec admin-ui python scripts/ops/migrate.py
+docker compose -f docker-compose.yml exec admin-ui python scripts/ops/migrate.py
 
 # Or locally with uv
 uv run python scripts/ops/migrate.py
