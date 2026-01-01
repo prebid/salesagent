@@ -29,8 +29,8 @@ When you create a media buy using the mock adapter, it can automatically:
 | Setting | Description | Default | Example Values |
 |---------|-------------|---------|----------------|
 | **Enabled** | Turn delivery simulation on/off | `false` | `true` / `false` |
-| **Time Acceleration** | Real seconds = Simulated seconds | `3600` (1 sec = 1 hour) | `60` (1 sec = 1 min)<br>`86400` (1 sec = 1 day) |
-| **Update Interval** | How often to fire webhooks (real-time) | `1.0` seconds | `0.5` (twice per second)<br>`5.0` (every 5 seconds) |
+| **Time Acceleration** | Real seconds = Simulated seconds | `3600` (1 sec = 1 hour) | `60` (1 sec = 1 min), `86400` (1 sec = 1 day) |
+| **Update Interval** | How often to fire webhooks (real-time) | `1.0` seconds | `0.5` (twice per second), `5.0` (every 5 seconds) |
 
 ### Example Scenarios
 
