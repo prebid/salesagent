@@ -408,6 +408,17 @@ def google_auth():
     logger.info(f"OAuth initiation - Request host: {request.host}")
     logger.info(f"OAuth initiation - Request scheme: {request.scheme}")
 
+    # Debug: Log session cookie configuration
+    logger.warning(
+        f"Session config: SECURE={current_app.config.get('SESSION_COOKIE_SECURE')}, "
+        f"SAMESITE={current_app.config.get('SESSION_COOKIE_SAMESITE')}, "
+        f"DOMAIN={current_app.config.get('SESSION_COOKIE_DOMAIN')}, "
+        f"PATH={current_app.config.get('SESSION_COOKIE_PATH')}"
+    )
+
+    # Debug: Log incoming cookies
+    logger.warning(f"Incoming cookies: {list(request.cookies.keys())}")
+
     redirect_uri = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI")
     if redirect_uri:
         logger.info(f"Using GOOGLE_OAUTH_REDIRECT_URI from env: {redirect_uri}")
@@ -479,6 +490,13 @@ def google_callback():
     logger.warning(f"Request URL: {request.url}")
     logger.warning(f"Request args: {dict(request.args)}")
     logger.warning(f"Session keys at start: {list(session.keys())}")
+    logger.warning(f"Incoming cookies: {list(request.cookies.keys())}")
+    logger.warning(
+        f"Session config: SECURE={current_app.config.get('SESSION_COOKIE_SECURE')}, "
+        f"SAMESITE={current_app.config.get('SESSION_COOKIE_SAMESITE')}, "
+        f"DOMAIN={current_app.config.get('SESSION_COOKIE_DOMAIN')}, "
+        f"PATH={current_app.config.get('SESSION_COOKIE_PATH')}"
+    )
 
     oauth = current_app.oauth if hasattr(current_app, "oauth") else None
     if not oauth:
