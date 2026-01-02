@@ -218,8 +218,6 @@ def login():
     For multi-tenant deployments, detects tenant from subdomain and checks
     for tenant-specific OIDC configuration first.
     """
-    test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-
     # Capture 'next' parameter for redirect after login
     next_url = request.args.get("next")
     if next_url:
@@ -228,9 +226,13 @@ def login():
     # Don't auto-redirect if user just logged out
     just_logged_out = request.args.get("logged_out") == "1"
 
-    # Check if OAuth is configured via environment
+    # Check if OAuth is configured via environment (fallback for all tenants)
     client_id, client_secret, discovery_url, _ = get_oauth_config()
     oauth_configured = bool(client_id and client_secret and discovery_url)
+
+    # Determine test_mode from env var only
+    # tenant.auth_setup_mode is only used when NO global OAuth is configured
+    test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
 
     from src.core.config_loader import is_single_tenant_mode
 
@@ -251,8 +253,8 @@ def login():
             if tenant:
                 tenant_context = tenant.tenant_id
                 tenant_name = tenant.name
-                # Check if tenant has auth_setup_mode enabled
-                if hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
+                # Only use auth_setup_mode if no global OAuth configured
+                if not oauth_configured and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
                     test_mode = True
                 logger.info(
                     f"Detected tenant context from Approximated headers: {approximated_host} -> {tenant_context}"
@@ -270,8 +272,8 @@ def login():
                 if tenant:
                     tenant_context = tenant.tenant_id
                     tenant_name = tenant.name
-                    # Check if tenant has auth_setup_mode enabled
-                    if hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
+                    # Only use auth_setup_mode if no global OAuth configured
+                    if not oauth_configured and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
                         test_mode = True
                     logger.info(f"Detected tenant context from Host header: {tenant_subdomain} -> {tenant_context}")
 
@@ -290,6 +292,10 @@ def login():
         if oidc_enabled and not test_mode and not just_logged_out:
             return redirect(url_for("oidc.login", tenant_id=tenant_context))
 
+        # Fall back to global OAuth for this tenant
+        if oauth_configured and not just_logged_out:
+            return redirect(url_for("auth.tenant_google_auth", tenant_id=tenant_context))
+
     elif is_single_tenant_mode():
         # Single-tenant mode: check default tenant's OIDC config
         from src.core.database.models import TenantAuthConfig
@@ -300,14 +306,15 @@ def login():
             if config and config.oidc_client_id:
                 oidc_configured = True
                 oidc_enabled = config.oidc_enabled
-            if tenant and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
+            # Only use auth_setup_mode in single-tenant mode if no global OAuth
+            if not oauth_configured and tenant and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
                 test_mode = True
 
         if oidc_enabled and not test_mode and not just_logged_out:
             return redirect(url_for("oidc.login", tenant_id="default"))
 
-    # Fall back to global OAuth if configured and no tenant-specific OIDC
-    if oauth_configured and not test_mode and not just_logged_out:
+    # Fall back to global OAuth if configured (for admin domain or unknown tenants)
+    if oauth_configured and not just_logged_out:
         return redirect(url_for("auth.google_auth"))
 
     # Show login page (test mode or OAuth not configured)
@@ -336,16 +343,25 @@ def tenant_login(tenant_id):
     if next_url:
         session["login_next_url"] = next_url
 
+    # Check if global OAuth is configured (fallback for all tenants)
+    client_id, client_secret, discovery_url, _ = get_oauth_config()
+    oauth_configured = bool(client_id and client_secret and discovery_url)
+
     # Verify tenant exists and get auth_setup_mode
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
             abort(404)
         tenant_name = tenant.name
-        # Use tenant's auth_setup_mode, with fallback to env var for backwards compatibility
-        test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
-        if os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true":
-            test_mode = True  # Environment variable can override to enable test mode
+
+        # Determine test_mode:
+        # - ADCP_AUTH_TEST_MODE env var enables test mode globally
+        # - tenant.auth_setup_mode enables test mode for this tenant ONLY if no global OAuth
+        #   (for multi-tenant with global OAuth, tenants use global OAuth, not setup mode)
+        test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
+        if not test_mode and not oauth_configured:
+            # No global OAuth - use tenant's auth_setup_mode (for single-tenant SSO setup)
+            test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
 
         # Check if tenant-specific OIDC is configured and enabled
         from src.services.auth_config_service import get_oidc_config_for_auth
@@ -353,16 +369,13 @@ def tenant_login(tenant_id):
         oidc_config = get_oidc_config_for_auth(tenant_id)
         oidc_enabled = bool(oidc_config)
 
-    # Check if global OAuth is configured (fallback)
-    client_id, client_secret, discovery_url, _ = get_oauth_config()
-    oauth_configured = bool(client_id and client_secret and discovery_url)
-
     # If OIDC is enabled and not in test mode and not just logged out, redirect directly to OIDC
     if oidc_enabled and not test_mode and not just_logged_out:
         return redirect(url_for("oidc.login", tenant_id=tenant_id))
 
-    # If OAuth is configured and not in test mode and not just logged out, redirect directly to OAuth
-    if oauth_configured and not test_mode and not just_logged_out:
+    # If OAuth is configured and not just logged out, redirect directly to OAuth
+    # (global OAuth is the fallback for tenants without their own OIDC)
+    if oauth_configured and not just_logged_out:
         return redirect(url_for("auth.tenant_google_auth", tenant_id=tenant_id))
 
     from src.core.config_loader import is_single_tenant_mode
