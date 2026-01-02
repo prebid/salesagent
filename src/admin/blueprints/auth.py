@@ -458,10 +458,14 @@ def google_auth():
     # Log what's in the session after Authlib stores the state
     logger.warning(f"Session keys after authorize_redirect: {list(session.keys())}")
 
-    # CRITICAL: Mark the session as modified to ensure Flask saves it
-    # Authlib stores OAuth state in session, but the redirect response may not
-    # trigger Flask's session save mechanism automatically
+    # CRITICAL FIX: Authlib's authorize_redirect() returns a redirect response,
+    # but this response bypasses Flask's normal session-saving mechanism.
+    # We must explicitly save the session to the response.
+    # Flask's session interface saves the session when processing the response
+    # through save_session(), but redirect responses from Authlib don't trigger this.
     session.modified = True
+    # Explicitly call Flask's session save mechanism on the response
+    current_app.session_interface.save_session(current_app, session, response)
 
     # Log the Set-Cookie header that will be sent
     set_cookie_header = response.headers.get("Set-Cookie", "")
@@ -502,7 +506,14 @@ def tenant_google_auth(tenant_id):
     session["oauth_tenant_context"] = tenant_id
 
     # Let Authlib manage the state parameter for CSRF protection
-    return oauth.google.authorize_redirect(redirect_uri)
+    response = oauth.google.authorize_redirect(redirect_uri)
+
+    # CRITICAL FIX: Explicitly save session to response (same fix as google_auth)
+    # Authlib's authorize_redirect() bypasses Flask's normal session-saving mechanism
+    session.modified = True
+    current_app.session_interface.save_session(current_app, session, response)
+
+    return response
 
 
 @auth_bp.route("/auth/google/callback")
