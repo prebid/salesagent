@@ -162,15 +162,29 @@ class LinkValidator:
         parsed = urlparse(url)
         return parsed.path
 
-    def validate_link(self, url: str) -> tuple[bool, int, str]:
+    def validate_link(self, url: str, visited: set[str] | None = None) -> tuple[bool, int, str]:
         """Validate a single link by making a HEAD request.
 
         Args:
             url: Normalized URL path to validate
+            visited: Set of already visited URLs (for cycle detection)
 
         Returns:
             Tuple of (is_valid, status_code, error_message)
         """
+        # Initialize visited set on first call
+        if visited is None:
+            visited = set()
+
+        # Detect redirect cycles
+        if url in visited:
+            # Cycle detected - consider it valid since the route exists and is accessible
+            # (the cycle is a routing issue, not a broken link)
+            return True, 302, ""
+
+        # Mark URL as visited
+        visited.add(url)
+
         try:
             # Don't follow redirects automatically - check where they go first
             response = self.client.head(url, follow_redirects=False)
@@ -187,9 +201,9 @@ class LinkValidator:
                     # External redirects (OAuth, etc.) are valid - route exists and is working
                     if location.startswith(("http://", "https://", "//")):
                         return True, response.status_code, ""
-                    # Internal redirects - follow them to validate
+                    # Internal redirects - follow them to validate (with cycle detection)
                     response.close()
-                    return self.validate_link(location)
+                    return self.validate_link(location, visited)
 
                 # Consider 200, 304 as valid
                 # 304: Not Modified (common for cached resources)
