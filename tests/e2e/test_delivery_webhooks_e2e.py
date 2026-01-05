@@ -294,18 +294,19 @@ class TestDailyDeliveryWebhookFlow:
             if received:
                 webhook_payload = received[0]
 
-                # # Verify webhook payload structure
-                # # The scheduler uses task_type="media_buy_delivery"
-                assert webhook_payload.get("task_type") == "media_buy_delivery"
-                assert webhook_payload.get("status") == "completed"
+                # Verify webhook payload structure (MCP webhook format)
+                assert webhook_payload.get("status") == "completed", f"Expected status 'completed', got {webhook_payload.get('status')}"
+                assert webhook_payload.get("task_id") == media_buy_id, f"Expected task_id '{media_buy_id}', got {webhook_payload.get('task_id')}"
+                assert "timestamp" in webhook_payload, "Missing timestamp in webhook payload"
 
                 result = webhook_payload.get("result") or {}
 
+                # Verify delivery data
                 media_buy_deliveries = result.get("media_buy_deliveries")
-                assert len(media_buy_deliveries) > 0
+                assert media_buy_deliveries is not None, "Missing media_buy_deliveries in result"
+                assert len(media_buy_deliveries) > 0, "Expected at least one media_buy_delivery"
                 assert media_buy_deliveries[0]["media_buy_id"] == media_buy_id
 
-                # # Verify scheduling metadata
-                assert "next_expected_at" in result
-                assert result.get("frequency") == "daily"
-                assert "sequence_number" in result
+                # Verify scheduling metadata
+                assert result.get("notification_type") == "scheduled", f"Expected notification_type 'scheduled', got {result.get('notification_type')}"
+                assert "next_expected_at" in result, "Missing next_expected_at in result"
