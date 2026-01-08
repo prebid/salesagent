@@ -871,7 +871,7 @@ class GAMCreativesManager:
         """
         from ..utils.macros import substitute_tracking_urls
 
-        # Extract tracking URLs from delivery_settings (populated by creative_helpers.py)
+        # Extract tracking URLs from delivery_settings
         delivery_settings = asset.get("delivery_settings", {})
         tracking_urls = delivery_settings.get("tracking_urls", {})
         impression_urls = tracking_urls.get("impression", [])
@@ -882,8 +882,7 @@ class GAMCreativesManager:
             creative_type = creative.get("xsi_type", "")
 
             if creative_type == "ThirdPartyCreative":
-                # Per GAM docs: ThirdPartyCreative uses thirdPartyImpressionTrackingUrls
-                # This is an array of strings (not dicts with url key)
+                # Per GAM docs: ThirdPartyCreative uses thirdPartyImpressionTrackingUrls (array of strings)
                 existing_urls = creative.get("thirdPartyImpressionTrackingUrls", [])
                 creative["thirdPartyImpressionTrackingUrls"] = existing_urls + [
                     url for url in processed_urls if url not in existing_urls
@@ -898,7 +897,6 @@ class GAMCreativesManager:
         click_urls = tracking_urls.get("click", [])
         if click_urls and creative.get("xsi_type") in ["ImageCreative", "ThirdPartyCreative"]:
             if not creative.get("destinationUrl"):
-                # Apply macro substitution to click URL too
                 processed_click_urls = substitute_tracking_urls(click_urls[:1])
                 if processed_click_urls:
                     creative["destinationUrl"] = processed_click_urls[0]

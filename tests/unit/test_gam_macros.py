@@ -40,9 +40,9 @@ class TestMacroMapping:
     def test_privacy_macros(self):
         """Privacy macros use various GAM formats."""
         assert ADCP_TO_GAM_MACRO_MAP["{GDPR}"] == "${GDPR}"
-        assert ADCP_TO_GAM_MACRO_MAP["{GDPR_CONSENT}"] == "${GDPR_CONSENT_XXXX}"
+        assert ADCP_TO_GAM_MACRO_MAP["{GDPR_CONSENT}"] is None  # Should already be filled
         assert ADCP_TO_GAM_MACRO_MAP["{US_PRIVACY}"] == "%%TAG_PARAM:us_privacy%%"
-        assert ADCP_TO_GAM_MACRO_MAP["{GPP_STRING}"] is None
+        assert ADCP_TO_GAM_MACRO_MAP["{GPP_STRING}"] is None  # Should already be filled
         assert ADCP_TO_GAM_MACRO_MAP["{LIMIT_AD_TRACKING}"] == "%%ADVERTISING_IDENTIFIER_IS_LAT%%"
 
     # ==========================================================================
@@ -168,11 +168,11 @@ class TestSubstituteMacros:
     # Privacy & Compliance Macros
     # ==========================================================================
     def test_gdpr_uses_dollar_format(self):
-        """GDPR macros use ${} format."""
+        """GDPR uses ${} format, GDPR_CONSENT passes through (already filled)."""
         url = "https://t.com/p?gdpr={GDPR}&consent={GDPR_CONSENT}"
         result = substitute_macros(url)
         assert "${GDPR}" in result
-        assert "${GDPR_CONSENT_XXXX}" in result
+        assert "{GDPR_CONSENT}" in result  # Passes through unchanged
 
     def test_us_privacy_uses_tag_param(self):
         """US_PRIVACY uses TAG_PARAM format."""
@@ -181,10 +181,10 @@ class TestSubstituteMacros:
         assert result == "https://t.com/p?usp=%%TAG_PARAM:us_privacy%%"
 
     def test_gpp_string_passthrough(self):
-        """GPP_STRING uses ${} format."""
+        """GPP_STRING passes through unchanged (already filled)."""
         url = "https://t.com/p?gpp={GPP_STRING}"
         result = substitute_macros(url)
-        assert "${GPP_STRING_XXXXX}" in result
+        assert "{GPP_STRING}" in result  # Passes through unchanged
 
     def test_limit_ad_tracking(self):
         """LIMIT_AD_TRACKING uses advertising identifier LAT macro."""
@@ -353,9 +353,9 @@ class TestSubstituteMacros:
         # Expand macros (%macro! format)
         assert "%epid!" in result  # PLACEMENT_ID
 
-        # GDPR macros (${} format)
+        # GDPR macros (${} format for GDPR, passthrough for GDPR_CONSENT)
         assert "${GDPR}" in result
-        assert "${GDPR_CONSENT_XXXX}" in result
+        assert "{GDPR_CONSENT}" in result  # Passes through (already filled)
 
         # TAG_PARAM macros
         assert "%%TAG_PARAM:us_privacy%%" in result

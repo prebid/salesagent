@@ -39,9 +39,9 @@ ADCP_TO_GAM_MACRO_MAP: dict[str, str | None] = {
     # Privacy & Compliance Macros
     # ==========================================================================
     "{GDPR}": "${GDPR}",
-    "{GDPR_CONSENT}": "${GDPR_CONSENT_XXXX}",  # IAB GVL ID
+    "{GDPR_CONSENT}": None,  # Should already be filled
     "{US_PRIVACY}": "%%TAG_PARAM:us_privacy%%",  # https://support.google.com/admanager/answer/2376981?hl=en#tag-parameter&zippy=%2Ctag-parameter
-    "{GPP_STRING}": "${GPP_STRING_XXXXX}",  # IAB GVL ID
+    "{GPP_STRING}": None,  # Should already be filled
     "{LIMIT_AD_TRACKING}": "%%ADVERTISING_IDENTIFIER_IS_LAT%%",
     # ==========================================================================
     # Device & Environment Macros
