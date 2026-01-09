@@ -187,7 +187,8 @@ def _extract_creative_url_and_dimensions(
     url = None
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         # Use format spec to find the correct asset_id for image/video/url assets
-        # Only check individual assets (not repeatable groups) which have asset_type/asset_id
+        # Note: We only support individual assets here (not repeatable groups).
+        # This matches previous behavior - repeatable groups were never supported in this function.
         for asset_spec in get_individual_assets(format_spec):
             # Type guard: get_individual_assets only returns Assets, not Assets1 (repeatable groups)
             if not isinstance(asset_spec, Assets):
@@ -206,7 +207,8 @@ def _extract_creative_url_and_dimensions(
     height = None
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         # Use format spec to find the correct asset_id for image/video assets
-        # Only check individual assets (not repeatable groups) which have asset_type/asset_id
+        # Note: We only support individual assets here (not repeatable groups).
+        # This matches previous behavior - repeatable groups were never supported in this function.
         for asset_spec in get_individual_assets(format_spec):
             # Type guard: get_individual_assets only returns Assets, not Assets1 (repeatable groups)
             if not isinstance(asset_spec, Assets):
