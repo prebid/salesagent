@@ -32,7 +32,7 @@ from tests.integration_v2.conftest import (
     add_required_setup_data,
     create_test_product_with_pricing,
 )
-from tests.utils.a2a_helpers import create_a2a_message_with_skill
+from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -175,13 +175,9 @@ class TestA2AErrorPropagation:
             assert result.artifacts is not None
             assert len(result.artifacts) > 0
 
-            # Extract response data
+            # Extract response data using helper (handles TextPart + DataPart pattern)
             artifact = result.artifacts[0]
-            artifact_data = (
-                artifact.parts[0].root.data
-                if hasattr(artifact.parts[0], "root") and hasattr(artifact.parts[0].root, "data")
-                else {}
-            )
+            artifact_data = extract_data_from_artifact(artifact)
 
             # CRITICAL ASSERTIONS: Error propagation
             assert "success" in artifact_data, "Response must include 'success' field"
@@ -231,13 +227,9 @@ class TestA2AErrorPropagation:
             # Process the message - should return auth error
             result = await handler.on_message_send(params)
 
-            # Extract response data
+            # Extract response data using helper (handles TextPart + DataPart pattern)
             artifact = result.artifacts[0]
-            artifact_data = (
-                artifact.parts[0].root.data
-                if hasattr(artifact.parts[0], "root") and hasattr(artifact.parts[0].root, "data")
-                else {}
-            )
+            artifact_data = extract_data_from_artifact(artifact)
 
             # CRITICAL ASSERTIONS: Error propagation for auth failures
             assert artifact_data["success"] is False, "success must be False for auth errors"
@@ -285,13 +277,9 @@ class TestA2AErrorPropagation:
             # Process the message - should succeed
             result = await handler.on_message_send(params)
 
-            # Extract response data
+            # Extract response data using helper (handles TextPart + DataPart pattern)
             artifact = result.artifacts[0]
-            artifact_data = (
-                artifact.parts[0].root.data
-                if hasattr(artifact.parts[0], "root") and hasattr(artifact.parts[0].root, "data")
-                else {}
-            )
+            artifact_data = extract_data_from_artifact(artifact)
 
             # CRITICAL ASSERTIONS: Success response
             assert artifact_data["success"] is True, "success must be True for successful operation"
@@ -346,13 +334,9 @@ class TestA2AErrorPropagation:
             # Process the message
             result = await handler.on_message_send(params)
 
-            # Extract response data
+            # Extract response data using helper (handles TextPart + DataPart pattern)
             artifact = result.artifacts[0]
-            artifact_data = (
-                artifact.parts[0].root.data
-                if hasattr(artifact.parts[0], "root") and hasattr(artifact.parts[0].root, "data")
-                else {}
-            )
+            artifact_data = extract_data_from_artifact(artifact)
 
             # CRITICAL ASSERTIONS: All AdCP domain fields from CreateMediaBuyResponse schema
             # Required AdCP domain field

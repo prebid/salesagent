@@ -1091,39 +1091,33 @@ class TestAdCPContract:
             len(internal_only_fields) >= 3
         ), f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
 
-    def test_package_rejects_invalid_fields(self):
-        """Test that Package schema rejects fields that don't exist in AdCP spec.
+    def test_package_ignores_invalid_fields(self):
+        """Test that Package schema ignores fields that don't exist in AdCP spec.
 
-        This prevents regressions where we accidentally try to construct Package
-        objects with PackageRequest-only fields or deprecated fields.
+        As of adcp 2.18.0, library schemas use extra="allow" for forward compatibility.
+        Unknown fields are accepted but not stored on the model (ignored).
+        This prevents breaking changes when new protocol fields are added.
         """
-        from pydantic import ValidationError
+        # Extra fields should be accepted but ignored (not raise ValidationError)
+        # 'status' - removed in AdCP 2.12.0, use 'paused' instead
+        pkg = Package(package_id="test", status="active")
+        assert not hasattr(pkg, "status") or pkg.model_extra.get("status") == "active"
 
-        # Should reject 'status' - removed in AdCP 2.12.0, use 'paused' instead
-        with pytest.raises(ValidationError) as exc_info:
-            Package(package_id="test", status="active")
-        assert "status" in str(exc_info.value)
-        assert "Extra inputs are not permitted" in str(exc_info.value)
+        # 'format_ids' - PackageRequest field, use 'format_ids_to_provide' in Package
+        pkg = Package(package_id="test", format_ids=[{"agent_url": "https://example.com", "id": "banner"}])
+        assert pkg.package_id == "test"
 
-        # Should reject 'format_ids' - PackageRequest field, use 'format_ids_to_provide' in Package
-        with pytest.raises(ValidationError) as exc_info:
-            Package(package_id="test", format_ids=[{"agent_url": "https://example.com", "id": "banner"}])
-        assert "format_ids" in str(exc_info.value)
+        # 'creative_ids' - PackageRequest field, use 'creative_assignments' in Package
+        pkg = Package(package_id="test", creative_ids=["creative_1"])
+        assert pkg.package_id == "test"
 
-        # Should reject 'creative_ids' - PackageRequest field, use 'creative_assignments' in Package
-        with pytest.raises(ValidationError) as exc_info:
-            Package(package_id="test", creative_ids=["creative_1"])
-        assert "creative_ids" in str(exc_info.value)
+        # 'creatives' - PackageRequest field, use 'creative_assignments' in Package
+        pkg = Package(package_id="test", creatives=[{"creative_id": "c1"}])
+        assert pkg.package_id == "test"
 
-        # Should reject 'creatives' - PackageRequest field, use 'creative_assignments' in Package
-        with pytest.raises(ValidationError) as exc_info:
-            Package(package_id="test", creatives=[{"creative_id": "c1"}])
-        assert "creatives" in str(exc_info.value)
-
-        # Should reject 'products' (plural) - incorrect field name
-        with pytest.raises(ValidationError) as exc_info:
-            Package(package_id="test", products=["prod_1"])
-        assert "products" in str(exc_info.value)
+        # 'products' (plural) - incorrect field name
+        pkg = Package(package_id="test", products=["prod_1"])
+        assert pkg.package_id == "test"
 
     def test_targeting_adcp_compliance(self):
         """Test that Targeting model complies with AdCP targeting schema."""

@@ -7,7 +7,32 @@ Reusable utilities for creating A2A protocol messages in tests.
 import uuid
 from typing import Any
 
-from a2a.types import DataPart, Message, Part, Role
+from a2a.types import Artifact, DataPart, Message, Part, Role
+
+
+def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
+    """Extract the data dictionary from an A2A artifact.
+
+    A2A responses may contain multiple parts:
+    - TextPart: Human-readable message (optional, may be first)
+    - DataPart: Structured data (required)
+
+    This helper finds the DataPart and returns its data.
+
+    Args:
+        artifact: A2A Artifact from response
+
+    Returns:
+        Dictionary containing the structured response data, or empty dict if not found
+    """
+    for part in artifact.parts:
+        # Check for DataPart with data attribute
+        if hasattr(part, "root") and hasattr(part.root, "data"):
+            return part.root.data
+        # Direct data attribute check (in case structure varies)
+        if hasattr(part, "data"):
+            return part.data
+    return {}
 
 
 def create_a2a_message_with_skill(skill_name: str, parameters: dict[str, Any]) -> Message:
