@@ -52,7 +52,7 @@ curl http://localhost:8000/health
 ### Setup Mode
 
 New tenants start with `auth_setup_mode=true`, which allows test credentials:
-- Email: `test_super_admin@example.com`
+- Click "Log in to Dashboard" button on the login page
 - Password: `test123`
 
 Once you've configured and tested SSO, disable Setup Mode from the Users & Access page. After that, only SSO authentication works.
@@ -132,6 +132,22 @@ docker compose build && docker compose up -d
 
 ## Troubleshooting
 
+### Container won't start on first run
+If containers don't start properly on the first attempt, this is usually a timing issue:
+```bash
+docker compose down -v          # Clean up
+docker compose build --no-cache # Rebuild without cache
+docker compose up -d            # Start fresh
+```
+
+### Docker volume conflicts
+If you have other Postgres containers, volumes may conflict. The salesagent uses `adcp_` prefixed volumes to avoid conflicts. If issues persist:
+```bash
+docker compose down -v  # Remove volumes
+docker volume prune     # Clean up orphan volumes
+docker compose up -d
+```
+
 ### "No tenant context" error
 - Ensure you're using the test login credentials
 - Check that migrations ran: `docker compose logs db-init`
@@ -142,11 +158,11 @@ lsof -i :8000
 kill -9 $(lsof -t -i:8000)
 ```
 
-### Container won't start
+### "Authentication required by tenant policy" error
+This can happen if the default tenant wasn't created with public discovery enabled:
 ```bash
-docker compose logs adcp-server
-docker compose down -v
-docker compose up -d
+docker compose down -v  # Reset database
+docker compose up -d    # Recreate demo tenant
 ```
 
 ## Next Steps

@@ -28,7 +28,7 @@ services:
       POSTGRES_USER: adcp_user
       POSTGRES_PASSWORD: secure_password_change_me
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - adcp_postgres_data:/var/lib/postgresql/data
     # No host port exposure - access via docker compose exec if needed
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U adcp_user -d adcp"]
@@ -158,6 +158,6 @@ services:
       retries: 3
 
 volumes:
-  postgres_data:
+  adcp_postgres_data:
   adcp_global_pip_cache:
   adcp_global_uv_cache:

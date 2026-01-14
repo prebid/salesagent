@@ -102,9 +102,9 @@ class Tenant(Base, JSONValidatorMixin):
     # Structure: {"providers": ["Provider 1", "Provider 2"], "default": "Provider 1"}
     measurement_providers: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
-    # Brand manifest policy - controls whether brand context is required
-    # Values: "public" (default), "private", or other policy strings
-    brand_manifest_policy: Mapped[str] = mapped_column(String(50), nullable=False, server_default="public")
+    # Brand manifest policy - controls product discovery access
+    # Values: "require_auth" (standard B2B - signup to see pricing), "require_brand" (brand context required), "public" (visible to all)
+    brand_manifest_policy: Mapped[str] = mapped_column(String(50), nullable=False, server_default="require_auth")
 
     # Auth setup mode - when True, test credentials work; when False, only SSO works
     # New tenants start in setup mode until SSO is configured and tested

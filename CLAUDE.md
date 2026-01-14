@@ -208,7 +208,7 @@ docker compose down       # Stop
 - MCP Server: `/mcp/`
 - A2A Server: `/a2a`
 
-**Test login:** `test_super_admin@example.com` / `test123`
+**Test login:** Click "Log in to Dashboard" button (password: `test123`)
 
 **Test MCP interface:**
 ```bash
@@ -368,7 +368,7 @@ APPROXIMATED_API_KEY=your-approximated-api-key
 
 **Local Dev Notes:**
 - Test mode enabled by default (`ADCP_AUTH_TEST_MODE=true`)
-- Test credentials: `test_super_admin@example.com` / `test123`
+- Test credentials: Click "Log in to Dashboard" button (password: `test123`)
 
 ### Git Workflow (MANDATORY)
 **Never push directly to main**

@@ -36,7 +36,7 @@ uvx adcp http://localhost:8000/mcp/ --auth test-token get_products '{"brief":"vi
 ```
 
 Access services at http://localhost:8000:
-- **Admin UI:** `/admin` (login: `test_super_admin@example.com` / `test123`)
+- **Admin UI:** `/admin` or just click "Log in to Dashboard" (test credentials: `test123`)
 - **MCP Server:** `/mcp/`
 - **A2A Server:** `/a2a`
 
@@ -84,7 +84,7 @@ docker compose logs -f
 ```
 
 Access at http://localhost:8000:
-- **Admin UI:** `/admin` (test login: `test_super_admin@example.com` / `test123`)
+- **Admin UI:** `/admin` - click "Log in to Dashboard" (password: `test123`)
 - **MCP Server:** `/mcp/`
 - **A2A Server:** `/a2a`
 
