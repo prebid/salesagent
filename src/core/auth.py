@@ -340,11 +340,32 @@ def get_principal_from_context(
         console.print(f"[bold green]Final tenant_id: {requested_tenant_id} (via {detection_method})[/bold green]")
 
     # NOW check for auth token (after tenant resolution)
+    # Accept either x-adcp-auth (preferred) or Authorization: Bearer (standard HTTP/MCP)
+    # This ensures compatibility with MCP clients that only support Authorization header
     auth_token = _get_header_case_insensitive(headers, "x-adcp-auth")
-    console.print(f"  x-adcp-auth: {'Present' if auth_token else 'Missing'}")
+    auth_source = "x-adcp-auth" if auth_token else None
+
+    # If x-adcp-auth not present, try Authorization: Bearer (for Anthropic, standard MCP clients)
+    if not auth_token:
+        authorization_header = _get_header_case_insensitive(headers, "Authorization")
+        if authorization_header:
+            # RFC 6750 specifies "Bearer" but accept case-insensitive for compatibility
+            auth_header_lower = authorization_header.lower()
+            if auth_header_lower.startswith("bearer "):
+                potential_token = authorization_header[7:].strip()  # Remove "Bearer " prefix and whitespace
+                if potential_token:  # Only use if there's actually a token after the prefix
+                    auth_token = potential_token
+                    auth_source = "Authorization: Bearer"
+
+    console.print(f"  x-adcp-auth: {'Present' if auth_source == 'x-adcp-auth' else 'Missing'}")
+    console.print(f"  Authorization: {'Present' if auth_source == 'Authorization: Bearer' else 'Missing'}")
+    if auth_source:
+        console.print(f"  [green]Auth token found via: {auth_source}[/green]")
 
     if not auth_token:
-        console.print("[yellow]No x-adcp-auth token found - OK for discovery endpoints[/yellow]")
+        console.print(
+            "[yellow]No auth token found (checked x-adcp-auth and Authorization: Bearer) - OK for discovery endpoints[/yellow]"
+        )
         # Return tenant context without auth for public discovery endpoints
         return (None, tenant_context)
 
