@@ -413,7 +413,7 @@ def test_filtering_by_name_search(integration_db, sample_tenant):
 def test_filtering_by_asset_types(integration_db, sample_tenant):
     """Test that asset_types filter returns formats supporting any of the requested types."""
     from adcp.types import AssetContentType
-    from adcp.types.generated_poc.core.format import AssetsRequired
+    from adcp.types.generated_poc.core.format import Assets
 
     context = ToolContext(
         context_id="test",
@@ -425,15 +425,15 @@ def test_filtering_by_asset_types(integration_db, sample_tenant):
         testing_context={},
     )
 
-    # Use assets_required to specify asset types per AdCP spec
+    # Use assets to specify asset types per AdCP spec (adcp 2.18.0+)
     mock_formats = [
         Format(
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="image_banner"),
             type=FormatCategory.display,
             name="Image Banner",
             is_standard=True,
-            assets_required=[
-                AssetsRequired(asset_id="main", asset_type=AssetContentType.image, item_type="individual")
+            assets=[
+                Assets(asset_id="main", asset_type=AssetContentType.image, item_type="individual", required=True)
             ],
         ),
         Format(
@@ -441,8 +441,8 @@ def test_filtering_by_asset_types(integration_db, sample_tenant):
             type=FormatCategory.video,
             name="Video Player",
             is_standard=True,
-            assets_required=[
-                AssetsRequired(asset_id="video", asset_type=AssetContentType.video, item_type="individual")
+            assets=[
+                Assets(asset_id="video", asset_type=AssetContentType.video, item_type="individual", required=True)
             ],
         ),
         Format(
@@ -450,9 +450,9 @@ def test_filtering_by_asset_types(integration_db, sample_tenant):
             type=FormatCategory.display,
             name="Rich Media",
             is_standard=True,
-            assets_required=[
-                AssetsRequired(asset_id="image", asset_type=AssetContentType.image, item_type="individual"),
-                AssetsRequired(asset_id="code", asset_type=AssetContentType.html, item_type="individual"),
+            assets=[
+                Assets(asset_id="image", asset_type=AssetContentType.image, item_type="individual", required=True),
+                Assets(asset_id="code", asset_type=AssetContentType.html, item_type="individual", required=True),
             ],
         ),
         Format(
@@ -460,7 +460,7 @@ def test_filtering_by_asset_types(integration_db, sample_tenant):
             type=FormatCategory.display,
             name="No Asset Types",
             is_standard=True,
-            # No assets_required
+            # No assets
         ),
     ]
 
@@ -594,7 +594,7 @@ def test_filtering_by_dimensions(integration_db, sample_tenant):
 def test_new_filters_combined_with_existing(integration_db, sample_tenant):
     """Test that new filters work correctly with existing filters."""
     from adcp.types import AssetContentType
-    from adcp.types.generated_poc.core.format import AssetsRequired, Dimensions, Renders
+    from adcp.types.generated_poc.core.format import Assets, Dimensions, Renders
 
     context = ToolContext(
         context_id="test",
@@ -606,7 +606,7 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
         testing_context={},
     )
 
-    # Use renders.dimensions and assets_required per AdCP spec
+    # Use renders.dimensions and assets per AdCP spec (adcp 2.6.0+)
     mock_formats = [
         Format(
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
@@ -614,8 +614,8 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
             name="Display 300x250",
             is_standard=True,
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets_required=[
-                AssetsRequired(asset_id="main", asset_type=AssetContentType.image, item_type="individual")
+            assets=[
+                Assets(asset_id="main", asset_type=AssetContentType.image, item_type="individual", required=True)
             ],
         ),
         Format(
@@ -624,8 +624,8 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
             name="Display 728x90",
             is_standard=True,
             renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
-            assets_required=[
-                AssetsRequired(asset_id="main", asset_type=AssetContentType.image, item_type="individual")
+            assets=[
+                Assets(asset_id="main", asset_type=AssetContentType.image, item_type="individual", required=True)
             ],
         ),
         Format(
@@ -634,8 +634,8 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
             name="Video 16:9",
             is_standard=True,
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
-            assets_required=[
-                AssetsRequired(asset_id="video", asset_type=AssetContentType.video, item_type="individual")
+            assets=[
+                Assets(asset_id="video", asset_type=AssetContentType.video, item_type="individual", required=True)
             ],
         ),
         Format(
@@ -644,8 +644,8 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
             name="Custom Display",
             is_standard=False,
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets_required=[
-                AssetsRequired(asset_id="main", asset_type=AssetContentType.image, item_type="individual")
+            assets=[
+                Assets(asset_id="main", asset_type=AssetContentType.image, item_type="individual", required=True)
             ],
         ),
     ]

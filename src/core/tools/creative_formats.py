@@ -7,10 +7,24 @@ implementation pattern from CLAUDE.md.
 import logging
 import time
 
+from typing import TypeVar
+
 from adcp import FormatId
+from adcp.types import Format as AdcpFormat
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.core.format import Assets, Assets1, AssetsRequired, AssetsRequired1
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
 from adcp.types.generated_poc.enums.format_category import FormatCategory
+from adcp.utils.format_assets import (
+    get_format_assets,
+    get_required_assets,
+    has_assets,
+    normalize_assets_required,
+    uses_deprecated_assets_field,
+)
+
+# TypeVar for Format to preserve subclass type through backward compatibility function
+FormatT = TypeVar("FormatT", bound=AdcpFormat)
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -19,6 +33,52 @@ from pydantic import ValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
+    """Ensure a Format has both `assets` and `assets_required` fields for backward compatibility.
+
+    AdCP 2.18.0 introduced the new `assets` field which includes both required and optional assets.
+    The `assets_required` field is deprecated but must still be populated for old clients.
+
+    This function:
+    - If format has `assets` but not `assets_required`: populates `assets_required` from required assets
+    - If format has `assets_required` but not `assets`: populates `assets` using normalize_assets_required
+    - If format has both or neither: returns unchanged
+
+    Args:
+        f: Format object from creative agent
+
+    Returns:
+        Format with both asset fields populated for backward compatibility
+    """
+    if uses_deprecated_assets_field(f):
+        # Old format with deprecated assets_required only - populate new assets field
+        normalized: list[Assets | Assets1] = normalize_assets_required(f.assets_required)  # type: ignore[arg-type]
+        if normalized:
+            return f.model_copy(update={"assets": normalized})
+
+    elif has_assets(f) and not f.assets_required:
+        # New format with assets only - populate deprecated assets_required for old clients
+        required_assets: list[Assets | Assets1] = get_required_assets(f)
+        if required_assets:
+            # Convert Assets to deprecated AssetsRequired format for backward compatibility
+            assets_required_list: list[AssetsRequired | AssetsRequired1] = []
+            for asset in required_assets:
+                asset_dict = asset.model_dump()
+                # Check if it's an individual asset or repeatable group
+                if asset_dict.get("item_type") == "individual":
+                    ar = AssetsRequired(**asset_dict)
+                    assets_required_list.append(ar)
+                else:
+                    # Repeatable group - use AssetsRequired1
+                    ar1 = AssetsRequired1(**asset_dict)
+                    assets_required_list.append(ar1)
+            return f.model_copy(update={"assets_required": assets_required_list})
+
+    # Both present, neither present, or conversion not needed
+    return f
+
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_from_context
@@ -125,11 +185,13 @@ def _list_creative_formats_impl(
         return dimensions
 
     def get_format_asset_types(f) -> set[str]:
-        """Get all asset types from format's assets_required."""
+        """Get all asset types from format's assets.
+
+        Uses adcp.utils.get_format_assets() which handles backward compatibility
+        with deprecated assets_required field automatically.
+        """
         types: set[str] = set()
-        if not f.assets_required:
-            return types
-        for asset_req in f.assets_required:
+        for asset_req in get_format_assets(f):
             # Handle both individual assets and repeatable groups
             asset_type = getattr(asset_req, "asset_type", None)
             if asset_type:
@@ -174,6 +236,10 @@ def _list_creative_formats_impl(
     # Sort formats by type and name for consistent ordering
     # Use .value to convert enum to string for sorting (enums don't support < comparison)
     formats.sort(key=lambda f: (f.type.value, f.name))
+
+    # Ensure backward compatibility: populate both assets and assets_required
+    # This allows old clients (using assets_required) and new clients (using assets) to work
+    formats = [_ensure_backward_compatible_format(f) for f in formats]
 
     # Log the operation
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])

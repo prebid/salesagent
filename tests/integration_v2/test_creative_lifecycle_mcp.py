@@ -1017,14 +1017,13 @@ class TestCreativeLifecycleMCP:
             )
         ]
 
-        mock_asset_req = SimpleNamespace(
-            asset_type="image",
-            asset_id="banner_image"
-        )
-        
-        mock_format = SimpleNamespace(
-            output_format_ids=None,
-            assets_required=[mock_asset_req]
+        # Use proper Format object for mock (adcp 2.18.0 uses get_format_assets utility)
+        from tests.helpers.adcp_factories import create_test_format
+        mock_format = create_test_format(
+            "display_300x250",
+            assets=[
+                {"item_type": "individual", "asset_id": "banner_image", "asset_type": "image", "required": True}
+            ]
         )
         
         with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format):
