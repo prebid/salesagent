@@ -103,7 +103,7 @@ ADCP_TO_GAM_MACRO_MAP: dict[str, str | None] = {
     # ==========================================================================
     # Other Macros
     # ==========================================================================
-    "{AXEM}": None,
+    "{AXEM}": "%{AXEM}",  # Filled by prebid RTD module at render time
 }
 
 

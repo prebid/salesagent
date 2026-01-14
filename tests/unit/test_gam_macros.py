@@ -128,7 +128,7 @@ class TestMacroMapping:
     # ==========================================================================
     def test_other_macros(self):
         """Other macros."""
-        assert ADCP_TO_GAM_MACRO_MAP["{AXEM}"] is None
+        assert ADCP_TO_GAM_MACRO_MAP["{AXEM}"] == "%{AXEM}"
 
 
 class TestSubstituteMacros:
@@ -304,11 +304,11 @@ class TestSubstituteMacros:
     # ==========================================================================
     # Other Macros
     # ==========================================================================
-    def test_axem_passthrough(self):
-        """AXEM passes through unchanged (no GAM equivalent)."""
+    def test_axem_converted_to_prebid_format(self):
+        """AXEM is converted to prebid macro format."""
         url = "https://t.com/p?axe={AXEM}"
         result = substitute_macros(url)
-        assert "{AXEM}" in result
+        assert "%{AXEM}" in result
 
     # ==========================================================================
     # General Substitution Behavior
@@ -409,3 +409,189 @@ class TestSubstituteTrackingUrls:
         assert result[0].startswith("https://first")
         assert result[1].startswith("https://second")
         assert result[2].startswith("https://third")
+
+
+# =============================================================================
+# Tests for _add_tracking_urls_to_creative (GAM creative type field mapping)
+# =============================================================================
+class TestAddTrackingUrlsToCreative:
+    """Test _add_tracking_urls_to_creative handles different GAM creative types correctly."""
+
+    def _get_manager(self):
+        """Create a GAMCreativesManager instance for testing."""
+        from unittest.mock import MagicMock
+
+        from src.adapters.gam.managers.creatives import GAMCreativesManager
+
+        mock_client = MagicMock()
+        return GAMCreativesManager(mock_client, "12345", dry_run=True)
+
+    # -------------------------------------------------------------------------
+    # ThirdPartyCreative - uses thirdPartyImpressionTrackingUrls
+    # -------------------------------------------------------------------------
+    def test_third_party_creative_uses_impression_tracking_urls(self):
+        """ThirdPartyCreative uses thirdPartyImpressionTrackingUrls field."""
+        manager = self._get_manager()
+        creative = {"xsi_type": "ThirdPartyCreative", "name": "Test"}
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "impression": ["https://tracker.com/pixel?cb={CACHEBUSTER}"]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert "thirdPartyImpressionTrackingUrls" in creative
+        assert len(creative["thirdPartyImpressionTrackingUrls"]) == 1
+        assert "%%CACHEBUSTER%%" in creative["thirdPartyImpressionTrackingUrls"][0]
+        assert "trackingUrls" not in creative
+
+    # -------------------------------------------------------------------------
+    # ImageRedirectCreative - uses thirdPartyImpressionTrackingUrls
+    # -------------------------------------------------------------------------
+    def test_image_redirect_creative_uses_impression_tracking_urls(self):
+        """ImageRedirectCreative uses thirdPartyImpressionTrackingUrls field."""
+        manager = self._get_manager()
+        creative = {"xsi_type": "ImageRedirectCreative", "name": "Test Image"}
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "impression": ["https://tracker.com/img?pid={PLACEMENT_ID}"]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert "thirdPartyImpressionTrackingUrls" in creative
+        assert len(creative["thirdPartyImpressionTrackingUrls"]) == 1
+        assert "%epid!" in creative["thirdPartyImpressionTrackingUrls"][0]
+        assert "trackingUrls" not in creative
+
+    # -------------------------------------------------------------------------
+    # CustomCreative (HTML5) - uses thirdPartyImpressionTrackingUrls
+    # -------------------------------------------------------------------------
+    def test_custom_creative_uses_impression_tracking_urls(self):
+        """CustomCreative (HTML5) uses thirdPartyImpressionTrackingUrls field."""
+        manager = self._get_manager()
+        creative = {"xsi_type": "CustomCreative", "name": "Test HTML5"}
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "impression": ["https://tracker.com/html5?gdpr={GDPR}"]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert "thirdPartyImpressionTrackingUrls" in creative
+        assert len(creative["thirdPartyImpressionTrackingUrls"]) == 1
+        assert "${GDPR}" in creative["thirdPartyImpressionTrackingUrls"][0]
+        assert "trackingUrls" not in creative
+
+    # -------------------------------------------------------------------------
+    # VideoRedirectCreative - uses trackingUrls with ConversionEvent format
+    # -------------------------------------------------------------------------
+    def test_video_redirect_creative_uses_tracking_urls_with_event(self):
+        """VideoRedirectCreative uses trackingUrls with CREATIVE_VIEW event."""
+        manager = self._get_manager()
+        creative = {"xsi_type": "VideoRedirectCreative", "name": "Test Video"}
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "impression": ["https://tracker.com/video?vid={VIDEO_ID}"]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert "trackingUrls" in creative
+        assert "thirdPartyImpressionTrackingUrls" not in creative
+        assert len(creative["trackingUrls"]) == 1
+
+        entry = creative["trackingUrls"][0]
+        assert entry["key"] == "CREATIVE_VIEW"
+        assert "urls" in entry["value"]
+        assert len(entry["value"]["urls"]) == 1
+        assert "%%VIDEO_ID%%" in entry["value"]["urls"][0]
+
+    def test_video_creative_appends_to_existing_creative_view(self):
+        """VideoRedirectCreative appends URLs to existing CREATIVE_VIEW entry."""
+        manager = self._get_manager()
+        creative = {
+            "xsi_type": "VideoRedirectCreative",
+            "name": "Test Video",
+            "trackingUrls": [
+                {"key": "CREATIVE_VIEW", "value": {"urls": ["https://existing.com/pixel"]}}
+            ]
+        }
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "impression": ["https://new-tracker.com/pixel"]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert len(creative["trackingUrls"]) == 1
+        entry = creative["trackingUrls"][0]
+        assert entry["key"] == "CREATIVE_VIEW"
+        assert len(entry["value"]["urls"]) == 2
+        assert "https://existing.com/pixel" in entry["value"]["urls"]
+        assert "https://new-tracker.com/pixel" in entry["value"]["urls"]
+
+    # -------------------------------------------------------------------------
+    # Edge cases
+    # -------------------------------------------------------------------------
+    def test_no_tracking_urls_does_nothing(self):
+        """Creative without tracking URLs is not modified."""
+        manager = self._get_manager()
+        creative = {"xsi_type": "ThirdPartyCreative", "name": "Test"}
+        asset = {}
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert "thirdPartyImpressionTrackingUrls" not in creative
+        assert "trackingUrls" not in creative
+
+    def test_empty_tracking_urls_does_nothing(self):
+        """Creative with empty tracking URLs is not modified."""
+        manager = self._get_manager()
+        creative = {"xsi_type": "ThirdPartyCreative", "name": "Test"}
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "impression": []
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert "thirdPartyImpressionTrackingUrls" not in creative
+
+    def test_multiple_impression_urls_all_added(self):
+        """Multiple impression tracking URLs are all added."""
+        manager = self._get_manager()
+        creative = {"xsi_type": "ImageRedirectCreative", "name": "Test"}
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "impression": [
+                        "https://tracker1.com/pixel",
+                        "https://tracker2.com/pixel",
+                        "https://tracker3.com/pixel",
+                    ]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert len(creative["thirdPartyImpressionTrackingUrls"]) == 3
