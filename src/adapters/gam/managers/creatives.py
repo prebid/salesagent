@@ -916,6 +916,12 @@ class GAMCreativesManager:
                     })
                     creative["trackingUrls"] = existing_tracking
 
+        click_urls = tracking_urls.get("click", [])
+        if click_urls and not creative.get("destinationUrl"):
+            processed_click_urls = substitute_tracking_urls(click_urls[:1])
+            if processed_click_urls:
+                creative["destinationUrl"] = processed_click_urls[0]
+
     def _configure_vast_for_line_items(
         self, media_buy_id: str, asset: dict[str, Any], line_item_map: dict[str, str]
     ) -> None:

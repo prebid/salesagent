@@ -547,6 +547,64 @@ class TestAddTrackingUrlsToCreative:
         assert "https://new-tracker.com/pixel" in entry["value"]["urls"]
 
     # -------------------------------------------------------------------------
+    # Click tracking (via redirection: GAM → click tracker → landing page)
+    # -------------------------------------------------------------------------
+    def test_click_url_sets_destination_url(self):
+        """Click tracking URL is set as destinationUrl for redirection flow."""
+        manager = self._get_manager()
+        creative = {"xsi_type": "ThirdPartyCreative", "name": "Test"}
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "click": ["https://click-tracker.com/click?url={CLICK_URL}"]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert "destinationUrl" in creative
+        assert "%%CLICK_URL_ESC%%" in creative["destinationUrl"]
+
+    def test_click_url_not_applied_when_destination_exists(self):
+        """Click tracking URL does not overwrite existing destinationUrl."""
+        manager = self._get_manager()
+        creative = {
+            "xsi_type": "ImageRedirectCreative",
+            "name": "Test Image",
+            "destinationUrl": "https://landing-page.com/"
+        }
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "click": ["https://click-tracker.com/click"]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert creative["destinationUrl"] == "https://landing-page.com/"
+
+    def test_click_url_with_macros_substituted(self):
+        """Click tracking URL has macros substituted."""
+        manager = self._get_manager()
+        creative = {"xsi_type": "ImageRedirectCreative", "name": "Test"}
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "click": ["https://tracker.com/c?cb={CACHEBUSTER}&axem={AXEM}"]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        assert "destinationUrl" in creative
+        assert "%%CACHEBUSTER%%" in creative["destinationUrl"]
+        assert "%{AXEM}" in creative["destinationUrl"]
+
+    # -------------------------------------------------------------------------
     # Edge cases
     # -------------------------------------------------------------------------
     def test_no_tracking_urls_does_nothing(self):
