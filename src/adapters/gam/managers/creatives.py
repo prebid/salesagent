@@ -634,6 +634,7 @@ class GAMCreativesManager:
             "creativeTemplateVariableValues": template_variables,
         }
 
+        self._add_tracking_urls_to_creative(creative, asset)
         return creative
 
     def _create_html5_creative(self, asset: dict[str, Any]) -> dict[str, Any]:
@@ -885,7 +886,7 @@ class GAMCreativesManager:
             creative_type = creative.get("xsi_type", "")
 
             # Creative types that use thirdPartyImpressionTrackingUrls (string[])
-            if creative_type in ["ThirdPartyCreative", "ImageRedirectCreative", "CustomCreative"]:
+            if creative_type in ["ThirdPartyCreative", "ImageRedirectCreative", "CustomCreative", "TemplateCreative"]:
                 existing_urls = creative.get("thirdPartyImpressionTrackingUrls", [])
                 creative["thirdPartyImpressionTrackingUrls"] = existing_urls + [
                     url for url in processed_urls if url not in existing_urls
@@ -920,13 +921,37 @@ class GAMCreativesManager:
         if click_urls:
             from urllib.parse import quote
 
+            if len(click_urls) > 1:
+                logger.warning(f"Multiple click trackers provided, only first will be used")
+
             original_destination = creative.get("destinationUrl", "")
             click_url = click_urls[0]
-            if original_destination and "{REDIRECT_URL}" in click_url:
-                click_url = click_url.replace("{REDIRECT_URL}", quote(original_destination, safe=""))
-            processed_click_urls = substitute_tracking_urls([click_url])
-            if processed_click_urls:
-                creative["destinationUrl"] = processed_click_urls[0]
+
+            if "{REDIRECT_URL}" in click_url:
+                if original_destination:
+                    # Replace {REDIRECT_URL} with URL-encoded landing page
+                    click_url = click_url.replace("{REDIRECT_URL}", quote(original_destination, safe=""))
+                    processed_click_urls = substitute_tracking_urls([click_url])
+                    if processed_click_urls:
+                        creative["destinationUrl"] = processed_click_urls[0]
+                else:
+                    # No landing page to embed - ignore click tracker to avoid broken redirect
+                    logger.warning(
+                        "Click tracker has {REDIRECT_URL} macro but no landing page provided. "
+                        "Click tracker ignored."
+                    )
+            elif original_destination:
+                # Click tracker missing {REDIRECT_URL} - would lose landing page
+                logger.warning(
+                    f"Click tracker missing {{REDIRECT_URL}} macro. "
+                    f"Landing page '{original_destination}' would be lost. Click tracker ignored."
+                )
+                # Keep original destinationUrl (landing page) instead of overwriting with tracker
+            else:
+                # No landing page and no {REDIRECT_URL} - just use click tracker as-is
+                processed_click_urls = substitute_tracking_urls([click_url])
+                if processed_click_urls:
+                    creative["destinationUrl"] = processed_click_urls[0]
 
     def _configure_vast_for_line_items(
         self, media_buy_id: str, asset: dict[str, Any], line_item_map: dict[str, str]

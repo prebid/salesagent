@@ -566,8 +566,8 @@ class TestAddTrackingUrlsToCreative:
         assert "destinationUrl" in creative
         assert "%%CLICK_URL_ESC%%" in creative["destinationUrl"]
 
-    def test_click_url_replaces_existing_destination(self):
-        """Click tracking URL replaces existing destinationUrl."""
+    def test_click_url_without_redirect_macro_preserves_landing_page(self):
+        """Click tracker without {REDIRECT_URL} is ignored to preserve landing page."""
         manager = self._get_manager()
         creative = {
             "xsi_type": "ImageRedirectCreative",
@@ -584,7 +584,28 @@ class TestAddTrackingUrlsToCreative:
 
         manager._add_tracking_urls_to_creative(creative, asset)
 
-        assert creative["destinationUrl"] == "https://click-tracker.com/click"
+        # Landing page should be preserved, click tracker ignored (would lose landing page)
+        assert creative["destinationUrl"] == "https://landing-page.com/"
+
+    def test_click_url_without_landing_page_sets_destination(self):
+        """Click tracker without landing page sets destinationUrl directly."""
+        manager = self._get_manager()
+        creative = {
+            "xsi_type": "ImageRedirectCreative",
+            "name": "Test Image",
+        }
+        asset = {
+            "delivery_settings": {
+                "tracking_urls": {
+                    "click": ["https://click-tracker.com/click?cb={CACHEBUSTER}"]
+                }
+            }
+        }
+
+        manager._add_tracking_urls_to_creative(creative, asset)
+
+        # No landing page, so click tracker becomes destinationUrl
+        assert creative["destinationUrl"] == "https://click-tracker.com/click?cb=%%CACHEBUSTER%%"
 
     def test_click_url_with_redirect_url_macro(self):
         """Click tracker URL has {REDIRECT_URL} replaced with original destination."""
