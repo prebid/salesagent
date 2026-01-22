@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1](https://github.com/adcontextprotocol/salesagent/compare/v0.9.0...v0.9.1) (2026-01-19)
+
+
+### Bug Fixes
+
+* Sync custom targeting keys to adapter_config during inventory sync ([fa187f9](https://github.com/adcontextprotocol/salesagent/commit/fa187f9c4689b256df0b12bd25b4552832de99a9))
+* Sync custom targeting keys to adapter_config during inventory sync ([d49badc](https://github.com/adcontextprotocol/salesagent/commit/d49badc385de4377698ad58a76fa2751ee1621ed))
+
 ## [0.9.0](https://github.com/adcontextprotocol/salesagent/compare/v0.8.0...v0.9.0) (2026-01-16)
 
 
