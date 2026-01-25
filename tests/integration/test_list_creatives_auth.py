@@ -30,7 +30,7 @@ class MockContext:
             self.meta = {
                 "headers": {
                     "x-adcp-auth": auth_token,
-                    "host": "auth-test.sales-agent.scope3.com",  # Matches subdomain in setup_test_data
+                    "host": "auth-test.sales-agent.example.com",  # Matches subdomain in setup_test_data
                 }
             }
 
@@ -167,7 +167,7 @@ class TestListCreativesAuthentication:
             "fastmcp.server.dependencies.get_http_headers",
             return_value={
                 "x-adcp-auth": "token-advertiser-a",
-                "host": "auth-test.sales-agent.scope3.com",
+                "host": "auth-test.sales-agent.example.com",
             },
         ):
             response = core_list_creatives_tool(ctx=mock_context)
@@ -200,7 +200,7 @@ class TestListCreativesAuthentication:
             "fastmcp.server.dependencies.get_http_headers",
             return_value={
                 "x-adcp-auth": "token-advertiser-b",
-                "host": "auth-test.sales-agent.scope3.com",
+                "host": "auth-test.sales-agent.example.com",
             },
         ):
             response = core_list_creatives_tool(ctx=mock_context_b)
@@ -233,7 +233,7 @@ class TestListCreativesAuthentication:
             "fastmcp.server.dependencies.get_http_headers",
             return_value={
                 "x-adcp-auth": "invalid-token-xyz",
-                "host": "auth-test.sales-agent.scope3.com",
+                "host": "auth-test.sales-agent.example.com",
             },
         ):
             from fastmcp.exceptions import ToolError

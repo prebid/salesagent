@@ -147,14 +147,14 @@ All authentication changes must include tests for:
 ## OAuth Cross-Domain Authentication
 
 ### Current Implementation Status
-**✅ Working**: OAuth authentication works correctly within the `sales-agent.scope3.com` domain and its subdomains.
+**✅ Working**: OAuth authentication works correctly within the `sales-agent.example.com` domain and its subdomains.
 
 **⚠️ Known Limitation**: OAuth authentication from external domains (e.g., `test-agent.adcontextprotocol.org`) has limitations due to browser cookie security restrictions.
 
 ### How OAuth Currently Works
 
 #### Same-Domain OAuth (✅ Fully Functional)
-- User visits `https://tenant.sales-agent.scope3.com/admin/`
+- User visits `https://tenant.sales-agent.example.com/admin/`
 - OAuth flow works perfectly with session cookies
 - User redirected back to tenant subdomain after authentication
 
@@ -169,7 +169,7 @@ All authentication changes must include tests for:
 #### Session Cookie Configuration
 ```python
 # Production session config
-SESSION_COOKIE_DOMAIN = ".sales-agent.scope3.com"  # Scoped to internal domain
+SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Scoped to internal domain
 SESSION_COOKIE_SECURE = True                        # HTTPS only
 SESSION_COOKIE_SAMESITE = "None"                   # Required for OAuth
 SESSION_COOKIE_PATH = "/admin/"                     # Admin interface only
@@ -185,7 +185,7 @@ external_domain = session.pop("oauth_external_domain", None)
 ```
 
 ### Browser Security Limitation
-The limitation is due to fundamental browser security: **cookies cannot be shared across different domains**. When a user comes from `test-agent.adcontextprotocol.org`, the browser cannot access session cookies scoped to `.sales-agent.scope3.com`.
+The limitation is due to fundamental browser security: **cookies cannot be shared across different domains**. When a user comes from `test-agent.adcontextprotocol.org`, the browser cannot access session cookies scoped to `.sales-agent.example.com`.
 
 ### Test Coverage
 - ✅ OAuth session handling within same domain
@@ -205,7 +205,7 @@ Potential approaches for cross-domain OAuth:
 4. **Proxy-Based Solution**: Handle authentication at the proxy/gateway level
 
 ### Current Recommendation
-For immediate needs, direct users to use `https://tenant.sales-agent.scope3.com/admin/` for OAuth authentication rather than external domain URLs.
+For immediate needs, direct users to use `https://tenant.sales-agent.example.com/admin/` for OAuth authentication rather than external domain URLs.
 
 ## Generic OIDC Provider Support
 

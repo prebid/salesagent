@@ -33,7 +33,7 @@ class TestAuthRemovalChanges:
         context.meta = {
             "headers": {
                 "x-adcp-auth": "test-token",
-                "host": "test-tenant.sales-agent.scope3.com",  # Required for tenant detection
+                "host": "test-tenant.sales-agent.example.com",  # Required for tenant detection
             }
         }
 
@@ -41,7 +41,7 @@ class TestAuthRemovalChanges:
             "src.core.auth.get_http_headers",
             return_value={
                 "x-adcp-auth": "test-token",
-                "host": "test-tenant.sales-agent.scope3.com",
+                "host": "test-tenant.sales-agent.example.com",
             },
         ):
             # Mock virtual host lookup to fail (not a virtual host)

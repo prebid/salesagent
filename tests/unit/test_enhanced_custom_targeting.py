@@ -509,7 +509,7 @@ class TestNestedGroupsCustomTargeting:
         """Test complex GAM-style targeting: (A AND B) OR (C AND D).
 
         Matches the GAM UI pattern:
-        Group 1: DAY_OF_WEEK is MONDAY,TUESDAY AND Scope3 is srP
+        Group 1: DAY_OF_WEEK is MONDAY,TUESDAY AND CustomKey is srP
         Or
         Group 2: BOK Test is cat
         """

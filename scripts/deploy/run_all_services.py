@@ -36,7 +36,9 @@ def validate_required_env():
 
     # Encryption key is required for storing OIDC client secrets
     if not os.environ.get("ENCRYPTION_KEY"):
-        missing.append("ENCRYPTION_KEY (generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')")
+        missing.append(
+            "ENCRYPTION_KEY (generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+        )
 
     # Multi-tenant mode requires SALES_AGENT_DOMAIN
     if os.environ.get("ADCP_MULTI_TENANT", "false").lower() == "true":
@@ -310,14 +312,33 @@ def run_nginx():
     if multi_tenant:
         config_path = "/etc/nginx/nginx-multi-tenant.conf"
         print("[Nginx] Using multi-tenant config (subdomain routing enabled)")
+
+        # Multi-tenant config uses environment variable templates
+        # Use envsubst to substitute ${SALES_AGENT_DOMAIN} with actual value
+        sales_agent_domain = os.environ.get("SALES_AGENT_DOMAIN", "")
+        if not sales_agent_domain:
+            print("❌ SALES_AGENT_DOMAIN is required for multi-tenant mode")
+            sys.exit(1)
+
+        print(f"[Nginx] Substituting SALES_AGENT_DOMAIN={sales_agent_domain}")
+
+        # Read template, substitute variables, write to active config
+        with open(config_path) as f:
+            config_content = f.read()
+
+        # Simple string substitution for ${SALES_AGENT_DOMAIN}
+        config_content = config_content.replace("${SALES_AGENT_DOMAIN}", sales_agent_domain)
+
+        with open("/etc/nginx/nginx.conf", "w") as f:
+            f.write(config_content)
     else:
         config_path = "/etc/nginx/nginx-single-tenant.conf"
         print("[Nginx] Using single-tenant config (path-based routing only)")
 
-    # Copy selected config to active location
-    import shutil
+        # Copy selected config to active location
+        import shutil
 
-    shutil.copy(config_path, "/etc/nginx/nginx.conf")
+        shutil.copy(config_path, "/etc/nginx/nginx.conf")
 
     # Test nginx configuration first
     test_proc = subprocess.run(["nginx", "-t"], capture_output=True, text=True)

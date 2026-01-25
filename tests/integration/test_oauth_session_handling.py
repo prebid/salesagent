@@ -21,7 +21,7 @@ class TestOAuthCrossDomainLimitations:
         break the parts that do work while attempting to fix cross-domain issues.
         """
         limitation_documentation = {
-            "current_status": "OAuth works within sales-agent.scope3.com domain only",
+            "current_status": "OAuth works within sales-agent.example.com domain only",
             "limitation": "Session cookies cannot be shared across different domains",
             "affected_domains": [
                 "test-agent.adcontextprotocol.org",
@@ -29,13 +29,13 @@ class TestOAuthCrossDomainLimitations:
                 "any-external-domain.com",
             ],
             "working_domains": [
-                "admin.sales-agent.scope3.com",
-                "tenant.sales-agent.scope3.com",
-                "*.sales-agent.scope3.com",
+                "admin.sales-agent.example.com",
+                "tenant.sales-agent.example.com",
+                "*.sales-agent.example.com",
             ],
             "root_cause": "Browser security prevents cross-domain cookie access",
             "session_config": {
-                "domain": ".sales-agent.scope3.com",
+                "domain": ".sales-agent.example.com",
                 "secure": True,
                 "samesite": "None",
                 "path": "/admin/",
@@ -72,18 +72,18 @@ class TestOAuthCrossDomainLimitations:
         # the cross-domain limitation
 
         expected_production_config = {
-            "SESSION_COOKIE_DOMAIN": ".sales-agent.scope3.com",
+            "SESSION_COOKIE_DOMAIN": ".sales-agent.example.com",
             "SESSION_COOKIE_SECURE": True,
             "SESSION_COOKIE_SAMESITE": "None",
             "SESSION_COOKIE_PATH": "/admin/",
         }
 
         # These settings work for same-domain OAuth but prevent cross-domain
-        assert expected_production_config["SESSION_COOKIE_DOMAIN"] == ".sales-agent.scope3.com"
+        assert expected_production_config["SESSION_COOKIE_DOMAIN"] == ".sales-agent.example.com"
 
         # This domain restriction is the root cause of cross-domain issues
         domain = expected_production_config["SESSION_COOKIE_DOMAIN"]
-        assert "sales-agent.scope3.com" in domain
+        assert "sales-agent.example.com" in domain
         assert "adcontextprotocol.org" not in domain  # External domains excluded
 
     def test_oauth_redirect_uri_integrity(self):
@@ -92,7 +92,7 @@ class TestOAuthCrossDomainLimitations:
         # the OAuth redirect URI, which causes redirect_uri_mismatch errors
 
         # The redirect URI should always be exact and unmodified
-        base_redirect_uri = "https://sales-agent.scope3.com/admin/auth/google/callback"
+        base_redirect_uri = "https://sales-agent.example.com/admin/auth/google/callback"
 
         # Should not contain query parameters
         assert "?" not in base_redirect_uri
@@ -100,7 +100,7 @@ class TestOAuthCrossDomainLimitations:
         assert "&" not in base_redirect_uri
 
         # Should use exact registered domain
-        assert "sales-agent.scope3.com" in base_redirect_uri
+        assert "sales-agent.example.com" in base_redirect_uri
         assert base_redirect_uri.startswith("https://")
 
     def test_authlib_csrf_protection_preservation(self):
@@ -128,7 +128,7 @@ class TestOAuthCrossDomainLimitations:
         """Document the current OAuth flow that works within same domain."""
         current_oauth_flow = {
             "step_1": {
-                "action": "User visits https://tenant.sales-agent.scope3.com/admin/",
+                "action": "User visits https://tenant.sales-agent.example.com/admin/",
                 "result": "Login page with Google OAuth button",
             },
             "step_2": {
@@ -166,12 +166,12 @@ class TestOAuthCrossDomainLimitations:
         oauth_scenarios = {
             "working": {
                 "same_domain_admin": {
-                    "url": "https://admin.sales-agent.scope3.com/admin/",
+                    "url": "https://admin.sales-agent.example.com/admin/",
                     "works": True,
                     "reason": "Session cookies accessible",
                 },
                 "tenant_subdomain": {
-                    "url": "https://scribd.sales-agent.scope3.com/admin/",
+                    "url": "https://scribd.sales-agent.example.com/admin/",
                     "works": True,
                     "reason": "Session cookies accessible",
                 },
@@ -193,12 +193,12 @@ class TestOAuthCrossDomainLimitations:
         # Verify working scenarios
         for scenario in oauth_scenarios["working"].values():
             assert scenario["works"] is True
-            assert "sales-agent.scope3.com" in scenario["url"]
+            assert "sales-agent.example.com" in scenario["url"]
 
         # Verify broken scenarios
         for scenario in oauth_scenarios["broken"].values():
             assert scenario["works"] is False
-            assert "sales-agent.scope3.com" not in scenario["url"]
+            assert "sales-agent.example.com" not in scenario["url"]
             assert "Session cookies not accessible" in scenario["reason"]
 
     def test_future_solution_approaches(self):

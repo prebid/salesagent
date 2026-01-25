@@ -25,7 +25,11 @@ jobs:
         version: ${{ env.UV_VERSION }}
 
     - name: Scan for vulnerabilities
-      run: uvx uv-secure
+      # GHSA-7gcm-g887-7qv7: protobuf DoS vulnerability (CVE-2026-0994)
+      # No fix available yet - affects all versions through 6.33.4
+      # Transitive dependency from google-ads, google-api-core, logfire, a2a-sdk
+      # Remove --ignore-vulns when protobuf releases a patched version
+      run: uvx uv-secure --ignore-vulns GHSA-7gcm-g887-7qv7
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)

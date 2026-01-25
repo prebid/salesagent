@@ -67,9 +67,9 @@ class TestAgentCardURLRegression:
             # We need to test the URL generation logic
             # For now, test the patterns we expect
             if "x-adcp-tenant" in headers:
-                expected_url = f"https://{headers['x-adcp-tenant']}.sales-agent.scope3.com/a2a"
+                expected_url = f"https://{headers['x-adcp-tenant']}.sales-agent.example.com/a2a"
             else:
-                expected_url = "https://sales-agent.scope3.com/a2a"
+                expected_url = "https://sales-agent.example.com/a2a"
 
             # Verify no trailing slash in expected URLs
             assert not expected_url.endswith("/a2a/"), f"Generated URL should not have trailing slash: {expected_url}"
@@ -79,8 +79,8 @@ class TestAgentCardURLRegression:
         """Test that both production and development URLs follow same pattern."""
         # Test production URLs (what's in the code)
         production_patterns = [
-            "https://sales-agent.scope3.com/a2a",
-            "https://tenant.sales-agent.scope3.com/a2a",
+            "https://sales-agent.example.com/a2a",
+            "https://tenant.sales-agent.example.com/a2a",
         ]
 
         # Test development URLs (what's in the code)

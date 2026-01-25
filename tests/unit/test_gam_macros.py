@@ -6,8 +6,6 @@ Based on:
 - GAM docs: https://support.google.com/admanager/answer/2376981
 """
 
-import pytest
-
 from src.adapters.gam.utils.macros import (
     ADCP_TO_GAM_MACRO_MAP,
     substitute_macros,
@@ -336,7 +334,7 @@ class TestSubstituteMacros:
     def test_full_sample_url(self):
         """Test with real-world sample URL showing all macro types."""
         url = (
-            "http://ping.scope3.com/agentic/imp?"
+            "http://tracker.example.com/agentic/imp?"
             "ttid=p000001&cid={CREATIVE_ID}&mb={MEDIA_BUY_ID}"
             "&cb={CACHEBUSTER}&ts={TIMESTAMP}"
             "&gdpr={GDPR}&gdpr_c={GDPR_CONSENT}&usp={US_PRIVACY}"
@@ -433,13 +431,7 @@ class TestAddTrackingUrlsToCreative:
         """ThirdPartyCreative uses thirdPartyImpressionTrackingUrls field."""
         manager = self._get_manager()
         creative = {"xsi_type": "ThirdPartyCreative", "name": "Test"}
-        asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "impression": ["https://tracker.com/pixel?cb={CACHEBUSTER}"]
-                }
-            }
-        }
+        asset = {"delivery_settings": {"tracking_urls": {"impression": ["https://tracker.com/pixel?cb={CACHEBUSTER}"]}}}
 
         manager._add_tracking_urls_to_creative(creative, asset)
 
@@ -455,13 +447,7 @@ class TestAddTrackingUrlsToCreative:
         """ImageRedirectCreative uses thirdPartyImpressionTrackingUrls field."""
         manager = self._get_manager()
         creative = {"xsi_type": "ImageRedirectCreative", "name": "Test Image"}
-        asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "impression": ["https://tracker.com/img?pid={PLACEMENT_ID}"]
-                }
-            }
-        }
+        asset = {"delivery_settings": {"tracking_urls": {"impression": ["https://tracker.com/img?pid={PLACEMENT_ID}"]}}}
 
         manager._add_tracking_urls_to_creative(creative, asset)
 
@@ -477,13 +463,7 @@ class TestAddTrackingUrlsToCreative:
         """CustomCreative (HTML5) uses thirdPartyImpressionTrackingUrls field."""
         manager = self._get_manager()
         creative = {"xsi_type": "CustomCreative", "name": "Test HTML5"}
-        asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "impression": ["https://tracker.com/html5?gdpr={GDPR}"]
-                }
-            }
-        }
+        asset = {"delivery_settings": {"tracking_urls": {"impression": ["https://tracker.com/html5?gdpr={GDPR}"]}}}
 
         manager._add_tracking_urls_to_creative(creative, asset)
 
@@ -499,13 +479,7 @@ class TestAddTrackingUrlsToCreative:
         """VideoRedirectCreative uses trackingUrls with CREATIVE_VIEW event."""
         manager = self._get_manager()
         creative = {"xsi_type": "VideoRedirectCreative", "name": "Test Video"}
-        asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "impression": ["https://tracker.com/video?vid={VIDEO_ID}"]
-                }
-            }
-        }
+        asset = {"delivery_settings": {"tracking_urls": {"impression": ["https://tracker.com/video?vid={VIDEO_ID}"]}}}
 
         manager._add_tracking_urls_to_creative(creative, asset)
 
@@ -525,17 +499,9 @@ class TestAddTrackingUrlsToCreative:
         creative = {
             "xsi_type": "VideoRedirectCreative",
             "name": "Test Video",
-            "trackingUrls": [
-                {"key": "CREATIVE_VIEW", "value": {"urls": ["https://existing.com/pixel"]}}
-            ]
+            "trackingUrls": [{"key": "CREATIVE_VIEW", "value": {"urls": ["https://existing.com/pixel"]}}],
         }
-        asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "impression": ["https://new-tracker.com/pixel"]
-                }
-            }
-        }
+        asset = {"delivery_settings": {"tracking_urls": {"impression": ["https://new-tracker.com/pixel"]}}}
 
         manager._add_tracking_urls_to_creative(creative, asset)
 
@@ -553,13 +519,7 @@ class TestAddTrackingUrlsToCreative:
         """Click tracking URL is set as destinationUrl for redirection flow."""
         manager = self._get_manager()
         creative = {"xsi_type": "ThirdPartyCreative", "name": "Test"}
-        asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "click": ["https://click-tracker.com/click?url={CLICK_URL}"]
-                }
-            }
-        }
+        asset = {"delivery_settings": {"tracking_urls": {"click": ["https://click-tracker.com/click?url={CLICK_URL}"]}}}
 
         manager._add_tracking_urls_to_creative(creative, asset)
 
@@ -572,15 +532,9 @@ class TestAddTrackingUrlsToCreative:
         creative = {
             "xsi_type": "ImageRedirectCreative",
             "name": "Test Image",
-            "destinationUrl": "https://landing-page.com/"
+            "destinationUrl": "https://landing-page.com/",
         }
-        asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "click": ["https://click-tracker.com/click"]
-                }
-            }
-        }
+        asset = {"delivery_settings": {"tracking_urls": {"click": ["https://click-tracker.com/click"]}}}
 
         manager._add_tracking_urls_to_creative(creative, asset)
 
@@ -595,11 +549,7 @@ class TestAddTrackingUrlsToCreative:
             "name": "Test Image",
         }
         asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "click": ["https://click-tracker.com/click?cb={CACHEBUSTER}"]
-                }
-            }
+            "delivery_settings": {"tracking_urls": {"click": ["https://click-tracker.com/click?cb={CACHEBUSTER}"]}}
         }
 
         manager._add_tracking_urls_to_creative(creative, asset)
@@ -613,14 +563,10 @@ class TestAddTrackingUrlsToCreative:
         creative = {
             "xsi_type": "ImageRedirectCreative",
             "name": "Test Image",
-            "destinationUrl": "https://landing-page.com/path?param=value"
+            "destinationUrl": "https://landing-page.com/path?param=value",
         }
         asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "click": ["https://click-tracker.com/c?redir={REDIRECT_URL}"]
-                }
-            }
+            "delivery_settings": {"tracking_urls": {"click": ["https://click-tracker.com/c?redir={REDIRECT_URL}"]}}
         }
 
         manager._add_tracking_urls_to_creative(creative, asset)
@@ -634,11 +580,7 @@ class TestAddTrackingUrlsToCreative:
         manager = self._get_manager()
         creative = {"xsi_type": "ImageRedirectCreative", "name": "Test"}
         asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "click": ["https://tracker.com/c?cb={CACHEBUSTER}&axem={AXEM}"]
-                }
-            }
+            "delivery_settings": {"tracking_urls": {"click": ["https://tracker.com/c?cb={CACHEBUSTER}&axem={AXEM}"]}}
         }
 
         manager._add_tracking_urls_to_creative(creative, asset)
@@ -665,13 +607,7 @@ class TestAddTrackingUrlsToCreative:
         """Creative with empty tracking URLs is not modified."""
         manager = self._get_manager()
         creative = {"xsi_type": "ThirdPartyCreative", "name": "Test"}
-        asset = {
-            "delivery_settings": {
-                "tracking_urls": {
-                    "impression": []
-                }
-            }
-        }
+        asset = {"delivery_settings": {"tracking_urls": {"impression": []}}}
 
         manager._add_tracking_urls_to_creative(creative, asset)
 

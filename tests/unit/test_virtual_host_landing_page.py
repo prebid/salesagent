@@ -71,7 +71,7 @@ class TestVirtualHostLandingPage:
             "name": "HTML Test Publisher & Co.",  # Test HTML escaping
             "subdomain": "htmltest",
         }
-        virtual_host = "htmltest.sales-agent.scope3.com"
+        virtual_host = "htmltest.sales-agent.example.com"
 
         # Act - use the new landing page module
         with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
@@ -82,13 +82,12 @@ class TestVirtualHostLandingPage:
         assert "Advertising Context Protocol" in html_content
         assert "/mcp" in html_content
         # A2A endpoint is at the root, not /a2a
-        assert "https://htmltest.sales-agent.scope3.com" in html_content
+        assert "https://htmltest.sales-agent.example.com" in html_content
         assert "/.well-known/agent.json" in html_content
         assert "<!DOCTYPE html>" in html_content
 
         # Check for new features
         assert "Need a Buying Agent?" in html_content
-        assert "scope3.com" in html_content
         assert "Internal Admin" in html_content
         assert "adcontextprotocol.org" in html_content
 
@@ -114,16 +113,16 @@ class TestVirtualHostLandingPage:
     def test_landing_page_url_generation_production(self):
         """Test URL generation in production environment."""
         tenant = {"name": "Production Publisher", "subdomain": "prod", "tenant_id": "prod-1"}
-        virtual_host = "prod.sales-agent.scope3.com"
+        virtual_host = "prod.sales-agent.example.com"
 
         with patch.dict("os.environ", {"PRODUCTION": "true"}):
             with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
                 html_content = generate_tenant_landing_page(tenant, virtual_host)
 
         # Should use production URLs (A2A at root, not /a2a)
-        assert "https://prod.sales-agent.scope3.com/mcp" in html_content
-        assert "https://prod.sales-agent.scope3.com" in html_content  # A2A endpoint is at root
-        assert "https://prod.sales-agent.scope3.com/.well-known/agent.json" in html_content
+        assert "https://prod.sales-agent.example.com/mcp" in html_content
+        assert "https://prod.sales-agent.example.com" in html_content  # A2A endpoint is at root
+        assert "https://prod.sales-agent.example.com/.well-known/agent.json" in html_content
 
     def test_landing_page_url_generation_development(self):
         """Test URL generation in development environment."""
@@ -247,13 +246,13 @@ class TestVirtualHostLandingPage:
     def test_landing_page_tenant_subdomain_extraction(self):
         """Test tenant subdomain extraction from virtual host."""
         tenant = {"name": "Subdomain Test", "tenant_id": "subdomain-test"}
-        virtual_host = "scribd.sales-agent.scope3.com"
+        virtual_host = "scribd.sales-agent.example.com"
 
         html_content = generate_tenant_landing_page(tenant, virtual_host)
 
         # Should extract "scribd" as the subdomain and use it in URLs
         assert "scribd" in html_content
-        assert "https://scribd.sales-agent.scope3.com" in html_content
+        assert "https://scribd.sales-agent.example.com" in html_content
 
     @patch("src.core.main.get_tenant_by_virtual_host")
     async def test_landing_page_header_case_insensitive(self, mock_get_tenant):

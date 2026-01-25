@@ -2610,7 +2610,7 @@ Exclude any products that don't match the brand's tone.</pre>
                 <h3>MCP Server Endpoint</h3>
                 <div class="config-code">
                     <button class="copy-button" onclick="copyToClipboard(this)">Copy</button>
-                    <pre style="margin: 0;">{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.sales-agent.scope3.com/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}</pre>
+                    <pre style="margin: 0;">{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}</pre>
                 </div>
             </div>
 
@@ -2627,7 +2627,7 @@ headers = {
 
 }
 transport = StreamableHttpTransport(
-    url="{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.sales-agent.scope3.com/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}",
+    url="{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}",
     headers=headers
 )
 client = Client(transport=transport)
@@ -2724,7 +2724,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
                 <h3 style="color: #065f46;">Sales Agent Currently Inactive</h3>
                 <p style="color: #047857; margin-bottom: 1rem;">
                     This sales agent is currently deactivated. To reactivate, please contact support at
-                    <a href="mailto:support@scope3.com">support@scope3.com</a>.
+                    <a href="mailto:{{ support_email }}">{{ support_email }}</a>.
                 </p>
             </div>
             {% endif %}

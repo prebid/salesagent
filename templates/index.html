@@ -69,7 +69,7 @@
                     {% else %}
                     <code>{{ tenant.subdomain }}</code>
                     {% if is_production %}
-                        <br><small style="color: #666;">https://{{ tenant.subdomain }}.sales-agent.scope3.com/mcp/</small>
+                        <br><small style="color: #666;">https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/mcp/</small>
                         <br><small style="color: #999;">(Tenant Subdomain)</small>
                     {% else %}
                         <br><small style="color: #666;">http://localhost:{{ mcp_port }}/mcp/</small>

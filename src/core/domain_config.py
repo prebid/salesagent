@@ -214,3 +214,14 @@ def get_session_cookie_domain() -> str | None:
     if sales_domain := get_sales_agent_domain():
         return f".{sales_domain}"
     return None
+
+
+def get_support_email() -> str:
+    """
+    Get the support email address for user-facing messages.
+
+    Returns:
+        The configured SUPPORT_EMAIL, or a placeholder if not set.
+        Configure via environment variable for production deployments.
+    """
+    return os.getenv("SUPPORT_EMAIL", "support@example.com")

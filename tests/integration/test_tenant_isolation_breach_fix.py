@@ -60,7 +60,7 @@ def test_tenant_isolation_with_valid_subdomain(integration_db):
     context.meta = {
         "headers": {
             "x-adcp-auth": "wonderstruck_token_abc123",
-            "host": "wonderstruck.sales-agent.scope3.com",
+            "host": "wonderstruck.sales-agent.example.com",
         }
     }
 
@@ -82,7 +82,7 @@ def test_tenant_isolation_with_valid_subdomain(integration_db):
     context2.meta = {
         "headers": {
             "x-adcp-auth": "test_agent_token_xyz789",
-            "host": "test-agent.sales-agent.scope3.com",
+            "host": "test-agent.sales-agent.example.com",
         }
     }
 
@@ -141,7 +141,7 @@ def test_cross_tenant_token_rejected(integration_db):
     context.meta = {
         "headers": {
             "x-adcp-auth": "wonderstruck_token_abc123",  # Wonderstruck token
-            "host": "test-agent.sales-agent.scope3.com",  # Test-agent subdomain
+            "host": "test-agent.sales-agent.example.com",  # Test-agent subdomain
         }
     }
 

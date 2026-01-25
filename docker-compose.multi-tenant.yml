@@ -4,17 +4,18 @@
 #   docker compose -f docker-compose.multi-tenant.yml up
 #
 # Prerequisites:
-#   Add to /etc/hosts:
-#     127.0.0.1 sales-agent.scope3.com
-#     127.0.0.1 admin.sales-agent.scope3.com
-#     127.0.0.1 tenant1.sales-agent.scope3.com
-#     127.0.0.1 tenant2.sales-agent.scope3.com
+#   1. Set SALES_AGENT_DOMAIN environment variable (e.g., sales-agent.local)
+#   2. Add to /etc/hosts:
+#        127.0.0.1 sales-agent.local
+#        127.0.0.1 admin.sales-agent.local
+#        127.0.0.1 tenant1.sales-agent.local
+#        127.0.0.1 tenant2.sales-agent.local
 #
-# Access:
-#   - http://admin.sales-agent.scope3.com:8000/        -> Admin UI
-#   - http://tenant1.sales-agent.scope3.com:8000/mcp   -> Tenant 1 MCP
-#   - http://tenant1.sales-agent.scope3.com:8000/a2a   -> Tenant 1 A2A
-#   - http://sales-agent.scope3.com:8000/              -> Main signup page
+# Access (assuming SALES_AGENT_DOMAIN=sales-agent.local):
+#   - http://admin.sales-agent.local:8000/        -> Admin UI
+#   - http://tenant1.sales-agent.local:8000/mcp   -> Tenant 1 MCP
+#   - http://tenant1.sales-agent.local:8000/a2a   -> Tenant 1 A2A
+#   - http://sales-agent.local:8000/              -> Main signup page
 #
 # Uses pre-built images from GitHub Container Registry.
 

@@ -1,6 +1,6 @@
 """Test tenant isolation fix for get_products.
 
-This test verifies that when accessing a tenant via subdomain (e.g., wonderstruck.sales-agent.scope3.com),
+This test verifies that when accessing a tenant via subdomain (e.g., wonderstruck.sales-agent.example.com),
 the products returned belong to that tenant, not the tenant associated with the auth token.
 
 Bug: Previously, get_principal_from_token() would overwrite the tenant context set from the subdomain
@@ -22,7 +22,7 @@ from src.core.main import get_principal_from_context
 def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
     """Test that cross-tenant tokens are rejected for security.
 
-    When accessing a tenant via subdomain (e.g., wonderstruck.sales-agent.scope3.com),
+    When accessing a tenant via subdomain (e.g., wonderstruck.sales-agent.example.com),
     tokens from a different tenant should be rejected, not accepted with overridden context.
     This prevents principals from one tenant accessing another tenant's resources.
     """
@@ -68,12 +68,12 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
         session.add(principal)
         session.commit()
 
-    # Simulate request to wonderstruck.sales-agent.scope3.com with test-agent token
+    # Simulate request to wonderstruck.sales-agent.example.com with test-agent token
     # This should be REJECTED for security reasons
     mock_context = MagicMock()
     mock_context.meta = {
         "headers": {
-            "host": "wonderstruck.sales-agent.scope3.com",
+            "host": "wonderstruck.sales-agent.example.com",
             "x-adcp-auth": "test_agent_principal_token",
         }
     }
@@ -166,11 +166,11 @@ def test_admin_token_with_subdomain_preserves_tenant_context(integration_db):
         session.add(tenant)
         session.commit()
 
-    # Simulate request to admin-test.sales-agent.scope3.com with admin token
+    # Simulate request to admin-test.sales-agent.example.com with admin token
     mock_context = MagicMock()
     mock_context.meta = {
         "headers": {
-            "host": "admin-test.sales-agent.scope3.com",
+            "host": "admin-test.sales-agent.example.com",
             "x-adcp-auth": "admin_test_admin_token",
         }
     }

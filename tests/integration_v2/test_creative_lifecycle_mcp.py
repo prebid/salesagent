@@ -12,7 +12,6 @@ Test creatives use "https://test.com" as a default value.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -493,7 +492,7 @@ class TestCreativeLifecycleMCP:
                 "fastmcp.server.dependencies.get_http_headers",
                 return_value={
                     "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.scope3.com",
+                    "host": "creative-test.sales-agent.example.com",
                 },
             ),
         ):
@@ -551,7 +550,7 @@ class TestCreativeLifecycleMCP:
                 "fastmcp.server.dependencies.get_http_headers",
                 return_value={
                     "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.scope3.com",
+                    "host": "creative-test.sales-agent.example.com",
                 },
             ),
         ):
@@ -621,7 +620,7 @@ class TestCreativeLifecycleMCP:
                 "fastmcp.server.dependencies.get_http_headers",
                 return_value={
                     "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.scope3.com",
+                    "host": "creative-test.sales-agent.example.com",
                 },
             ),
         ):
@@ -705,7 +704,7 @@ class TestCreativeLifecycleMCP:
                 "fastmcp.server.dependencies.get_http_headers",
                 return_value={
                     "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.scope3.com",
+                    "host": "creative-test.sales-agent.example.com",
                 },
             ),
         ):
@@ -766,7 +765,7 @@ class TestCreativeLifecycleMCP:
                 "fastmcp.server.dependencies.get_http_headers",
                 return_value={
                     "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.scope3.com",
+                    "host": "creative-test.sales-agent.example.com",
                 },
             ),
         ):
@@ -814,7 +813,7 @@ class TestCreativeLifecycleMCP:
                 "fastmcp.server.dependencies.get_http_headers",
                 return_value={
                     "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.scope3.com",
+                    "host": "creative-test.sales-agent.example.com",
                 },
             ),
         ):
@@ -892,7 +891,7 @@ class TestCreativeLifecycleMCP:
                 "fastmcp.server.dependencies.get_http_headers",
                 return_value={
                     "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.scope3.com",
+                    "host": "creative-test.sales-agent.example.com",
                 },
             ),
         ):
@@ -966,7 +965,7 @@ class TestCreativeLifecycleMCP:
                 "fastmcp.server.dependencies.get_http_headers",
                 return_value={
                     "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.scope3.com",
+                    "host": "creative-test.sales-agent.example.com",
                 },
             ),
         ):
@@ -980,9 +979,10 @@ class TestCreativeLifecycleMCP:
 
     def test_validate_creatives_missing_required_fields(self, mock_context):
         """Test _validate_creatives_before_adapter_call detects missing required fields."""
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
-        from src.core.schemas import PackageRequest
         from fastmcp.exceptions import ToolError
+
+        from src.core.schemas import PackageRequest
+        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
 
         with get_db_session() as session:
             creative_no_url = DBCreative(
@@ -1019,20 +1019,19 @@ class TestCreativeLifecycleMCP:
 
         # Use proper Format object for mock (adcp 2.18.0 uses get_format_assets utility)
         from tests.helpers.adcp_factories import create_test_format
+
         mock_format = create_test_format(
             "display_300x250",
-            assets=[
-                {"item_type": "individual", "asset_id": "banner_image", "asset_type": "image", "required": True}
-            ]
+            assets=[{"item_type": "individual", "asset_id": "banner_image", "asset_type": "image", "required": True}],
         )
-        
+
         with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format):
             with pytest.raises(ToolError) as exc_info:
                 _validate_creatives_before_adapter_call(packages, self.test_tenant_id)
-            
+
             error_msg = str(exc_info.value).lower()
             assert "validate_test_no_url" in error_msg
-            assert ("url" in error_msg or "required" in error_msg)
+            assert "url" in error_msg or "required" in error_msg
 
     async def test_create_media_buy_with_creative_ids(self, mock_context, sample_creatives):
         """Test create_media_buy accepts creative_ids in packages."""

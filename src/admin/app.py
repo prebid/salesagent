@@ -321,6 +321,7 @@ def create_app(config=None):
 
         from src.core.database.database_session import get_db_session
         from src.core.database.models import Tenant
+        from src.core.domain_config import get_sales_agent_domain, get_support_email
 
         context = {}
 
@@ -329,6 +330,12 @@ def create_app(config=None):
             context["script_name"] = "/admin"
         else:
             context["script_name"] = ""
+
+        # Inject support email (configurable via SUPPORT_EMAIL env var)
+        context["support_email"] = get_support_email()
+
+        # Inject sales agent domain for URL generation in templates
+        context["sales_agent_domain"] = get_sales_agent_domain() or "example.com"
 
         # Inject fresh tenant data if user is logged in with a tenant
         tenant_id = session.get("tenant_id")

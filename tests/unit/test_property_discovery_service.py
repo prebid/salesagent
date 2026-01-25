@@ -302,7 +302,7 @@ class TestPropertyDiscoveryService:
         mock_adagents_data = {
             "authorized_agents": [
                 {
-                    "url": "https://wonderstruck.sales-agent.scope3.com",
+                    "url": "https://wonderstruck.sales-agent.example.com",
                     "authorized_for": "Authorized for display banners",
                     # Note: No property_ids, property_tags, properties, or publisher_properties fields
                     # This means access to ALL properties from this publisher

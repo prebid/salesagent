@@ -128,7 +128,7 @@ GCP credentials loaded from GOOGLE_APPLICATION_CREDENTIALS_JSON
 
 ### Step 8: Test the Feature
 
-1. Log into Admin UI: https://sales-agent.scope3.com/
+1. Log into Admin UI: https://your-sales-agent-domain.com/
 2. Navigate to **Tenant Settings** → **Ad Server**
 3. Select **Google Ad Manager**
 4. Scroll to **Service Account Integration**

@@ -35,7 +35,7 @@ class MockContext:
             self.meta = {
                 "headers": {
                     "x-adcp-auth": auth_token,
-                    "host": "security-test.sales-agent.scope3.com",  # Matches subdomain in setup_test_data
+                    "host": "security-test.sales-agent.example.com",  # Matches subdomain in setup_test_data
                 }
             }
 
@@ -151,7 +151,7 @@ class TestCrossPrincipalSecurity:
             "src.core.auth.get_http_headers",
             return_value={
                 "x-adcp-auth": "token-advertiser-b",
-                "host": "security-test.sales-agent.scope3.com",
+                "host": "security-test.sales-agent.example.com",
             },
         ):
             response = _list_creatives_impl(ctx=mock_context_b)
@@ -177,7 +177,7 @@ class TestCrossPrincipalSecurity:
             "src.core.auth.get_http_headers",
             return_value={
                 "x-adcp-auth": "token-advertiser-b",
-                "host": "security-test.sales-agent.scope3.com",
+                "host": "security-test.sales-agent.example.com",
             },
         ):
             # _verify_principal should raise PermissionError
@@ -216,7 +216,7 @@ class TestCrossPrincipalSecurity:
             "src.core.auth.get_http_headers",
             return_value={
                 "x-adcp-auth": "token-advertiser-b",
-                "host": "security-test.sales-agent.scope3.com",
+                "host": "security-test.sales-agent.example.com",
             },
         ):
             response = _get_media_buy_delivery_impl(req=request, ctx=mock_context_b)
@@ -283,7 +283,7 @@ class TestCrossPrincipalSecurity:
             "src.core.auth.get_http_headers",
             return_value={
                 "x-adcp-auth": "token-advertiser-a",
-                "host": "security-test.sales-agent.scope3.com",
+                "host": "security-test.sales-agent.example.com",
             },
         ):
             response = _list_creatives_impl(ctx=mock_context_a)

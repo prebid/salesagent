@@ -35,7 +35,7 @@ class TestLandingPages:
             response = requests.get(
                 f"{base_url}/",
                 headers={
-                    "Host": "admin.sales-agent.scope3.com",
+                    "Host": "admin.sales-agent.example.com",
                 },
                 timeout=5,
                 allow_redirects=False,
@@ -59,7 +59,7 @@ class TestLandingPages:
             response = requests.get(
                 f"{base_url}/",
                 headers={
-                    "Host": "admin.sales-agent.scope3.com",
+                    "Host": "admin.sales-agent.example.com",
                 },
                 timeout=5,
                 allow_redirects=True,
@@ -151,7 +151,7 @@ class TestLandingPages:
                 f"{base_url}/",
                 headers={
                     "Host": "localhost:8001",  # Backend host
-                    "Apx-Incoming-Host": "admin.sales-agent.scope3.com",  # Proxied admin host
+                    "Apx-Incoming-Host": "admin.sales-agent.example.com",  # Proxied admin host
                 },
                 timeout=5,
                 allow_redirects=False,
@@ -508,7 +508,7 @@ class TestProductionLandingPages:
         if not self._is_production_test():
             pytest.skip("Set PRODUCTION_TEST=true to run production tests")
 
-        domain = self._get_production_domain("applabs", "https://applabs.sales-agent.scope3.com")
+        domain = self._get_production_domain("applabs", "https://applabs.sales-agent.example.com")
 
         try:
             response = requests.get(
@@ -537,7 +537,7 @@ class TestProductionLandingPages:
         if not self._is_production_test():
             pytest.skip("Set PRODUCTION_TEST=true to run production tests")
 
-        domain = self._get_production_domain("admin", "https://admin.sales-agent.scope3.com")
+        domain = self._get_production_domain("admin", "https://admin.sales-agent.example.com")
 
         try:
             response = requests.get(

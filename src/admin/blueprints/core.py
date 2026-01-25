@@ -201,7 +201,7 @@ def index():
 
     # Check if this is actually an /admin/ request that had its prefix stripped by CustomProxyFix.
     # When request.script_root is "/admin", it means the request came via /admin/ path
-    # (e.g., wonderstruck.sales-agent.scope3.com/admin/). In this case, delegate to admin_index().
+    # (e.g., tenant.your-domain.com/admin/). In this case, delegate to admin_index().
     if request.script_root == "/admin":
         return admin_index()
 

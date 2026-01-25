@@ -76,20 +76,20 @@ class TestGetAdvertisers:
         # Mock service response
         mock_service = MagicMock()
         mock_companies = [
-            MockCompanyResult("123", "Scope3"),
-            MockCompanyResult("456", "Scopely"),
+            MockCompanyResult("123", "Acme Corp"),
+            MockCompanyResult("456", "Acme Inc"),
         ]
         mock_response = MockGetCompaniesByStatementResponse(mock_companies, 2)
         mock_service.getCompaniesByStatement = MagicMock(return_value=mock_response)
         mock_client_manager.get_service.return_value = mock_service
 
         # Call with search query
-        result = orders_manager.get_advertisers(search_query="Scope")
+        result = orders_manager.get_advertisers(search_query="Acme")
 
         # Verify results
         assert len(result) == 2
-        assert result[0]["name"] == "Scope3"
-        assert result[1]["name"] == "Scopely"
+        assert result[0]["name"] == "Acme Corp"
+        assert result[1]["name"] == "Acme Inc"
 
     def test_get_advertisers_sanitizes_search_query(self, orders_manager, mock_client_manager):
         """Test that search query is sanitized (stripped and length-limited)."""
@@ -100,7 +100,7 @@ class TestGetAdvertisers:
         mock_client_manager.get_service.return_value = mock_service
 
         # Test whitespace stripping
-        result = orders_manager.get_advertisers(search_query="  Scope3  ")
+        result = orders_manager.get_advertisers(search_query="  Acme  ")
         assert len(result) == 0  # Empty result is fine, we're testing sanitization
 
         # Test length limiting (100 chars max)

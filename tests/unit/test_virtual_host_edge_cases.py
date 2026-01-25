@@ -424,7 +424,7 @@ class TestVirtualHostPublisherAuthorizationUrl:
         if virtual_host:
             agent_url = f"https://{virtual_host}"
         else:
-            agent_url = "https://fallback.sales-agent.scope3.com"
+            agent_url = "https://fallback.sales-agent.example.com"
 
         # Assert
         assert agent_url == "https://sales-agent.accuweather.com"
@@ -439,11 +439,11 @@ class TestVirtualHostPublisherAuthorizationUrl:
         if virtual_host:
             agent_url = f"https://{virtual_host}"
         else:
-            # Simulates get_tenant_url(subdomain) -> https://subdomain.sales-agent.scope3.com
-            agent_url = f"https://{subdomain}.sales-agent.scope3.com"
+            # Simulates get_tenant_url(subdomain) -> https://subdomain.sales-agent.example.com
+            agent_url = f"https://{subdomain}.sales-agent.example.com"
 
         # Assert
-        assert agent_url == "https://accuweather.sales-agent.scope3.com"
+        assert agent_url == "https://accuweather.sales-agent.example.com"
 
     def test_agent_url_handles_empty_string_virtual_host(self):
         """Test that empty string virtual_host is treated as None."""
@@ -455,7 +455,7 @@ class TestVirtualHostPublisherAuthorizationUrl:
         if virtual_host:
             agent_url = f"https://{virtual_host}"
         else:
-            agent_url = f"https://{subdomain}.sales-agent.scope3.com"
+            agent_url = f"https://{subdomain}.sales-agent.example.com"
 
         # Assert - should fall back to subdomain
-        assert agent_url == "https://accuweather.sales-agent.scope3.com"
+        assert agent_url == "https://accuweather.sales-agent.example.com"

@@ -361,10 +361,7 @@ APPROXIMATED_API_KEY=your-approximated-api-key
 
 ### Environments
 - **Local Dev**: `docker compose up -d` → http://localhost:8000 (builds from source)
-- **Reference Sales Agent**: Fly.io → https://adcp-sales-agent.fly.dev (auto-deploys from main)
-- **Test Buyer**: https://testing.adcontextprotocol.org/ (production tenant with mock adapter)
-
-**All environments are INDEPENDENT** - Docker doesn't affect production.
+- **Production**: Deploy to your preferred hosting platform
 
 **Local Dev Notes:**
 - Test mode enabled by default (`ADCP_AUTH_TEST_MODE=true`)
@@ -375,7 +372,7 @@ APPROXIMATED_API_KEY=your-approximated-api-key
 
 1. Work on feature branches: `git checkout -b feature/name`
 2. Create PR: `gh pr create`
-3. Merge via GitHub UI → auto-deploys to Fly.io
+3. Merge via GitHub UI
 
 ### Hosting Options
 This app can be hosted anywhere:

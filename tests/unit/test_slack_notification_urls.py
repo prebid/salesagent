@@ -30,7 +30,7 @@ class TestSlackNotificationUrls:
 
     def test_notify_new_task_with_tenant_id(self, slack_notifier, mock_webhook_delivery):
         """Test that notify_new_task uses tenant-specific URL when tenant_id provided."""
-        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.scope3.com"}):
+        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.example.com"}):
             slack_notifier.notify_new_task(
                 task_id="task_123",
                 task_type="create_media_buy",
@@ -49,12 +49,12 @@ class TestSlackNotificationUrls:
         assert actions_block is not None, "Should have actions block"
 
         url = actions_block["elements"][0]["url"]
-        assert url == "https://sales-agent.scope3.com/tenant/tenant_abc/workflows"
+        assert url == "https://sales-agent.example.com/tenant/tenant_abc/workflows"
         assert "localhost" not in url, "Should not contain localhost"
 
     def test_notify_new_task_without_tenant_id(self, slack_notifier, mock_webhook_delivery):
         """Test that notify_new_task falls back to global workflows page without tenant_id."""
-        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.scope3.com"}):
+        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.example.com"}):
             slack_notifier.notify_new_task(
                 task_id="task_123",
                 task_type="create_media_buy",
@@ -71,12 +71,12 @@ class TestSlackNotificationUrls:
         url = actions_block["elements"][0]["url"]
 
         # Should fall back to global workflows
-        assert url == "https://sales-agent.scope3.com/workflows"
+        assert url == "https://sales-agent.example.com/workflows"
         assert "localhost" not in url
 
     def test_notify_media_buy_event_with_tenant_and_buy_id(self, slack_notifier, mock_webhook_delivery):
         """Test media buy event notification links to specific media buy."""
-        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.scope3.com"}):
+        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.example.com"}):
             slack_notifier.notify_media_buy_event(
                 event_type="created",
                 media_buy_id="mb_123",
@@ -97,12 +97,12 @@ class TestSlackNotificationUrls:
             actions_block = next((b for b in payload["attachments"][0]["blocks"] if b["type"] == "actions"), None)
 
         url = actions_block["elements"][0]["url"]
-        assert url == "https://sales-agent.scope3.com/tenant/tenant_abc/workflows#mb_123"
+        assert url == "https://sales-agent.example.com/tenant/tenant_abc/workflows#mb_123"
         assert "localhost" not in url
 
     def test_notify_media_buy_event_with_tenant_only(self, slack_notifier, mock_webhook_delivery):
         """Test media buy event without media_buy_id links to tenant workflows."""
-        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.scope3.com"}):
+        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.example.com"}):
             slack_notifier.notify_media_buy_event(
                 event_type="failed",
                 media_buy_id=None,  # No media buy ID yet
@@ -121,12 +121,12 @@ class TestSlackNotificationUrls:
         actions_block = next((b for b in payload["attachments"][0]["blocks"] if b["type"] == "actions"), None)
         url = actions_block["elements"][0]["url"]
 
-        assert url == "https://sales-agent.scope3.com/tenant/tenant_abc/workflows"
+        assert url == "https://sales-agent.example.com/tenant/tenant_abc/workflows"
         assert "localhost" not in url
 
     def test_notify_media_buy_event_without_tenant_id(self, slack_notifier, mock_webhook_delivery):
         """Test media buy event falls back to global workflows without tenant_id."""
-        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.scope3.com"}):
+        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.example.com"}):
             slack_notifier.notify_media_buy_event(
                 event_type="created",
                 media_buy_id="mb_123",
@@ -144,12 +144,12 @@ class TestSlackNotificationUrls:
         url = actions_block["elements"][0]["url"]
 
         # Should fall back to global workflows
-        assert url == "https://sales-agent.scope3.com/workflows"
+        assert url == "https://sales-agent.example.com/workflows"
         assert "localhost" not in url
 
     def test_notify_creative_pending_with_tenant_id(self, slack_notifier, mock_webhook_delivery):
         """Test creative notification uses tenant-specific URL."""
-        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.scope3.com"}):
+        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.example.com"}):
             slack_notifier.notify_creative_pending(
                 creative_id="creative_123",
                 principal_name="Test Advertiser",
@@ -164,7 +164,7 @@ class TestSlackNotificationUrls:
         actions_block = next((b for b in payload["blocks"] if b["type"] == "actions"), None)
         url = actions_block["elements"][0]["url"]
 
-        assert url == "https://sales-agent.scope3.com/tenant/tenant_abc/creatives/review#creative_123"
+        assert url == "https://sales-agent.example.com/tenant/tenant_abc/creatives/review#creative_123"
         assert "localhost" not in url
 
     def test_localhost_fallback_when_env_not_set(self, slack_notifier, mock_webhook_delivery):
@@ -192,7 +192,7 @@ class TestSlackNotificationUrls:
         """Test that all event types properly handle tenant-specific URLs."""
         event_types = ["created", "approval_required", "config_approval_required", "failed", "activated"]
 
-        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.scope3.com"}):
+        with patch.dict(os.environ, {"ADMIN_UI_URL": "https://sales-agent.example.com"}):
             for event_type in event_types:
                 mock_webhook_delivery.reset_mock()
 

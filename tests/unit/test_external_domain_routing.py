@@ -151,7 +151,7 @@ class TestExternalDomainRouting:
                     assert "landing" in response.location or "signup" in response.location
 
     def test_index_route_subdomain_with_tenant(self):
-        """Test that subdomain (*.sales-agent.scope3.com) with tenant shows agent landing page."""
+        """Test that subdomain (*.sales-agent.example.com) with tenant shows agent landing page."""
         from src.admin.app import create_app
 
         app, _ = create_app()
@@ -172,7 +172,7 @@ class TestExternalDomainRouting:
                             "virtual_host": None,
                         }
                         mock_route.return_value = RoutingResult(
-                            "subdomain", tenant_dict, "accuweather.sales-agent.scope3.com"
+                            "subdomain", tenant_dict, "accuweather.sales-agent.example.com"
                         )
 
                         # Mock landing page generation
@@ -182,7 +182,7 @@ class TestExternalDomainRouting:
                         response = client.get(
                             "/",
                             headers={
-                                "Host": "accuweather.sales-agent.scope3.com",
+                                "Host": "accuweather.sales-agent.example.com",
                             },
                         )
 
