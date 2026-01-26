@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0](https://github.com/adcontextprotocol/salesagent/compare/v0.9.3...v1.0.0) (2026-01-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* This updates the AdCP library dependency from 2.14.0 to 3.0.0.
+
+### Features
+
+* Migrate to AdCP 3.0.0 library ([#968](https://github.com/adcontextprotocol/salesagent/issues/968)) ([e4b31b2](https://github.com/adcontextprotocol/salesagent/commit/e4b31b2ee2747db86c6d8dc352e58f0491d498ee))
+
 ## [0.9.3](https://github.com/adcontextprotocol/salesagent/compare/v0.9.2...v0.9.3) (2026-01-25)
 
 
