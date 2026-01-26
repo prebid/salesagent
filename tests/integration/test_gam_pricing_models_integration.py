@@ -729,8 +729,8 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
     # Verify error message explains the limitation
     error_message = str(exc_info.value)
     assert "Auction CPC pricing option cpc_usd_auction is not supported" in error_message
-    assert "adcp library v2.5.0" in error_message
-    assert "CpcPricingOption class only supports fixed-rate pricing" in error_message
+    # V3: Message updated to explain fixed_price requirement
+    assert "CPC pricing requires fixed_price" in error_message
 
     # Cleanup auction pricing option
     with get_db_session() as session:

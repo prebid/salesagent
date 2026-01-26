@@ -479,8 +479,9 @@ class TestAdCPContract:
                     "pricing_option_id": "cpm_eur_auction",
                     "pricing_model": "cpm",
                     "currency": "EUR",
-                    "is_fixed": False,  # Required in adcp 2.4.0+
-                    "price_guidance": {"floor": 5.0, "p75": 8.5, "p90": 10.0},
+                    # V3 Migration: is_fixed removed, floor moved to top-level floor_price
+                    "floor_price": 5.0,  # V3: was price_guidance.floor
+                    "price_guidance": {"p75": 8.5, "p90": 10.0},
                 }
             ],
             publisher_properties=[
@@ -491,8 +492,8 @@ class TestAdCPContract:
         adcp_response = non_guaranteed_product.model_dump()
         # Currency is now in pricing_options, not at product level
         assert adcp_response["pricing_options"][0]["currency"] == "EUR"
-        # Verify price_guidance contains floor and percentile values
-        assert adcp_response["pricing_options"][0]["price_guidance"]["floor"] == 5.0
+        # V3 Migration: floor is now top-level floor_price, not inside price_guidance
+        assert adcp_response["pricing_options"][0]["floor_price"] == 5.0
         assert adcp_response["pricing_options"][0]["price_guidance"]["p75"] == 8.5  # p75 used as recommended
         assert adcp_response["pricing_options"][0]["price_guidance"]["p90"] == 10.0
 
@@ -1511,8 +1512,11 @@ class TestAdCPContract:
         Now extends library ListCreativesRequest directly - all fields are spec-compliant.
         """
         from adcp.types import CreativeFilters as LibraryCreativeFilters
-        from adcp.types import Pagination as LibraryPagination
         from adcp.types import Sort as LibrarySort
+
+        # V3: Request and Response Pagination are different types
+        # Request uses limit/offset, Response uses batch_number/total_artifacts/total_batches
+        from adcp.types.generated_poc.media_buy.list_creatives_request import Pagination as RequestPagination
 
         from src.core.schemas import ListCreativesRequest
 
@@ -1527,7 +1531,7 @@ class TestAdCPContract:
                 media_buy_ids=["mb_123"],
                 buyer_refs=["buyer_456"],
             ),
-            pagination=LibraryPagination(offset=0, limit=50),
+            pagination=RequestPagination(limit=50, offset=0),  # Request pagination uses limit/offset
             sort=LibrarySort(field="created_date", direction="desc"),  # type: ignore[arg-type]
             include_performance=False,
             include_assignments=True,
@@ -1544,8 +1548,10 @@ class TestAdCPContract:
 
         # Verify filters structure
         filters = adcp_response["filters"]
-        # Status is converted to CreativeStatus enum by library
-        assert filters["status"].value == "approved", "filters.status should match input"
+        # V3: Status is serialized as string (not enum) in model_dump
+        status = filters["status"]
+        status_value = status.value if hasattr(status, "value") else status
+        assert status_value == "approved", "filters.status should match input"
         assert filters["format"] == "display_300x250", "filters.format should match input"
         assert filters["tags"] == ["sports", "premium"], "filters.tags should match input"
         assert "created_after" in filters, "filters.created_after should be present"
@@ -1560,9 +1566,11 @@ class TestAdCPContract:
 
         # Verify sort structure
         sort = adcp_response["sort"]
-        # Field and direction are converted to enums by library
-        assert sort["field"].value == "created_date", "sort.field should match input"
-        assert sort["direction"].value == "desc", "sort.direction should match input"
+        # V3: Enums serialized as strings in model_dump
+        field_val = sort["field"].value if hasattr(sort["field"], "value") else sort["field"]
+        direction_val = sort["direction"].value if hasattr(sort["direction"], "value") else sort["direction"]
+        assert field_val == "created_date", "sort.field should match input"
+        assert direction_val == "desc", "sort.direction should match input"
 
         # Fields WITH defaults should be present
         assert "include_performance" in adcp_response, "Field with default should be present"
@@ -1626,6 +1634,7 @@ class TestAdCPContract:
             updated_at=datetime.now(),
         )
 
+        # Response Pagination uses page-based fields (limit, offset, total_pages, current_page, has_more)
         response = ListCreativesResponse(
             creatives=[creative1, creative2],
             query_summary=QuerySummary(
@@ -1636,9 +1645,9 @@ class TestAdCPContract:
             pagination=Pagination(
                 limit=50,
                 offset=0,
-                has_more=False,
                 total_pages=1,
                 current_page=1,
+                has_more=False,
             ),
         )
 
@@ -1661,9 +1670,10 @@ class TestAdCPContract:
         assert "returned" in adcp_response["query_summary"]
         assert adcp_response["query_summary"]["total_matching"] >= 0
 
-        # Verify pagination structure
+        # Verify pagination structure (page-based)
         assert "limit" in adcp_response["pagination"]
         assert "offset" in adcp_response["pagination"]
+        assert "total_pages" in adcp_response["pagination"]
         assert "has_more" in adcp_response["pagination"]
 
         # Test creative object structure in response

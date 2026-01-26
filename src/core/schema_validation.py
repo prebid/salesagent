@@ -9,9 +9,15 @@ client-side validation.
 from typing import Any
 from urllib.parse import urljoin
 
+from adcp import get_adcp_version
 from pydantic import BaseModel, ConfigDict
 
 from src.core.domain_config import get_sales_agent_url
+
+# Get AdCP version dynamically from library
+_ADCP_VERSION = get_adcp_version()
+# Extract major.minor for schema paths (e.g., "3.0.0-beta.1" -> "v3.0")
+_ADCP_SCHEMA_VERSION = f"v{'.'.join(_ADCP_VERSION.split('.')[:2])}"
 
 
 class SchemaMetadata(BaseModel):
@@ -19,7 +25,7 @@ class SchemaMetadata(BaseModel):
 
     schema_url: str | None = None
     schema_version: str = "draft-2020-12"
-    adcp_version: str = "2.4"
+    adcp_version: str = _ADCP_VERSION
     response_type: str | None = None
     validation_enabled: bool = True
 
@@ -65,7 +71,7 @@ def get_schema_reference(model_class: type[BaseModel], base_url: str | None = No
             raise ValueError("SALES_AGENT_DOMAIN must be configured or base_url must be provided")
 
     schema_name = model_class.__name__.lower().replace("response", "")
-    return urljoin(base_url, f"/schemas/adcp/v2.4/{schema_name}.json")
+    return urljoin(base_url, f"/schemas/adcp/{_ADCP_SCHEMA_VERSION}/{schema_name}.json")
 
 
 def create_schema_metadata(model_class: type[BaseModel], base_url: str | None = None) -> SchemaMetadata:
@@ -82,7 +88,7 @@ def create_schema_metadata(model_class: type[BaseModel], base_url: str | None = 
         schema_url=get_schema_reference(model_class, base_url),
         response_type=model_class.__name__,
         schema_version="draft-2020-12",
-        adcp_version="2.4",
+        adcp_version=_ADCP_VERSION,
         validation_enabled=True,
     )
 

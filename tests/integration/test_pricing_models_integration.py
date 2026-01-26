@@ -255,8 +255,8 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     # adcp 2.14.0+ uses RootModel wrapper - access via .root
     pricing_inner = getattr(cpm_product.pricing_options[0], "root", cpm_product.pricing_options[0])
     assert pricing_inner.pricing_model == PricingModel.CPM
-    assert pricing_inner.is_fixed is True
-    assert pricing_inner.rate == 12.50
+    # V3: is_fixed removed - fixed pricing has fixed_price field
+    assert pricing_inner.fixed_price == 12.50
 
     # Find the multi-pricing product
     multi_product = next((p for p in response.products if p.product_id == "prod_multi"), None)

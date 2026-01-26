@@ -269,9 +269,9 @@ class TestGetProductsFilterBehavior:
         pricing = product.pricing_options[0]
         pricing_inner = pricing.root if hasattr(pricing, "root") else pricing
         assert hasattr(pricing_inner, "pricing_model")
-        # Note: 'rate' only exists on fixed-rate pricing options, not auction options
-        # Test for 'is_fixed' and 'currency' which exist on all pricing options
-        assert hasattr(pricing_inner, "is_fixed")
+        # V3: is_fixed removed - use fixed_price presence instead
+        # Test for pricing_option_id and currency which exist on all pricing options
+        assert hasattr(pricing_inner, "pricing_option_id")
         assert hasattr(pricing_inner, "currency")
 
         # Check formats structure
@@ -341,7 +341,7 @@ class TestNewGetProductsFilters:
                 is_custom=False,
             )
 
-            # Product 2: US + CA, video channel
+            # Product 2: US + CA, olv (online video) channel
             create_test_product_with_pricing(
                 session=session,
                 tenant_id="new_filter_test",
@@ -358,11 +358,11 @@ class TestNewGetProductsFilters:
                 is_fixed=True,
                 currency="USD",
                 countries=["US", "CA"],
-                channels=["video"],
+                channels=["olv"],  # V3: "video" → "olv" (online video)
                 is_custom=False,
             )
 
-            # Product 3: Global (no country restriction), audio channel
+            # Product 3: Global (no country restriction), streaming_audio channel
             create_test_product_with_pricing(
                 session=session,
                 tenant_id="new_filter_test",
@@ -379,7 +379,7 @@ class TestNewGetProductsFilters:
                 is_fixed=True,
                 currency="USD",
                 countries=None,  # No country restriction
-                channels=["audio"],
+                channels=["streaming_audio"],  # V3: "audio" → "streaming_audio"
                 is_custom=False,
             )
 
@@ -404,13 +404,13 @@ class TestNewGetProductsFilters:
                 is_custom=False,
             )
 
-            # Product 5: US, native channel
+            # Product 5: US, social channel
             create_test_product_with_pricing(
                 session=session,
                 tenant_id="new_filter_test",
                 product_id="us_native",
-                name="US Native",
-                description="Native advertising",
+                name="US Social",
+                description="Social advertising",
                 format_ids=[
                     {"agent_url": "https://test.com", "id": "native_feed"},
                 ],
@@ -421,7 +421,7 @@ class TestNewGetProductsFilters:
                 is_fixed=True,
                 currency="USD",
                 countries=["US"],
-                channels=["native"],
+                channels=["social"],  # V3: "native" → "social"
                 is_custom=False,
             )
 
@@ -528,7 +528,7 @@ class TestNewGetProductsFilters:
 
     @pytest.mark.asyncio
     async def test_filter_by_channels_video(self):
-        """Test filtering products by video channel."""
+        """Test filtering products by olv (online video) channel."""
         get_products = self._import_get_products_tool()
 
         context = Mock()
@@ -537,11 +537,11 @@ class TestNewGetProductsFilters:
         result = await get_products(
             brand_manifest={"name": "Test Brand"},
             brief="",
-            filters={"channels": ["video"]},
+            filters={"channels": ["olv"]},  # V3: "video" → "olv"
             ctx=context,
         )
 
-        # Should include: us_ca_video, global_no_channel (mock adapter includes video)
+        # Should include: us_ca_video (has olv), global_no_channel (mock adapter includes olv)
         product_ids = {p.product_id for p in result.products}
         assert "us_ca_video" in product_ids
         assert "global_no_channel" in product_ids
@@ -557,11 +557,11 @@ class TestNewGetProductsFilters:
         result = await get_products(
             brand_manifest={"name": "Test Brand"},
             brief="",
-            filters={"channels": ["audio", "native"]},
+            filters={"channels": ["streaming_audio", "social"]},  # V3: "audio" → "streaming_audio", "native" → "social"
             ctx=context,
         )
 
-        # Should include: global_audio, us_native, global_no_channel (mock adapter includes audio/native)
+        # Should include: global_audio (streaming_audio), us_native (social), global_no_channel (mock adapter includes all)
         product_ids = {p.product_id for p in result.products}
         assert "global_audio" in product_ids
         assert "us_native" in product_ids
@@ -569,10 +569,10 @@ class TestNewGetProductsFilters:
 
     @pytest.mark.asyncio
     async def test_filter_by_channels_retail_excludes_mock_products(self):
-        """Test that retail channel filter excludes products without explicit retail channel.
+        """Test that retail_media channel filter excludes products without explicit retail channel.
 
-        Mock adapter defaults to display, video, audio, native - NOT retail.
-        So products without channel set should NOT match retail filter.
+        Mock adapter defaults to display, olv, streaming_audio, social - NOT retail_media.
+        So products without channel set should NOT match retail_media filter.
         """
         get_products = self._import_get_products_tool()
 
@@ -582,11 +582,11 @@ class TestNewGetProductsFilters:
         result = await get_products(
             brand_manifest={"name": "Test Brand"},
             brief="",
-            filters={"channels": ["retail"]},
+            filters={"channels": ["retail_media"]},  # V3: "retail" → "retail_media"
             ctx=context,
         )
 
-        # No products have retail channel, and mock adapter doesn't default to retail
+        # No products have retail_media channel, and mock adapter doesn't default to retail_media
         # So no products should match
         product_ids = {p.product_id for p in result.products}
         assert "global_no_channel" not in product_ids
@@ -630,15 +630,15 @@ class TestNewGetProductsFilters:
             brief="",
             filters={
                 "countries": ["CA"],
-                "channels": ["video"],
+                "channels": ["olv"],  # V3: "video" → "olv"
             },
             ctx=context,
         )
 
-        # Should include: us_ca_video (CA + video), global_no_channel (no restrictions, mock includes video)
-        # Should exclude: us_display (not CA), uk_display (not CA, not video)
+        # Should include: us_ca_video (CA + olv), global_no_channel (no restrictions, mock includes olv)
+        # Should exclude: us_display (not CA), uk_display (not CA, not olv)
         product_ids = {p.product_id for p in result.products}
         assert "us_ca_video" in product_ids
         assert "global_no_channel" in product_ids
-        # These have video but not CA
+        # These have olv but not CA
         assert "us_display" not in product_ids

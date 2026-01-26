@@ -16,13 +16,14 @@ from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
 from adcp import BrandManifest, PushNotificationConfig
-from adcp.types import GeneratedTaskStatus as AdcpTaskStatus, MediaBuyStatus
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types import MediaBuyStatus
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.targeting import TargetingOverlay
-from adcp.types.generated_poc.media_buy.create_media_buy_request import ReportingWebhook
-from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
 from adcp.types.generated_poc.core.format import Assets
+from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
+from adcp.types.generated_poc.core.targeting import TargetingOverlay
+from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
 from adcp.utils.format_assets import get_individual_assets, has_assets
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
@@ -104,6 +105,22 @@ from src.services.activity_feed import activity_feed
 # NOTE: _sanitize_package_status() removed in adcp 2.12.0 migration
 # Package.status enum was replaced with Package.paused boolean field
 # See: adcp 2.12.0 changelog
+
+
+def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package) -> list[str] | None:
+    """Safely get creative_ids from a package (backward compatibility).
+
+    The creative_ids field is a local extension added to PackageRequest for
+    backward compatibility. It may not exist on library types, so we use
+    getattr to safely access it.
+
+    Args:
+        package: Package or PackageRequest object
+
+    Returns:
+        List of creative IDs if present, None otherwise
+    """
+    return getattr(package, "creative_ids", None)
 
 
 def _determine_media_buy_status(
@@ -190,7 +207,7 @@ def _extract_creative_url_and_dimensions(
         # Note: We only support individual assets here (not repeatable groups).
         # This matches previous behavior - repeatable groups were never supported in this function.
         for asset_spec in get_individual_assets(format_spec):
-            # Type guard: get_individual_assets only returns Assets, not Assets1 (repeatable groups)
+            # Type guard: get_individual_assets only returns Assets, not Assets5 (repeatable groups)
             if not isinstance(asset_spec, Assets):
                 continue
             asset_type = str(asset_spec.asset_type).lower()
@@ -210,7 +227,7 @@ def _extract_creative_url_and_dimensions(
         # Note: We only support individual assets here (not repeatable groups).
         # This matches previous behavior - repeatable groups were never supported in this function.
         for asset_spec in get_individual_assets(format_spec):
-            # Type guard: get_individual_assets only returns Assets, not Assets1 (repeatable groups)
+            # Type guard: get_individual_assets only returns Assets, not Assets5 (repeatable groups)
             if not isinstance(asset_spec, Assets):
                 continue
             asset_type = str(asset_spec.asset_type).lower()
@@ -242,14 +259,14 @@ def _extract_creative_url_and_dimensions(
     # Fallback: If format spec didn't work, iterate through all assets
     if not url or not width or not height:
         if creative_data.get("assets"):
-            for asset_id, asset_obj in creative_data["assets"].items():
+            for _asset_id, asset_obj in creative_data["assets"].items():
                 if isinstance(asset_obj, dict):
                     # Extract URL if not found yet
                     if not url and asset_obj.get("url"):
                         url = asset_obj["url"]
 
                     # Extract dimensions if not found yet
-                    if (not width or not height):
+                    if not width or not height:
                         raw_width = asset_obj.get("width")
                         raw_height = asset_obj.get("height")
                         if raw_width is not None and not width:
@@ -334,8 +351,9 @@ def _validate_creatives_before_adapter_call(packages: list[Package], tenant_id: 
     # Collect all creative IDs from all packages
     all_creative_ids = set()
     for package in packages:
-        if hasattr(package, "creative_ids") and package.creative_ids:
-            all_creative_ids.update(package.creative_ids)
+        pkg_creative_ids = _get_creative_ids(package)
+        if pkg_creative_ids:
+            all_creative_ids.update(pkg_creative_ids)
 
     if not all_creative_ids:
         # No creatives to validate
@@ -1594,22 +1612,23 @@ async def _create_media_buy_impl(
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)
-            for package in req.packages:
-                if package.pricing_option_id == "legacy_conversion" and package.product_id in product_map:
-                    product = product_map[package.product_id]
-                    # Use the first pricing option from the product
-                    if product.pricing_options and len(product.pricing_options) > 0:
-                        # Use the generated pricing_option_id format from the product's first option
-                        # Unwrap RootModel wrapper if present (adcp 2.14.0+ uses RootModel)
-                        first_option = product.pricing_options[0]
-                        first_option = getattr(first_option, "root", first_option)
-                        pricing_model = first_option.pricing_model.lower()
-                        currency = first_option.currency.lower()
-                        is_fixed = "fixed" if first_option.is_fixed else "auction"
-                        package.pricing_option_id = f"{pricing_model}_{currency}_{is_fixed}"
-                        logger.info(
-                            f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
-                        )
+            if req.packages:
+                for package in req.packages:
+                    if package.pricing_option_id == "legacy_conversion" and package.product_id in product_map:
+                        product = product_map[package.product_id]
+                        # Use the first pricing option from the product
+                        if product.pricing_options and len(product.pricing_options) > 0:
+                            # Use the generated pricing_option_id format from the product's first option
+                            # Unwrap RootModel wrapper if present (adcp 2.14.0+ uses RootModel)
+                            first_option = product.pricing_options[0]
+                            first_option = getattr(first_option, "root", first_option)
+                            pricing_model = first_option.pricing_model.lower()
+                            currency = first_option.currency.lower()
+                            is_fixed = "fixed" if first_option.is_fixed else "auction"
+                            package.pricing_option_id = f"{pricing_model}_{currency}_{is_fixed}"
+                            logger.info(
+                                f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
+                            )
 
             # Get currency from product pricing options (per AdCP spec)
             request_currency = None
@@ -1852,20 +1871,21 @@ async def _create_media_buy_impl(
                         raise ValueError(error_msg)
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
-        for pkg in req.packages:
-            if hasattr(pkg, "targeting_overlay") and pkg.targeting_overlay:
-                from src.services.targeting_capabilities import validate_overlay_targeting
+        if req.packages:
+            for pkg in req.packages:
+                if hasattr(pkg, "targeting_overlay") and pkg.targeting_overlay:
+                    from src.services.targeting_capabilities import validate_overlay_targeting
 
-                # Convert to dict for validation - TargetingOverlay always has model_dump
-                targeting_data: dict[str, Any] = (
-                    pkg.targeting_overlay.model_dump(exclude_none=True)
-                    if hasattr(pkg.targeting_overlay, "model_dump")
-                    else dict(pkg.targeting_overlay)  # Fallback for dict-like objects
-                )
-                violations = validate_overlay_targeting(targeting_data)
-                if violations:
-                    error_msg = f"Targeting validation failed: {'; '.join(violations)}"
-                    raise ValueError(error_msg)
+                    # Convert to dict for validation - TargetingOverlay always has model_dump
+                    targeting_data: dict[str, Any] = (
+                        pkg.targeting_overlay.model_dump(exclude_none=True)
+                        if hasattr(pkg.targeting_overlay, "model_dump")
+                        else dict(pkg.targeting_overlay)  # Fallback for dict-like objects
+                    )
+                    violations = validate_overlay_targeting(targeting_data)
+                    if violations:
+                        error_msg = f"Targeting validation failed: {'; '.join(violations)}"
+                        raise ValueError(error_msg)
 
     except (ValueError, PermissionError) as e:
         # Update workflow step as failed
@@ -2000,6 +2020,8 @@ async def _create_media_buy_impl(
             pending_packages = []
             raw_request_dict = req.model_dump(mode="json", by_alias=True)  # Serialize with aliases (e.g., content_uri)
 
+            # req.packages validated earlier in _create_media_buy_impl
+            assert req.packages is not None, "packages required - validated earlier"
             for idx, pkg in enumerate(req.packages, 1):
                 # Generate permanent package ID using product_id and index
                 # Format: pkg_{product_id}_{timestamp_part}_{idx}
@@ -2134,6 +2156,7 @@ async def _create_media_buy_impl(
                         "paused": paused,  # Store paused state (adcp 2.12.0)
                     }
                     # Add full package data from raw_request
+                    assert req.packages is not None, "packages required - validated earlier"
                     for idx, req_pkg in enumerate(req.packages):
                         if idx == pending_packages.index(pkg_obj):
                             # Get pricing info for this package if available
@@ -2181,7 +2204,7 @@ async def _create_media_buy_impl(
                                     "targeting_overlay": (
                                         req_pkg.targeting_overlay.model_dump() if req_pkg.targeting_overlay else None
                                     ),
-                                    "creative_ids": req_pkg.creative_ids,
+                                    "creative_ids": _get_creative_ids(req_pkg),
                                     "format_ids": format_ids_serialized,
                                     "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                                     "impressions": getattr(
@@ -2244,8 +2267,9 @@ async def _create_media_buy_impl(
                     # Batch load all creatives upfront
                     all_creative_ids = []
                     for package in req.packages:
-                        if package.creative_ids:
-                            all_creative_ids.extend(package.creative_ids)
+                        pkg_cids = _get_creative_ids(package)
+                        if pkg_cids:
+                            all_creative_ids.extend(pkg_cids)
 
                     creatives_map: dict[str, Any] = {}
                     if all_creative_ids:
@@ -2266,7 +2290,8 @@ async def _create_media_buy_impl(
                         from src.core.helpers import validate_creative_format_against_product
 
                         for package in req.packages:
-                            if package.creative_ids and package.product_id:
+                            pkg_cids = _get_creative_ids(package)
+                            if pkg_cids and package.product_id:
                                 # Load product to check supported formats
                                 product_for_format_validation_stmt = select(ModelProduct).where(
                                     ModelProduct.tenant_id == tenant["tenant_id"],
@@ -2278,7 +2303,7 @@ async def _create_media_buy_impl(
 
                                 if product_for_format_validation:
                                     # Validate each creative against this product
-                                    for creative_id in package.creative_ids:
+                                    for creative_id in pkg_cids:
                                         creative = creatives_map.get(creative_id)
                                         if creative:
                                             # Simple binary check: does creative's format_id match product?
@@ -2312,7 +2337,8 @@ async def _create_media_buy_impl(
 
                     # Create assignments for each package
                     for i, package in enumerate(req.packages):
-                        if package.creative_ids:
+                        pkg_cids = _get_creative_ids(package)
+                        if pkg_cids:
                             # Get package_id from pending_packages (already generated)
                             pkg_id: str | None = pending_packages[i].package_id if i < len(pending_packages) else None
                             if not pkg_id:
@@ -2320,10 +2346,10 @@ async def _create_media_buy_impl(
                                 continue
 
                             logger.info(
-                                f"[CREATIVE_ASSIGN_DEBUG] Creating assignments for package {pkg_id}, creative_ids: {package.creative_ids}"
+                                f"[CREATIVE_ASSIGN_DEBUG] Creating assignments for package {pkg_id}, creative_ids: {pkg_cids}"
                             )
 
-                            for creative_id in package.creative_ids:
+                            for creative_id in pkg_cids:
                                 creative = creatives_map.get(creative_id)
                                 if not creative:
                                     logger.warning(f"Creative {creative_id} not found in database, skipping assignment")
@@ -2423,7 +2449,9 @@ async def _create_media_buy_impl(
                 ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_detail)
                 return (
                     CreateMediaBuyError(
-                        errors=[Error(code="invalid_configuration", message=err, details=None) for err in config_errors],
+                        errors=[
+                            Error(code="invalid_configuration", message=err, details=None) for err in config_errors
+                        ],
                         context=to_context_object(req.context),
                     ),
                     AdcpTaskStatus.failed,
@@ -2450,6 +2478,7 @@ async def _create_media_buy_impl(
 
             # Generate permanent package IDs and prepare response packages
             response_packages = []
+            assert req.packages is not None, "packages required - validated earlier"
             for idx, pkg in enumerate(req.packages, 1):
                 # Generate permanent package ID
                 import secrets
@@ -2532,6 +2561,7 @@ async def _create_media_buy_impl(
         # CRITICAL: Iterate over req.packages, not products_in_buy, to handle multiple packages with same product_id
         # Example: 2 packages with same product_id but different targeting (US vs CA) must create 2 MediaPackages
         packages = []
+        assert req.packages is not None, "packages required - validated earlier"
         for idx, pkg in enumerate(req.packages, 1):  # Iterate over request packages
             # Find the product for this package (from schema catalog, not database model)
             # Package has product_id field per AdCP spec
@@ -2717,7 +2747,7 @@ async def _create_media_buy_impl(
                     product_id=pkg_product.product_id,  # Include product_id
                     budget=package_budget_value,  # Include budget from request (now normalized)
                     creative_ids=(
-                        matching_package.creative_ids if matching_package else None
+                        _get_creative_ids(matching_package) if matching_package else None
                     ),  # Include creative_ids from uploaded creatives
                 )
             )
@@ -2802,7 +2832,7 @@ async def _create_media_buy_impl(
         # Check packages for creative_ids
         if req.packages:
             for pkg in req.packages:
-                if pkg.creative_ids:
+                if _get_creative_ids(pkg):
                     has_creatives = True
                     # For now, assume creatives in request are not yet approved
                     # They need to go through sync_creatives approval flow
@@ -2892,7 +2922,7 @@ async def _create_media_buy_impl(
                     pricing_info_for_package = package_pricing_info.get(resp_package_id)
 
                     # Get impressions from request package if available (legacy field)
-                    request_pkg = req.packages[i] if i < len(req.packages) else None
+                    request_pkg = req.packages[i] if req.packages and i < len(req.packages) else None
                     impressions = getattr(request_pkg, "impressions", None) if request_pkg else None
 
                     package_config = {
@@ -2986,8 +3016,9 @@ async def _create_media_buy_impl(
                 # Batch load all creatives upfront to avoid N+1 queries
                 all_creative_ids = []
                 for package in req.packages:
-                    if package.creative_ids:
-                        all_creative_ids.extend(package.creative_ids)
+                    pkg_cids = _get_creative_ids(package)
+                    if pkg_cids:
+                        all_creative_ids.extend(pkg_cids)
 
                 creatives_by_id: dict[str, Any] = {}
                 if all_creative_ids:
@@ -3018,7 +3049,8 @@ async def _create_media_buy_impl(
                     from src.core.helpers import validate_creative_format_against_product
 
                     for package in req.packages:
-                        if package.creative_ids and package.product_id:
+                        pkg_cids = _get_creative_ids(package)
+                        if pkg_cids and package.product_id:
                             # Load product to check supported formats
                             product_format_check_stmt = select(ModelProduct).where(
                                 ModelProduct.tenant_id == tenant["tenant_id"],
@@ -3030,15 +3062,13 @@ async def _create_media_buy_impl(
 
                             if product_format_check:
                                 # Validate each creative against this product
-                                for creative_id in package.creative_ids:
+                                for creative_id in pkg_cids:
                                     creative = creatives_by_id.get(creative_id)
                                     if creative:
                                         # Simple binary check: does creative's format_id match product?
                                         # Construct FormatId from database creative's agent_url and format columns
                                         # (DBCreative stores these as separate string columns, not a FormatId object)
-                                        creative_format_id = FormatId(
-                                            agent_url=creative.agent_url, id=creative.format
-                                        )
+                                        creative_format_id = FormatId(agent_url=creative.agent_url, id=creative.format)
                                         format_is_valid, format_error = validate_creative_format_against_product(
                                             creative_format_id=creative_format_id,
                                             product=product_format_check,
@@ -3065,7 +3095,8 @@ async def _create_media_buy_impl(
                                         )
 
                 for i, package in enumerate(req.packages):
-                    if package.creative_ids:
+                    pkg_cids = _get_creative_ids(package)
+                    if pkg_cids:
                         # Use package_id from response (matches what's in media_packages table)
                         # NO FALLBACK - if adapter doesn't return package_id, fail loudly
                         response_package_id = None
@@ -3088,7 +3119,7 @@ async def _create_media_buy_impl(
                         # Collect platform creative IDs for association
                         platform_creative_ids = []
 
-                        for creative_id in package.creative_ids:
+                        for creative_id in pkg_cids:
                             # Get creative from batch-loaded map
                             creative = creatives_by_id.get(creative_id)
 
@@ -3296,6 +3327,7 @@ async def _create_media_buy_impl(
         # Get adapter response packages (have package_ids)
         adapter_packages = response.packages if response.packages else []
 
+        assert req.packages is not None, "packages required - validated earlier"
         for i, package in enumerate(req.packages):
             # Get package_id from adapter response
             if i < len(adapter_packages):

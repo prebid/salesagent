@@ -3,15 +3,15 @@
 import asyncio
 import logging
 
+from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp.types import CreateMediaBuySuccessResponse, Package
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from flask import Blueprint
 from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.models import MediaBuy, MediaPackage, PushNotificationConfig
 from src.services.protocol_webhook_service import get_protocol_webhook_service
-from a2a.types import TaskState
-from adcp.types import CreateMediaBuySuccessResponse, GeneratedTaskStatus as AdcpTaskStatus, Package
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 
 logger = logging.getLogger(__name__)
 
@@ -468,7 +468,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             media_buy_id=media_buy_id,
                             buyer_ref=media_buy_data["buyer_ref"],
                             packages=[Package(package_id=x.package_id) for x in all_packages],
-                            context={}, # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                            context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
                         )
                         metadata = {
                             "task_type": step_data["tool_name"],
@@ -477,7 +477,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         }
 
                         # Determine protocol type from workflow step request_data
-                        protocol = step_data["request_data"].get("protocol", "mcp")  # Default to MCP for backward compatibility
+                        protocol = step_data["request_data"].get(
+                            "protocol", "mcp"
+                        )  # Default to MCP for backward compatibility
 
                         # Create appropriate webhook payload based on protocol
                         if protocol == "a2a":
@@ -485,13 +487,13 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                 task_id=step_data["step_id"],
                                 status=AdcpTaskStatus.completed,
                                 result=create_media_buy_approved_result,
-                                context_id=step_data["context_id"]
+                                context_id=step_data["context_id"],
                             )
                         else:
                             create_media_buy_approved_payload = create_mcp_webhook_payload(
                                 task_id=step_data["step_id"],
                                 result=create_media_buy_approved_result,
-                                status=AdcpTaskStatus.completed
+                                status=AdcpTaskStatus.completed,
                             )
 
                         try:
@@ -500,7 +502,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                 service.send_notification(
                                     push_notification_config=webhook_config,
                                     payload=create_media_buy_approved_payload,
-                                    metadata=metadata
+                                    metadata=metadata,
                                 )
                             )
                             logger.info(f"Sent webhook notification for approved media buy {media_buy_id}")
@@ -556,7 +558,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         media_buy_id=media_buy_id,
                         buyer_ref=media_buy_data["buyer_ref"],
                         packages=[Package(package_id=x.package_id) for x in all_packages],
-                        context={}, # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                        context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
                     )
                     metadata = {
                         "task_type": step_data["tool_name"],
@@ -565,7 +567,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     }
 
                     # Determine protocol type from workflow step request_data
-                    protocol = step_data["request_data"].get("protocol", "mcp")  # Default to MCP for backward compatibility
+                    protocol = step_data["request_data"].get(
+                        "protocol", "mcp"
+                    )  # Default to MCP for backward compatibility
 
                     # Create appropriate webhook payload based on protocol
                     if protocol == "a2a":
@@ -573,14 +577,14 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             task_id=step_data["step_id"],
                             status=AdcpTaskStatus.rejected,
                             result=create_media_buy_rejected_result,
-                            context_id=step_data["context_id"] 
+                            context_id=step_data["context_id"],
                         )
                     else:
                         create_media_buy_rejected_payload = create_mcp_webhook_payload(
                             task_id=step_data["step_id"],
                             result=create_media_buy_rejected_result,
-                            status=AdcpTaskStatus.rejected
-                        )                    
+                            status=AdcpTaskStatus.rejected,
+                        )
 
                     try:
                         service = get_protocol_webhook_service()
@@ -588,7 +592,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             service.send_notification(
                                 push_notification_config=webhook_config,
                                 payload=create_media_buy_rejected_payload,
-                                metadata=metadata
+                                metadata=metadata,
                             )
                         )
                         logger.info(f"Sent webhook notification for rejected media buy {media_buy_id}")

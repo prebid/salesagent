@@ -19,7 +19,6 @@ from src.services.auth_config_service import (
     get_oidc_config_for_auth,
     get_or_create_auth_config,
     get_tenant_redirect_uri,
-    mark_oidc_verified,
     save_oidc_config,
 )
 
@@ -255,7 +254,7 @@ def callback():
             try:
                 oauth_client = getattr(oauth, client_name)
                 token = oauth_client.authorize_access_token()
-                logger.info(f"OAuth callback: token exchange successful")
+                logger.info("OAuth callback: token exchange successful")
             except Exception as e:
                 logger.error(f"OAuth token exchange failed: {e}", exc_info=True)
                 flash(f"OAuth authentication failed: {e}", "error")
@@ -283,6 +282,7 @@ def callback():
             # Test flow - mark config as verified and enable SSO in one transaction
             redirect_uri = get_tenant_redirect_uri(tenant)
             from datetime import UTC, datetime
+
             from src.core.database.models import TenantAuthConfig
 
             with get_db_session() as db_session:
@@ -319,8 +319,8 @@ def callback():
 
                 if email_domain and email_domain in authorized_domains:
                     # Auto-create user from authorized domain
-                    from datetime import UTC, datetime
                     import uuid
+                    from datetime import UTC, datetime
 
                     user = User(
                         user_id=str(uuid.uuid4()),
@@ -393,9 +393,7 @@ def login(tenant_id: str):
         # This lets users test the full login flow before enabling
         from src.core.database.models import TenantAuthConfig
 
-        auth_config = db_session.scalars(
-            select(TenantAuthConfig).filter_by(tenant_id=tenant_id)
-        ).first()
+        auth_config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
 
         # Check if OIDC is available
         if not auth_config or not auth_config.oidc_client_id:

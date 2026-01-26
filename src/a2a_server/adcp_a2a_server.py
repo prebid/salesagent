@@ -58,6 +58,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
 
+from adcp import create_a2a_webhook_payload
+from adcp.types import GeneratedTaskStatus
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
@@ -97,8 +99,6 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
-from adcp import create_a2a_webhook_payload
-from adcp.types import GeneratedTaskStatus
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 
@@ -457,13 +457,13 @@ class AdCPRequestHandler(RequestHandler):
             )
 
             metadata = {
-                "task_type": task.metadata['skills_requested'][0] if len(task.metadata['skills_requested']) > 0 else 'unknown',
+                "task_type": (
+                    task.metadata["skills_requested"][0] if len(task.metadata["skills_requested"]) > 0 else "unknown"
+                ),
             }
 
             await push_notification_service.send_notification(
-                push_notification_config=push_notification_config,
-                payload=payload,
-                metadata=metadata
+                push_notification_config=push_notification_config, payload=payload, metadata=metadata
             )
         except Exception as e:
             # Don't fail the task if webhook fails
@@ -671,8 +671,10 @@ class AdCPRequestHandler(RequestHandler):
 
                     try:
                         result = await self._handle_explicit_skill(
-                            skill_name, parameters, auth_token,
-                            push_notification_config=task_metadata.get("push_notification_config")
+                            skill_name,
+                            parameters,
+                            auth_token,
+                            push_notification_config=task_metadata.get("push_notification_config"),
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except ServerError:
@@ -690,7 +692,9 @@ class AdCPRequestHandler(RequestHandler):
                         if result_status == "submitted":
                             task.status = TaskStatus(state=TaskState.submitted)
                             task.artifacts = None  # No artifacts for pending tasks
-                            logger.info(f"Task {task_id} requires manual approval, returning status=submitted with no artifacts")
+                            logger.info(
+                                f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
+                            )
                             # Send protocol-level webhook notification
                             await self._send_protocol_webhook(task, status="submitted")
                             self.tasks[task_id] = task

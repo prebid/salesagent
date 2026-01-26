@@ -17,8 +17,9 @@ class Kevel(AdServerAdapter):
 
     adapter_name = "kevel"
 
-    # Kevel specializes in native and retail media
-    default_channels = ["native", "retail"]
+    # Kevel specializes in social and retail_media
+    # V3 channel names: native → social, retail → retail_media
+    default_channels = ["social", "retail_media"]
 
     def __init__(
         self,

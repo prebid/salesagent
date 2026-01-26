@@ -24,7 +24,9 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-from adcp import CpmAuctionPricingOption, CpmFixedRatePricingOption
+# V3: Consolidated pricing types - CpmAuctionPricingOption/CpmFixedRatePricingOption → CpmPricingOption
+# Use fixed_price for fixed-rate, floor_price for auction
+from adcp import CpmPricingOption
 
 from src.core.schemas import (
     Budget,
@@ -202,12 +204,12 @@ class TestProductSchemaContract:
             ],  # Required per AdCP spec
             "brief_relevance": "Highly relevant for display advertising",
             "pricing_options": [
-                CpmFixedRatePricingOption(
+                # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
+                CpmPricingOption(
                     pricing_option_id="cpm_usd_fixed",
                     pricing_model="cpm",
-                    rate=15.0,
+                    fixed_price=15.0,
                     currency="USD",
-                    is_fixed=True,
                     min_spend_per_package=2000.0,
                 )
             ],
@@ -249,12 +251,13 @@ class TestProductSchemaContract:
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "pricing_options": [
-                CpmAuctionPricingOption(
+                # V3: CpmPricingOption with floor_price (replaces CpmAuctionPricingOption)
+                CpmPricingOption(
                     pricing_option_id="cpm_usd_auction",
                     pricing_model="cpm",
                     currency="USD",
-                    is_fixed=False,
-                    price_guidance={"floor": 5.0, "p50": 10.0, "p90": 15.0},
+                    floor_price=5.0,
+                    price_guidance={"p50": 10.0, "p90": 15.0},
                 )
             ],
         }
@@ -298,12 +301,12 @@ class TestProductSchemaContract:
             ],  # Required per AdCP spec
             "brief_relevance": "Perfect match for multi-format campaign requirements",
             "pricing_options": [
-                CpmFixedRatePricingOption(
+                # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
+                CpmPricingOption(
                     pricing_option_id="cpm_usd_fixed",
                     pricing_model="cpm",
-                    rate=25.75,
+                    fixed_price=25.75,
                     currency="USD",
-                    is_fixed=True,
                     min_spend_per_package=5000.0,
                 )
             ],
@@ -330,12 +333,12 @@ class TestProductSchemaContract:
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "pricing_options": [
-                CpmFixedRatePricingOption(
+                # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
+                CpmPricingOption(
                     pricing_option_id="cpm_usd_fixed",
                     pricing_model="cpm",
-                    rate=10.0,
+                    fixed_price=10.0,
                     currency="USD",
-                    is_fixed=True,
                 )
             ],
         }
@@ -551,12 +554,12 @@ class TestGetProductsResponseContract:
                     {"publisher_domain": "example.com", "selection_type": "all"}
                 ],  # Required per AdCP spec
                 pricing_options=[
-                    CpmFixedRatePricingOption(
+                    # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
+                    CpmPricingOption(
                         pricing_option_id="cpm_usd_fixed",
                         pricing_model="cpm",
-                        rate=10.0,
+                        fixed_price=10.0,
                         currency="USD",
-                        is_fixed=True,
                     )
                 ],
             ),
@@ -574,12 +577,13 @@ class TestGetProductsResponseContract:
                     {"publisher_domain": "example.com", "selection_type": "all"}
                 ],  # Required per AdCP spec
                 pricing_options=[
-                    CpmAuctionPricingOption(
+                    # V3: CpmPricingOption with floor_price (replaces CpmAuctionPricingOption)
+                    CpmPricingOption(
                         pricing_option_id="cpm_usd_auction",
                         pricing_model="cpm",
                         currency="USD",
-                        is_fixed=False,
-                        price_guidance={"floor": 5.0, "p50": 10.0, "p90": 15.0},
+                        floor_price=5.0,
+                        price_guidance={"p50": 10.0, "p90": 15.0},
                     )
                 ],
             ),
@@ -629,12 +633,12 @@ class TestSchemaEvolutionSafety:
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "pricing_options": [
-                CpmFixedRatePricingOption(
+                # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
+                CpmPricingOption(
                     pricing_option_id="cpm_usd_fixed",
                     pricing_model="cpm",
-                    rate=10.0,
+                    fixed_price=10.0,
                     currency="USD",
-                    is_fixed=True,
                 )
             ],
         }
@@ -665,12 +669,13 @@ class TestSchemaEvolutionSafety:
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "pricing_options": [
-                CpmAuctionPricingOption(
+                # V3: CpmPricingOption with floor_price (replaces CpmAuctionPricingOption)
+                CpmPricingOption(
                     pricing_option_id="cpm_usd_auction",
                     pricing_model="cpm",
                     currency="USD",
-                    is_fixed=False,
-                    price_guidance={"floor": 5.0, "p50": 10.0, "p90": 15.0},
+                    floor_price=5.0,
+                    price_guidance={"p50": 10.0, "p90": 15.0},
                 )
             ],
         }
@@ -701,12 +706,12 @@ class TestSchemaEvolutionSafety:
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             pricing_options=[
-                CpmFixedRatePricingOption(
+                # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
+                CpmPricingOption(
                     pricing_option_id="cpm_usd_fixed",
                     pricing_model="cpm",
-                    rate=Decimal("15.50"),  # Decimal input
+                    fixed_price=Decimal("15.50"),  # Decimal input
                     currency="USD",
-                    is_fixed=True,
                     min_spend_per_package=Decimal("2000.00"),  # Decimal input
                 )
             ],
@@ -718,7 +723,8 @@ class TestSchemaEvolutionSafety:
         assert "pricing_options" in adcp_output
         assert len(adcp_output["pricing_options"]) == 1
         pricing_option = adcp_output["pricing_options"][0]
-        assert isinstance(pricing_option["rate"], int | float)
+        # V3: rate is now fixed_price
+        assert isinstance(pricing_option["fixed_price"], int | float)
         assert isinstance(pricing_option["min_spend_per_package"], int | float)
-        assert pricing_option["rate"] == 15.5  # Decimal converted to float
+        assert pricing_option["fixed_price"] == 15.5  # Decimal converted to float
         assert pricing_option["min_spend_per_package"] == 2000.0  # Decimal converted to float

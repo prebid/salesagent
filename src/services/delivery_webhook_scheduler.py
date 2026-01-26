@@ -12,6 +12,9 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from adcp import create_mcp_webhook_payload
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types import McpWebhookPayload
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
@@ -21,8 +24,6 @@ from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResp
 from src.core.tool_context import ToolContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.protocol_webhook_service import get_protocol_webhook_service
-from adcp import create_mcp_webhook_payload, create_a2a_webhook_payload
-from adcp.types import GeneratedTaskStatus as AdcpTaskStatus, McpWebhookPayload
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +260,9 @@ class DeliveryWebhookScheduler:
             media_buy_delivery_result: dict[str, Any] = delivery_response.model_dump(mode="json")
             media_buy_delivery_result["notification_type"] = "scheduled"
             media_buy_delivery_result["next_expected_at"] = next_expected_at
-            media_buy_delivery_result["partial_data"] = False  # TODO: Check for reporting_delayed status in media_buy_deliveries
+            media_buy_delivery_result["partial_data"] = (
+                False  # TODO: Check for reporting_delayed status in media_buy_deliveries
+            )
             media_buy_delivery_result["unavailable_count"] = 0  # TODO: Count reporting_delayed/failed deliveries
 
             # Extract webhook URL and authentication
@@ -309,23 +312,21 @@ class DeliveryWebhookScheduler:
                 "principal_id": media_buy.principal_id,
                 "media_buy_id": media_buy.media_buy_id,
             }
-            
+
             # TODO: Fix in adcp python client - create_mcp_webhook_payload should return
             # McpWebhookPayload instead of dict[str, Any] for proper type safety
             mcp_payload_dict = create_mcp_webhook_payload(
                 task_id=media_buy.media_buy_id,  # TODO: @yusuf - double check if using media buy id is correct for media buy delivery???
                 task_type="media_buy_delivery",
                 result=media_buy_delivery_result,
-                status=AdcpTaskStatus.completed
+                status=AdcpTaskStatus.completed,
             )
             media_buy_delivery_payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
 
             # Send webhook notification OUTSIDE the session context
             # This ensures the session is closed before async webhook call
             await self.webhook_service.send_notification(
-                push_notification_config=push_notification_config,
-                payload=media_buy_delivery_payload,
-                metadata=metadata
+                push_notification_config=push_notification_config, payload=media_buy_delivery_payload, metadata=metadata
             )
 
             logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")

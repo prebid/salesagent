@@ -176,7 +176,8 @@ class TestMCPEndpointsComprehensive:
                 # Verify pricing option structure
                 pricing = product["pricing_options"][0]
                 assert "pricing_model" in pricing
-                assert "is_fixed" in pricing
+                # V3: is_fixed removed - check pricing_option_id instead
+                assert "pricing_option_id" in pricing
 
     @pytest.mark.timeout(60)
     @pytest.mark.requires_server

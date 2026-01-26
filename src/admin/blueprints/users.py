@@ -51,7 +51,9 @@ def list_users(tenant_id):
         # Get auth config to check if SSO is enabled
         auth_config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
         oidc_enabled = auth_config.oidc_enabled if auth_config else False
-        logger.info(f"list_users: tenant={tenant_id}, oidc_enabled={oidc_enabled}, auth_setup_mode={tenant.auth_setup_mode}")
+        logger.info(
+            f"list_users: tenant={tenant_id}, oidc_enabled={oidc_enabled}, auth_setup_mode={tenant.auth_setup_mode}"
+        )
 
         return render_template(
             "users.html",

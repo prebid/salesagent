@@ -235,48 +235,50 @@ class DynamicPricingService:
 
         if cpm_option:
             # Update existing option's price_guidance
-            # Create new PriceGuidance object with updated values
-            # Use getattr for discriminated union attribute access
+            # V3: floor moved to floor_price at PricingOption level, price_guidance only has percentiles
             existing_guidance = getattr(cpm_option, "price_guidance", None)
-            updated_floor = (
-                floor_cpm if floor_cpm is not None else (existing_guidance.floor if existing_guidance else None)
-            )
+            existing_floor_price = getattr(cpm_option, "floor_price", None)
+            updated_floor = floor_cpm if floor_cpm is not None else existing_floor_price
             updated_p75 = (
                 recommended_cpm
                 if recommended_cpm is not None
                 else (existing_guidance.p75 if existing_guidance else None)
             )
 
-            if updated_floor is not None:
-                # Set price_guidance on discriminated union using setattr
-                # Not all pricing option types have price_guidance attribute
-                new_guidance = PriceGuidance(floor=updated_floor, p25=None, p50=None, p75=updated_p75, p90=None)
-                cpm_option.price_guidance = new_guidance  # type: ignore[union-attr]
+            if updated_floor is not None or updated_p75 is not None:
+                # V3: Set floor_price at option level, price_guidance only for percentiles
+                if updated_floor is not None:
+                    cpm_option.floor_price = updated_floor  # type: ignore[union-attr]
+                if updated_p75 is not None:
+                    new_guidance = PriceGuidance(p25=None, p50=None, p75=updated_p75, p90=None)
+                    cpm_option.price_guidance = new_guidance  # type: ignore[union-attr]
                 logger.debug(f"Updated existing CPM pricing option for {product.product_id}")
         else:
             # Create new CPM pricing option with price_guidance
+            # V3: floor_price at top level, price_guidance only for percentiles
             if floor_cpm is not None:
-                price_guidance_obj = PriceGuidance(
-                    floor=floor_cpm,
-                    p25=None,
-                    p50=None,
-                    p75=recommended_cpm,  # p75 is the recommended value
-                    p90=None,
+                price_guidance_obj = (
+                    PriceGuidance(
+                        p25=None,
+                        p50=None,
+                        p75=recommended_cpm,  # p75 is the recommended value
+                        p90=None,
+                    )
+                    if recommended_cpm is not None
+                    else None
                 )
 
-                new_option = PricingOption(
+                new_option = PricingOption(  # type: ignore[call-arg]
                     pricing_option_id=f"{product.product_id}_dynamic_cpm",
                     pricing_model=PricingModel.CPM,
-                    rate=None,
+                    floor_price=floor_cpm,  # V3: floor moved to top-level
                     currency=pricing.get("currency", "USD"),
-                    is_fixed=True,
                     price_guidance=price_guidance_obj,
-                    parameters=None,
                     min_spend_per_package=None,
                     supported=None,
                     unsupported_reason=None,
                 )
                 # Pydantic validates PricingOption against discriminated union at runtime
-                # mypy doesn't understand this is compatible with CpmFixedRatePricingOption
+                # mypy doesn't understand this is compatible with CpmPricingOption
                 product.pricing_options.append(new_option)  # type: ignore[arg-type]
                 logger.debug(f"Created new CPM pricing option for {product.product_id}")

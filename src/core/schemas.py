@@ -36,9 +36,6 @@ from adcp.types import ListCreativeFormatsResponse as LibraryListCreativeFormats
 from adcp.types import ListCreativesRequest as LibraryListCreativesRequest
 from adcp.types import PackageRequest as LibraryPackageRequest
 from adcp.types import (
-    Pagination as LibraryPagination,
-)
-from adcp.types import (
     ProductFilters as LibraryFilters,  # For GetProductsRequest (was Filters pre-2.11.0)
 )
 from adcp.types.aliases import (
@@ -55,6 +52,9 @@ from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 
+# V3: Two Pagination types - batch-based for delivery, page-based for list responses
+from adcp.types.generated_poc.media_buy.list_creatives_response import Pagination as LibraryResponsePagination
+
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
 # Simple types that match library exactly
@@ -63,31 +63,27 @@ from adcp.types import BrandManifest as LibraryBrandManifest
 from adcp.types import (
     CpcPricingOption,
     CpcvPricingOption,
-    CpmAuctionPricingOption,
-    CpmFixedRatePricingOption,
+    CpmPricingOption,  # V3: consolidated from CpmAuctionPricingOption/CpmFixedRatePricingOption
     CppPricingOption,
     CpvPricingOption,
     FlatRatePricingOption,
-    VcpmAuctionPricingOption,
-    VcpmFixedRatePricingOption,
+    VcpmPricingOption,  # V3: consolidated from VcpmAuctionPricingOption/VcpmFixedRatePricingOption
 )
 
 # AdCP creative types for schema definitions
 from adcp.types import CreativeAsset as LibraryCreativeAsset
 from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
-from adcp.types import Identifier as LibraryIdentifier
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import Product as LibraryProduct
 from adcp.types import Property as LibraryProperty
+from adcp.types import PropertyListReference as LibraryPropertyListReference  # V3: new field in GetProductsRequest
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
 
-# Type alias for the union of all AdCP pricing option types
+# Type alias for the union of all AdCP pricing option types (V3 consolidated)
 AdCPPricingOption = (
-    CpmFixedRatePricingOption
-    | CpmAuctionPricingOption
-    | VcpmFixedRatePricingOption
-    | VcpmAuctionPricingOption
+    CpmPricingOption
+    | VcpmPricingOption
     | CpcPricingOption
     | CpcvPricingOption
     | CpvPricingOption
@@ -543,24 +539,40 @@ class PricingParameters(BaseModel):
 
 
 class PricingOption(BaseModel):
-    """A pricing model option offered by a publisher for a product per AdCP spec."""
+    """A pricing model option offered by a publisher for a product per AdCP spec.
+
+    V3 Migration: Consolidated pricing fields:
+    - rate → fixed_price (for fixed-rate pricing)
+    - floor added at top level as floor_price (was in price_guidance)
+    - is_fixed removed (determined by presence of fixed_price vs floor_price)
+    - price_guidance now only contains percentiles (p25, p50, p75, p90)
+    """
 
     pricing_option_id: str = Field(
         ..., description="Unique identifier for this pricing option within the product (e.g., 'cpm_usd_guaranteed')"
     )
     pricing_model: PricingModel = Field(..., description="The pricing model for this option")
-    rate: float | None = Field(None, ge=0, description="The rate for this pricing model (required if is_fixed=true)")
     currency: str = Field(..., pattern="^[A-Z]{3}$", description="ISO 4217 currency code (e.g., USD, EUR, GBP)")
-    is_fixed: bool = Field(..., description="Whether this is a fixed rate (true) or auction-based (false)")
-    price_guidance: PriceGuidance | None = Field(
-        None, description="Pricing guidance for auction-based pricing (required if is_fixed=false)"
+
+    # V3: Consolidated pricing fields - use fixed_price OR floor_price, not both
+    fixed_price: float | None = Field(None, ge=0, description="Fixed rate for this pricing model (V3: replaces rate)")
+    floor_price: float | None = Field(
+        None, ge=0, description="Floor price for auction-based pricing (V3: was price_guidance.floor)"
     )
-    parameters: PricingParameters | None = Field(None, description="Additional pricing model-specific parameters")
+
+    # V3: price_guidance now only contains percentiles, no floor
+    price_guidance: PriceGuidance | None = Field(
+        None, description="Pricing guidance with percentiles (p25, p50, p75, p90) for auction-based pricing"
+    )
     min_spend_per_package: float | None = Field(
         None, ge=0, description="Minimum spend requirement per package using this pricing option"
     )
 
-    # Adapter capability annotations (populated dynamically, not stored in database)
+    # Internal fields - not in AdCP spec, used for adapter capability tracking
+    is_fixed: bool | None = Field(
+        None,
+        description="Internal: Whether this is a fixed rate (true) or auction-based (false). Computed from fixed_price presence.",
+    )
     supported: bool | None = Field(
         None, description="Whether this pricing model is supported by the current adapter (populated at discovery time)"
     )
@@ -570,22 +582,31 @@ class PricingOption(BaseModel):
 
     @model_validator(mode="after")
     def validate_pricing_option(self) -> "PricingOption":
-        """Validate pricing option per AdCP spec constraints."""
-        if self.is_fixed and self.rate is None:
-            raise ValueError("rate is required when is_fixed=true")
-        if not self.is_fixed and self.price_guidance is None:
-            raise ValueError("price_guidance is required when is_fixed=false")
+        """Validate pricing option per AdCP V3 spec constraints."""
+        # V3: Must have either fixed_price or floor_price (not both, not neither)
+        has_fixed = self.fixed_price is not None
+        has_floor = self.floor_price is not None
+
+        if has_fixed and has_floor:
+            raise ValueError("Cannot have both fixed_price and floor_price - use one or the other")
+        if not has_fixed and not has_floor:
+            raise ValueError("Must have either fixed_price (for fixed-rate) or floor_price (for auction)")
+
+        # Auto-compute is_fixed for internal use
+        object.__setattr__(self, "is_fixed", has_fixed)
         return self
 
     def model_dump(self, **kwargs):
-        """Override to exclude is_fixed for AdCP compliance.
+        """Override to exclude internal fields for AdCP V3 compliance.
 
-        AdCP uses separate schemas (cpm-fixed-option, cpm-auction-option, etc.)
-        instead of a single schema with is_fixed flag. We exclude is_fixed and
-        internal fields (supported, unsupported_reason) from external responses.
+        V3 uses separate schemas (cpm-pricing-option, vcpm-pricing-option, etc.)
+        determined by which pricing fields are present:
+        - fixed_price present = fixed-rate pricing
+        - floor_price present = auction pricing with floor
 
-        Also excludes None values to match AdCP spec where optional fields should
-        be omitted rather than set to null (e.g., rate in auction-based pricing).
+        Excludes internal fields (is_fixed, supported, unsupported_reason) from
+        external responses. Also excludes None values to match AdCP spec where
+        optional fields should be omitted rather than set to null.
         """
         exclude = kwargs.get("exclude", set())
         if isinstance(exclude, set):
@@ -1245,10 +1266,10 @@ class Product(LibraryProduct):
 
         return result
 
-    # Note: is_fixed field is now provided by adcp library 2.4.0+
-    # Individual pricing option types (CpmFixedRatePricingOption, CpmAuctionPricingOption, etc.)
-    # include is_fixed as a required field per AdCP spec.
-    # No custom serialization needed - library handles it correctly.
+    # Note: In AdCP V3, pricing is determined by field presence:
+    # - fixed_price present = fixed pricing
+    # - floor_price present = auction pricing with floor
+    # The consolidated CpmPricingOption/VcpmPricingOption types handle this automatically.
 
     def model_dump(self, **kwargs):
         """Return AdCP-compliant model dump with proper field names, excluding internal fields and null values."""
@@ -1428,6 +1449,8 @@ class GetProductsRequest(AdCPBaseModel):
 
     All fields are optional per AdCP spec. brand_manifest and brief provide
     context for better product recommendations but are not required.
+
+    V3 Migration: Added property_list and proposal_id fields.
     """
 
     brand_manifest: LibraryBrandManifest | str | None = Field(
@@ -1448,6 +1471,15 @@ class GetProductsRequest(AdCPBaseModel):
     filters: ProductFilters | None = Field(
         None,
         description="Structured filters for product discovery",
+    )
+    # V3 new fields
+    property_list: LibraryPropertyListReference | None = Field(
+        None,
+        description="Reference to a property list for filtering products by publisher properties",
+    )
+    proposal_id: str | None = Field(
+        None,
+        description="Proposal ID for referencing a previously generated proposal",
     )
 
 
@@ -2085,18 +2117,14 @@ class QuerySummary(BaseModel):
     sort_applied: dict[str, str] | None = None
 
 
-class Pagination(LibraryPagination):
-    """Pagination information for navigating results.
+class Pagination(LibraryResponsePagination):
+    """Pagination information for list response results.
 
-    Extends library type with additional computed fields for navigation.
-    Library provides: limit (default=50), offset (default=0)
-    Local extensions: has_more, total_pages, current_page
+    Uses page-based pagination (limit, offset, total_pages, current_page, has_more).
+    This is the appropriate type for list endpoints like list_creatives.
     """
 
-    # Local extensions for richer pagination info
-    has_more: bool = Field(..., description="Whether there are more results after this page")
-    total_pages: int | None = Field(None, ge=0, description="Total number of pages available")
-    current_page: int | None = Field(None, ge=1, description="Current page number (1-indexed)")
+    pass  # Inherits all fields from library: limit, offset, total_pages, current_page, has_more
 
 
 class ListCreativesResponse(NestedModelSerializerMixin, AdCPBaseModel):
@@ -2416,6 +2444,13 @@ class PackageRequest(LibraryPackageRequest):
     creatives: list["Creative"] | None = Field(  # type: ignore[assignment]
         None,
         description="Full creative objects to upload and assign at creation time (alternative to creative_ids)",
+    )
+    # V3: creative_ids moved to local extension for backward compatibility with internal code
+    # Library V3 uses creatives (full objects), but internal code often uses creative_ids (string list)
+    creative_ids: list[str] | None = Field(
+        None,
+        description="Internal: List of creative IDs to assign (alternative to full creatives objects)",
+        exclude=True,
     )
 
     @model_validator(mode="before")
@@ -3458,7 +3493,10 @@ PROPERTY_ERROR_MESSAGES = {
 
 # --- Authorized Properties (AdCP Spec) ---
 # Use library types directly - all fields inherited from AdCP spec
-PropertyIdentifier: TypeAlias = LibraryIdentifier  # Library calls this 'Identifier'
+# V3: Property uses property-specific Identifier, not generic Identifier
+from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier
+
+PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # Property-specific identifier
 Property: TypeAlias = LibraryProperty
 
 

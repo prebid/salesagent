@@ -62,7 +62,7 @@ http-server = [
 
 [[package]]
 name = "adcp"
-version = "2.18.0"
+version = "3.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
@@ -72,14 +72,14 @@ dependencies = [
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b7/bd/09b09642a50e1fc0831c42810dd1acbb4f30d14d3d15d265a31e1521a651/adcp-2.18.0.tar.gz", hash = "sha256:9df0262f7a2c0ca2ccfcc1b026837a4d7927b605b311220912fa21ed755f11da", size = 192176, upload-time = "2026-01-09T15:55:38.336Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f1/21/a6c5705e6838525c0c7cedec3903519bd0dcbeb990577e43ea1190f8b5d9/adcp-3.0.0.tar.gz", hash = "sha256:496d526780e825a02c5048c44f0220cf58fa2e306af489a6f0f2662e14148b51", size = 242084, upload-time = "2026-01-26T13:36:35.309Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/61/f2/bad9c2a0fd14063ecff4d6b33aed2107fea513a065a6db7921099c1fb533/adcp-2.18.0-py3-none-any.whl", hash = "sha256:b508b879b8fddc5873e73afed4b0749aab31ef68409b5a696ee3975ea7c315b0", size = 221978, upload-time = "2026-01-09T15:55:36.634Z" },
+    { url = "https://files.pythonhosted.org/packages/71/2a/5de6edb52548e7ad7f3d40d47ed38d83ea6629da611cb21758110559cf33/adcp-3.0.0-py3-none-any.whl", hash = "sha256:8b5c65e3e3668470f2126c196ae3dac395af85249c66b92c95331860610a6758", size = 305239, upload-time = "2026-01-26T13:36:33.572Z" },
 ]
 
 [[package]]
 name = "adcp-sales-agent"
-version = "0.9.2"
+version = "0.9.3"
 source = { virtual = "." }
 dependencies = [
     { name = "a2a-cli" },
@@ -172,7 +172,7 @@ dev = [
 requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=0.3.19" },
-    { name = "adcp", specifier = "==2.18.0" },
+    { name = "adcp", specifier = ">=3.0.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.13.5" },

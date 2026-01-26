@@ -134,9 +134,7 @@ class TestCreativeFormatValidationBug:
 
     def test_validate_with_empty_product_format_ids_accepts_all(self):
         """Verify products with no format restrictions accept all creatives."""
-        creative_format_id = FormatId(
-            agent_url="https://creative.adcontextprotocol.org/", id="any_format"
-        )
+        creative_format_id = FormatId(agent_url="https://creative.adcontextprotocol.org/", id="any_format")
 
         # Product with no format restrictions
         mock_product = MagicMock()
@@ -155,9 +153,7 @@ class TestCreativeFormatValidationBug:
 
     def test_validate_with_none_product_format_ids_accepts_all(self):
         """Verify products with None format_ids accept all creatives."""
-        creative_format_id = FormatId(
-            agent_url="https://creative.adcontextprotocol.org/", id="any_format"
-        )
+        creative_format_id = FormatId(agent_url="https://creative.adcontextprotocol.org/", id="any_format")
 
         # Product with None format_ids
         mock_product = MagicMock()
@@ -184,9 +180,7 @@ class TestProductFormatIdsAsDicts:
 
     def test_validate_with_product_format_ids_as_dicts(self):
         """Verify validation works when product.format_ids contains dicts."""
-        creative_format_id = FormatId(
-            agent_url="https://creative.adcontextprotocol.org/", id="display_970x250_image"
-        )
+        creative_format_id = FormatId(agent_url="https://creative.adcontextprotocol.org/", id="display_970x250_image")
 
         # Product with format_ids as dicts (how database stores them)
         mock_product = MagicMock()
@@ -207,9 +201,7 @@ class TestProductFormatIdsAsDicts:
 
     def test_validate_with_product_format_ids_as_dicts_mismatch(self):
         """Verify validation detects mismatch when product.format_ids contains dicts."""
-        creative_format_id = FormatId(
-            agent_url="https://creative.adcontextprotocol.org/", id="video_300x250"
-        )
+        creative_format_id = FormatId(agent_url="https://creative.adcontextprotocol.org/", id="video_300x250")
 
         # Product with format_ids as dicts
         mock_product = MagicMock()
@@ -231,9 +223,7 @@ class TestProductFormatIdsAsDicts:
 
     def test_validate_with_product_format_ids_using_format_id_key(self):
         """Verify validation works with legacy 'format_id' key instead of 'id'."""
-        creative_format_id = FormatId(
-            agent_url="https://creative.adcontextprotocol.org/", id="display_970x250_image"
-        )
+        creative_format_id = FormatId(agent_url="https://creative.adcontextprotocol.org/", id="display_970x250_image")
 
         # Product with format_ids using legacy 'format_id' key
         mock_product = MagicMock()
@@ -254,9 +244,7 @@ class TestProductFormatIdsAsDicts:
 
     def test_validate_with_mixed_format_ids(self):
         """Verify validation works with mixed FormatId objects and dicts."""
-        creative_format_id = FormatId(
-            agent_url="https://creative.adcontextprotocol.org/", id="display_300x250_image"
-        )
+        creative_format_id = FormatId(agent_url="https://creative.adcontextprotocol.org/", id="display_300x250_image")
 
         # Product with mixed format_ids (both FormatId objects and dicts)
         mock_product = MagicMock()

@@ -24,6 +24,7 @@ from enum import Enum
 from typing import Any
 
 import httpx
+from adcp import get_adcp_version
 
 logger = logging.getLogger(__name__)
 
@@ -253,9 +254,9 @@ class WebhookDeliveryService:
             if not is_final and next_expected_interval_seconds:
                 next_expected_at = (datetime.now(UTC) + timedelta(seconds=next_expected_interval_seconds)).isoformat()
 
-            # Build AdCP V2.3 compliant payload with new fields
+            # Build AdCP compliant payload with new fields
             delivery_payload = {
-                "adcp_version": "2.3.0",
+                "adcp_version": get_adcp_version(),
                 "notification_type": notification_type,
                 "is_adjusted": is_adjusted,  # New field for late data
                 "sequence_number": sequence_number,

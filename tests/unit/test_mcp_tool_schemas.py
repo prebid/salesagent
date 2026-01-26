@@ -97,7 +97,10 @@ class TestMCPToolTypedSchemas:
         ), f"targeting_overlay should use TargetingOverlay type, got {params['targeting_overlay'].annotation}"
 
     def test_update_media_buy_uses_typed_parameters(self):
-        """update_media_buy should use TargetingOverlay, Packages types."""
+        """update_media_buy should use TargetingOverlay, PackageUpdate types.
+
+        V3 Migration: Packages renamed to PackageUpdate in adcp library.
+        """
         from src.core.tools.media_buy_update import update_media_buy
 
         sig = inspect.signature(update_media_buy)
@@ -108,10 +111,10 @@ class TestMCPToolTypedSchemas:
             params["targeting_overlay"].annotation
         ), f"targeting_overlay should use TargetingOverlay type, got {params['targeting_overlay'].annotation}"
 
-        # Check packages uses Packages type (from update_media_buy_request)
-        assert "Packages" in str(
+        # Check packages uses PackageUpdate type (V3: was Packages)
+        assert "PackageUpdate" in str(
             params["packages"].annotation
-        ), f"packages should use Packages type, got {params['packages'].annotation}"
+        ), f"packages should use PackageUpdate type (V3), got {params['packages'].annotation}"
 
     def test_list_creative_formats_uses_typed_parameters(self):
         """list_creative_formats should use FormatCategory, FormatId, etc."""

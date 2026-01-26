@@ -16,7 +16,7 @@ from adcp import PushNotificationConfig
 from adcp.types import Error
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.targeting import TargetingOverlay
-from adcp.types.generated_poc.media_buy.update_media_buy_request import Packages as UpdatePackage
+from adcp.types.generated_poc.media_buy.package_update import PackageUpdate as UpdatePackage
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -780,7 +780,11 @@ def _update_media_buy_impl(
                     # If media buy was approved (approved_at set) but is in draft status
                     # (meaning it was approved without creatives), transition to pending_creatives
                     # Check whenever creative_ids are being set (not just when new ones added)
-                    if pkg_update.creative_ids and media_buy_obj.status == "draft" and media_buy_obj.approved_at is not None:
+                    if (
+                        pkg_update.creative_ids
+                        and media_buy_obj.status == "draft"
+                        and media_buy_obj.approved_at is not None
+                    ):
                         media_buy_obj.status = "pending_creatives"
                         logger.info(
                             f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
@@ -1020,7 +1024,11 @@ def _update_media_buy_impl(
                     # If media buy was approved (approved_at set) but is in draft status
                     # (meaning it was approved without creatives), transition to pending_creatives
                     # Check whenever creative_assignments are being set (not just when new ones created)
-                    if pkg_update.creative_assignments and media_buy_obj.status == "draft" and media_buy_obj.approved_at is not None:
+                    if (
+                        pkg_update.creative_assignments
+                        and media_buy_obj.status == "draft"
+                        and media_buy_obj.approved_at is not None
+                    ):
                         media_buy_obj.status = "pending_creatives"
                         logger.info(
                             f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "

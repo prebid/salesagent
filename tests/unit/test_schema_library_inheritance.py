@@ -50,7 +50,9 @@ class TestSchemaLibraryInheritance:
         from adcp.types import AggregatedTotals as LibraryAggregatedTotals
         from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
         from adcp.types import Measurement as LibraryMeasurement
-        from adcp.types import Pagination as LibraryPagination
+        from adcp.types.generated_poc.media_buy.list_creatives_response import (
+            Pagination as LibraryResponsePagination,
+        )
 
         from src.core.schemas import AggregatedTotals, DeliveryMeasurement, Measurement, Pagination
 
@@ -59,7 +61,8 @@ class TestSchemaLibraryInheritance:
             DeliveryMeasurement, LibraryDeliveryMeasurement
         ), "DeliveryMeasurement must extend library type."
         assert issubclass(AggregatedTotals, LibraryAggregatedTotals), "AggregatedTotals must extend library type."
-        assert issubclass(Pagination, LibraryPagination), "Pagination must extend library type."
+        # Pagination for list responses uses page-based pagination (limit/offset/total_pages)
+        assert issubclass(Pagination, LibraryResponsePagination), "Pagination must extend library response pagination."
 
     def test_brand_manifest_is_library_type(self):
         """BrandManifest must be the library type directly."""
@@ -80,13 +83,19 @@ class TestSchemaLibraryInheritance:
         assert Property is LibraryProperty, "Property must be the library type directly."
 
     def test_property_identifier_is_library_type(self):
-        """PropertyIdentifier must be the library Identifier type."""
-        from adcp.types import Identifier as LibraryIdentifier
+        """PropertyIdentifier must be the library property-specific Identifier type.
+
+        V3 Migration: Property class requires property-specific Identifier from
+        adcp.types.generated_poc.core.property.Identifier, not generic Identifier.
+        """
+        from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier
 
         from src.core.schemas import PropertyIdentifier
 
-        # PropertyIdentifier should be the exact library type (alias)
-        assert PropertyIdentifier is LibraryIdentifier, "PropertyIdentifier must be the library Identifier type."
+        # PropertyIdentifier should be the property-specific library type (alias)
+        assert (
+            PropertyIdentifier is PropertySpecificIdentifier
+        ), "PropertyIdentifier must be the property-specific Identifier type."
 
     def test_document_schemas_not_extending_library(self):
         """Document which schemas exist in library but aren't extended locally.

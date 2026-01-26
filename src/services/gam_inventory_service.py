@@ -612,9 +612,7 @@ class GAMInventoryService:
 
             if key_mapping:
                 # Update adapter_config
-                adapter_config = self.db.scalars(
-                    select(AdapterConfig).filter_by(tenant_id=tenant_id)
-                ).first()
+                adapter_config = self.db.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
                 if adapter_config:
                     adapter_config.custom_targeting_keys = key_mapping
                     self.db.commit()
@@ -622,7 +620,9 @@ class GAMInventoryService:
                         f"Updated adapter_config.custom_targeting_keys with {len(key_mapping)} keys for tenant {tenant_id}"
                     )
                 else:
-                    logger.warning(f"No adapter_config found for tenant {tenant_id}, skipping targeting key mapping update")
+                    logger.warning(
+                        f"No adapter_config found for tenant {tenant_id}, skipping targeting key mapping update"
+                    )
             else:
                 logger.info(f"No custom targeting keys found in gam_inventory for tenant {tenant_id}")
         except Exception as e:

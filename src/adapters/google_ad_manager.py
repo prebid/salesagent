@@ -67,8 +67,9 @@ class GoogleAdManager(AdServerAdapter):
 
     adapter_name = "google_ad_manager"
 
-    # GAM supports display, video, and native advertising
-    default_channels = ["display", "video", "native"]
+    # GAM supports display, olv (online video), and social advertising
+    # V3 channel names: video → olv, native → social
+    default_channels = ["display", "olv", "social"]
 
     def __init__(
         self,

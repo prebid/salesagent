@@ -911,10 +911,7 @@ class GAMCreativesManager:
                     ]
                 else:
                     # Create new CREATIVE_VIEW entry
-                    existing_tracking.append({
-                        "key": "CREATIVE_VIEW",
-                        "value": {"urls": processed_urls}
-                    })
+                    existing_tracking.append({"key": "CREATIVE_VIEW", "value": {"urls": processed_urls}})
                     creative["trackingUrls"] = existing_tracking
 
         click_urls = tracking_urls.get("click", [])
@@ -922,7 +919,7 @@ class GAMCreativesManager:
             from urllib.parse import quote
 
             if len(click_urls) > 1:
-                logger.warning(f"Multiple click trackers provided, only first will be used")
+                logger.warning("Multiple click trackers provided, only first will be used")
 
             original_destination = creative.get("destinationUrl", "")
             click_url = click_urls[0]
@@ -937,8 +934,7 @@ class GAMCreativesManager:
                 else:
                     # No landing page to embed - ignore click tracker to avoid broken redirect
                     logger.warning(
-                        "Click tracker has {REDIRECT_URL} macro but no landing page provided. "
-                        "Click tracker ignored."
+                        "Click tracker has {REDIRECT_URL} macro but no landing page provided. " "Click tracker ignored."
                     )
             elif original_destination:
                 # Click tracker missing {REDIRECT_URL} - would lose landing page

@@ -53,12 +53,14 @@ class WebhookPayloadCapture(BaseHTTPRequestHandler):
                 else:
                     status = str(status_obj)
 
-            self.received_payloads.append({
-                "payload": payload,
-                "payload_type": payload_type,
-                "status": status,
-                "path": self.path,
-            })
+            self.received_payloads.append(
+                {
+                    "payload": payload,
+                    "payload_type": payload_type,
+                    "status": status,
+                    "path": self.path,
+                }
+            )
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -454,13 +456,11 @@ class TestA2AWebhookPayloadTypes:
             payload_type = webhook["payload_type"]
 
             if status in final_states:
-                assert payload_type == "Task", (
-                    f"Final state '{status}' should use Task payload, got {payload_type}"
-                )
+                assert payload_type == "Task", f"Final state '{status}' should use Task payload, got {payload_type}"
             elif status in intermediate_states:
-                assert payload_type == "TaskStatusUpdateEvent", (
-                    f"Intermediate state '{status}' should use TaskStatusUpdateEvent payload, got {payload_type}"
-                )
+                assert (
+                    payload_type == "TaskStatusUpdateEvent"
+                ), f"Intermediate state '{status}' should use TaskStatusUpdateEvent payload, got {payload_type}"
             # Unknown states are logged but not asserted
 
 
@@ -529,9 +529,7 @@ class TestWebhookPayloadStructure:
                         }
                     ],
                 },
-                "configuration": {
-                    "pushNotificationConfig": {"url": webhook_capture_server["url"]}
-                },
+                "configuration": {"pushNotificationConfig": {"url": webhook_capture_server["url"]}},
             },
         }
 
@@ -630,9 +628,7 @@ class TestWebhookPayloadStructure:
                         }
                     ],
                 },
-                "configuration": {
-                    "pushNotificationConfig": {"url": webhook_capture_server["url"]}
-                },
+                "configuration": {"pushNotificationConfig": {"url": webhook_capture_server["url"]}},
             },
         }
 

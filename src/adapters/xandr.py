@@ -331,8 +331,8 @@ class XandrAdapter(AdServerAdapter):
     def get_products(self) -> list[Product]:
         """Get available products (placement groups in Xandr)."""
         try:
-            # Use stable API per adcp 2.7.0+ recommendation
-            from adcp.types import CpmAuctionPricingOption, DeliveryMeasurement, DeliveryType
+            # Use V3 consolidated pricing types
+            from adcp.types import CpmPricingOption, DeliveryMeasurement, DeliveryType
             from adcp.types import PriceGuidance as AdCPPriceGuidance
             from adcp.types.generated_poc.core.publisher_property_selector import PublisherPropertySelector1
 
@@ -352,13 +352,12 @@ class XandrAdapter(AdServerAdapter):
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
-                        CpmAuctionPricingOption(  # type: ignore[list-item]
+                        CpmPricingOption(  # type: ignore[list-item]
                             pricing_option_id="xandr_display_cpm",
                             pricing_model="cpm",
                             currency="USD",
-                            is_fixed=False,
-                            price_guidance=AdCPPriceGuidance(floor=0.50, p25=None, p50=None, p75=10.0, p90=None),
-                            min_spend_per_package=None,
+                            floor_price=0.50,  # V3: floor moved to top-level
+                            price_guidance=AdCPPriceGuidance(p75=10.0),  # type: ignore[arg-type]
                         )
                     ],
                     publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
@@ -382,13 +381,12 @@ class XandrAdapter(AdServerAdapter):
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
-                        CpmAuctionPricingOption(  # type: ignore[list-item]
+                        CpmPricingOption(  # type: ignore[list-item]
                             pricing_option_id="xandr_video_cpm",
                             pricing_model="cpm",
                             currency="USD",
-                            is_fixed=False,
-                            price_guidance=AdCPPriceGuidance(floor=10.0, p25=None, p50=None, p75=30.0, p90=None),
-                            min_spend_per_package=None,
+                            floor_price=10.0,  # V3: floor moved to top-level
+                            price_guidance=AdCPPriceGuidance(p75=30.0),  # type: ignore[arg-type]
                         )
                     ],
                     publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
@@ -412,13 +410,12 @@ class XandrAdapter(AdServerAdapter):
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
-                        CpmAuctionPricingOption(  # type: ignore[list-item]
+                        CpmPricingOption(  # type: ignore[list-item]
                             pricing_option_id="xandr_native_cpm",
                             pricing_model="cpm",
                             currency="USD",
-                            is_fixed=False,
-                            price_guidance=AdCPPriceGuidance(floor=2.0, p25=None, p50=None, p75=15.0, p90=None),
-                            min_spend_per_package=None,
+                            floor_price=2.0,  # V3: floor moved to top-level
+                            price_guidance=AdCPPriceGuidance(p75=15.0),  # type: ignore[arg-type]
                         )
                     ],
                     publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
@@ -443,13 +440,12 @@ class XandrAdapter(AdServerAdapter):
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
-                        CpmAuctionPricingOption(  # type: ignore[list-item]
+                        CpmPricingOption(  # type: ignore[list-item]
                             pricing_option_id="xandr_deals_cpm",
                             pricing_model="cpm",
                             currency="USD",
-                            is_fixed=False,
-                            price_guidance=AdCPPriceGuidance(floor=5.0, p25=None, p50=None, p75=25.0, p90=None),
-                            min_spend_per_package=None,
+                            floor_price=5.0,  # V3: floor moved to top-level
+                            price_guidance=AdCPPriceGuidance(p75=25.0),  # type: ignore[arg-type]
                         )
                     ],
                     publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
@@ -565,7 +561,7 @@ class XandrAdapter(AdServerAdapter):
             package_responses = []
 
             # Create line items for each package
-            for idx, package in enumerate(packages):
+            for _idx, package in enumerate(packages):
                 if not self.advertiser_id:
                     raise ValueError("Advertiser ID is required for creating line items")
 

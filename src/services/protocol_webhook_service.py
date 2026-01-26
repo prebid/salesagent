@@ -13,8 +13,6 @@ Application-level webhooks are configured via:
 """
 
 import asyncio
-import hashlib
-import hmac
 import json
 import logging
 import time
@@ -22,17 +20,18 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
-from a2a.types import Task, TaskStatusUpdateEvent
-from adcp.types import McpWebhookPayload
-from adcp import get_adcp_signed_headers_for_webhook, extract_webhook_result_data
 
 import requests
+from a2a.types import Task, TaskStatusUpdateEvent
+from adcp import extract_webhook_result_data, get_adcp_signed_headers_for_webhook
+from adcp.types import McpWebhookPayload
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig, WebhookDeliveryLog
 
 logger = logging.getLogger(__name__)
+
 
 def _normalize_localhost_for_docker(url: str) -> str:
     """Replace localhost host with host.docker.internal while preserving userinfo and port."""
@@ -71,23 +70,25 @@ class ProtocolWebhookService:
         self,
         push_notification_config: PushNotificationConfig,
         payload: Task | TaskStatusUpdateEvent | McpWebhookPayload,
-        metadata: dict[str, Any]
+        metadata: dict[str, Any],
     ) -> bool:
         """
         Send a protocol-level push notification to the configured webhook.
 
         Args:
             push_notification_config: Push notification configuration from protocol layer
-            payload: For A2A it can be Task or TaskStatusUpdateEvent types for MCP it wil be McpWebhookPayload. 
+            payload: For A2A it can be Task or TaskStatusUpdateEvent types for MCP it wil be McpWebhookPayload.
                 Use create_a2a_webhook_payload or create_mcp_webhook_payload from adcp's official python client to get the payload for particular task and status
             metadata: Contains app specific metadata's such as task_type, tenant_id, principal_id
-                
+
         Returns:
             True if notification sent successfully, False otherwise
         """
         if not push_notification_config or not push_notification_config.url:
             # TODO: @yusuf - Double check logging actually works for Task, TaskStatusUpdateEvent and McpWebhookPayload types
-            logger.debug(f"No webhook URL configured in the push notification. Here's payload: {payload}, skipping notification")
+            logger.debug(
+                f"No webhook URL configured in the push notification. Here's payload: {payload}, skipping notification"
+            )
             return False
 
         url = _normalize_localhost_for_docker(push_notification_config.url)
@@ -102,7 +103,7 @@ class ProtocolWebhookService:
                 push_notification_config.authentication_type
                 if hasattr(push_notification_config, "authentication_type")
                 else None
-            )
+            ),
             # DO NOT log authentication_token - security risk
         }
         logger.info(f"push_notification_config (sanitized): {safe_config}")
@@ -124,19 +125,17 @@ class ProtocolWebhookService:
         ):
             # Sign payload with HMAC-SHA256
             timestamp = str(int(time.time()))
-            get_adcp_signed_headers_for_webhook(headers, push_notification_config.authentication_token, timestamp, payload_dict)
+            get_adcp_signed_headers_for_webhook(
+                headers, push_notification_config.authentication_token, timestamp, payload_dict
+            )
 
         elif push_notification_config.authentication_type == "Bearer" and push_notification_config.authentication_token:
             # Use Bearer token authentication
             headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
-        
 
         # Send notification with retry logic and logging
         return await self._send_with_retry_and_logging(
-            url=url,
-            payload=payload_dict,
-            headers=headers,
-            metadata=metadata
+            url=url, payload=payload_dict, headers=headers, metadata=metadata
         )
 
     async def _send_with_retry_and_logging(
@@ -151,23 +150,23 @@ class ProtocolWebhookService:
         # Calculate payload size for metrics
         payload_size_bytes = len(json.dumps(payload).encode("utf-8"))
 
-        task_type=metadata['task_type'] if 'task_type' in metadata else None
-        tenant_id=metadata['tenant_id'] if 'tenant_id' in metadata else None
-        principal_id=metadata['principal_id'] if 'principal_id' in metadata else None
-        media_buy_id=metadata['media_buy_id'] if 'media_buy_id' in metadata else None
+        task_type = metadata["task_type"] if "task_type" in metadata else None
+        tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
+        principal_id = metadata["principal_id"] if "principal_id" in metadata else None
+        media_buy_id = metadata["media_buy_id"] if "media_buy_id" in metadata else None
 
         # TODO: Fix type annotation discrepancy in adcp library - extract_webhook_result_data
         # returns dict at runtime but is typed as AdcpAsyncResponseData | None
         result = cast(dict[str, Any] | None, extract_webhook_result_data(payload))
         # After serialization, payload is always a dict - extract task_id accordingly
         # A2A Task uses 'id', TaskStatusUpdateEvent uses 'task_id', MCP uses 'task_id'
-        task_id = payload.get('id') or payload.get('task_id') or ''
+        task_id = payload.get("id") or payload.get("task_id") or ""
 
         # If we are delivering media buy delivery report
-        notification_type_from_result=result.get("notification_type") if result is not None else None
-        sequence_number_from_result=result.get("sequence_number") if result is not None else None
-        notification_type=notification_type_from_result
-        sequence_number=sequence_number_from_result if isinstance(sequence_number_from_result, int) else 1
+        notification_type_from_result = result.get("notification_type") if result is not None else None
+        sequence_number_from_result = result.get("sequence_number") if result is not None else None
+        notification_type = notification_type_from_result
+        sequence_number = sequence_number_from_result if isinstance(sequence_number_from_result, int) else 1
 
         # Create webhook delivery log entry
         log_id = str(uuid4())

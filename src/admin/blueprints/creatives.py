@@ -8,6 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
+from a2a.types import Task, TaskStatusUpdateEvent
+from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp.types import CreativeAction, McpWebhookPayload, SyncCreativeResult, SyncCreativesSuccessResponse
+from adcp.types.generated_poc.core.context import ContextObject
+from adcp.webhooks import GeneratedTaskStatus
+
 from src.core.database.models import (
     ObjectWorkflowMapping,
     WorkflowStep,
@@ -15,11 +21,6 @@ from src.core.database.models import (
 from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
-from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
-from adcp.types import McpWebhookPayload, SyncCreativesSuccessResponse, CreativeAction, SyncCreativeResult
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.webhooks import GeneratedTaskStatus
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -166,24 +167,20 @@ async def _call_webhook_for_creative_status(
         creatives: list[SyncCreativeResult] = [
             SyncCreativeResult(
                 creative_id=c.creative_id,
-                platform_id="", # we need to populate this. Currently not storing any internal id of our own per creative
+                platform_id="",  # we need to populate this. Currently not storing any internal id of our own per creative
                 action=CreativeAction.failed if c.status != "approved" else CreativeAction.created,
-                errors=[c.data.get("rejection_reason")] if c.data and c.data.get("rejection_reason") else []
+                errors=[c.data.get("rejection_reason")] if c.data and c.data.get("rejection_reason") else [],
             )
             for c in all_creatives
         ]
-        
+
         # Convert context dict to ContextObject if present
         context_data = step.request_data.get("context")
         context_obj: ContextObject | None = None
         if context_data and isinstance(context_data, dict):
             context_obj = ContextObject.model_construct(**context_data)
 
-        complete_result = SyncCreativesSuccessResponse(
-            creatives=creatives,
-            dry_run=False,
-            context=context_obj
-        )
+        complete_result = SyncCreativesSuccessResponse(creatives=creatives, dry_run=False, context=context_obj)
 
         # build push notification config from step request data
         # this is because we don't store push notification config in the database when creating the creative
@@ -238,7 +235,7 @@ async def _call_webhook_for_creative_status(
                     task_id=step.step_id,
                     status=GeneratedTaskStatus.completed,
                     result=result_dict,
-                    context_id=step.context_id
+                    context_id=step.context_id,
                 )
             else:
                 # TODO: Fix in adcp python client - create_mcp_webhook_payload should return
@@ -253,9 +250,7 @@ async def _call_webhook_for_creative_status(
             }
 
             await service.send_notification(
-                push_notification_config=push_notification_config,
-                payload=payload,
-                metadata=metadata
+                push_notification_config=push_notification_config, payload=payload, metadata=metadata
             )
 
             logger.info(
@@ -575,7 +570,9 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                             media_buy.approved_by = "system"
                             db_session.commit()
 
-                            logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} successfully created in adapter, status={new_status}")
+                            logger.info(
+                                f"[CREATIVE APPROVAL] Media buy {media_buy_id} successfully created in adapter, status={new_status}"
+                            )
                         else:
                             logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
                             # Leave status as pending_creatives so admin can retry
@@ -667,9 +664,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             db_session.commit()
 
             asyncio.run(
-                _call_webhook_for_creative_status(
-                    db_session=db_session, creative_id=creative_id, tenant_id=tenant_id
-                )
+                _call_webhook_for_creative_status(db_session=db_session, creative_id=creative_id, tenant_id=tenant_id)
             )
 
             # Send Slack notification if configured

@@ -101,19 +101,20 @@ Automatically fetches and parses Agent Cards to:
 - Get correct RPC endpoint URLs
 - Display agent metadata and descriptions
 
-### AdCP 2.5 Extension Support
+### AdCP Extension Support
 
-The agent card includes the AdCP extension (per AdCP 2.5 spec) in `capabilities.extensions`:
+The agent card includes the AdCP extension in `capabilities.extensions`. The version is dynamically
+determined from the installed `adcp` library via `get_adcp_version()`:
 
 ```json
 {
   "capabilities": {
     "extensions": [
       {
-        "uri": "https://adcontextprotocol.org/schemas/2.5.0/protocols/adcp-extension.json",
+        "uri": "https://adcontextprotocol.org/schemas/{version}/protocols/adcp-extension.json",
         "description": "AdCP protocol version and supported domains",
         "params": {
-          "adcp_version": "2.5.0",
+          "adcp_version": "{version}",
           "protocols_supported": ["media_buy"]
         }
       }
@@ -123,7 +124,7 @@ The agent card includes the AdCP extension (per AdCP 2.5 spec) in `capabilities.
 ```
 
 This extension declares:
-- **adcp_version**: The AdCP specification version implemented by this agent (currently "2.5.0")
+- **adcp_version**: The AdCP specification version implemented by this agent (determined by the `adcp` library)
 - **protocols_supported**: Which AdCP protocol domains are supported (currently only "media_buy")
 
 ### Skill Invocation Patterns (AdCP PR #48)

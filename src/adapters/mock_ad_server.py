@@ -30,12 +30,13 @@ class MockAdServer(AdServerAdapter):
     adapter_name = "mock"
 
     # Mock adapter supports all common channels for testing
-    default_channels = ["display", "video", "audio", "native"]
+    # V3 channel names: display, olv, streaming_audio, social
+    default_channels = ["display", "olv", "streaming_audio", "social"]
     _media_buys: dict[str, dict[str, Any]] = {}
 
     # Supported targeting dimensions (mock supports everything)
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet", "ctv", "dooh", "audio"}
-    SUPPORTED_MEDIA_TYPES = {"video", "display", "native", "audio", "dooh"}
+    SUPPORTED_MEDIA_TYPES = {"olv", "display", "social", "streaming_audio", "dooh"}
 
     def __init__(self, config, principal, dry_run=False, creative_engine=None, tenant_id=None, strategy_context=None):
         """Initialize mock adapter with GAM-like objects."""

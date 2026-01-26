@@ -161,15 +161,22 @@ class TestUpdateMediaBuyInlineCreatives:
 
     def test_update_media_buy_package_creatives_field_exists(self):
         """Verify update_media_buy accepts package.creatives field."""
-        # UpdateMediaBuyRequest is a union type (UpdateMediaBuyRequest1 | UpdateMediaBuyRequest2)
-        # Check the Packages type directly for the creatives field
-        from adcp.types.generated_poc.media_buy.update_media_buy_request import Packages
+        # V3 Migration: PackageUpdate is a wrapper with root field containing union variants
+        # Check the union variants (PackageUpdate1/PackageUpdate2) for the creatives field
+        from adcp.types.generated_poc.media_buy.package_update import PackageUpdate1, PackageUpdate2
 
-        # Check Packages structure has creatives field
-        fields = Packages.model_fields
-        assert "creatives" in fields, "Packages should have creatives field (AdCP 2.5)"
-        assert "creative_assignments" in fields, "Packages should have creative_assignments field (AdCP 2.5)"
-        assert "creative_ids" in fields, "Packages should have creative_ids field"
+        # Check PackageUpdate1 structure has creatives field
+        fields1 = PackageUpdate1.model_fields
+        assert "creatives" in fields1, "PackageUpdate1 should have creatives field (AdCP 2.5)"
+        assert "creative_assignments" in fields1, "PackageUpdate1 should have creative_assignments field (AdCP 2.5)"
+
+        # V3 removed creative_ids from update - use creative_assignments instead
+        # assert "creative_ids" in fields1, "PackageUpdate1 should have creative_ids field"
+
+        # Same for PackageUpdate2
+        fields2 = PackageUpdate2.model_fields
+        assert "creatives" in fields2, "PackageUpdate2 should have creatives field (AdCP 2.5)"
+        assert "creative_assignments" in fields2, "PackageUpdate2 should have creative_assignments field (AdCP 2.5)"
 
 
 class TestUpdateMediaBuyCreativeAssignments:
@@ -578,6 +585,7 @@ class TestListCreativesResponseFormat:
         """Response with all required fields should be valid."""
         from src.core.schemas import ListCreativesResponse, Pagination, QuerySummary
 
+        # Response Pagination uses page-based fields (limit, offset, total_pages, current_page, has_more)
         response = ListCreativesResponse(
             creatives=[],
             query_summary=QuerySummary(
@@ -588,9 +596,9 @@ class TestListCreativesResponseFormat:
             pagination=Pagination(
                 limit=50,
                 offset=0,
-                has_more=False,
-                total_pages=0,
+                total_pages=1,
                 current_page=1,
+                has_more=False,
             ),
         )
         assert response.creatives == []

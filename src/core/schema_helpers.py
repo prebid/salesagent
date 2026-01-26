@@ -16,7 +16,7 @@ from adcp import GetProductsRequest, GetProductsResponse, Product
 from adcp.types.generated_poc.core.brand_manifest import BrandManifest
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.product_filters import ProductFilters
-from adcp.types.generated_poc.media_buy.create_media_buy_request import ReportingWebhook
+from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:

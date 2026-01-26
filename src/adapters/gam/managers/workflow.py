@@ -163,7 +163,9 @@ class GAMWorkflowManager:
             if tenant:
                 tenant_gemini_key = tenant.gemini_api_key
 
-        naming_context = build_order_name_context(request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key)
+        naming_context = build_order_name_context(
+            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key
+        )
         order_name = apply_naming_template(order_name_template, naming_context)
 
         # Build detailed action list for humans to manually create the order

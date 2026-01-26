@@ -34,10 +34,10 @@ class TestA2AResponseAttributeAccess:
         - response.pagination.limit
         - response.pagination.has_more
         """
-        # Create a minimal ListCreativesResponse
+        # Create a minimal ListCreativesResponse with page-based pagination
         response = ListCreativesResponse(
             query_summary=QuerySummary(total_matching=10, returned=2, filters_applied=[], sort_applied=None),
-            pagination=Pagination(limit=50, offset=0, has_more=True, total_pages=1, current_page=1),
+            pagination=Pagination(limit=50, offset=0, has_more=True, total_pages=2, current_page=1),
             creatives=[],
         )
 
@@ -96,7 +96,7 @@ class TestA2AResponseAttributeAccess:
         This simulates what the A2A handler does with the response.
         Tests the FIXED version that accesses nested attributes correctly.
         """
-        # Create minimal response
+        # Create minimal response with page-based pagination
         response = ListCreativesResponse(
             query_summary=QuerySummary(total_matching=5, returned=0, filters_applied=[], sort_applied=None),
             pagination=Pagination(limit=50, offset=0, has_more=False, total_pages=1, current_page=1),
@@ -105,10 +105,10 @@ class TestA2AResponseAttributeAccess:
 
         # Simulate what A2A handler does (the fixed version)
         creatives_list = [creative.model_dump() for creative in response.creatives]
-        total_count = response.query_summary.total_matching  # ✅ Correct
-        page = response.pagination.current_page  # ✅ Correct
-        limit = response.pagination.limit  # ✅ Correct
-        has_more = response.pagination.has_more  # ✅ Correct
+        total_count = response.query_summary.total_matching
+        page = response.pagination.current_page
+        limit = response.pagination.limit
+        has_more = response.pagination.has_more
 
         # Verify extraction worked
         assert creatives_list == []

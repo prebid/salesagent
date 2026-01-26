@@ -17,8 +17,9 @@ class TritonDigital(AdServerAdapter):
 
     adapter_name = "triton"
 
-    # Triton Digital specializes in audio and podcast advertising
-    default_channels = ["audio", "podcast"]
+    # Triton Digital specializes in streaming_audio and podcast advertising
+    # V3 channel names: audio → streaming_audio
+    default_channels = ["streaming_audio", "podcast"]
 
     def __init__(
         self,

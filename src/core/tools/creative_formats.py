@@ -6,13 +6,12 @@ implementation pattern from CLAUDE.md.
 
 import logging
 import time
-
 from typing import TypeVar
 
 from adcp import FormatId
 from adcp.types import Format as AdcpFormat
 from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.format import Assets, Assets1, AssetsRequired, AssetsRequired1
+from adcp.types.generated_poc.core.format import Assets, Assets5, AssetsRequired, AssetsRequired1
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 from adcp.utils.format_assets import (
@@ -54,13 +53,13 @@ def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
     """
     if uses_deprecated_assets_field(f):
         # Old format with deprecated assets_required only - populate new assets field
-        normalized: list[Assets | Assets1] = normalize_assets_required(f.assets_required)  # type: ignore[arg-type]
+        normalized: list[Assets | Assets5] = normalize_assets_required(f.assets_required)  # type: ignore[arg-type]
         if normalized:
             return f.model_copy(update={"assets": normalized})
 
     elif has_assets(f) and not f.assets_required:
         # New format with assets only - populate deprecated assets_required for old clients
-        required_assets: list[Assets | Assets1] = get_required_assets(f)
+        required_assets: list[Assets | Assets5] = get_required_assets(f)
         if required_assets:
             # Convert Assets to deprecated AssetsRequired format for backward compatibility
             assets_required_list: list[AssetsRequired | AssetsRequired1] = []

@@ -1445,9 +1445,7 @@ def _sync_creatives_impl(
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
                     mb_obj.status = "pending_creatives"
-                    logger.info(
-                        f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives"
-                    )
+                    logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
 
             session.commit()
 
@@ -1796,8 +1794,10 @@ def _list_creatives_impl(
         ListCreativesResponse with filtered creative assets and pagination info
     """
     from adcp.types import CreativeFilters as LibraryCreativeFilters
-    from adcp.types import Pagination as LibraryPagination
     from adcp.types import Sort as LibrarySort
+
+    # V3: Request Pagination uses limit/offset, Response Pagination uses batch_number/total_batches
+    from adcp.types.generated_poc.media_buy.list_creatives_request import Pagination as LibraryPagination
 
     from src.core.schemas import ListCreativesRequest
 
@@ -2020,13 +2020,24 @@ def _list_creatives_impl(
 
             format_obj = FormatId(**format_kwargs)
 
-            # Ensure datetime fields are datetime (not SQLAlchemy DateTime)
-            created_at_dt: datetime = (
-                db_creative.created_at if isinstance(db_creative.created_at, datetime) else datetime.now(UTC)
-            )
-            updated_at_dt: datetime = (
-                db_creative.updated_at if isinstance(db_creative.updated_at, datetime) else datetime.now(UTC)
-            )
+            # Ensure datetime fields are timezone-aware (database may store naive datetimes)
+            if isinstance(db_creative.created_at, datetime):
+                created_at_dt = (
+                    db_creative.created_at.replace(tzinfo=UTC)
+                    if db_creative.created_at.tzinfo is None
+                    else db_creative.created_at
+                )
+            else:
+                created_at_dt = datetime.now(UTC)
+
+            if isinstance(db_creative.updated_at, datetime):
+                updated_at_dt = (
+                    db_creative.updated_at.replace(tzinfo=UTC)
+                    if db_creative.updated_at.tzinfo is None
+                    else db_creative.updated_at
+                )
+            else:
+                updated_at_dt = datetime.now(UTC)
 
             # AdCP v1 spec compliant - only spec fields
             # Get assets dict from database (all production data uses AdCP v2.4 format)
@@ -2135,7 +2146,11 @@ def _list_creatives_impl(
             sort_applied=sort_applied,
         ),
         pagination=Pagination(
-            limit=limit, offset=offset_calc, has_more=has_more, total_pages=total_pages, current_page=page
+            limit=limit,
+            offset=offset_calc,
+            has_more=has_more,
+            total_pages=total_pages,
+            current_page=page,
         ),
         creatives=creatives,
         format_summary=None,
