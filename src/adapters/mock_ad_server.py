@@ -4,7 +4,7 @@ from typing import Any
 
 from adcp.types.aliases import Package as ResponsePackage
 
-from src.adapters.base import AdServerAdapter
+from src.adapters.base import AdServerAdapter, TargetingCapabilities
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -98,6 +98,26 @@ class MockAdServer(AdServerAdapter):
     def get_supported_pricing_models(self) -> set[str]:
         """Mock adapter supports all pricing models (AdCP PR #88)."""
         return {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
+
+    def get_targeting_capabilities(self) -> TargetingCapabilities:
+        """Mock adapter supports all targeting for testing flexibility."""
+        return TargetingCapabilities(
+            geo_countries=True,
+            geo_regions=True,
+            nielsen_dma=True,
+            us_zip=True,
+            us_zip_plus_four=True,
+            ca_fsa=True,
+            ca_full=True,
+            gb_outward=True,
+            gb_full=True,
+            de_plz=True,
+            fr_code_postal=True,
+            au_postcode=True,
+            eurostat_nuts2=True,
+            uk_itl1=True,
+            uk_itl2=True,
+        )
 
     def _initialize_hitl_config(self):
         """Initialize Human-in-the-Loop configuration from principal platform_mappings."""

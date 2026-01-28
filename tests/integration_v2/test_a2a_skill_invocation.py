@@ -45,9 +45,7 @@ class A2AAdCPValidator:
         "sync_creatives": "sync-creatives",  # New AdCP spec endpoint
         "list_creatives": "list-creatives",  # New AdCP spec endpoint
         "approve_creative": "approve-creative",  # When schema becomes available
-        # Legacy skills don't have AdCP schemas
-        "get_pricing": None,
-        "get_targeting": None,
+        # Skills without AdCP schemas yet
         "get_media_buy_status": None,
         "optimize_media_buy": None,
     }
@@ -657,6 +655,7 @@ class TestA2ASkillInvocation:
                 # We can't easily test the actual execution without full setup,
                 # but we can at least verify the skill name is recognized
                 assert skill_name in [
+                    "get_adcp_capabilities",  # AdCP v3 discovery endpoint
                     "get_products",
                     "create_media_buy",
                     "update_media_buy",  # Added for media buy management
@@ -667,9 +666,6 @@ class TestA2ASkillInvocation:
                     "approve_creative",
                     "get_media_buy_status",
                     "optimize_media_buy",
-                    # Note: signals skills removed - should come from dedicated signals agents
-                    "get_pricing",
-                    "get_targeting",
                     "list_creative_formats",  # Keep existing creative format endpoint
                     "list_authorized_properties",  # Added for AdCP compliance
                 ], f"Skill {skill_name} not in expected skill list"
@@ -986,64 +982,6 @@ class TestA2ASkillInvocation:
             assert isinstance(result, Task)
             assert result.metadata["invocation_type"] == "explicit_skill"
             assert "get_media_buy_delivery" in result.metadata["skills_requested"]
-            assert result.artifacts is not None
-
-    @pytest.mark.asyncio
-    async def test_get_pricing_skill(self, handler, sample_tenant, sample_principal, validator):
-        """Test get_pricing skill invocation."""
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
-
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
-
-            # Create skill invocation
-            skill_params = {}
-            message = create_a2a_message_with_skill("get_pricing", skill_params)
-            params = MessageSendParams(message=message)
-
-            # Process the message - executes real code path
-            result = await handler.on_message_send(params)
-
-            # Verify result
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "get_pricing" in result.metadata["skills_requested"]
-            assert result.artifacts is not None
-
-    @pytest.mark.asyncio
-    async def test_get_targeting_skill(self, handler, sample_tenant, sample_principal, validator):
-        """Test get_targeting skill invocation."""
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
-
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
-
-            # Create skill invocation
-            skill_params = {}
-            message = create_a2a_message_with_skill("get_targeting", skill_params)
-            params = MessageSendParams(message=message)
-
-            # Process the message - executes real code path
-            result = await handler.on_message_send(params)
-
-            # Verify result
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "get_targeting" in result.metadata["skills_requested"]
             assert result.artifacts is not None
 
     @pytest.mark.asyncio

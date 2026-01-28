@@ -20,7 +20,7 @@ from typing import Any, Literal, cast
 from adcp.types.aliases import Package as ResponsePackage
 from flask import Flask
 
-from src.adapters.base import AdServerAdapter
+from src.adapters.base import AdServerAdapter, TargetingCapabilities
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager
@@ -300,6 +300,24 @@ class GoogleAdManager(AdServerAdapter):
             Set of pricing model strings supported by this adapter
         """
         return {"cpm", "vcpm", "cpc", "flat_rate"}
+
+    def get_targeting_capabilities(self) -> TargetingCapabilities:
+        """Return targeting capabilities GAM adapter supports.
+
+        Google Ad Manager supports comprehensive geo targeting:
+        - Countries and regions worldwide
+        - Nielsen DMAs (US metros)
+        - US ZIP codes
+
+        Returns:
+            TargetingCapabilities describing GAM's targeting support
+        """
+        return TargetingCapabilities(
+            geo_countries=True,
+            geo_regions=True,
+            nielsen_dma=True,  # GAM supports US DMAs
+            us_zip=True,  # GAM supports US ZIP targeting
+        )
 
     # Legacy properties for backward compatibility
     @property

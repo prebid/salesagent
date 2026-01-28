@@ -1003,6 +1003,7 @@ if unified_mode:
 # Tools are imported and then registered with MCP manually (no decorators in tool modules)
 # Import error logging wrapper for centralized error visibility
 from src.core.tool_error_logging import with_error_logging  # noqa: E402
+from src.core.tools.capabilities import get_adcp_capabilities  # noqa: E402, F401
 from src.core.tools.creative_formats import list_creative_formats  # noqa: E402, F401
 from src.core.tools.creatives import list_creatives, sync_creatives  # noqa: E402, F401
 from src.core.tools.media_buy_create import create_media_buy  # noqa: E402, F401
@@ -1017,6 +1018,7 @@ from src.core.tools.properties import list_authorized_properties  # noqa: E402, 
 # Register tools with MCP (must be done after imports to avoid circular dependency)
 # This breaks the circular import: tool modules no longer import mcp from main.py
 # Tools are wrapped with error logging to ensure errors appear in activity feed
+mcp.tool()(with_error_logging(get_adcp_capabilities))
 mcp.tool()(with_error_logging(get_products))
 mcp.tool()(with_error_logging(list_creative_formats))
 mcp.tool()(with_error_logging(sync_creatives))

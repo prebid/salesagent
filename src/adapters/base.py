@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -17,6 +18,35 @@ from src.core.schemas import (
     ReportingPeriod,
     UpdateMediaBuyResponse,
 )
+
+
+@dataclass
+class TargetingCapabilities:
+    """Targeting capabilities supported by an adapter.
+
+    Maps to AdCP GetAdcpCapabilitiesResponse.media_buy.execution.targeting structure.
+    """
+
+    # Geographic targeting
+    geo_countries: bool = False
+    geo_regions: bool = False
+
+    # Metro/DMA targeting
+    nielsen_dma: bool = False  # US Nielsen DMAs
+    eurostat_nuts2: bool = False  # EU NUTS2 regions
+    uk_itl1: bool = False  # UK ITL1 regions
+    uk_itl2: bool = False  # UK ITL2 regions
+
+    # Postal code targeting
+    us_zip: bool = False
+    us_zip_plus_four: bool = False
+    ca_fsa: bool = False  # Canadian FSA
+    ca_full: bool = False  # Full Canadian postal code
+    gb_outward: bool = False  # UK outward code (first part)
+    gb_full: bool = False  # Full UK postcode
+    de_plz: bool = False  # German PLZ
+    fr_code_postal: bool = False  # French postal code
+    au_postcode: bool = False  # Australian postcode
 
 
 class CreativeEngineAdapter(ABC):
@@ -82,6 +112,17 @@ class AdServerAdapter(ABC):
             Set of pricing model strings: {"cpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
         """
         return {"cpm"}
+
+    def get_targeting_capabilities(self) -> TargetingCapabilities:
+        """Return targeting capabilities this adapter supports.
+
+        Default implementation returns minimal capabilities (geo country only).
+        Override in subclasses with actual adapter capabilities.
+
+        Returns:
+            TargetingCapabilities describing what targeting is supported
+        """
+        return TargetingCapabilities(geo_countries=True)
 
     @abstractmethod
     def create_media_buy(

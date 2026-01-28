@@ -142,8 +142,6 @@ class A2AAdCPComplianceClient:
             "create_media_buy": "create-media-buy",
             "add_creative_assets": "add-creative-assets",
             # Skills without AdCP schemas
-            "get_pricing": None,
-            "get_targeting": None,
             "approve_creative": None,  # Schema may not be available yet
             "get_media_buy_status": None,
             "optimize_media_buy": None,
@@ -366,9 +364,6 @@ class TestA2AAdCPCompliance:
                     "assets": {"main": {"asset_type": "image", "url": "https://example.com/creative.jpg"}},
                 },
             ),
-            # Legacy skills (no schema validation expected)
-            ("get_pricing", {}),
-            ("get_targeting", {}),
         ]
 
         for skill_name, params in skill_tests:
