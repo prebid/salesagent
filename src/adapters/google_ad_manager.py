@@ -157,7 +157,8 @@ class GoogleAdManager(AdServerAdapter):
             self.orders_manager = GAMOrdersManager(self.client_manager, self.advertiser_id, self.trafficker_id, dry_run)
 
             # Only initialize creative manager if we have advertiser_id (required for creative operations)
-            if self.advertiser_id and self.trafficker_id:
+            # Note: trafficker_id is NOT required for creative operations - only for order creation
+            if self.advertiser_id:
                 self.creatives_manager = GAMCreativesManager(
                     self.client_manager, self.advertiser_id, dry_run, self.log, self
                 )
@@ -187,7 +188,8 @@ class GoogleAdManager(AdServerAdapter):
             self.orders_manager = GAMOrdersManager(None, self.advertiser_id, self.trafficker_id, dry_run=True)
 
             # Only initialize creative manager if we have advertiser_id (required for creative operations)
-            if self.advertiser_id and self.trafficker_id:
+            # Note: trafficker_id is NOT required for creative operations - only for order creation
+            if self.advertiser_id:
                 self.creatives_manager = GAMCreativesManager(
                     None,
                     self.advertiser_id,
