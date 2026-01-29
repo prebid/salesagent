@@ -24,7 +24,7 @@ jobs:
           PERSONAL_ACCESS_TOKEN: ${{ secrets.IPR_PAT }}
         with:
           path-to-signatures: 'signatures/ipr-signatures.json'
-          path-to-document: 'https://github.com/adcontextprotocol/adcp/blob/main/IPR_POLICY.md'
+          path-to-document: 'https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md'
           branch: 'ipr-signatures'
           remote-organization-name: 'adcontextprotocol'
           remote-repository-name: 'adcp'
@@ -33,7 +33,7 @@ jobs:
           custom-notsigned-prcomment: |
             ## IPR Policy Agreement Required
 
-            Thank you for your contribution! Before we can accept your pull request, you must agree to our [Intellectual Property Rights Policy](https://github.com/adcontextprotocol/adcp/blob/main/IPR_POLICY.md).
+            Thank you for your contribution! Before we can accept your pull request, you must agree to our [Intellectual Property Rights Policy](https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md).
 
             By making a Contribution, you agree that:
             - You grant the Foundation a perpetual, irrevocable, worldwide, non-exclusive, royalty-free copyright license to your Contribution
@@ -46,12 +46,12 @@ jobs:
             I have read the IPR Policy
             ```
 
-            You can read the full [IPR Policy here](https://github.com/adcontextprotocol/adcp/blob/main/IPR_POLICY.md).
+            You can read the full [IPR Policy here](https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md).
 
           custom-pr-sign-comment: 'I have read the IPR Policy'
 
           custom-allsigned-prcomment: |
-            All contributors have agreed to the [IPR Policy](https://github.com/adcontextprotocol/adcp/blob/main/IPR_POLICY.md). Thank you!
+            All contributors have agreed to the [IPR Policy](https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md). Thank you!
 
           lock-pullrequest-aftermerge: false
           use-dco-flag: false

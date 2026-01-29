@@ -4,7 +4,7 @@ commit your changes, and [open a pull request](https://help.github.com/articles/
 main branch.
 
 ## Intellectual Property Rights
-Before contributing to the AdCP project, ensure that you have read and agree with our [Intellectual Property Rights Policy](https://github.com/adcontextprotocol/adcp/blob/main/IPR_POLICY.md).
+Before contributing to the AdCP project, ensure that you have read and agree with our [Intellectual Property Rights Policy](IPR_POLICY.md).
 
 ## Contributing
 Before contributing please see:
