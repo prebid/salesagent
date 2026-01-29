@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/prebid/salesagent/compare/v1.1.0...v1.2.0) (2026-01-29)
+
+
+### Features
+
+* Add get_adcp_capabilities tool for AdCP v3 compliance ([#973](https://github.com/prebid/salesagent/issues/973)) ([407a495](https://github.com/prebid/salesagent/commit/407a49550ea2a68d33429db05aafa10bc31c2369))
+
+
+### Bug Fixes
+
+* ipr policy should point to prebid.org ([1fad905](https://github.com/prebid/salesagent/commit/1fad905b2888b8e2cc023c541b3bd1fdc464d18f))
+* Remove unnecessary trafficker_id requirement from GAM creatives_manager ([#975](https://github.com/prebid/salesagent/issues/975)) ([87fad8a](https://github.com/prebid/salesagent/commit/87fad8a9208fd1a64ff3e50822a99420e34552b7))
+
+
+### Documentation
+
+* fix repo loc ([03ffce8](https://github.com/prebid/salesagent/commit/03ffce8d5dcae6e43542ed9dc62890cb9787f4c6))
+
 ## [1.1.0](https://github.com/prebid/salesagent/compare/v1.0.0...v1.1.0) (2026-01-26)
 
 
