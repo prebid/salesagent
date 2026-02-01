@@ -1,0 +1,489 @@
+{% extends "base.html" %}
+
+{% block title %}Add Product - Sales Agent Admin{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="back-button-container">
+        <a href="{{ url_for('products.list_products', tenant_id=tenant_id) }}" class="btn btn-secondary btn-back">
+            ← Back to Products
+        </a>
+    </div>
+
+    <h2>Add New Product</h2>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="name">Product Name *</label>
+                <input type="text" id="name" name="name" required placeholder="e.g., Homepage Premium Display">
+            </div>
+
+            <div class="form-group">
+                <label for="product_id">Product ID</label>
+                <input type="text" id="product_id" name="product_id" placeholder="Auto-generated from name">
+                <small style="color: #666;">Leave blank to auto-generate</small>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="description">Description</label>
+            <textarea id="description" name="description" rows="3" placeholder="Describe this product offering"></textarea>
+        </div>
+
+        <h3 style="margin-top: 2rem;">Creative Formats</h3>
+
+        <div class="form-group">
+            <label>Select format templates and configure sizes:</label>
+            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
+                Choose format templates and specify which sizes this product supports. Creative type (image, JS, HTML5)
+                is auto-detected when advertisers upload creatives.
+            </p>
+
+            <!-- Format Template Picker Container -->
+            <div id="format-template-picker-container">
+                <div style="text-align: center; padding: 2rem; color: #666;">
+                    Loading format templates...
+                </div>
+            </div>
+        </div>
+
+        <!-- Hidden input to store selected format data -->
+        <input type="hidden" id="formats-data" name="formats" value="[]">
+
+        <!-- Load Format Template Picker JS -->
+        <script src="{{ request.script_root }}/static/js/format-template-picker.js"></script>
+        <script>
+        // Initialize format template picker on page load
+        // Use window.formatPicker for global access (needed for form submission and testing)
+        document.addEventListener('DOMContentLoaded', function() {
+            window.formatPicker = new FormatTemplatePicker({
+                containerId: 'format-template-picker-container',
+                hiddenInputId: 'formats-data',
+                tenantId: '{{ tenant_id }}',
+                adapterType: '{{ adapter_type }}',
+                scriptRoot: '{{ request.script_root }}' || '',
+                initialFormats: [],
+                onSelectionChange: function(formats) {
+                    console.log('Formats updated:', formats.length, 'formats selected');
+                }
+            });
+        });
+        </script>
+
+        <h3 style="margin-top: 2rem;">Pricing & Delivery</h3>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="delivery_type">Delivery Type</label>
+                <select id="delivery_type" name="delivery_type">
+                    <option value="guaranteed">Guaranteed</option>
+                    <option value="non_guaranteed">Non-guaranteed</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Pricing Options (AdCP PR #88) -->
+        <div style="margin-top: 1.5rem; padding: 1rem; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
+            <h4 style="margin-top: 0; margin-bottom: 0.5rem;">Pricing Options (Recommended)</h4>
+            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">Add one or more pricing models for this product. Buyers can choose which model to use.</p>
+
+            <div id="pricing-options-container">
+                <!-- Pricing options will be added here by JavaScript -->
+            </div>
+
+            <button type="button" class="btn btn-secondary" onclick="addPricingOption()" style="margin-top: 0.5rem;">
+                + Add Pricing Option
+            </button>
+        </div>
+
+        <!-- Legacy Pricing (Backward Compatibility) -->
+        <details style="margin-top: 1.5rem;">
+            <summary style="cursor: pointer; padding: 0.5rem; background: #f8f9fa; border-radius: 4px;">
+                <strong>Legacy Pricing (Deprecated)</strong> - Use Pricing Options above instead
+            </summary>
+            <div style="margin-top: 1rem; padding: 1rem; border: 1px solid #dee2e6; border-radius: 4px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="form-group" id="cpm-group">
+                        <label for="cpm">CPM (Cost per 1000 impressions)</label>
+                        <input type="number" id="cpm" name="cpm" value="5.00" step="0.01">
+                    </div>
+
+                    <div class="form-group" id="price-guidance-group" style="display: none;">
+                        <label for="price_guidance_min">Price Guidance (CPM Range)</label>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="number" id="price_guidance_min" name="price_guidance_min" placeholder="Min" step="0.01" style="flex: 1;">
+                            <span>-</span>
+                            <input type="number" id="price_guidance_max" name="price_guidance_max" placeholder="Max" step="0.01" style="flex: 1;">
+                        </div>
+                        <small style="color: #666;">Suggested CPM range for non-guaranteed inventory</small>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <h3 style="margin-top: 2rem;">Channel & Geographic Targeting</h3>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="channels">Advertising Channels</label>
+                {% set selected_channels = [] %}
+                {% include 'components/channel_selector.html' %}
+            </div>
+
+            <div class="form-group">
+                <label for="countries">Target Countries</label>
+                {% set selected_countries = [] %}
+                {% include 'components/country_selector.html' %}
+            </div>
+        </div>
+
+        <h3 style="margin-top: 2rem;">Property Authorization (AdCP) *</h3>
+        <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
+            <strong>Required:</strong> Specify which properties this product covers so buyers can validate against their authorized properties (adagents.json).
+        </div>
+
+        {% include 'components/publisher_properties_selector.html' %}
+
+        <!-- Custom Targeting (Optional) -->
+        <h3 style="margin-top: 2rem;">
+            <i class="fas fa-bullseye"></i> Custom Targeting (Optional)
+        </h3>
+        <div class="alert alert-info" style="background: #fff9e6; border-left: 4px solid #ffc107; padding: 1rem; margin-bottom: 1rem;">
+            <strong>Who Sees This:</strong> Configure custom targeting (key-value pairs) to define which audience segments will see ads for this product.
+            <br><small style="color: #666;">Example: sport=basketball, genre=action, age=18-34</small>
+        </div>
+
+        {# Enhanced targeting selector with OR/AND operators and include/exclude #}
+        {% include 'components/targeting_selector_widget.html' %}
+        <input type="hidden" id="targeting-data" name="targeting_template" value="">
+
+        <!-- Principal Access Control -->
+        <h3 style="margin-top: 2rem;">
+            <i class="fas fa-lock"></i> Principal Access Control
+        </h3>
+        <p style="color: #666; margin-bottom: 1rem;">
+            Restrict which advertisers/principals can see this product. Leave empty to show to all principals.
+        </p>
+
+        <div class="form-group">
+            <label for="allowed_principal_ids">Allowed Principals (Advertisers)</label>
+            <select id="allowed_principal_ids" name="allowed_principal_ids" multiple style="height: 120px;">
+                {% if principals %}
+                    {% for principal in principals %}
+                    <option value="{{ principal.principal_id }}">
+                        {{ principal.name }} ({{ principal.principal_id }})
+                    </option>
+                    {% endfor %}
+                {% else %}
+                    <option disabled>No principals configured</option>
+                {% endif %}
+            </select>
+            <small style="color: #666;">
+                Hold Ctrl/Cmd to select multiple. If none selected, product is visible to all principals.
+            </small>
+        </div>
+
+        <!-- Adapter-Specific Product Configuration -->
+        {% if adapter_type %}
+        <div id="adapter-product-config" style="margin-top: 2rem;">
+            {% include "adapters/" ~ adapter_type ~ "/product_config.html" ignore missing %}
+        </div>
+        {% endif %}
+
+        <!-- Product Details (AdCP Compliance) -->
+        <h3 style="margin-top: 2rem;">
+            <i class="fas fa-info-circle"></i> Product Details
+        </h3>
+        <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
+            <strong>Required:</strong> Delivery measurement is required per AdCP spec. Other details enhance product visibility for buyers.
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="delivery_measurement_provider">Delivery Measurement Provider *</label>
+                {% set measurement_config = tenant.measurement_providers if tenant else {} %}
+                {% set providers = measurement_config.providers if measurement_config else [] %}
+                {% set default_provider = measurement_config.default if measurement_config else '' %}
+
+                <input type="text" id="delivery_measurement_provider" name="delivery_measurement_provider"
+                       list="measurement_providers_list"
+                       placeholder="e.g., comScore, Nielsen, IAS"
+                       value="{{ default_provider }}" required>
+                <datalist id="measurement_providers_list">
+                    {% if providers %}
+                        {% for provider in providers %}
+                        <option value="{{ provider }}">
+                        {% endfor %}
+                    {% else %}
+                        <option value="comScore">
+                        <option value="Nielsen">
+                        <option value="IAS">
+                    {% endif %}
+                </datalist>
+                <small style="color: #666;">Select from configured providers or enter custom (autocomplete enabled)</small>
+            </div>
+
+            <div class="form-group">
+                <label for="delivery_measurement_notes">Measurement Notes</label>
+                <input type="text" id="delivery_measurement_notes" name="delivery_measurement_notes"
+                       placeholder="e.g., MRC-accredited viewability. 50% in-view for 1s">
+                <small style="color: #666;">Additional methodology details (optional)</small>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="product_image_url">Product Image URL (Optional)</label>
+            <input type="url" id="product_image_url" name="product_image_url"
+                   placeholder="https://example.com/product-image.jpg">
+            <small style="color: #666;">
+                Product image for visual cards (300x400px recommended). Leave blank to auto-generate from product data.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="enable_markdown" name="enable_markdown" value="1">
+                Description supports markdown formatting
+            </label>
+            <small style="display: block; color: #666; margin-left: 1.5rem;">
+                Enable to use **bold**, *italic*, and other markdown formatting in description
+            </small>
+        </div>
+
+        <div style="margin-top: 2rem;">
+            <button type="submit" class="btn">Create Product</button>
+            <a href="{{ url_for('products.list_products', tenant_id=tenant_id) }}" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<script>
+function updatePricingFields() {
+    const deliveryType = document.getElementById('delivery_type').value;
+    const cpmGroup = document.getElementById('cpm-group');
+    const priceGuidanceGroup = document.getElementById('price-guidance-group');
+    const cpmInput = document.getElementById('cpm');
+
+    if (deliveryType === 'guaranteed') {
+        cpmGroup.style.display = 'block';
+        priceGuidanceGroup.style.display = 'none';
+        cpmInput.required = true;
+    } else {
+        cpmGroup.style.display = 'none';
+        priceGuidanceGroup.style.display = 'block';
+        cpmInput.required = false;
+    }
+}
+
+// togglePropertyMode and validatePublisherProperties are defined in the publisher_properties_selector.html component
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    updatePricingFields();
+
+    // Add event listener to delivery type dropdown
+    document.getElementById('delivery_type').addEventListener('change', updatePricingFields);
+
+    // Add form validation on submit
+    const form = document.querySelector('form');
+    form.addEventListener('submit', function(e) {
+        if (!validatePublisherProperties()) {
+            e.preventDefault();
+            return false;
+        }
+    });
+
+    // Handle country selection
+    const countriesSelect = document.getElementById('countries');
+    countriesSelect.addEventListener('change', function() {
+        const selectedOptions = Array.from(this.selectedOptions).map(opt => opt.value);
+
+        // If "ALL" is selected, deselect all others
+        if (selectedOptions.includes('ALL') && selectedOptions.length > 1) {
+            // Clear all selections and just select ALL
+            Array.from(this.options).forEach(opt => opt.selected = false);
+            this.options[0].selected = true; // Select "All Countries"
+        }
+        // If specific countries are selected, deselect ALL
+        else if (!selectedOptions.includes('ALL') && selectedOptions.length > 0) {
+            this.options[0].selected = false; // Deselect "All Countries"
+        }
+        // If nothing is selected, select ALL by default
+        else if (selectedOptions.length === 0) {
+            this.options[0].selected = true; // Select "All Countries"
+        }
+    });
+
+    // Add initial pricing option
+    addPricingOption();
+});
+
+// Pricing Options Management (AdCP PR #88)
+let pricingOptionIndex = 0;
+
+function addPricingOption() {
+    const container = document.getElementById('pricing-options-container');
+    const index = pricingOptionIndex++;
+
+    const optionHtml = `
+        <div class="pricing-option" id="pricing-option-${index}" style="border: 1px solid #dee2e6; border-radius: 4px; padding: 1rem; margin-bottom: 1rem; background: white;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h5 style="margin: 0;">Pricing Option #${index + 1}</h5>
+                <button type="button" class="btn btn-secondary" onclick="removePricingOption(${index})" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">Remove</button>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                <div class="form-group">
+                    <label>Pricing Model *</label>
+                    <select name="pricing_model_${index}" class="pricing-model-select" onchange="updatePricingFields${index}()" required>
+                        <option value="">Select...</option>
+                        <optgroup label="Guaranteed (Fixed Price)">
+                            <option value="cpm_fixed">CPM - Fixed Rate (Cost per 1,000 impressions)</option>
+                            <option value="flat_rate">Flat Rate - Fixed Campaign Cost (Sponsorship)</option>
+                        </optgroup>
+                        <optgroup label="Non-Guaranteed (Auction/Bidding)">
+                            <option value="cpm_auction">CPM - Auction (Floor price bidding)</option>
+                            <option value="vcpm">VCPM - Auction (Viewable impressions)</option>
+                            <option value="cpc">CPC - Auction (Cost per click)</option>
+                        </optgroup>
+                    </select>
+                    <small style="color: #666;">Select a pricing model for this option.</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Currency *</label>
+                    <select name="currency_${index}" required>
+                        {% for currency in currencies %}
+                        <option value="{{ currency }}" {% if currency == 'USD' %}selected{% endif %}>{{ currency }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="form-group" id="rate-group-${index}">
+                    <label>Rate *</label>
+                    <input type="number" name="rate_${index}" step="0.01" min="0" placeholder="e.g., 12.50">
+                    <small style="color: #666;">Price per unit (CPM, CPCV, etc.)</small>
+                </div>
+
+                <div class="form-group" id="floor-group-${index}" style="display: none;">
+                    <label>Floor Price *</label>
+                    <input type="number" name="floor_${index}" step="0.01" min="0" placeholder="Minimum bid">
+                    <small style="color: #666;">Minimum acceptable price</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Min Spend Per Package</label>
+                    <input type="number" name="min_spend_${index}" step="0.01" min="0" placeholder="Optional">
+                    <small style="color: #666;">Minimum budget requirement</small>
+                </div>
+            </div>
+
+            <div id="price-guidance-${index}" style="display: none; margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
+                <strong>Price Guidance (Optional)</strong>
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin-top: 0.5rem;">
+                    <input type="number" name="p25_${index}" step="0.01" placeholder="P25">
+                    <input type="number" name="p50_${index}" step="0.01" placeholder="P50 (Median)">
+                    <input type="number" name="p75_${index}" step="0.01" placeholder="P75">
+                    <input type="number" name="p90_${index}" step="0.01" placeholder="P90">
+                </div>
+                <small style="color: #666;">Historical price percentiles for auction guidance</small>
+            </div>
+
+            <div id="parameters-${index}" style="margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 4px; display: none;">
+                <strong>Model-Specific Parameters</strong>
+                <div id="params-content-${index}" style="margin-top: 0.5rem;"></div>
+            </div>
+        </div>
+    `;
+
+    container.insertAdjacentHTML('beforeend', optionHtml);
+
+    // Create the update function for this specific option
+    window[\`updatePricingFields\${index}\`] = function() {
+        const pricingModel = document.querySelector(\`select[name="pricing_model_\${index}"]\`).value;
+        const rateGroup = document.getElementById(\`rate-group-\${index}\`);
+        const floorGroup = document.getElementById(\`floor-group-\${index}\`);
+        const priceGuidance = document.getElementById(\`price-guidance-\${index}\`);
+
+        // Determine if fixed or auction from pricing model selection
+        const isAuction = pricingModel.includes('_auction') || pricingModel === 'vcpm' || pricingModel === 'cpc';
+
+        if (isAuction) {
+            // Auction mode (cpm_auction or cpc_auction)
+            rateGroup.style.display = 'none';
+            floorGroup.style.display = 'block';
+            priceGuidance.style.display = 'block';
+            document.querySelector(\`input[name="rate_\${index}"]\`).required = false;
+            document.querySelector(\`input[name="floor_\${index}"]\`).required = true;
+        } else {
+            // Fixed rate mode
+            rateGroup.style.display = 'block';
+            floorGroup.style.display = 'none';
+            priceGuidance.style.display = 'none';
+            document.querySelector(\`input[name="rate_\${index}"]\`).required = true;
+            document.querySelector(\`input[name="floor_\${index}"]\`).required = false;
+        }
+
+        // Show model-specific parameters based on selected model
+        const parametersDiv = document.getElementById(\`parameters-\${index}\`);
+        const paramsContent = document.getElementById(\`params-content-\${index}\`);
+
+        // Extract base model - strip _fixed/_auction suffix
+        let baseModel = pricingModel;
+        if (pricingModel.includes('_fixed') || pricingModel.includes('_auction')) {
+            baseModel = pricingModel.split('_')[0]; // cpm_fixed → cpm, cpc_auction → cpc
+        }
+
+        if (baseModel === 'cpp') {
+            parametersDiv.style.display = 'block';
+            paramsContent.innerHTML = \`
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                    <div>
+                        <label>Demographic</label>
+                        <input type="text" name="demographic_\${index}" placeholder="e.g., A18-49">
+                    </div>
+                    <div>
+                        <label>Min Points (GRPs)</label>
+                        <input type="number" name="min_points_\${index}" step="0.1">
+                    </div>
+                </div>
+            \`;
+        } else if (baseModel === 'cpv') {
+            parametersDiv.style.display = 'block';
+            paramsContent.innerHTML = \`
+                <div>
+                    <label>View Threshold</label>
+                    <input type="number" name="view_threshold_\${index}" step="0.01" min="0" max="1" placeholder="0.5 = 50% viewed">
+                    <small style="color: #666;">Percentage of video that must be viewed (0.0 to 1.0)</small>
+                </div>
+            \`;
+        } else {
+            parametersDiv.style.display = 'none';
+        }
+    };
+
+    // Initialize fields
+    window[\`updatePricingFields\${index}\`]();
+}
+
+function removePricingOption(index) {
+    const option = document.getElementById(\`pricing-option-\${index}\`);
+    if (option) {
+        option.remove();
+    }
+
+    // If no pricing options left, add one back
+    const container = document.getElementById('pricing-options-container');
+    if (container.children.length === 0) {
+        addPricingOption();
+    }
+}
+</script>
+{% endblock %}

@@ -648,11 +648,13 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
                 form_data=form_data,  # Preserve form data on error
             )
         else:
-            # For Mock and other adapters
+            # For Mock and other adapters - use unified template
             formats = get_creative_formats(tenant_id=tenant_id)
             return render_template(
-                "add_product_mock.html",
+                "add_product.html",
                 tenant_id=tenant_id,
+                tenant=tenant,
+                adapter_type=adapter_type,
                 formats=formats,
                 authorized_properties=properties_list,
                 property_tags=property_tags,
@@ -2129,11 +2131,15 @@ def edit_product(tenant_id, product_id):
                     selected_publisher_properties=selected_publisher_properties,
                 )
             else:
+                # For non-GAM adapters - use unified edit template
+                # Reload tenant for template context (measurement_providers, etc.)
+                tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
                 return render_template(
-                    "edit_product_mock.html",
+                    "edit_product.html",
                     tenant_id=tenant_id,
+                    tenant=tenant,
+                    adapter_type=adapter_type,
                     product=product_dict,
-                    tenant_adapter=adapter_type,
                     currencies=currencies,
                     principals=principals_list,
                     authorized_properties=authorized_properties_list,

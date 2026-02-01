@@ -1,0 +1,89 @@
+{#
+Mock Adapter Connection Configuration Template
+
+This template is included in the settings page when the Mock adapter is selected.
+It provides form fields for MockConnectionConfig schema fields.
+
+Expected context variables:
+- adapter_config: dict with current adapter configuration
+- scriptRoot: URL prefix for reverse proxy support
+#}
+
+<div class="adapter-connection-config" data-adapter-type="mock">
+    <div class="form-section">
+        <h3>Mock Adapter Configuration</h3>
+        <p class="text-muted" style="margin-bottom: 1.5rem;">
+            The Mock adapter simulates ad server behavior for testing and development.
+            No external API connections are required.
+        </p>
+
+        <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981; padding: 1rem; margin-bottom: 1.5rem;">
+            <h4 style="margin: 0 0 0.5rem 0;">✅ Ready to Use</h4>
+            <p style="margin: 0; font-size: 0.875rem;">
+                The Mock adapter is pre-configured and ready for testing.
+                Adjust the settings below to customize simulation behavior.
+            </p>
+        </div>
+
+        <div class="form-group">
+            <label for="mock_dry_run">
+                <input type="checkbox" id="mock_dry_run" name="mock_dry_run"
+                       {% if adapter_config and adapter_config.get('dry_run') %}checked{% endif %}>
+                Dry Run Mode
+            </label>
+            <small class="form-text text-muted">
+                When enabled, operations are simulated without persisting state.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="mock_manual_approval_required">
+                <input type="checkbox" id="mock_manual_approval_required" name="mock_manual_approval_required"
+                       {% if adapter_config and adapter_config.get('manual_approval_required') %}checked{% endif %}>
+                Require Manual Approval
+            </label>
+            <small class="form-text text-muted">
+                When enabled, media buy operations require human approval before execution.
+            </small>
+        </div>
+
+        <div style="margin-top: 1.5rem;">
+            <button type="button" onclick="saveMockConfig()" class="btn btn-primary">
+                Save Configuration
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+function saveMockConfig() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const config = {
+        dry_run: document.getElementById('mock_dry_run').checked,
+        manual_approval_required: document.getElementById('mock_manual_approval_required').checked
+    };
+
+    fetch(scriptRoot + '/api/adapter-config', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            adapter_type: 'mock',
+            config: config
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showNotification('Configuration saved successfully', 'success');
+        } else {
+            showNotification('Failed to save: ' + (data.error || 'Unknown error'), 'error');
+        }
+    })
+    .catch(error => {
+        showNotification('Error saving configuration: ' + error.message, 'error');
+    });
+}
+</script>

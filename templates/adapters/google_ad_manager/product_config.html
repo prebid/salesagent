@@ -1,0 +1,248 @@
+{#
+GAM (Google Ad Manager) Adapter Product Configuration Template Fragment
+
+This template is included in the product add/edit form when the GAM adapter is selected.
+It provides GAM-specific configuration including inventory targeting and line item settings.
+
+Expected context variables:
+- implementation_config: dict with current product implementation config
+- inventory_synced: bool indicating if GAM inventory has been synced
+- inventory_profiles: list of available inventory profiles
+- product: Product object when editing
+- form_data: form data when preserving state after validation error
+- scriptRoot: URL prefix for reverse proxy support
+#}
+
+<div class="adapter-product-config" data-adapter-type="gam">
+    <!-- Inventory Profile Selection -->
+    <div class="form-section">
+        <h3>GAM Inventory Configuration</h3>
+
+        <div class="form-group">
+            <label for="inventory_profile_id">Inventory Profile</label>
+            <select id="inventory_profile_id" name="inventory_profile_id" class="form-control" onchange="handleInventoryProfileChange(this)">
+                <option value="">-- Select an inventory profile or configure manually --</option>
+                {% if inventory_profiles %}
+                    {% for profile in inventory_profiles %}
+                    <option value="{{ profile.id }}"
+                            {% if (form_data and form_data.inventory_profile_id == profile.id) or (product and product.inventory_profile_id == profile.id) %}selected{% endif %}>
+                        {{ profile.name }}
+                    </option>
+                    {% endfor %}
+                {% endif %}
+            </select>
+            <small class="form-text text-muted">
+                Inventory profiles pre-configure ad units, formats, and targeting for common product types.
+            </small>
+        </div>
+
+        <!-- Profile preview (populated when profile selected) -->
+        <div id="profile-preview" style="display: none; margin-top: 1rem; padding: 1rem; background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div>
+                    <div id="profile-preview-name" style="font-weight: 600; font-size: 1.1rem; margin-bottom: 0.5rem;"></div>
+                    <div id="profile-preview-description" style="color: #666; font-size: 0.9rem; margin-bottom: 0.75rem;"></div>
+                    <div id="profile-preview-details" style="display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.85rem; color: #555;"></div>
+                </div>
+                <a href="#" id="profile-preview-edit-link" target="_blank" style="white-space: nowrap; font-size: 0.9rem;">
+                    Edit Profile
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manual Inventory Selection (shown when no profile selected) -->
+    <div id="manual-inventory-section" style="display: {% if (form_data and form_data.inventory_profile_id) or (product and product.inventory_profile_id) %}none{% else %}block{% endif %};">
+        <h4 style="margin-top: 1.5rem; color: #666;">GAM Inventory</h4>
+        <p style="color: #666; margin-bottom: 1rem;">Select ad units and placements from your GAM inventory</p>
+
+        {% if not inventory_synced %}
+        <div class="alert alert-warning" style="margin-bottom: 1rem;">
+            <strong>Inventory Not Synced</strong>
+            <p>GAM inventory must be synced before you can select ad units. Go to Settings to sync inventory.</p>
+        </div>
+        {% endif %}
+
+        <div class="form-group">
+            <label for="ad-unit-search">Ad Units</label>
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <input type="text" id="ad-unit-search" placeholder="Search ad units..." style="flex: 1;" class="form-control">
+                <button type="button" onclick="window.inventoryPicker && window.inventoryPicker.open('ad_unit')" class="btn btn-secondary" {% if not inventory_synced %}disabled{% endif %}>
+                    Browse Ad Units
+                </button>
+            </div>
+            <div id="selected-ad-units" style="min-height: 60px; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #f9f9f9;">
+                <span style="color: #999;">No ad units selected</span>
+            </div>
+            <textarea id="targeted_ad_unit_ids" name="targeted_ad_unit_ids" style="display: none;">{{ implementation_config.get('targeted_ad_unit_ids', [])|join(',') if implementation_config else '' }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="placement-search">Placements</label>
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <input type="text" id="placement-search" placeholder="Search placements..." style="flex: 1;" class="form-control">
+                <button type="button" onclick="window.inventoryPicker && window.inventoryPicker.open('placement')" class="btn btn-secondary" {% if not inventory_synced %}disabled{% endif %}>
+                    Browse Placements
+                </button>
+            </div>
+            <div id="selected-placements" style="min-height: 60px; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #f9f9f9;">
+                <span style="color: #999;">No placements selected</span>
+            </div>
+            <textarea id="targeted_placement_ids" name="targeted_placement_ids" style="display: none;">{{ implementation_config.get('targeted_placement_ids', [])|join(',') if implementation_config else '' }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="include_descendants"
+                       {% if not implementation_config or implementation_config.get('include_descendants', True) %}checked{% endif %}>
+                Include child ad units in targeting
+            </label>
+        </div>
+    </div>
+
+    <!-- GAM Line Item Configuration -->
+    <div class="form-section" style="margin-top: 2rem;">
+        <h4>GAM Line Item Configuration</h4>
+
+        <div style="padding: 1rem; background: #e7f3ff; border-left: 4px solid #007bff; border-radius: 4px; margin-bottom: 1rem;">
+            <strong>Automatic Configuration</strong>
+            <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;">
+                Line item type and priority are automatically determined based on your selected pricing model:
+            </p>
+            <ul style="margin: 0.5rem 0 0 1.5rem; color: #666; font-size: 0.9rem;">
+                <li><strong>CPM Fixed</strong> → Standard line item (priority 8, guaranteed delivery)</li>
+                <li><strong>CPM Bid</strong> → Price Priority line item (priority 12, non-guaranteed)</li>
+                <li><strong>Flat Rate</strong> → Sponsorship line item (priority 4, 100% share of voice)</li>
+            </ul>
+        </div>
+
+        <!-- Advanced Line Item Settings (collapsible) -->
+        <details style="margin-top: 1rem;">
+            <summary style="cursor: pointer; font-weight: 600; color: #374151;">Advanced Line Item Settings</summary>
+            <div style="margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
+                <div class="form-group">
+                    <label for="impl_order_name_template">Order Name Template</label>
+                    <input type="text" id="impl_order_name_template" name="impl_order_name_template" class="form-control"
+                           value="{{ implementation_config.get('order_name_template', 'AdCP-{po_number}-{product_name}-{timestamp}') if implementation_config else 'AdCP-{po_number}-{product_name}-{timestamp}' }}"
+                           placeholder="AdCP-{po_number}-{product_name}-{timestamp}">
+                    <small class="form-text text-muted">
+                        Variables: {po_number}, {product_name}, {timestamp}, {principal_name}
+                    </small>
+                </div>
+
+                <div class="form-group">
+                    <label for="impl_creative_rotation_type">Creative Rotation</label>
+                    <select id="impl_creative_rotation_type" name="impl_creative_rotation_type" class="form-control">
+                        <option value="EVEN" {% if implementation_config and implementation_config.get('creative_rotation_type') == 'EVEN' %}selected{% endif %}>
+                            Even - Rotate creatives evenly
+                        </option>
+                        <option value="OPTIMIZED" {% if implementation_config and implementation_config.get('creative_rotation_type') == 'OPTIMIZED' %}selected{% endif %}>
+                            Optimized - Favor best performers
+                        </option>
+                        <option value="MANUAL" {% if implementation_config and implementation_config.get('creative_rotation_type') == 'MANUAL' %}selected{% endif %}>
+                            Manual - Weighted rotation
+                        </option>
+                        <option value="SEQUENTIAL" {% if implementation_config and implementation_config.get('creative_rotation_type') == 'SEQUENTIAL' %}selected{% endif %}>
+                            Sequential - Show in order
+                        </option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="impl_delivery_rate_type">Delivery Pacing</label>
+                    <select id="impl_delivery_rate_type" name="impl_delivery_rate_type" class="form-control">
+                        <option value="EVENLY" {% if not implementation_config or implementation_config.get('delivery_rate_type', 'EVENLY') == 'EVENLY' %}selected{% endif %}>
+                            Evenly - Spread throughout flight
+                        </option>
+                        <option value="FRONTLOADED" {% if implementation_config and implementation_config.get('delivery_rate_type') == 'FRONTLOADED' %}selected{% endif %}>
+                            Frontloaded - Deliver faster early
+                        </option>
+                        <option value="AS_FAST_AS_POSSIBLE" {% if implementation_config and implementation_config.get('delivery_rate_type') == 'AS_FAST_AS_POSSIBLE' %}selected{% endif %}>
+                            As Fast As Possible - No pacing
+                        </option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="impl_allow_overbook"
+                               {% if implementation_config and implementation_config.get('allow_overbook') %}checked{% endif %}>
+                        Allow overbooking
+                    </label>
+                    <small class="form-text text-muted">Allow booking more impressions than available inventory</small>
+                </div>
+            </div>
+        </details>
+    </div>
+</div>
+
+<script>
+// Handle inventory profile selection
+function handleInventoryProfileChange(select) {
+    const profileId = select.value;
+    const manualSection = document.getElementById('manual-inventory-section');
+    const profilePreview = document.getElementById('profile-preview');
+    const formatsSection = document.getElementById('creative-formats-section');
+
+    if (profileId) {
+        // Hide manual configuration, show profile preview
+        if (manualSection) manualSection.style.display = 'none';
+        if (formatsSection) formatsSection.style.display = 'none';
+        if (profilePreview) profilePreview.style.display = 'block';
+
+        // Load profile details via API
+        loadProfilePreview(profileId);
+    } else {
+        // Show manual configuration
+        if (manualSection) manualSection.style.display = 'block';
+        if (formatsSection) formatsSection.style.display = 'block';
+        if (profilePreview) profilePreview.style.display = 'none';
+    }
+}
+
+function loadProfilePreview(profileId) {
+    // Validate profileId is a safe integer to prevent injection
+    const safeProfileId = parseInt(profileId, 10);
+    if (isNaN(safeProfileId) || safeProfileId < 0) {
+        console.error('Invalid profile ID:', profileId);
+        return;
+    }
+
+    const scriptRoot = '{{ request.script_root }}' || '';
+    fetch(`${scriptRoot}/api/inventory-profiles/${safeProfileId}`, {
+        credentials: 'same-origin'
+    })
+    .then(response => response.json())
+    .then(profile => {
+        // Use textContent for safety (prevents XSS)
+        document.getElementById('profile-preview-name').textContent = profile.name || '';
+        document.getElementById('profile-preview-description').textContent = profile.description || '';
+
+        // Build details safely using textContent
+        const details = document.getElementById('profile-preview-details');
+        const adUnitCount = (profile.inventory_config?.targeted_ad_unit_ids || []).length;
+        const formatCount = (profile.format_ids || []).length;
+        details.textContent = `Ad Units: ${adUnitCount} | Formats: ${formatCount}`;
+
+        document.getElementById('profile-preview-edit-link').href =
+            `${scriptRoot}/tenant/{{ tenant_id }}/inventory-profiles/${safeProfileId}/edit`;
+    })
+    .catch(error => {
+        console.error('Error loading profile:', error);
+    });
+}
+
+// Collect GAM implementation config values
+function getGAMImplementationConfig() {
+    const config = {
+        targeted_ad_unit_ids: (document.getElementById('targeted_ad_unit_ids')?.value || '').split(',').filter(Boolean),
+        targeted_placement_ids: (document.getElementById('targeted_placement_ids')?.value || '').split(',').filter(Boolean),
+        include_descendants: document.querySelector('input[name="include_descendants"]')?.checked ?? true,
+        order_name_template: document.getElementById('impl_order_name_template')?.value || 'AdCP-{po_number}-{product_name}-{timestamp}',
+        creative_rotation_type: document.getElementById('impl_creative_rotation_type')?.value || 'EVEN',
+        delivery_rate_type: document.getElementById('impl_delivery_rate_type')?.value || 'EVENLY',
+        allow_overbook: document.querySelector('input[name="impl_allow_overbook"]')?.checked ?? false
+    };
+    return config;
+}
+</script>

@@ -1044,6 +1044,14 @@ class AdapterConfig(Base):
     triton_station_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     triton_api_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
+    # Schema-driven configuration (coexists with legacy columns during migration)
+    config_json: Mapped[dict] = mapped_column(
+        JSONType,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        comment="Schema-validated adapter configuration",
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

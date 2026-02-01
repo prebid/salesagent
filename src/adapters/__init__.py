@@ -1,8 +1,11 @@
 # from .xandr import XandrAdapter  # Temporarily disabled - needs schema updates
+from .base import AdapterCapabilities as AdapterCapabilities
 from .base import AdServerAdapter as AdServerAdapter
+from .base import TargetingCapabilities as TargetingCapabilities
 from .creative_engine import CreativeEngineAdapter
 from .google_ad_manager import GoogleAdManager as GAMAdapter
 from .kevel import Kevel as KevelAdapter
+from .mock_ad_server import MockAdServer as MockAdapter
 from .triton_digital import TritonDigital as TritonAdapter
 
 # Map of adapter type strings to adapter classes
@@ -10,11 +13,15 @@ ADAPTER_REGISTRY = {
     "gam": GAMAdapter,
     "google_ad_manager": GAMAdapter,
     "kevel": KevelAdapter,
+    "mock": MockAdapter,
     "triton": TritonAdapter,
     "creative_engine": CreativeEngineAdapter,
     # 'xandr': XandrAdapter,
     # 'microsoft_monetize': XandrAdapter
 }
+
+# Note: Adapter schemas are registered lazily in src/adapters/schemas/__init__.py
+# to avoid circular imports. Call get_adapter_schemas() to access them.
 
 
 def get_adapter(adapter_type: str, config: dict, principal):

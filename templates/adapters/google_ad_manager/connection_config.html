@@ -1,0 +1,272 @@
+{#
+GAM (Google Ad Manager) Adapter Connection Configuration Template
+
+This template is included in the settings page when the GAM adapter is selected.
+It handles OAuth setup, service account configuration, and network code detection.
+
+Expected context variables:
+- adapter_config: dict with current adapter configuration
+- gam_oauth_configured: bool indicating if OAuth env vars are set
+- single_tenant_mode: bool indicating if running in single-tenant mode
+- scriptRoot: URL prefix for reverse proxy support
+#}
+
+<div class="adapter-connection-config" data-adapter-type="gam">
+    <div class="form-section">
+        <h3>Google Ad Manager Configuration</h3>
+
+        {% if not gam_oauth_configured %}
+        <!-- Warning: GAM OAuth environment variables not set -->
+        <div class="status-card" style="background: #fef3c7; border-left: 4px solid #f59e0b; margin-bottom: 1.5rem;">
+            <h4 style="margin: 0 0 0.5rem 0;">OAuth Not Configured</h4>
+            <p style="margin: 0 0 0.75rem 0; font-size: 0.875rem;">
+                OAuth authentication requires environment variables that are not currently set.
+            </p>
+            <p style="margin: 0 0 0.5rem 0; font-size: 0.875rem;"><strong>To enable OAuth authentication:</strong></p>
+            <ol style="margin: 0 0 0.75rem 1.5rem; padding: 0; font-size: 0.875rem;">
+                <li>Create OAuth credentials at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color: #2563eb;">Google Cloud Console</a></li>
+                <li>Add redirect URI: <code style="background: #e5e7eb; padding: 0.125rem 0.25rem; border-radius: 3px;">{{ request.url_root }}tenant/callback/gam</code></li>
+                <li>Set environment variables: <code>GAM_OAUTH_CLIENT_ID</code> and <code>GAM_OAUTH_CLIENT_SECRET</code></li>
+            </ol>
+            <p style="margin: 0; font-size: 0.875rem;">
+                <strong>Alternative:</strong> Use Service Account authentication below.
+            </p>
+        </div>
+        {% endif %}
+
+        {% if adapter_config and adapter_config.get('refresh_token') and adapter_config.get('network_code') %}
+        <!-- Fully configured - show success state -->
+        <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981;">
+            <!-- Hidden fields for JS operations -->
+            <input type="hidden" id="gam_refresh_token" value="{{ adapter_config.get('refresh_token') }}">
+            <input type="hidden" id="gam_network_code" value="{{ adapter_config.get('network_code') }}">
+            <input type="hidden" id="gam_trafficker_id" value="{{ adapter_config.get('trafficker_id') }}">
+
+            <h4>Configuration Complete</h4>
+            <ul style="list-style: none; padding: 0; margin: 0.5rem 0;">
+                <li>OAuth Token: Configured</li>
+                <li>Network Code: {{ adapter_config.get('network_code') }}</li>
+                {% if adapter_config.get('trafficker_id') %}
+                <li>Trafficker ID: {{ adapter_config.get('trafficker_id') }}</li>
+                {% endif %}
+                {% if adapter_config.get('network_currency') %}
+                <li>Network Currency: {{ adapter_config.get('network_currency') }}</li>
+                {% endif %}
+                {% if adapter_config.get('secondary_currencies') %}
+                <li>Secondary Currencies: {{ adapter_config.get('secondary_currencies')|join(', ') }}</li>
+                {% endif %}
+                {% if adapter_config.get('network_timezone') %}
+                <li>Network Timezone: {{ adapter_config.get('network_timezone') }}</li>
+                {% endif %}
+            </ul>
+            <div style="margin-top: 0.5rem;">
+                <button onclick="testGAMConnection()" class="btn btn-secondary btn-sm">
+                    Test Connection
+                </button>
+                <button onclick="refreshGAMInfo()" class="btn btn-secondary btn-sm" style="margin-left: 0.5rem;">
+                    Refresh GAM Info
+                </button>
+                <button onclick="initiateGAMAuth()" class="btn btn-secondary btn-sm" style="margin-left: 0.5rem;">
+                    Refresh OAuth Token
+                </button>
+                <button onclick="editGAMConfig()" class="btn btn-warning btn-sm" style="margin-left: 0.5rem;">
+                    Edit Configuration
+                </button>
+            </div>
+        </div>
+        {% else %}
+        <!-- Not configured or partially configured -->
+
+        <!-- Step 1: Get OAuth Token -->
+        <div class="form-group">
+            <label><strong>Step 1:</strong> Get OAuth Token</label>
+            {% if adapter_config and adapter_config.get('refresh_token') %}
+            <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981;">
+                <strong>OAuth Token Configured</strong>
+                <p>Your refresh token is active.</p>
+                <button onclick="initiateGAMAuth()" class="btn btn-secondary btn-sm" style="margin-top: 0.5rem;">
+                    Refresh OAuth Token
+                </button>
+            </div>
+            {% else %}
+            <div class="status-card" style="background: #fef3c7; border-left: 4px solid #f59e0b;">
+                <strong>OAuth Setup Required</strong>
+                <p>Click the button below to authorize AdCP access to your Google Ad Manager account.</p>
+                <button onclick="initiateGAMAuth()" class="btn btn-primary" style="margin-top: 0.5rem;">
+                    Get OAuth Token
+                </button>
+            </div>
+            {% endif %}
+
+            <!-- Advanced option for manual token entry -->
+            <details style="margin-top: 1rem;">
+                <summary style="cursor: pointer; color: #666; font-size: 0.9em;">Advanced: Manual Token Entry</summary>
+                <div style="margin-top: 0.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
+                    <label for="gam_refresh_token">Manual OAuth Refresh Token</label>
+                    <input type="text" id="gam_refresh_token" class="form-control"
+                           value="{{ adapter_config.get('refresh_token', '') if adapter_config else '' }}"
+                           placeholder="Paste your OAuth refresh token here">
+                    <small class="form-text text-muted">For advanced users: manually enter a refresh token if you have one.</small>
+                    <button onclick="saveManualToken()" class="btn btn-primary" style="margin-top: 0.5rem;">
+                        Save Token
+                    </button>
+                </div>
+            </details>
+        </div>
+
+        <!-- Step 2: Auto-detect Network (only show if token exists) -->
+        {% if adapter_config and adapter_config.get('refresh_token') %}
+        <div class="form-group" style="margin-top: 1.5rem;">
+            <label><strong>Step 2:</strong> Configure Network Code</label>
+            {% if adapter_config.get('network_code') %}
+            <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981;">
+                <strong>Network Code Detected: {{ adapter_config.get('network_code') }}</strong>
+                {% if adapter_config.get('trafficker_id') %}
+                <p>Trafficker ID: {{ adapter_config.get('trafficker_id') }}</p>
+                {% endif %}
+            </div>
+            {% else %}
+            <div style="display: flex; gap: 0.5rem; align-items: start;">
+                <div style="flex: 1;">
+                    <input type="text" id="gam_network_code" class="form-control"
+                           value="{{ adapter_config.get('network_code', '') if adapter_config else '' }}"
+                           placeholder="Enter network code or click auto-detect">
+                </div>
+                <button onclick="detectGAMNetwork()" class="btn btn-primary" id="detect-network-btn">
+                    Auto-detect Network
+                </button>
+            </div>
+            <small class="form-text text-muted">
+                Enter your GAM network code (found in GAM Admin → Network settings), or use auto-detect.
+            </small>
+
+            <div style="margin-top: 1rem;">
+                <label for="gam_trafficker_id" class="form-label">Trafficker ID (optional)</label>
+                <input type="text" id="gam_trafficker_id" class="form-control"
+                       value="{{ adapter_config.get('trafficker_id', '') if adapter_config else '' }}"
+                       placeholder="Auto-detected or enter manually">
+                <small class="form-text text-muted">
+                    Your GAM user ID for order trafficking. Auto-detected during network detection.
+                </small>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% endif %}
+
+        <!-- Service Account Section -->
+        <div class="form-section" style="margin-top: 2rem; padding-top: 2rem; border-top: 2px solid #e5e7eb;">
+            <h3>
+                {% if not gam_oauth_configured %}Recommended: {% endif %}Service Account Integration
+            </h3>
+            <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+                Service accounts provide secure, non-expiring authentication without OAuth setup.
+            </p>
+
+            {% if adapter_config and adapter_config.get('service_account_email') %}
+            <!-- Service account already created -->
+            <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981;">
+                <h4>Service Account Created</h4>
+                <p style="margin: 0.5rem 0;">
+                    <strong>Service Account Email:</strong><br>
+                    <code style="background: #e5e7eb; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.9em;">{{ adapter_config.get('service_account_email') }}</code>
+                </p>
+                <div style="margin-top: 1rem; padding: 1rem; background: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 4px;">
+                    <p style="margin: 0; font-size: 0.875rem;"><strong>Next Steps:</strong></p>
+                    <ol style="margin: 0.5rem 0 0 1.5rem; padding: 0; font-size: 0.875rem;">
+                        <li>Log into your Google Ad Manager account</li>
+                        <li>Go to <strong>Admin → Access & authorization → Users</strong></li>
+                        <li>Add the service account email with the <strong>Trafficker</strong> role</li>
+                        <li>Enter your GAM Network Code and click "Save"</li>
+                        <li>Click "Test Connection" to verify</li>
+                    </ol>
+                </div>
+
+                <!-- Network Code for Service Account -->
+                <div style="margin-top: 1.5rem;">
+                    <label style="font-weight: 600; font-size: 0.875rem; display: block; margin-bottom: 0.5rem;">
+                        GAM Network Code <span style="color: #dc2626;">*</span>
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <input type="text" id="service_account_network_code"
+                               value="{{ adapter_config.get('network_code', '') }}"
+                               style="flex: 1; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px; font-family: monospace;"
+                               placeholder="e.g., 12345678">
+                        <button onclick="saveServiceAccountNetworkCode()" class="btn btn-primary btn-sm">
+                            Save Network Code
+                        </button>
+                    </div>
+                </div>
+
+                <div style="margin-top: 1rem;">
+                    <button onclick="testGAMServiceAccountConnection()" class="btn btn-primary btn-sm"
+                            {% if not adapter_config.get('network_code') %}disabled title="Save network code first"{% endif %}>
+                        Test Connection
+                    </button>
+                    <button onclick="copyServiceAccountEmail()" class="btn btn-secondary btn-sm" style="margin-left: 0.5rem;">
+                        Copy Email
+                    </button>
+                </div>
+            </div>
+            {% else %}
+            <!-- No service account yet -->
+            <div class="status-card" style="background: #f9fafb; border-left: 4px solid #9ca3af;">
+                {% if single_tenant_mode %}
+                <p style="margin: 0 0 1rem 0; font-size: 0.875rem;">
+                    To use a service account, create one in your GCP project and download the JSON key file.
+                    Then add the service account email as a user in Google Ad Manager with the Trafficker role.
+                </p>
+
+                <!-- Service Account JSON Key Input -->
+                <div style="margin-top: 1rem;">
+                    <label style="font-weight: 600; font-size: 0.875rem; display: block; margin-bottom: 0.5rem;">
+                        Service Account JSON Key <span style="color: #dc2626;">*</span>
+                    </label>
+                    <textarea id="manual_service_account_json"
+                              style="width: 100%; min-height: 150px; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px; font-family: monospace; font-size: 0.75rem;"
+                              placeholder='Paste your service account JSON key here'></textarea>
+                </div>
+
+                <!-- Network Code Input -->
+                <div style="margin-top: 1rem;">
+                    <label style="font-weight: 600; font-size: 0.875rem; display: block; margin-bottom: 0.5rem;">
+                        GAM Network Code <span style="color: #dc2626;">*</span>
+                    </label>
+                    <input type="text" id="manual_network_code"
+                           style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px; font-family: monospace;"
+                           placeholder="e.g., 12345678">
+                </div>
+
+                <div style="margin-top: 1.5rem;">
+                    <button onclick="saveManualServiceAccount()" class="btn btn-primary">
+                        Save Service Account Configuration
+                    </button>
+                </div>
+                {% else %}
+                <p style="margin: 0 0 1rem 0; font-size: 0.875rem;">
+                    We'll create a service account in our GCP project and provide you with the email address.
+                    You then add this email as a user in your Google Ad Manager with the Trafficker role.
+                </p>
+                <button onclick="createServiceAccount()" class="btn btn-success" id="create-service-account-btn">
+                    Create Service Account
+                </button>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Save button - only show when NOT fully configured -->
+        {% if not (adapter_config and adapter_config.get('refresh_token') and adapter_config.get('network_code')) %}
+        <div class="form-group" style="margin-top: 2rem;">
+            {% if adapter_config and adapter_config.get('refresh_token') %}
+            <button onclick="saveGAMConfig()" class="btn btn-primary">Save Configuration</button>
+            {% else %}
+            <button onclick="saveGAMConfig()" class="btn btn-primary" disabled title="Get OAuth token first">
+                Save Configuration
+            </button>
+            <small class="form-text text-muted">Complete Step 1 to enable saving</small>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>

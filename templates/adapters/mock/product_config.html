@@ -1,0 +1,109 @@
+{#
+Mock Adapter Product Configuration Template Fragment
+
+This template is included in the product add/edit form when the Mock adapter is selected.
+It provides form fields for MockProductConfig schema fields (simulation settings).
+
+Expected context variables:
+- implementation_config: dict with current product implementation config
+- scriptRoot: URL prefix for reverse proxy support
+#}
+
+<div class="adapter-product-config" data-adapter-type="mock">
+    <div class="form-section">
+        <h3>Mock Simulation Settings</h3>
+        <p class="text-muted" style="margin-bottom: 1.5rem;">
+            Configure how this product behaves in the mock simulation environment.
+        </p>
+
+        <h4 style="margin-top: 1.5rem; margin-bottom: 1rem; font-size: 1rem; color: #374151;">Traffic Simulation</h4>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="impl_daily_impressions">Daily Impressions</label>
+                <input type="number" id="impl_daily_impressions" name="impl_daily_impressions"
+                       value="{{ implementation_config.get('daily_impressions', 10000) if implementation_config else 10000 }}"
+                       min="0" step="1000">
+                <small class="form-text text-muted">Simulated daily impression capacity</small>
+            </div>
+
+            <div class="form-group">
+                <label for="impl_fill_rate">Fill Rate</label>
+                <input type="number" id="impl_fill_rate" name="impl_fill_rate"
+                       value="{{ (implementation_config.get('fill_rate', 0.85) * 100)|int if implementation_config else 85 }}"
+                       min="0" max="100" step="1">
+                <small class="form-text text-muted">Percentage of requests that will be filled (0-100)</small>
+            </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="impl_ctr">Click-Through Rate</label>
+                <input type="number" id="impl_ctr" name="impl_ctr"
+                       value="{{ (implementation_config.get('ctr', 0.02) * 100)|round(2) if implementation_config else 2.0 }}"
+                       min="0" max="100" step="0.1">
+                <small class="form-text text-muted">Simulated CTR percentage (0-100)</small>
+            </div>
+
+            <div class="form-group">
+                <label for="impl_viewability">Viewability Rate</label>
+                <input type="number" id="impl_viewability" name="impl_viewability"
+                       value="{{ (implementation_config.get('viewability', 0.65) * 100)|int if implementation_config else 65 }}"
+                       min="0" max="100" step="1">
+                <small class="form-text text-muted">Simulated viewability percentage (0-100)</small>
+            </div>
+        </div>
+
+        <h4 style="margin-top: 1.5rem; margin-bottom: 1rem; font-size: 1rem; color: #374151;">Test Scenario</h4>
+        <div class="form-group">
+            <label for="impl_scenario">Simulation Scenario</label>
+            <select id="impl_scenario" name="impl_scenario" class="form-control">
+                <option value="normal" {% if not implementation_config or implementation_config.get('scenario', 'normal') == 'normal' %}selected{% endif %}>
+                    Normal Operation
+                </option>
+                <option value="high_demand" {% if implementation_config and implementation_config.get('scenario') == 'high_demand' %}selected{% endif %}>
+                    High Demand (Low Fill)
+                </option>
+                <option value="degraded" {% if implementation_config and implementation_config.get('scenario') == 'degraded' %}selected{% endif %}>
+                    Degraded Performance
+                </option>
+                <option value="outage" {% if implementation_config and implementation_config.get('scenario') == 'outage' %}selected{% endif %}>
+                    Service Outage
+                </option>
+            </select>
+            <small class="form-text text-muted">Simulate different operational scenarios for testing</small>
+        </div>
+    </div>
+</div>
+
+<script>
+// Auto-adjust simulation parameters when scenario changes
+document.getElementById('impl_scenario')?.addEventListener('change', function() {
+    const scenario = this.value;
+    const fillRateInput = document.getElementById('impl_fill_rate');
+    const viewabilityInput = document.getElementById('impl_viewability');
+
+    if (scenario === 'high_demand') {
+        if (fillRateInput) fillRateInput.value = 30;
+    } else if (scenario === 'degraded') {
+        if (fillRateInput) fillRateInput.value = 50;
+        if (viewabilityInput) viewabilityInput.value = 40;
+    } else if (scenario === 'outage') {
+        if (fillRateInput) fillRateInput.value = 0;
+    } else {
+        // Reset to defaults for normal
+        if (fillRateInput) fillRateInput.value = 85;
+        if (viewabilityInput) viewabilityInput.value = 65;
+    }
+});
+
+// Collect mock implementation config values
+function getMockImplementationConfig() {
+    return {
+        daily_impressions: parseInt(document.getElementById('impl_daily_impressions')?.value || 10000),
+        fill_rate: parseFloat(document.getElementById('impl_fill_rate')?.value || 85) / 100,
+        ctr: parseFloat(document.getElementById('impl_ctr')?.value || 2) / 100,
+        viewability: parseFloat(document.getElementById('impl_viewability')?.value || 65) / 100,
+        scenario: document.getElementById('impl_scenario')?.value || 'normal'
+    };
+}
+</script>

@@ -49,6 +49,34 @@ class TargetingCapabilities:
     au_postcode: bool = False  # Australian postcode
 
 
+@dataclass
+class AdapterCapabilities:
+    """UI and feature capabilities declared by an adapter.
+
+    Controls which UI sections are shown and what features are available.
+    Used by admin UI to show/hide relevant configuration sections.
+    """
+
+    # Inventory management
+    supports_inventory_sync: bool = False  # Can sync inventory from ad server
+    supports_inventory_profiles: bool = False  # Supports inventory profile configuration
+    inventory_entity_label: str = "Items"  # UI label for inventory entities (e.g., "Zones", "Ad Units")
+
+    # Targeting
+    supports_custom_targeting: bool = False  # Supports custom key-value targeting
+    supports_geo_targeting: bool = True  # Supports geographic targeting
+
+    # Product configuration
+    supports_dynamic_products: bool = False  # Supports AI-driven product configuration
+
+    # Pricing (None means all pricing models supported)
+    supported_pricing_models: list[str] | None = None
+
+    # Reporting and webhooks
+    supports_webhooks: bool = False  # Supports webhook notifications
+    supports_realtime_reporting: bool = False  # Supports real-time delivery reporting
+
+
 class CreativeEngineAdapter(ABC):
     """Abstract base class for creative engine adapters."""
 
