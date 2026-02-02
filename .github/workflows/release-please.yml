@@ -56,7 +56,7 @@ jobs:
         with:
           images: |
             ghcr.io/${{ github.repository }}
-            ${{ secrets.DOCKER_HUB_USERNAME }}/salesagent
+            prebid/salesagent
           tags: |
             type=semver,pattern={{version}},value=${{ needs.release-please.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.version }}
