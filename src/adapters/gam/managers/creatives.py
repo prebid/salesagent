@@ -1001,7 +1001,7 @@ class GAMCreativesManager:
                 # Try multiple matching strategies for flexibility with different naming templates:
                 # 1. Line item name ends with " - {product_id}" (e.g., "Campaign Name - prod_291a023d")
                 # 2. Line item name equals "{product_id}" exactly (default template: {product_name})
-                # 3. Line item name contains "{product_id}" (fallback for custom templates)
+                # 3. Line item name starts with "{product_id} " (e.g., "prod_291a023d - Extra Info")
                 for line_item_name, item_id in line_item_map.items():
                     logger.info(f"[DEBUG] Checking line item: {line_item_name}")
                     # Strategy 1: ends with " - {product_id}"
