@@ -29,7 +29,7 @@ class TestAdapterConfigEndpoint:
         """Config save logic should validate against schema."""
         from pydantic import ValidationError
 
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
 
@@ -46,7 +46,7 @@ class TestAdapterConfigEndpoint:
         """Capabilities endpoint logic should serialize dataclass."""
         from dataclasses import asdict
 
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
 
@@ -62,7 +62,7 @@ class TestAdapterConfigValidation:
 
     def test_mock_config_validates_correctly(self):
         """Mock config should validate and serialize."""
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
         config_data = {"dry_run": True, "manual_approval_required": True}
@@ -78,7 +78,7 @@ class TestAdapterConfigValidation:
         """Mock config should reject invalid data."""
         from pydantic import ValidationError
 
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
 
@@ -90,7 +90,7 @@ class TestAdapterConfigValidation:
         """MockProductConfig should enforce value ranges."""
         from pydantic import ValidationError
 
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
         MockProductConfig = schemas.product_config
@@ -115,7 +115,7 @@ class TestCapabilitiesEndpointLogic:
         """Capabilities should be convertible to dict for JSON response."""
         from dataclasses import asdict
 
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
         caps_dict = asdict(schemas.capabilities)
@@ -136,7 +136,7 @@ class TestCapabilitiesEndpointLogic:
 
     def test_mock_capabilities_values(self):
         """Mock adapter capabilities should have expected values."""
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
         caps = schemas.capabilities
@@ -154,7 +154,7 @@ class TestCapabilitiesEndpointLogic:
 
     def test_unknown_adapter_returns_none(self):
         """Unknown adapter should return None from registry."""
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("nonexistent_adapter_xyz")
         assert schemas is None
@@ -255,7 +255,7 @@ class TestSchemaRegistryCompleteness:
 
     def test_mock_adapter_fully_registered(self):
         """Mock adapter should have core schema components."""
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
 
@@ -269,21 +269,18 @@ class TestSchemaRegistryCompleteness:
         """Schema classes should be Pydantic BaseModel subclasses."""
         from pydantic import BaseModel
 
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
 
         assert issubclass(schemas.connection_config, BaseModel)
         assert issubclass(schemas.product_config, BaseModel)
-        # inventory_config is optional
-        if schemas.inventory_config:
-            assert issubclass(schemas.inventory_config, BaseModel)
 
     def test_capabilities_is_dataclass(self):
         """Capabilities should be a dataclass."""
         from dataclasses import is_dataclass
 
-        from src.adapters.schemas import get_adapter_schemas
+        from src.adapters import get_adapter_schemas
 
         schemas = get_adapter_schemas("mock")
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.adapters.schemas import get_adapter_schemas
+from src.adapters import get_adapter_schemas
 
 pytestmark = pytest.mark.unit
 

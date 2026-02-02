@@ -109,8 +109,6 @@ conductor_ports.lock
 
 # AdCP Schema Cache (downloaded on demand by E2E tests)
 schemas/
-# But not the adapter schemas module
-!src/adapters/schemas/
 
 # Test response files
 line_item_*_response.json

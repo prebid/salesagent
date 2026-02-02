@@ -3,20 +3,16 @@
 import pytest
 from pydantic import ValidationError
 
-from src.adapters import AdapterCapabilities, TargetingCapabilities
-from src.adapters.schemas import (
-    ADAPTER_SCHEMA_REGISTRY,
+from src.adapters import (
+    ADAPTER_REGISTRY,
+    AdapterCapabilities,
     AdapterSchemas,
     BaseConnectionConfig,
-    BaseInventoryConfig,
     BaseProductConfig,
+    TargetingCapabilities,
     get_adapter_schemas,
 )
-
-# Get Mock schemas from registry (defined inline to avoid circular imports)
-_mock_schemas = get_adapter_schemas("mock")
-MockConnectionConfig = _mock_schemas.connection_config
-MockProductConfig = _mock_schemas.product_config
+from src.adapters.mock_ad_server import MockConnectionConfig, MockProductConfig
 
 pytestmark = pytest.mark.unit
 
@@ -38,11 +34,6 @@ class TestBaseSchemas:
     def test_base_product_config_empty(self):
         """BaseProductConfig should allow empty instantiation."""
         config = BaseProductConfig()
-        assert config is not None
-
-    def test_base_inventory_config_empty(self):
-        """BaseInventoryConfig should allow empty instantiation."""
-        config = BaseInventoryConfig()
         assert config is not None
 
 
@@ -140,12 +131,12 @@ class TestTargetingCapabilities:
         assert caps.nielsen_dma is True
 
 
-class TestSchemaRegistry:
-    """Tests for the adapter schema registry."""
+class TestAdapterRegistry:
+    """Tests for the adapter registry."""
 
     def test_mock_adapter_registered(self):
-        """Mock adapter should be registered in schema registry."""
-        assert "mock" in ADAPTER_SCHEMA_REGISTRY
+        """Mock adapter should be registered."""
+        assert "mock" in ADAPTER_REGISTRY
 
     def test_get_adapter_schemas_mock(self):
         """get_adapter_schemas should return Mock adapter schemas."""
@@ -154,7 +145,6 @@ class TestSchemaRegistry:
         assert isinstance(schemas, AdapterSchemas)
         assert schemas.connection_config is not None
         assert schemas.product_config is not None
-        # inventory_config is optional
         assert schemas.capabilities is not None
 
     def test_get_adapter_schemas_unknown(self):

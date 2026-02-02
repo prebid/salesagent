@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
 from src.core.audit_logger import get_audit_logger
@@ -77,6 +78,23 @@ class AdapterCapabilities:
     supports_realtime_reporting: bool = False  # Supports real-time delivery reporting
 
 
+class BaseConnectionConfig(BaseModel):
+    """Base schema for adapter connection configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    manual_approval_required: bool = Field(
+        default=False,
+        description="Require human approval for operations like create_media_buy",
+    )
+
+
+class BaseProductConfig(BaseModel):
+    """Base schema for product-level adapter configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class CreativeEngineAdapter(ABC):
     """Abstract base class for creative engine adapters."""
 
@@ -91,6 +109,15 @@ class AdServerAdapter(ABC):
     # Default advertising channels supported by this adapter
     # Subclasses should override with their supported channels
     default_channels: list[str] = []
+
+    # Adapter capabilities - override in subclasses
+    capabilities: AdapterCapabilities = AdapterCapabilities()
+
+    # Connection config schema - override in subclasses
+    connection_config_class: type[BaseConnectionConfig] | None = BaseConnectionConfig
+
+    # Product config schema - override in subclasses (optional)
+    product_config_class: type[BaseProductConfig] | None = None
 
     def __init__(
         self,

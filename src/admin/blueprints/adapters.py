@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
-from src.adapters.schemas import get_adapter_schemas
+from src.adapters import get_adapter_schemas
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
