@@ -8,7 +8,7 @@ tests will skip rather than fail, since external service availability is outside
 our control.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -34,6 +34,18 @@ from tests.utils.database_helpers import create_tenant_with_timestamps
 
 # Tests are now AdCP 2.4 compliant (removed status field, using errors field)
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+def _get_future_date_range() -> tuple[str, str]:
+    """Get a valid future date range for tests.
+    
+    Returns start_time (tomorrow) and end_time (30 days from now) as ISO strings.
+    """
+    tomorrow = datetime.now(UTC) + timedelta(days=1)
+    end_date = tomorrow + timedelta(days=30)
+    start_time = tomorrow.strftime("%Y-%m-%dT00:00:00Z")
+    end_time = end_date.strftime("%Y-%m-%dT23:59:59Z")
+    return start_time, end_time
 
 
 @pytest.fixture
@@ -271,6 +283,7 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
 @pytest.mark.requires_db
 async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_product):
     """Test that GAM adapter rejects CPCV pricing model with clear error."""
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -282,8 +295,8 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
                 budget=10000.0,
             )
         ],
-        start_time="2026-02-01T00:00:00Z",
-        end_time="2026-02-28T23:59:59Z",
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -324,6 +337,7 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     """Test that GAM adapter accepts CPM pricing model."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -335,8 +349,8 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
                 budget=10000.0,
             )
         ],
-        start_time="2026-02-01T00:00:00Z",
-        end_time="2026-02-28T23:59:59Z",
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -375,6 +389,7 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
     """Test that GAM adapter rejects CPP when buyer chooses it from multi-pricing product."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -386,8 +401,8 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
                 budget=15000.0,
             )
         ],
-        start_time="2026-02-01T00:00:00Z",
-        end_time="2026-02-28T23:59:59Z",
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -427,6 +442,7 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     """Test that GAM adapter accepts CPM when buyer chooses it from multi-pricing product."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -438,8 +454,8 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
                 budget=10000.0,
             )
         ],
-        start_time="2026-02-01T00:00:00Z",
-        end_time="2026-02-28T23:59:59Z",
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
