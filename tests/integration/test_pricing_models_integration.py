@@ -23,7 +23,7 @@ pytestmark = pytest.mark.requires_db
 
 def _get_future_date_range() -> tuple[str, str]:
     """Get a valid future date range for tests.
-    
+
     Returns start_time (tomorrow) and end_time (30 days from now) as ISO strings.
     """
     tomorrow = datetime.now(UTC) + timedelta(days=1)

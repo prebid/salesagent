@@ -3,8 +3,15 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from adcp.types.aliases import Package as ResponsePackage
+from pydantic import Field
 
-from src.adapters.base import AdServerAdapter, TargetingCapabilities
+from src.adapters.base import (
+    AdapterCapabilities,
+    AdServerAdapter,
+    BaseConnectionConfig,
+    BaseProductConfig,
+    TargetingCapabilities,
+)
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -21,6 +28,22 @@ from src.core.schemas import (
 )
 
 
+class MockConnectionConfig(BaseConnectionConfig):
+    """Connection config for Mock adapter."""
+
+    dry_run: bool = Field(default=False, description="When true, simulates operations without persisting state")
+
+
+class MockProductConfig(BaseProductConfig):
+    """Product config for Mock adapter simulation parameters."""
+
+    daily_impressions: int = Field(default=10000, ge=0)
+    fill_rate: float = Field(default=0.85, ge=0.0, le=1.0)
+    ctr: float = Field(default=0.02, ge=0.0, le=1.0)
+    viewability: float = Field(default=0.65, ge=0.0, le=1.0)
+    scenario: str = Field(default="normal")
+
+
 class MockAdServer(AdServerAdapter):
     """
     A mock ad server that simulates the lifecycle of a media buy.
@@ -33,6 +56,21 @@ class MockAdServer(AdServerAdapter):
     # V3 channel names: display, olv, streaming_audio, social
     default_channels = ["display", "olv", "streaming_audio", "social"]
     _media_buys: dict[str, dict[str, Any]] = {}
+
+    # Schema and capabilities
+    connection_config_class = MockConnectionConfig
+    product_config_class = MockProductConfig
+    capabilities = AdapterCapabilities(
+        supports_inventory_sync=False,
+        supports_inventory_profiles=False,
+        inventory_entity_label="Mock Items",
+        supports_custom_targeting=False,
+        supports_geo_targeting=True,
+        supports_dynamic_products=False,
+        supported_pricing_models=["cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"],
+        supports_webhooks=False,
+        supports_realtime_reporting=False,
+    )
 
     # Supported targeting dimensions (mock supports everything)
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet", "ctv", "dooh", "audio"}

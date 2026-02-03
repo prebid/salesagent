@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
 from src.core.audit_logger import get_audit_logger
@@ -49,6 +50,51 @@ class TargetingCapabilities:
     au_postcode: bool = False  # Australian postcode
 
 
+@dataclass
+class AdapterCapabilities:
+    """UI and feature capabilities declared by an adapter.
+
+    Controls which UI sections are shown and what features are available.
+    Used by admin UI to show/hide relevant configuration sections.
+    """
+
+    # Inventory management
+    supports_inventory_sync: bool = False  # Can sync inventory from ad server
+    supports_inventory_profiles: bool = False  # Supports inventory profile configuration
+    inventory_entity_label: str = "Items"  # UI label for inventory entities (e.g., "Zones", "Ad Units")
+
+    # Targeting
+    supports_custom_targeting: bool = False  # Supports custom key-value targeting
+    supports_geo_targeting: bool = True  # Supports geographic targeting
+
+    # Product configuration
+    supports_dynamic_products: bool = False  # Supports AI-driven product configuration
+
+    # Pricing (None means all pricing models supported)
+    supported_pricing_models: list[str] | None = None
+
+    # Reporting and webhooks
+    supports_webhooks: bool = False  # Supports webhook notifications
+    supports_realtime_reporting: bool = False  # Supports real-time delivery reporting
+
+
+class BaseConnectionConfig(BaseModel):
+    """Base schema for adapter connection configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    manual_approval_required: bool = Field(
+        default=False,
+        description="Require human approval for operations like create_media_buy",
+    )
+
+
+class BaseProductConfig(BaseModel):
+    """Base schema for product-level adapter configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class CreativeEngineAdapter(ABC):
     """Abstract base class for creative engine adapters."""
 
@@ -63,6 +109,15 @@ class AdServerAdapter(ABC):
     # Default advertising channels supported by this adapter
     # Subclasses should override with their supported channels
     default_channels: list[str] = []
+
+    # Adapter capabilities - override in subclasses
+    capabilities: AdapterCapabilities = AdapterCapabilities()
+
+    # Connection config schema - override in subclasses
+    connection_config_class: type[BaseConnectionConfig] | None = BaseConnectionConfig
+
+    # Product config schema - override in subclasses (optional)
+    product_config_class: type[BaseProductConfig] | None = None
 
     def __init__(
         self,

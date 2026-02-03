@@ -845,9 +845,14 @@
                 </div>
             </div>
 
-            <!-- Adapter-specific configuration will be loaded here -->
+            <!-- Adapter-specific configuration loaded from adapter templates -->
             <div id="adapter-config">
-                {% if active_adapter == 'google_ad_manager' %}
+                {% if active_adapter %}
+                {% include "adapters/" ~ active_adapter ~ "/connection_config.html" ignore missing %}
+                {% endif %}
+
+                {# LEGACY: Keep original GAM config as fallback until fully migrated #}
+                {% if active_adapter == 'google_ad_manager' and false %}{# Disabled - using adapter template #}
                 <div class="form-section" style="margin-top: 2rem;">
                     <h3>Google Ad Manager Configuration</h3>
 
@@ -1142,14 +1147,14 @@
                     </div>
                     {% endif %}
                 </div>
-                {% elif active_adapter == 'mock' %}
+                {% elif active_adapter == 'mock' and false %}{# Disabled - using adapter template #}
                 <div class="form-section" style="margin-top: 2rem;">
                     <div class="alert alert-info">
                         <strong>Mock Adapter Active</strong>
                         <p>The mock adapter is configured and ready for testing. No additional setup required.</p>
                     </div>
                 </div>
-                {% endif %}
+                {% endif %}{# End legacy adapter config #}
             </div>
         </div>
 
