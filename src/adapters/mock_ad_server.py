@@ -379,38 +379,6 @@ class MockAdServer(AdServerAdapter):
         else:
             errors.append("InvalidArgumentError @ order.totalBudget")
 
-        # Format dimension validation (mirror GAM behavior)
-        # Parameterized formats require dimensions to create line items
-        PARAMETERIZED_FORMATS = {
-            'display_image', 'display_html', 'display_js',
-            'video_standard', 'video_vast', 'video_dimensions'
-        }
-
-        for pkg_idx, package in enumerate(packages):
-            if package.format_ids:
-                for fmt_idx, format_id in enumerate(package.format_ids):
-                    # Extract format_id string and check if it's parameterized
-                    format_id_str = format_id.id if hasattr(format_id, 'id') else str(format_id)
-                    agent_url = format_id.agent_url if hasattr(format_id, 'agent_url') else None
-
-                    if format_id_str in PARAMETERIZED_FORMATS:
-                        # Check if dimensions are provided
-                        has_dimensions = (
-                            hasattr(format_id, 'width') and hasattr(format_id, 'height')
-                            and format_id.width and format_id.height
-                        )
-
-                        if not has_dimensions:
-                            # Build display string for error message
-                            format_display = f"{agent_url}/{format_id_str}" if agent_url else format_id_str
-
-                            error_msg = (
-                                f"Format '{format_display}' has no width/height configuration. "
-                                f"Parameterized formats require dimensions. "
-                                f"Add width/height to format in product definition or use format with dimensions."
-                            )
-                            errors.append(f"FormatValidationError @ package[{pkg_idx}].format_ids[{fmt_idx}]: {error_msg}")
-
         # If we have errors, format them like GAM does
         if errors:
             error_message = "[" + ", ".join(errors) + "]"
