@@ -8,7 +8,7 @@ tests will skip rather than fail, since external service availability is outside
 our control.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -271,6 +271,10 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
 @pytest.mark.requires_db
 async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_product):
     """Test that GAM adapter rejects CPCV pricing model with clear error."""
+    # Use dynamic dates to avoid "start time in the past" errors
+    start_time = datetime.now(UTC) + timedelta(days=1)
+    end_time = start_time + timedelta(days=27)
+
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -282,8 +286,8 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
                 budget=10000.0,
             )
         ],
-        start_time="2026-02-01T00:00:00Z",
-        end_time="2026-02-28T23:59:59Z",
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -324,6 +328,10 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     """Test that GAM adapter accepts CPM pricing model."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
+    # Use dynamic dates to avoid "start time in the past" errors
+    start_time = datetime.now(UTC) + timedelta(days=1)
+    end_time = start_time + timedelta(days=27)
+
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -335,8 +343,8 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
                 budget=10000.0,
             )
         ],
-        start_time="2026-02-01T00:00:00Z",
-        end_time="2026-02-28T23:59:59Z",
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -375,6 +383,10 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
     """Test that GAM adapter rejects CPP when buyer chooses it from multi-pricing product."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
+    # Use dynamic dates to avoid "start time in the past" errors
+    start_time = datetime.now(UTC) + timedelta(days=1)
+    end_time = start_time + timedelta(days=27)
+
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -386,8 +398,8 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
                 budget=15000.0,
             )
         ],
-        start_time="2026-02-01T00:00:00Z",
-        end_time="2026-02-28T23:59:59Z",
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -427,6 +439,10 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     """Test that GAM adapter accepts CPM when buyer chooses it from multi-pricing product."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
+    # Use dynamic dates to avoid "start time in the past" errors
+    start_time = datetime.now(UTC) + timedelta(days=1)
+    end_time = start_time + timedelta(days=27)
+
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -438,8 +454,8 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
                 budget=10000.0,
             )
         ],
-        start_time="2026-02-01T00:00:00Z",
-        end_time="2026-02-28T23:59:59Z",
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
