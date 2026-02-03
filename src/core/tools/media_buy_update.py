@@ -516,6 +516,21 @@ def _update_media_buy_impl(
                 buyer_ref=buyer_ref_val,
                 affected_packages=affected_pkgs,
             )
+            # Log successful update_media_buy (pause/resume)
+            audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+            audit_logger.log_operation(
+                operation="update_media_buy",
+                principal_name=principal_id or "anonymous",
+                principal_id=principal_id or "anonymous",
+                adapter_id="mcp_server",
+                success=True,
+                details={
+                    "media_buy_id": req.media_buy_id,
+                    "buyer_ref": req.buyer_ref,
+                    "action": action,
+                    "affected_packages_count": len(affected_pkgs),
+                },
+            )
             return success_response
 
     # Handle package-level updates
@@ -1361,6 +1376,24 @@ def _update_media_buy_impl(
         buyer_ref=req.buyer_ref or "",
         affected_packages=affected_packages_list,
         context=to_context_object(req.context),
+    )
+
+    # Log successful update_media_buy call
+    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger.log_operation(
+        operation="update_media_buy",
+        principal_name=principal_id or "anonymous",
+        principal_id=principal_id or "anonymous",
+        adapter_id="mcp_server",
+        success=True,
+        details={
+            "media_buy_id": req.media_buy_id,
+            "buyer_ref": req.buyer_ref,
+            "affected_packages_count": len(affected_packages_list),
+            "has_budget_update": req.budget is not None,
+            "has_pause_update": req.paused is not None,
+            "has_packages_update": req.packages is not None and len(req.packages) > 0,
+        },
     )
 
     # Persist success with response data, then return

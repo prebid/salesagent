@@ -444,7 +444,17 @@ def google_auth():
 
     # Clear any existing session to start fresh for OAuth
     # This ensures we don't have conflicting session state
+    # Preserve signup flow state before clearing
+    signup_flow = session.get("signup_flow")
+    signup_step = session.get("signup_step")
+
     session.clear()
+
+    # Restore signup flow state (needed for new user registration)
+    if signup_flow:
+        session["signup_flow"] = signup_flow
+    if signup_step:
+        session["signup_step"] = signup_step
 
     # Simple OAuth flow - no tenant context preservation needed
     response = oauth.google.authorize_redirect(redirect_uri)

@@ -787,6 +787,24 @@ async def _get_products_impl(
         context=req.context,
     )
 
+    # Log successful get_products call
+    elapsed_ms = int((time.time() - start_time) * 1000)
+    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger.log_operation(
+        operation="get_products",
+        principal_name=principal_id or "anonymous",
+        principal_id=principal_id or "anonymous",
+        adapter_id="mcp_server",
+        success=True,
+        details={
+            "product_count": len(eligible_products),
+            "brief_length": len(brief_text),
+            "has_filters": req.filters is not None,
+            "has_brand_manifest": brand_manifest_unwrapped is not None,
+            "elapsed_ms": elapsed_ms,
+        },
+    )
+
     return resp
 
 

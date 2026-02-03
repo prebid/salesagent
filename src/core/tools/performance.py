@@ -19,7 +19,9 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 console = Console()
 
+from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
+from src.core.config_loader import get_current_tenant
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.context_helpers import get_principal_id_from_context as _get_principal_id_from_context
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
@@ -92,6 +94,26 @@ def _update_performance_index_impl(
     # Simulate optimization based on performance
     if any(p.performance_index < 0.8 for p in req.performance_data):
         console.print("  [yellow]⚠️  Low performance detected - optimization recommended[/yellow]")
+
+    # Log the update_performance_index call
+    tenant = get_current_tenant()
+    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger.log_operation(
+        operation="update_performance_index",
+        principal_name=principal_id or "anonymous",
+        principal_id=principal_id or "anonymous",
+        adapter_id="mcp_server",
+        success=success,
+        details={
+            "media_buy_id": req.media_buy_id,
+            "product_count": len(req.performance_data),
+            "avg_performance_index": (
+                sum(p.performance_index for p in req.performance_data) / len(req.performance_data)
+                if req.performance_data
+                else 0
+            ),
+        },
+    )
 
     return UpdatePerformanceIndexResponse(
         status="success" if success else "failed",

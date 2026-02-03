@@ -20,11 +20,17 @@ from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = pytest.mark.requires_db
 
-# Use dynamic dates to avoid "start time in the past" validation errors
-_tomorrow = datetime.now(UTC) + timedelta(days=1)
-_next_month = datetime.now(UTC) + timedelta(days=30)
-TEST_START_TIME = _tomorrow.strftime("%Y-%m-%dT00:00:00Z")
-TEST_END_TIME = _next_month.strftime("%Y-%m-%dT23:59:59Z")
+
+def _get_future_date_range() -> tuple[str, str]:
+    """Get a valid future date range for tests.
+
+    Returns start_time (tomorrow) and end_time (30 days from now) as ISO strings.
+    """
+    tomorrow = datetime.now(UTC) + timedelta(days=1)
+    end_date = tomorrow + timedelta(days=30)
+    start_time = tomorrow.strftime("%Y-%m-%dT00:00:00Z")
+    end_time = end_date.strftime("%Y-%m-%dT23:59:59Z")
+    return start_time, end_time
 
 
 @pytest.fixture
@@ -279,6 +285,7 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
 @pytest.mark.requires_db
 async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing_products):
     """Test creating media buy with fixed CPM pricing."""
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -290,8 +297,8 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
                 budget=10000.0,
             )
         ],
-        start_time=TEST_START_TIME,
-        end_time=TEST_END_TIME,
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -324,6 +331,7 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
 @pytest.mark.requires_db
 async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_pricing_products):
     """Test creating media buy with auction CPM pricing."""
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -336,8 +344,8 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
                 budget=10000.0,
             )
         ],
-        start_time=TEST_START_TIME,
-        end_time=TEST_END_TIME,
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -370,6 +378,7 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
 @pytest.mark.requires_db
 async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_pricing_products):
     """Test that auction bid below floor price fails."""
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -382,8 +391,8 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
                 budget=10000.0,
             )
         ],
-        start_time=TEST_START_TIME,
-        end_time=TEST_END_TIME,
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -415,6 +424,7 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
 @pytest.mark.requires_db
 async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_products):
     """Test creating media buy with CPCV pricing."""
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -426,8 +436,8 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
                 budget=8000.0,  # Above min spend of 5000
             )
         ],
-        start_time=TEST_START_TIME,
-        end_time=TEST_END_TIME,
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -460,6 +470,7 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
 @pytest.mark.requires_db
 async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_products):
     """Test that budget below min_spend_per_package fails."""
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -471,8 +482,8 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
                 budget=3000.0,  # Below min spend of 5000
             )
         ],
-        start_time=TEST_START_TIME,
-        end_time=TEST_END_TIME,
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -504,6 +515,7 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
 @pytest.mark.requires_db
 async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_pricing_products):
     """Test creating media buy choosing CPP from multi-pricing product."""
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -515,8 +527,8 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
                 budget=15000.0,  # Above min spend of 10000
             )
         ],
-        start_time=TEST_START_TIME,
-        end_time=TEST_END_TIME,
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(
@@ -549,6 +561,7 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
 @pytest.mark.requires_db
 async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pricing_products):
     """Test that requesting unavailable pricing model fails."""
+    start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
         brand_manifest={"name": "https://example.com/product"},
@@ -560,8 +573,8 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
                 budget=10000.0,
             )
         ],
-        start_time=TEST_START_TIME,
-        end_time=TEST_END_TIME,
+        start_time=start_time,
+        end_time=end_time,
     )
 
     context = ToolContext(

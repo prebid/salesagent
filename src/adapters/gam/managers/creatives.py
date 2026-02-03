@@ -989,25 +989,40 @@ class GAMCreativesManager:
         package_info = _extract_package_info(asset.get("package_assignments", []))
 
         for package_id, weight in package_info:
-            # Line item map is keyed by line item name (which ends with "- prod_XXXXXX")
+            # Line item map is keyed by line item name
             # Package IDs are like "pkg_prod_XXXXXX_YYYYYYYY_N"
-            # We need to match them by product ID
+            # We need to match them by product ID using multiple strategies
             line_item_id = None
 
             # Extract product ID from package_id: "pkg_prod_2215c038_..." -> "prod_2215c038"
             product_id = _extract_product_id_from_package(package_id)
             if product_id:
-                logger.info(f"[DEBUG] Looking for line item ending with ' - {product_id}'")
-                # Find line item that ends with this product ID
+                logger.info(f"[DEBUG] Looking for line item matching product_id '{product_id}'")
+                # Try multiple matching strategies for flexibility with different naming templates:
+                # 1. Line item name ends with " - {product_id}" (e.g., "Campaign Name - prod_291a023d")
+                # 2. Line item name equals "{product_id}" exactly (default template: {product_name})
+                # 3. Line item name starts with "{product_id} " (e.g., "prod_291a023d - Extra Info")
                 for line_item_name, item_id in line_item_map.items():
                     logger.info(f"[DEBUG] Checking line item: {line_item_name}")
-                    logger.info(
-                        f"[DEBUG] Does it end with ' - {product_id}'? {line_item_name.endswith(f' - {product_id}')}"
-                    )
+                    # Strategy 1: ends with " - {product_id}"
                     if line_item_name.endswith(f" - {product_id}"):
                         line_item_id = item_id
                         logger.info(
-                            f"[DEBUG] MATCH! Package {package_id} -> line item {line_item_name} (ID: {item_id})"
+                            f"[DEBUG] MATCH (ends with)! Package {package_id} -> line item {line_item_name} (ID: {item_id})"
+                        )
+                        break
+                    # Strategy 2: exact match (default template uses just product_id as name)
+                    if line_item_name == product_id:
+                        line_item_id = item_id
+                        logger.info(
+                            f"[DEBUG] MATCH (exact)! Package {package_id} -> line item {line_item_name} (ID: {item_id})"
+                        )
+                        break
+                    # Strategy 3: starts with "{product_id}" (e.g., "prod_291a023d - Extra Info")
+                    if line_item_name.startswith(f"{product_id} "):
+                        line_item_id = item_id
+                        logger.info(
+                            f"[DEBUG] MATCH (starts with)! Package {package_id} -> line item {line_item_name} (ID: {item_id})"
                         )
                         break
 
