@@ -148,6 +148,9 @@ class TestVirtualHostLandingPage:
         assert "Test Publisher" in html_content
         assert "AdCP" in html_content
         assert "testpub" in html_content
+        # Check version is displayed in footer (both sales agent and AdCP versions)
+        assert "Prebid Sales Agent v" in html_content
+        assert "(AdCP " in html_content
 
     def test_landing_page_admin_dashboard_link(self):
         """Test that landing page includes admin dashboard link."""
