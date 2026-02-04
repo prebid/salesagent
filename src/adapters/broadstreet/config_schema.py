@@ -197,13 +197,6 @@ class BroadstreetImplementationConfig(BaseModel):
         description="Allow text-only creatives",
     )
 
-    # Template support for special Broadstreet formats
-    template_type: str | None = Field(
-        default=None,
-        description="Broadstreet template type (e.g., 'cube_3d', 'youtube_video', 'gallery'). "
-        "If None, uses basic static/html/text based on content.",
-    )
-
     # Automation settings
     automation_mode: str = Field(
         default="manual",
@@ -249,24 +242,6 @@ class BroadstreetImplementationConfig(BaseModel):
         if v_lower not in valid_modes:
             raise ValueError(f"Invalid automation_mode '{v}'. Must be one of: {valid_modes}")
         return v_lower
-
-    @field_validator("template_type")
-    @classmethod
-    def validate_template_type(cls, v: str | None) -> str | None:
-        """Validate template type is supported."""
-        if v is None:
-            return None
-        v_lower = v.lower()
-        if v_lower not in BROADSTREET_TEMPLATES:
-            valid_templates = list(BROADSTREET_TEMPLATES.keys())
-            raise ValueError(f"Invalid template_type '{v}'. Must be one of: {valid_templates}")
-        return v_lower
-
-    def get_template_info(self) -> dict[str, Any] | None:
-        """Get template information for this config."""
-        if not self.template_type:
-            return None
-        return get_template_info(self.template_type)
 
     def get_zone_ids(self) -> list[str]:
         """Get all zone IDs from both targeted_zone_ids and zone_targeting."""
