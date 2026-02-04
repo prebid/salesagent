@@ -218,12 +218,13 @@ class TestCreativeLifecycleMCP:
 
         NOTE: Uses structured format objects with agent_url to avoid deprecated string format_ids.
         Available formats from creative agent: display_300x250_image, display_728x90_image, etc.
+        Uses "https://test.com" as agent_url to match test products in setup_test_data.
         """
         return [
             {
                 "creative_id": "creative_display_1",
                 "name": "Banner Ad 300x250",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+                "format_id": {"agent_url": "https://test.com", "id": "display_300x250_image"},
                 "url": "https://example.com/banner.jpg",
                 "click_url": "https://advertiser.com/landing",
                 "width": 300,
@@ -232,7 +233,7 @@ class TestCreativeLifecycleMCP:
             {
                 "creative_id": "creative_video_1",
                 "name": "Video Ad 30sec",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_instream_15s"},
+                "format_id": {"agent_url": "https://test.com", "id": "video_instream_15s"},
                 "url": "https://example.com/video.mp4",
                 "click_url": "https://advertiser.com/video-landing",
                 "width": 640,
@@ -242,7 +243,7 @@ class TestCreativeLifecycleMCP:
             {
                 "creative_id": "creative_display_2",
                 "name": "Leaderboard Ad 728x90",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90_image"},
+                "format_id": {"agent_url": "https://test.com", "id": "display_728x90_image"},
                 "url": "https://example.com/leaderboard.jpg",
                 "click_url": "https://advertiser.com/landing2",
                 "width": 728,
