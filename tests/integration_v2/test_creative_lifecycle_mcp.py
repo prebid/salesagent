@@ -1108,6 +1108,15 @@ class TestCreativeLifecycleMCP:
                 "src.core.tools.creatives.get_current_tenant",
                 return_value={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
             ),
+            # Patch media_buy_create module's imports (separate from creatives module)
+            patch(
+                "src.core.tools.media_buy_create.get_principal_id_from_context",
+                return_value=self.test_principal_id,
+            ),
+            patch(
+                "src.core.tools.media_buy_create.get_current_tenant",
+                return_value={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
+            ),
             patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter,
             patch("src.core.main.get_product_catalog") as mock_catalog,
