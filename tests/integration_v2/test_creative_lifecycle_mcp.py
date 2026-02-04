@@ -1052,7 +1052,8 @@ class TestCreativeLifecycleMCP:
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import Creative
+        from src.core.database.models import Creative, PricingOption
+        from src.core.database.models import Product as DBProduct
 
         with get_db_session() as session:
             for idx, creative_data in enumerate(sample_creatives):
@@ -1066,6 +1067,33 @@ class TestCreativeLifecycleMCP:
                     from sqlalchemy.orm import attributes
 
                     attributes.flag_modified(creative, "data")
+            session.commit()
+
+        # Create test product in database (create_media_buy queries DB directly, not get_product_catalog)
+        with get_db_session() as session:
+            test_product = DBProduct(
+                tenant_id=self.test_tenant_id,
+                product_id="prod_1",
+                name="Test Product",
+                description="Test product for creative lifecycle test",
+                format_ids=[{"agent_url": "https://test.com", "id": "display_300x250_image"}],
+                targeting_template={},
+                delivery_type="non_guaranteed",
+                properties=[{"publisher_domain": "test.com", "selection_type": "all"}],
+            )
+            session.add(test_product)
+            session.commit()
+
+            # Create pricing option for the product
+            pricing_option = PricingOption(
+                tenant_id=self.test_tenant_id,
+                product_id="prod_1",
+                pricing_model="cpm",
+                currency="USD",
+                is_fixed=False,
+                price_guidance={"floor": 5.0, "p50": 10.0, "p75": 12.0, "p90": 15.0},
+            )
+            session.add(pricing_option)
             session.commit()
 
         # Import create_media_buy tool
