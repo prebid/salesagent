@@ -86,6 +86,28 @@ from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResp
 from src.core.validation_helpers import format_validation_error
 
 
+def _infer_asset_type(asset_id: str) -> str:
+    """Infer asset type from asset ID naming convention.
+
+    Args:
+        asset_id: Asset identifier (e.g., "front_image", "youtube_url", "headline")
+
+    Returns:
+        Asset type string (image, video, text, url)
+    """
+    asset_lower = asset_id.lower()
+    if "image" in asset_lower or "logo" in asset_lower:
+        return "image"
+    elif "video" in asset_lower or "youtube" in asset_lower:
+        return "video"
+    elif "url" in asset_lower or "click" in asset_lower:
+        return "url"
+    elif "html" in asset_lower:
+        return "html"
+    else:
+        return "text"  # Default to text for headlines, body, captions, etc.
+
+
 def _list_creative_formats_impl(
     req: ListCreativeFormatsRequest | None, context: Context | ToolContext | None
 ) -> ListCreativeFormatsResponse:
@@ -141,6 +163,80 @@ def _list_creative_formats_impl(
             formats = loop.run_until_complete(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
         finally:
             loop.close()
+
+    # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
+    # Check adapter type from tenant config and load formats without instantiating the full adapter
+    try:
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AdapterConfig
+
+        with get_db_session() as session:
+            stmt = select(AdapterConfig).filter_by(tenant_id=tenant["tenant_id"])
+            config_row = session.scalars(stmt).first()
+
+            adapter_type = config_row.adapter_type if config_row else None
+
+            if adapter_type == "broadstreet":
+                # Import Broadstreet templates and convert to formats
+                from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
+                from src.core.schemas import Format, FormatId, url
+
+                agent_url = f"broadstreet://{tenant['tenant_id']}"
+
+                for template_id, template in BROADSTREET_TEMPLATES.items():
+                    try:
+                        format_id = FormatId(
+                            id=f"broadstreet_{template_id}",
+                            agent_url=url(agent_url),
+                        )
+
+                        # Build assets list
+                        assets_list: list[Assets | Assets5] = []
+                        for asset_id in template.get("required_assets", []):
+                            asset_type = _infer_asset_type(asset_id)
+                            assets_list.append(
+                                Assets(
+                                    item_type="individual",
+                                    asset_id=asset_id,
+                                    asset_type=AssetContentType(asset_type),
+                                    required=True,
+                                )
+                            )
+                        for asset_id in template.get("optional_assets", []):
+                            asset_type = _infer_asset_type(asset_id)
+                            assets_list.append(
+                                Assets(
+                                    item_type="individual",
+                                    asset_id=asset_id,
+                                    asset_type=AssetContentType(asset_type),
+                                    required=False,
+                                )
+                            )
+
+                        fmt = Format(
+                            format_id=format_id,
+                            name=str(template["name"]),
+                            type=FormatCategory.display,
+                            description=str(template["description"]) if template.get("description") else None,
+                            assets=assets_list if assets_list else None,
+                            is_standard=False,
+                            platform_config=None,
+                            category=None,
+                            requirements=None,
+                            iab_specification=None,
+                            accepts_3p_tags=None,
+                        )
+                        formats.append(fmt)
+                    except Exception as e:
+                        logger.warning(f"Failed to parse Broadstreet template {template_id}: {e}")
+                        continue
+
+                logger.info(f"Added {len(BROADSTREET_TEMPLATES)} Broadstreet formats")
+    except Exception as e:
+        # Don't fail if adapter formats can't be retrieved
+        logger.debug(f"Could not get adapter formats: {e}")
 
     # Apply filters from request
     if req.type:

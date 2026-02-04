@@ -907,3 +907,83 @@ class BroadstreetAdapter(AdServerAdapter):
         """
         self.log("Fetching available inventory from Broadstreet", dry_run_prefix=False)
         return self.inventory_manager.build_inventory_response()
+
+    def get_creative_formats(self) -> list[dict[str, Any]]:
+        """Return Broadstreet templates as AdCP creative formats.
+
+        Converts Broadstreet template definitions to AdCP Format schema.
+        These formats are included in list_creative_formats responses when
+        Broadstreet is acting as both sales and creative agent.
+
+        Returns:
+            List of format dictionaries matching AdCP Format schema
+        """
+        from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
+
+        formats = []
+        # Use tenant subdomain or adapter name for agent URL
+        agent_url = f"broadstreet://{self.tenant_id or 'default'}"
+
+        for template_id, template in BROADSTREET_TEMPLATES.items():
+            # Build assets list from required and optional assets
+            assets = []
+
+            # Required assets
+            for asset_id in template.get("required_assets", []):
+                asset_type = self._infer_asset_type(asset_id)
+                assets.append(
+                    {
+                        "item_type": "individual",
+                        "asset_id": asset_id,
+                        "asset_type": asset_type,
+                        "required": True,
+                        "name": asset_id.replace("_", " ").title(),
+                    }
+                )
+
+            # Optional assets
+            for asset_id in template.get("optional_assets", []):
+                asset_type = self._infer_asset_type(asset_id)
+                assets.append(
+                    {
+                        "item_type": "individual",
+                        "asset_id": asset_id,
+                        "asset_type": asset_type,
+                        "required": False,
+                        "name": asset_id.replace("_", " ").title(),
+                    }
+                )
+
+            formats.append(
+                {
+                    "format_id": {"id": f"broadstreet_{template_id}", "agent_url": agent_url},
+                    "name": template["name"],
+                    "type": "display",  # All Broadstreet formats are display
+                    "description": template.get("description", ""),
+                    "assets": assets,
+                    "is_standard": False,  # These are Broadstreet-specific formats
+                }
+            )
+
+        return formats
+
+    def _infer_asset_type(self, asset_id: str) -> str:
+        """Infer asset type from asset ID naming convention.
+
+        Args:
+            asset_id: Asset identifier (e.g., "front_image", "youtube_url", "headline")
+
+        Returns:
+            Asset type string (image, video, text, url)
+        """
+        asset_lower = asset_id.lower()
+        if "image" in asset_lower or "logo" in asset_lower:
+            return "image"
+        elif "video" in asset_lower or "youtube" in asset_lower:
+            return "video"
+        elif "url" in asset_lower or "click" in asset_lower:
+            return "url"
+        elif "html" in asset_lower:
+            return "html"
+        else:
+            return "text"  # Default to text for headlines, body, captions, etc.
