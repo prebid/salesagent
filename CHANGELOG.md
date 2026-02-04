@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0](https://github.com/prebid/salesagent/compare/v1.2.0...v1.3.0) (2026-02-04)
+
+
+### Features
+
+* Add schema-driven adapter configuration ([#1007](https://github.com/prebid/salesagent/issues/1007)) ([e6324b6](https://github.com/prebid/salesagent/commit/e6324b6d4ebd1d7ce97ad012312d94a441ffc4d9))
+* Display version in tenant landing page footer ([27780c5](https://github.com/prebid/salesagent/commit/27780c517cf63bb1d9404ae59f29287a7a67e39f))
+* Display version in tenant landing page footer ([37015e6](https://github.com/prebid/salesagent/commit/37015e62be09e31bac0d8505f9310c2bfd48ab2a))
+
+
+### Bug Fixes
+
+* Add audit logging for get_products, update_media_buy, and update_performance_index ([9dfd39b](https://github.com/prebid/salesagent/commit/9dfd39b26e7838f89fd7f24569a12b73aa79a530))
+* Add audit logging for get_products, update_media_buy, and update_performance_index ([d563dc8](https://github.com/prebid/salesagent/commit/d563dc8dc354cc412475410d583a8dcaddf6151a))
+* Correct comment to match actual implementation (starts with, not contains) ([666f889](https://github.com/prebid/salesagent/commit/666f889a543cdf9f7623af6f0d041b5dff9d1644))
+* Improve GAM creative-to-line-item matching for flexible naming templates ([126f0dd](https://github.com/prebid/salesagent/commit/126f0dd4ba2f61df47295f9eb09c61f24fc9efe1))
+* Improve GAM creative-to-line-item matching for flexible naming templates ([7d85208](https://github.com/prebid/salesagent/commit/7d85208fb50378b8d654fb7256158ac11a9083cb))
+* more tests ([88b0347](https://github.com/prebid/salesagent/commit/88b0347a155784b501ce03552ff1b736690f4e80))
+* mypy ([0aeb111](https://github.com/prebid/salesagent/commit/0aeb111ceb25e3ba120bfbf0b40c4c6c3c461f4d))
+* preserve format dimensions during media buy approval ([1bdc4a7](https://github.com/prebid/salesagent/commit/1bdc4a7fa0f6bd55748f4d57e1f9974edd5f6276))
+* preserve format dimensions during media buy approval ([dc2429e](https://github.com/prebid/salesagent/commit/dc2429ed3b6d3e29e30b30fae6b9ac8b38d22444))
+* Preserve signup flow state through OAuth redirect ([7e63052](https://github.com/prebid/salesagent/commit/7e63052fffad9b5a9b9e9d865073bb347f5febd6))
+* Preserve signup flow state through OAuth redirect ([735211d](https://github.com/prebid/salesagent/commit/735211d2783bba2aff995e327f0cfea20ddce50b))
+* reset tests to main ([03e32db](https://github.com/prebid/salesagent/commit/03e32db5eb97cb2c9791ba3fd555e686ad56608d))
+* tests ([491e21e](https://github.com/prebid/salesagent/commit/491e21ea02e9f733773d48bf3bbb7ecb21212f3f))
+* Update organization and repository names in ipr sig workflow ([3217152](https://github.com/prebid/salesagent/commit/32171525fd495394c28c2ba3bbb70122c68b55d6))
+* Use dynamic dates in GAM pricing restriction tests ([bef48d1](https://github.com/prebid/salesagent/commit/bef48d1fdd4674529656f6ae2a577f89e9d739f9))
+* Use dynamic dates in pricing integration tests ([a89dc8a](https://github.com/prebid/salesagent/commit/a89dc8ad7477e2ceb6a65750206f925060e571d1))
+
+
+### Documentation
+
+* Add PR naming guideline to CLAUDE.md ([34a87be](https://github.com/prebid/salesagent/commit/34a87be7d7104b54ff3e5570bffb4cf918156758))
+
 ## [1.2.0](https://github.com/prebid/salesagent/compare/v1.1.0...v1.2.0) (2026-01-29)
 
 
