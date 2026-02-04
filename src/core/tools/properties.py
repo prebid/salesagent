@@ -11,7 +11,6 @@ import logging
 import time
 from typing import Any, cast
 
-from adcp import ListAuthorizedPropertiesRequest
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
@@ -24,7 +23,7 @@ from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner
 from src.core.helpers import log_tool_activity
-from src.core.schemas import ListAuthorizedPropertiesResponse
+from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
 from src.core.testing_hooks import get_testing_context
 from src.core.tool_context import ToolContext
 from src.core.validation_helpers import safe_parse_json_field
