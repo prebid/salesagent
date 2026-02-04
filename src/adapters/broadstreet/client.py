@@ -267,7 +267,7 @@ class BroadstreetClient:
         Returns:
             Created advertisement data
         """
-        data: dict[str, Any] = {"name": name, "type": ad_type}
+        data: dict[str, Any] = {"name": name, "type": ad_type, "active": 1}
         if params:
             data.update(params)
 
