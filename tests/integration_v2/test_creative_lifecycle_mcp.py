@@ -1215,6 +1215,11 @@ class TestCreativeLifecycleMCP:
 
             # Verify response (domain response doesn't have status field)
             # Note: media_buy_id may be transformed by naming template (e.g., "buy_PO-TEST-123")
+            # Debug: print response to understand failures
+            print(f"DEBUG create_media_buy response: {response}")
+            if "errors" in response:
+                print(f"DEBUG errors: {response['errors']}")
+            assert "media_buy_id" in response, f"Expected media_buy_id in response, got: {response.keys()}"
             assert response["media_buy_id"]  # Just verify it exists
             actual_media_buy_id = response["media_buy_id"]
             # Protocol envelope adds status field - domain response just has media_buy_id
