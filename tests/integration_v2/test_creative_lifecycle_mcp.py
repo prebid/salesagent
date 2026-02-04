@@ -1198,6 +1198,7 @@ class TestCreativeLifecycleMCP:
                     product_id="prod_1",
                     pricing_option_id="cpm_usd_auction",  # Required by adcp 2.5.0
                     budget=5000.0,  # Float budget, currency from pricing_option
+                    bid_price=10.0,  # Required for auction pricing (floor=5.0, p50=10.0)
                     creative_ids=creative_ids,  # Provide creative_ids
                 )
             ]
