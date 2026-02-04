@@ -720,13 +720,15 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                                 fmt_height = fmt.get("height")
                                 fmt_duration_ms = fmt.get("duration_ms")
 
-                                format_ids_list.append(FormatIdType(
-                                    agent_url=make_url(agent_url),
-                                    id=format_id,
-                                    width=int(fmt_width) if fmt_width is not None else None,
-                                    height=int(fmt_height) if fmt_height is not None else None,
-                                    duration_ms=float(fmt_duration_ms) if fmt_duration_ms is not None else None
-                                ))
+                                format_ids_list.append(
+                                    FormatIdType(
+                                        agent_url=make_url(agent_url),
+                                        id=format_id,
+                                        width=int(fmt_width) if fmt_width is not None else None,
+                                        height=int(fmt_height) if fmt_height is not None else None,
+                                        duration_ms=float(fmt_duration_ms) if fmt_duration_ms is not None else None,
+                                    )
+                                )
 
                             # Already correct type (no conversion needed)
                             elif isinstance(fmt, FormatIdType):
@@ -1624,6 +1626,12 @@ async def _create_media_buy_impl(
 
             # Build product lookup map
             product_map = {p.product_id: p for p in products}
+
+            # Validate all requested product_ids exist
+            missing_product_ids = set(product_ids) - set(product_map.keys())
+            if missing_product_ids:
+                error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
+                raise ValueError(error_msg)
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)

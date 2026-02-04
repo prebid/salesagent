@@ -3,6 +3,8 @@ GAM Workflow Manager - Human-in-the-Loop Workflow Management
 
 This module handles workflow step creation, notification, and management
 for Google Ad Manager operations requiring human intervention.
+
+Extends BaseWorkflowManager with GAM-specific workflow logic.
 """
 
 import logging
@@ -10,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from src.core.config_loader import get_tenant_config
+from src.adapters.base_workflow import BaseWorkflowManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.schemas import CreateMediaBuyRequest, MediaPackage
@@ -18,8 +20,14 @@ from src.core.schemas import CreateMediaBuyRequest, MediaPackage
 logger = logging.getLogger(__name__)
 
 
-class GAMWorkflowManager:
-    """Manages Human-in-the-Loop workflows for Google Ad Manager operations."""
+class GAMWorkflowManager(BaseWorkflowManager):
+    """Manages Human-in-the-Loop workflows for Google Ad Manager operations.
+
+    Extends BaseWorkflowManager with GAM-specific workflow logic.
+    """
+
+    platform_name = "Google Ad Manager"
+    platform_url_base = "https://admanager.google.com"
 
     def __init__(self, tenant_id: str, principal=None, audit_logger=None, log_func=None):
         """Initialize workflow manager.
@@ -30,10 +38,7 @@ class GAMWorkflowManager:
             audit_logger: Audit logging instance
             log_func: Logging function for output
         """
-        self.tenant_id = tenant_id
-        self.principal = principal
-        self.audit_logger = audit_logger
-        self.log = log_func or logger.info
+        super().__init__(tenant_id, principal, audit_logger, log_func)
 
     def create_activation_workflow_step(self, media_buy_id: str, packages: list[MediaPackage]) -> str | None:
         """Creates a workflow step for human approval of order activation.
@@ -425,80 +430,30 @@ class GAMWorkflowManager:
                 self.audit_logger.log_warning(error_msg)
             return None
 
-    def _send_workflow_notification(self, step_id: str, action_details: dict[str, Any]) -> None:
-        """Send Slack notification for workflow step if configured.
+    def _get_notification_details(self, step_id: str, action_details: dict[str, Any]) -> dict[str, str]:
+        """Get GAM-specific notification styling.
 
         Args:
             step_id: The workflow step ID
             action_details: Details about the workflow step
+
+        Returns:
+            Dictionary with title, description, and color
         """
-        try:
-            tenant_config = get_tenant_config(self.tenant_id)
-            slack_webhook_url = tenant_config.get("slack", {}).get("webhook_url")
+        action_type = action_details.get("action_type", "workflow_step")
 
-            if not slack_webhook_url:
-                self.log("[yellow]No Slack webhook configured - skipping notification[/yellow]")
-                return
-
-            import requests
-
-            action_type = action_details.get("action_type", "workflow_step")
-            automation_mode = action_details.get("automation_mode", "unknown")
-
-            if action_type == "create_gam_order":
-                title = "🔨 Manual GAM Order Creation Required"
-                color = "#FF9500"  # Orange
-                description = "Manual mode activated - human intervention needed to create GAM order"
-            elif action_type == "activate_gam_order":
-                title = "✅ GAM Order Activation Approval Required"
-                color = "#FFD700"  # Gold
-                description = "Order created successfully - approval needed for activation"
-            else:
-                title = "🔔 Workflow Step Requires Attention"
-                color = "#36A2EB"  # Blue
-                description = f"Workflow step {step_id} needs human intervention"
-
-            # Build Slack message
-            slack_payload = {
-                "attachments": [
-                    {
-                        "color": color,
-                        "title": title,
-                        "text": description,
-                        "fields": [
-                            {"title": "Step ID", "value": step_id, "short": True},
-                            {
-                                "title": "Automation Mode",
-                                "value": automation_mode.replace("_", " ").title(),
-                                "short": True,
-                            },
-                            {
-                                "title": "Action Required",
-                                "value": action_details.get("instructions", ["Check admin dashboard"])[0],
-                                "short": False,
-                            },
-                        ],
-                        "footer": "AdCP Sales Agent",
-                        "ts": int(datetime.now().timestamp()),
-                    }
-                ]
+        if action_type == "create_gam_order":
+            return {
+                "title": "Manual GAM Order Creation Required",
+                "description": "Manual mode activated - human intervention needed to create GAM order",
+                "color": "#FF9500",  # Orange
             }
-
-            # Send notification
-            response = requests.post(
-                slack_webhook_url,
-                json=slack_payload,
-                timeout=10,
-                headers={"Content-Type": "application/json"},
-            )
-
-            if response.status_code == 200:
-                self.log(f"✓ Sent Slack notification for workflow step {step_id}")
-                if self.audit_logger:
-                    self.audit_logger.log_success(f"Sent Slack notification for workflow step: {step_id}")
-            else:
-                self.log(f"[yellow]Slack notification failed with status {response.status_code}[/yellow]")
-
-        except Exception as e:
-            self.log(f"[yellow]Failed to send Slack notification: {str(e)}[/yellow]")
-            # Don't fail the workflow creation if notification fails
+        elif action_type == "activate_gam_order":
+            return {
+                "title": "GAM Order Activation Approval Required",
+                "description": "Order created successfully - approval needed for activation",
+                "color": "#FFD700",  # Gold
+            }
+        else:
+            # Fall back to base class behavior
+            return super()._get_notification_details(step_id, action_details)
