@@ -177,12 +177,17 @@ class TestCreativeLifecycleMCP:
 
             # Create test product for create_media_buy tests
             # (create_media_buy queries DB directly, not get_product_catalog)
+            # Include all formats from sample_creatives fixture
             test_product = DBProduct(
                 tenant_id="creative_test",
                 product_id="prod_1",
                 name="Test Product",
                 description="Test product for creative lifecycle test",
-                format_ids=[{"agent_url": "https://test.com", "id": "display_300x250_image"}],
+                format_ids=[
+                    {"agent_url": "https://test.com", "id": "display_300x250_image"},
+                    {"agent_url": "https://test.com", "id": "video_instream_15s"},
+                    {"agent_url": "https://test.com", "id": "display_728x90_image"},
+                ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
                 properties=[{"publisher_domain": "test.com", "selection_type": "all"}],
