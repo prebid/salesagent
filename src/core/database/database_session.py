@@ -1,5 +1,5 @@
 """
-Standardized database session management for the AdCP Sales Agent.
+Standardized database session management for the Prebid Sales Agent.
 
 This module provides a consistent, thread-safe approach to database session
 management across the entire application.

@@ -1,6 +1,6 @@
 # Adapters
 
-Adapters connect the AdCP Sales Agent to ad servers. Choose the adapter that matches your ad server platform.
+Adapters connect the Prebid Sales Agent to ad servers. Choose the adapter that matches your ad server platform.
 
 ## Available Adapters
 

@@ -1,6 +1,6 @@
 # GCP Cloud Run Deployment
 
-This walkthrough covers deploying the AdCP Sales Agent to Google Cloud Run with Cloud SQL PostgreSQL.
+This walkthrough covers deploying the Prebid Sales Agent to Google Cloud Run with Cloud SQL PostgreSQL.
 
 ## Prerequisites
 

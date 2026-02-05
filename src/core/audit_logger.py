@@ -1,5 +1,5 @@
 """
-Audit logging module for AdCP Sales Agent platform.
+Audit logging module for Prebid Sales Agent platform.
 
 Implements security-compliant logging with:
 - Timestamps

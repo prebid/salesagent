@@ -1,6 +1,6 @@
 # Product Management
 
-Products define what inventory you're selling through the AdCP Sales Agent. Each product maps to a line item template in your ad server.
+Products define what inventory you're selling through the Prebid Sales Agent. Each product maps to a line item template in your ad server.
 
 ## Creating Products
 

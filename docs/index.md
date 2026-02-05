@@ -1,4 +1,6 @@
-# AdCP Sales Agent Documentation
+# Prebid Sales Agent Documentation
+
+The Prebid Sales Agent is the Prebid.org reference implementation of an AdCP-compliant sales agent.
 
 ## Quick Start
 
@@ -94,7 +96,7 @@ docs/
 
 ```
 ┌─────────────────┐     ┌──────────────────┐
-│   AI Agent      │────▶│  AdCP Sales Agent│
+│   AI Agent      │────▶│  Prebid Sales Agent│
 └─────────────────┘     └──────────────────┘
                               │
                 ┌─────────────┼─────────────┐

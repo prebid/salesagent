@@ -65,7 +65,7 @@ class GAMClientManager:
 
             # Create AdManager client
             ad_manager_client = ad_manager.AdManagerClient(
-                credentials, "AdCP Sales Agent", network_code=self.network_code
+                credentials, "Prebid Sales Agent", network_code=self.network_code
             )
 
             logger.info(

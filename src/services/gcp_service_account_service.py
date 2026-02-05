@@ -188,7 +188,7 @@ class GCPServiceAccountService:
                 logger.info(f"Creating new service account with account_id='{account_id}' for tenant {tenant_id}")
                 try:
                     service_account = self._create_service_account(
-                        account_id=account_id, display_name=display_name or f"AdCP Sales Agent - {tenant_id}"
+                        account_id=account_id, display_name=display_name or f"Prebid Sales Agent - {tenant_id}"
                     )
                     service_account_email = service_account.email
                     service_account_was_created = True

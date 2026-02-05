@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-Complete reference for all environment variables supported by the AdCP Sales Agent.
+Complete reference for all environment variables supported by the Prebid Sales Agent.
 
 ## Quick Start
 

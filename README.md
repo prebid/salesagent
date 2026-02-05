@@ -1,10 +1,10 @@
-# AdCP Sales Agent
+# Prebid Sales Agent
 
-A reference implementation of the [Ad Context Protocol (AdCP)](https://adcontextprotocol.org) sales agent, enabling AI agents to buy advertising inventory through a standardized MCP interface.
+A reference implementation of the [Ad Context Protocol (AdCP)](https://adcontextprotocol.org) sales agent, enabling AI agents to buy advertising inventory through a standardized MCP interface. This codebase is maintained under Prebid.org as the Prebid Sales Agent reference implementation.
 
 ## What is this?
 
-The AdCP Sales Agent is a server that:
+The Prebid Sales Agent is a server that:
 - **Exposes advertising inventory** to AI agents via MCP (Model Context Protocol) and A2A (Agent-to-Agent)
 - **Integrates with ad servers** like Google Ad Manager
 - **Provides an admin interface** for managing inventory and campaigns
@@ -194,7 +194,7 @@ docker compose logs adcp-server | head -50
 ## Protocol Support
 
 ### MCP (Model Context Protocol)
-The primary interface for AI agents to interact with the AdCP Sales Agent. Uses FastMCP with HTTP/SSE transport.
+The primary interface for AI agents to interact with the Prebid Sales Agent. Uses FastMCP with HTTP/SSE transport.
 
 ### A2A (Agent-to-Agent Protocol)
 JSON-RPC 2.0 compliant server for agent-to-agent communication:

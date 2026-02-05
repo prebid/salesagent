@@ -213,7 +213,7 @@ def _run_sync_thread(
                     )
                     oauth2_client = oauth2.GoogleCredentialsClient(credentials)
                     client = ad_manager.AdManagerClient(
-                        oauth2_client, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
+                        oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
                     )
                 finally:
                     try:
@@ -227,7 +227,7 @@ def _run_sync_thread(
                     refresh_token=adapter_config.gam_refresh_token,
                 )
                 client = ad_manager.AdManagerClient(
-                    oauth2_client, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
+                    oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
                 )
 
         # Get last successful sync time for incremental mode

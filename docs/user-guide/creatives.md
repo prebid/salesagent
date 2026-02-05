@@ -1,6 +1,6 @@
 # Creative Management
 
-Creatives are the ad assets (images, videos, HTML) that run in campaigns. The AdCP Sales Agent provides a creative approval workflow.
+Creatives are the ad assets (images, videos, HTML) that run in campaigns. The Prebid Sales Agent provides a creative approval workflow.
 
 ## Creative Workflow
 

@@ -1,6 +1,6 @@
 # Single-Tenant Deployment
 
-Single-tenant mode is the default and recommended for most publishers deploying their own AdCP Sales Agent.
+Single-tenant mode is the default and recommended for most publishers deploying their own Prebid Sales Agent.
 
 ## Overview
 

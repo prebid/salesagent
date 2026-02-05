@@ -1,5 +1,5 @@
 """
-Core MCP server components for the AdCP Sales Agent.
+Core MCP server components for the Prebid Sales Agent.
 
 This module contains the core functionality for the MCP server including:
 - MCP server implementation (main.py)

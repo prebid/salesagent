@@ -1,6 +1,6 @@
 # GAM Product Configuration Guide
 
-Complete guide for configuring Google Ad Manager (GAM) product trafficking settings in the AdCP Sales Agent.
+Complete guide for configuring Google Ad Manager (GAM) product trafficking settings in the Prebid Sales Agent.
 
 ---
 

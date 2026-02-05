@@ -1,5 +1,5 @@
 """
-Slack notification system for AdCP Sales Agent.
+Slack notification system for Prebid Sales Agent.
 Sends notifications for new tasks and approvals via Slack webhooks.
 """
 

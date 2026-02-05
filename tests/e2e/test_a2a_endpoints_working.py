@@ -45,8 +45,8 @@ class TestA2AEndpointsActual:
                 assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
                 assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
 
-                # Should be AdCP Sales Agent
-                assert data["name"] == "AdCP Sales Agent"
+                # Should be Prebid Sales Agent
+                assert data["name"] == "Prebid Sales Agent"
 
                 # Should have skills
                 assert isinstance(data["skills"], list)
@@ -86,7 +86,7 @@ class TestA2AEndpointsActual:
             if response.status_code == 200:
                 assert response.headers["content-type"].startswith("application/json")
                 data = response.json()
-                assert data["name"] == "AdCP Sales Agent"
+                assert data["name"] == "Prebid Sales Agent"
 
                 # Same URL validation as well-known endpoint
                 url = data["url"]
@@ -160,7 +160,7 @@ class TestA2AAgentCardCreation:
         assert hasattr(agent_card, "security") or hasattr(agent_card, "securitySchemes")
 
         # Validate content
-        assert agent_card.name == "AdCP Sales Agent"
+        assert agent_card.name == "Prebid Sales Agent"
 
         # Note: A2A spec uses security/securitySchemes for authentication, not a simple authentication field
 
@@ -250,7 +250,7 @@ class TestA2AAgentCardCreation:
 
             # Should be able to parse back
             parsed = json.loads(json_str)
-            assert parsed["name"] == "AdCP Sales Agent"
+            assert parsed["name"] == "Prebid Sales Agent"
 
         except Exception as e:
             pytest.fail(f"Agent card serialization failed: {e}")

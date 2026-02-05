@@ -1,6 +1,6 @@
 # Multi-Tenant Setup Guide
 
-This guide covers setting up the AdCP Sales Agent in multi-tenant mode, where a single deployment hosts multiple publishers with subdomain-based routing.
+This guide covers setting up the Prebid Sales Agent in multi-tenant mode, where a single deployment hosts multiple publishers with subdomain-based routing.
 
 > **Prerequisites**: This guide assumes you have a working single-tenant deployment. See [Single-Tenant Deployment](single-tenant.md) for Docker images, environment variables, and basic setup.
 

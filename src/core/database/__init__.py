@@ -1,4 +1,4 @@
-"""Database module for AdCP Sales Agent Server.
+"""Database module for Prebid Sales Agent Server.
 
 This module contains all database-related functionality including:
 - Database configuration and connection management

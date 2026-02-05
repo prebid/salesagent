@@ -609,7 +609,7 @@ def get_gam_custom_targeting_keys(tenant_id):
 
             # Create GAM client
             client = ad_manager.AdManagerClient(
-                oauth2_client, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
+                oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
             )
 
             # Initialize GAM inventory discovery

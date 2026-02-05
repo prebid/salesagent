@@ -18,7 +18,7 @@ New tenants start in **Setup Mode**, which enables test credentials for initial 
 
 ## Overview
 
-The AdCP Sales Agent supports any OIDC-compliant identity provider:
+The Prebid Sales Agent supports any OIDC-compliant identity provider:
 
 - **Google Workspace** - For organizations using Google
 - **Microsoft Entra ID (Azure AD)** - For Microsoft 365 organizations
@@ -64,7 +64,7 @@ Before configuring SSO, you'll need:
 4. Click **Create Credentials** > **OAuth client ID**
 5. If prompted, configure the OAuth consent screen first:
    - User Type: **Internal** (for your organization only) or **External**
-   - App name: "AdCP Sales Agent" (or your preferred name)
+   - App name: "Prebid Sales Agent" (or your preferred name)
    - User support email: Your admin email
    - Authorized domains: Add your domain
    - Scopes: Add `openid`, `email`, `profile`
@@ -72,7 +72,7 @@ Before configuring SSO, you'll need:
 #### Step 2: Configure OAuth Client
 
 1. Application type: **Web application**
-2. Name: "AdCP Sales Agent SSO"
+2. Name: "Prebid Sales Agent SSO"
 3. Authorized redirect URIs: Add your tenant's redirect URI
    - Example: `https://your-tenant.sales-agent.example.com/admin/auth/oidc/callback`
 4. Click **Create**
@@ -99,7 +99,7 @@ Before configuring SSO, you'll need:
 2. Navigate to **Microsoft Entra ID** > **App registrations**
 3. Click **New registration**
 4. Configure:
-   - Name: "AdCP Sales Agent"
+   - Name: "Prebid Sales Agent"
    - Supported account types: Choose based on your needs
      - **Single tenant**: Only your organization
      - **Multitenant**: Any Microsoft organization
@@ -155,7 +155,7 @@ Replace `{tenant-id}` with your Directory (tenant) ID.
 
 #### Step 2: Configure Application
 
-1. App integration name: "AdCP Sales Agent"
+1. App integration name: "Prebid Sales Agent"
 2. Grant type: Ensure **Authorization Code** is selected
 3. Sign-in redirect URIs: Add your tenant's redirect URI
 4. Sign-out redirect URIs: (optional) Add your logout URL
@@ -190,7 +190,7 @@ Replace `your-domain` with your Okta domain.
 2. Go to **Applications** > **Applications**
 3. Click **Create Application**
 4. Configure:
-   - Name: "AdCP Sales Agent"
+   - Name: "Prebid Sales Agent"
    - Application Type: **Regular Web Applications**
 5. Click **Create**
 

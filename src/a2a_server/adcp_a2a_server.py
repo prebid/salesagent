@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AdCP Sales Agent A2A Server using official a2a-sdk library.
+Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
@@ -2285,7 +2285,7 @@ def create_agent_card() -> AgentCard:
     """Create the agent card describing capabilities.
 
     Returns:
-        AgentCard with AdCP Sales Agent capabilities
+        AgentCard with Prebid Sales Agent capabilities
     """
     # Use configured domain for agent card
     # Note: This will be overridden dynamically in the endpoint handlers
@@ -2313,7 +2313,7 @@ def create_agent_card() -> AgentCard:
 
     # Create the agent card with minimal required fields
     agent_card = AgentCard(
-        name="AdCP Sales Agent",
+        name="Prebid Sales Agent",
         description="AI agent for programmatic advertising campaigns via AdCP protocol",
         version=sales_agent_version,
         protocol_version="1.0",

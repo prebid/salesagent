@@ -1,1 +1,1 @@
-"""Admin UI module - Flask application for managing AdCP Sales Agent."""
+"""Admin UI module - Flask application for managing Prebid Sales Agent."""

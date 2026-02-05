@@ -1,4 +1,4 @@
-"""Startup configuration and validation for AdCP Sales Agent."""
+"""Startup configuration and validation for Prebid Sales Agent."""
 
 import logging
 
@@ -21,7 +21,7 @@ def initialize_application() -> None:
         # This ensures production environments get JSON logs
         setup_structured_logging()
 
-        logger.info("Initializing AdCP Sales Agent...")
+        logger.info("Initializing Prebid Sales Agent...")
 
         # Setup OAuth-specific logging
         setup_oauth_logging()

@@ -1,6 +1,6 @@
 # Google Ad Manager (GAM) Adapter
 
-Connect the AdCP Sales Agent to Google Ad Manager to create and manage line items programmatically.
+Connect the Prebid Sales Agent to Google Ad Manager to create and manage line items programmatically.
 
 ## Getting Started
 

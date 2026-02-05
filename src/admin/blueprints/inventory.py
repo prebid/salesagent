@@ -252,7 +252,7 @@ def get_targeting_values(tenant_id, key_id):
                     oauth2_client = oauth2.GoogleCredentialsClient(credentials)
                     # Create Ad Manager client with service account
                     gam_ad_manager_client = ad_manager.AdManagerClient(
-                        oauth2_client, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
+                        oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
                     )
                 finally:
                     # Clean up temp file
@@ -272,7 +272,7 @@ def get_targeting_values(tenant_id, key_id):
                 )
                 # Create Ad Manager client
                 gam_ad_manager_client = ad_manager.AdManagerClient(
-                    oauth2_client, "AdCP Sales Agent", network_code=adapter_config.gam_network_code
+                    oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
                 )
 
             # Create inventory discovery instance

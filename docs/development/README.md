@@ -1,6 +1,6 @@
 # Development Guide
 
-Documentation for contributors to the AdCP Sales Agent codebase.
+Documentation for contributors to the Prebid Sales Agent codebase, maintained under Prebid.org.
 
 ## Getting Started
 

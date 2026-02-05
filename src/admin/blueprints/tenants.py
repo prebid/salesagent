@@ -528,13 +528,13 @@ def test_slack(tenant_id):
             response = requests.post(
                 tenant.slack_webhook_url,
                 json={
-                    "text": f"🎉 Test message from AdCP Sales Agent for {tenant.name}",
+                    "text": f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
                     "blocks": [
                         {
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"*Test Notification*\nThis is a test message from the AdCP Sales Agent for *{tenant.name}*.",
+                                "text": f"*Test Notification*\nThis is a test message from the Prebid Sales Agent for *{tenant.name}*.",
                             },
                         },
                         {

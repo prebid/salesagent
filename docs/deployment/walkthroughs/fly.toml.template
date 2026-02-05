@@ -1,4 +1,4 @@
-# fly.toml - Fly.io deployment configuration for AdCP Sales Agent
+# fly.toml - Fly.io deployment configuration for Prebid Sales Agent
 #
 # This is a TEMPLATE. Copy to your project root and customize:
 #   cp docs/deployment/walkthroughs/fly.toml.template fly.toml

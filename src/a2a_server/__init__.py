@@ -1,4 +1,4 @@
-"""A2A Server integration for AdCP Sales Agent."""
+"""A2A Server integration for Prebid Sales Agent."""
 
 from .adcp_a2a_server import main
 

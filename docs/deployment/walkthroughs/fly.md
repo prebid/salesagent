@@ -1,6 +1,6 @@
 # Fly.io Deployment
 
-This walkthrough covers deploying the AdCP Sales Agent to Fly.io. The reference implementation at https://adcp-sales-agent.fly.dev uses this setup.
+This walkthrough covers deploying the Prebid Sales Agent to Fly.io. The reference implementation maintained by Prebid uses this setup.
 
 > **Single-Tenant by Default**: Fly.io deployments run in single-tenant mode by default, which is appropriate for most publishers deploying their own sales agent. Session cookies use the actual request domain, so authentication works with any custom domain. For multi-tenant mode with subdomain routing, see [Multi-Tenant Setup](../multi-tenant.md).
 

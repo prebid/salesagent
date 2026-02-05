@@ -28,7 +28,7 @@ Partners add these to their GAM
 
 ```bash
 # Create a new GCP project (or use existing)
-gcloud projects create adcp-sales-agent-prod --name="AdCP Sales Agent Production"
+gcloud projects create adcp-sales-agent-prod --name="Prebid Sales Agent Production"
 
 # Set as default project
 gcloud config set project adcp-sales-agent-prod
@@ -42,7 +42,7 @@ This is the service account that your application will run as to create other se
 # Create the management service account
 gcloud iam service-accounts create adcp-manager \
     --display-name="AdCP Service Account Manager" \
-    --description="Service account used by AdCP Sales Agent to create partner service accounts"
+    --description="Service account used by Prebid Sales Agent to create partner service accounts"
 
 # Get the email
 export SA_EMAIL="adcp-manager@adcp-sales-agent-prod.iam.gserviceaccount.com"

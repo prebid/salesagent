@@ -1,4 +1,4 @@
-"""Configuration management for AdCP Sales Agent.
+"""Configuration management for Prebid Sales Agent.
 
 Provides Pydantic-based configuration classes for type-safe, validated configuration
 management using environment variables.

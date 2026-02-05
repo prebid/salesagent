@@ -1,4 +1,4 @@
-"""Authentication functions for AdCP Sales Agent.
+"""Authentication functions for Prebid Sales Agent.
 
 This module provides authentication and principal resolution functions used
 by both MCP and A2A protocols.

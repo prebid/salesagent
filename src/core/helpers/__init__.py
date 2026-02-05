@@ -1,4 +1,4 @@
-"""Helper modules for AdCP Sales Agent.
+"""Helper modules for Prebid Sales Agent.
 
 This package contains modular helper functions extracted from main.py for better maintainability:
 - adapter_helpers: Adapter instance creation and configuration

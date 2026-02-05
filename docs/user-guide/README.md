@@ -1,6 +1,6 @@
 # User Guide
 
-Once you have the AdCP Sales Agent deployed, this guide covers how to configure and use it.
+Once you have the Prebid Sales Agent deployed, this guide covers how to configure and use it.
 
 ## First Steps
 

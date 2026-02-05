@@ -1,1 +1,1 @@
-"""Source code directory for AdCP Sales Agent."""
+"""Source code directory for Prebid Sales Agent."""

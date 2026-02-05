@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AdCP Sales Agent supports two authentication methods for Google Ad Manager:
+The Prebid Sales Agent supports two authentication methods for Google Ad Manager:
 
 1. **OAuth (Refresh Token)** - User-based authentication requiring manual token refresh
 2. **Service Account** - Automated authentication using Google Cloud service accounts (recommended for production)
@@ -159,7 +159,7 @@ If you haven't set these up yet, see your system administrator or cloud platform
 4. Click **Create Service Account**
 5. Enter details:
    - **Name**: `adcp-sales-agent` (or your preferred name)
-   - **Description**: `Service account for AdCP Sales Agent GAM integration`
+   - **Description**: `Service account for Prebid Sales Agent GAM integration`
 6. Click **Create and Continue**
 7. Skip role assignment (will assign in GAM directly)
 8. Click **Done**
@@ -185,7 +185,7 @@ If you haven't set these up yet, see your system administrator or cloud platform
    - This restricts access to only those advertisers for better security
 7. Click **Save**
 
-### Step 4: Configure in AdCP Sales Agent
+### Step 4: Configure in Prebid Sales Agent
 
 #### Via Admin UI:
 
@@ -342,7 +342,7 @@ A: Yes, but it's not recommended. Each tenant should have its own service accoun
 
 **Q: What happens if the service account key is leaked?**
 
-A: Delete the compromised key immediately in Google Cloud Console, create a new key, and update the configuration in AdCP Sales Agent.
+A: Delete the compromised key immediately in Google Cloud Console, create a new key, and update the configuration in Prebid Sales Agent.
 
 **Q: Can I switch between OAuth and service account without losing data?**
 
