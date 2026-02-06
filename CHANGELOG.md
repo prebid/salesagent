@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1](https://github.com/prebid/salesagent/compare/v1.3.0...v1.3.1) (2026-02-06)
+
+
+### Bug Fixes
+
+* Convert FormatId dicts to objects for GAM creative placeholders ([#1016](https://github.com/prebid/salesagent/issues/1016)) ([0a6f2a2](https://github.com/prebid/salesagent/commit/0a6f2a20d7a7ebad01cf4e3f19a58aaaa43d7f89))
+
 ## [1.3.0](https://github.com/prebid/salesagent/compare/v1.2.0...v1.3.0) (2026-02-04)
 
 
