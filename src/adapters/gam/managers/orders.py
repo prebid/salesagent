@@ -570,6 +570,24 @@ class GAMOrdersManager:
                             height = requirements.get("height")
                             creative_size_type = "NATIVE" if format_obj.type == "native" else "PIXEL"
 
+                        # Check FormatId parameters (AdCP 2.5 parameterized formats)
+                        # The buyer can specify width/height directly in the FormatId object
+                        if not (width and height):
+                            # Handle both FormatId objects and dicts (from database JSONB)
+                            if hasattr(format_id_obj, "width") and hasattr(format_id_obj, "height"):
+                                if format_id_obj.width and format_id_obj.height:
+                                    width = format_id_obj.width
+                                    height = format_id_obj.height
+                                    log(f"  [blue]Using dimensions from FormatId parameters: {width}x{height}[/blue]")
+                            elif isinstance(format_id_obj, dict):
+                                # Fallback for dict format (shouldn't happen after fix, but defensive)
+                                dict_width = format_id_obj.get("width")
+                                dict_height = format_id_obj.get("height")
+                                if dict_width and dict_height:
+                                    width = int(dict_width)
+                                    height = int(dict_height)
+                                    log(f"  [blue]Using dimensions from FormatId dict: {width}x{height}[/blue]")
+
                         # Last resort: Try to extract dimensions from format_id (e.g., "display_970x250_image")
                         if not (width and height):
                             import re
@@ -596,8 +614,9 @@ class GAMOrdersManager:
                             # For formats without dimensions
                             error_msg = (
                                 f"Format '{format_display}' has no width/height configuration for GAM. "
-                                f"Add 'platform_config.gam.creative_placeholder' to format definition or "
-                                f"ensure format has width/height in requirements."
+                                f"For parameterized formats like 'display_image', specify width/height in the FormatId "
+                                f"(e.g., {{'id': 'display_image', 'width': 300, 'height': 250}}), "
+                                f"or add 'platform_config.gam.creative_placeholder' to the format definition."
                             )
                             log(f"[red]Error: {error_msg}[/red]")
                             raise ValueError(error_msg)
