@@ -1,7 +1,8 @@
 """Unit tests for Broadstreet adapter."""
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -270,32 +271,140 @@ class TestBroadstreetAdapterCreatives:
         assert all(r["status"] == "success" for r in results)
 
 
+def _make_mock_db_package(package_id="pkg_1", media_buy_id="bs_12345", ad_ids=None):
+    """Create a mock DB MediaPackage with package_config."""
+    pkg = MagicMock()
+    pkg.package_id = package_id
+    pkg.media_buy_id = media_buy_id
+    pkg.package_config = {
+        "broadstreet_advertisement_ids": ad_ids or ["ad_100", "ad_200"],
+    }
+    return pkg
+
+
+@contextmanager
+def _mock_db_session(packages):
+    """Context manager that mocks get_db_session returning given packages."""
+    mock_session = MagicMock()
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = packages
+    mock_scalars.first.return_value = packages[0] if packages else None
+    mock_session.scalars.return_value = mock_scalars
+
+    @contextmanager
+    def fake_get_db_session():
+        yield mock_session
+
+    with patch("src.core.database.database_session.get_db_session", fake_get_db_session):
+        yield mock_session
+
+
 class TestBroadstreetAdapterUpdates:
     """Tests for update methods."""
 
     def test_update_media_buy_pause_dry_run(self, mock_principal, mock_config):
-        """Test pausing media buy in dry-run mode."""
+        """Test pausing media buy in dry-run mode queries DB and returns success."""
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
         )
 
-        result = adapter.update_media_buy(
-            media_buy_id="bs_12345",
-            buyer_ref="buyer_123",
-            action="pause_media_buy",
-            package_id=None,
-            budget=None,
-            today=datetime.now(UTC),
-        )
+        db_pkgs = [_make_mock_db_package()]
+
+        with _mock_db_session(db_pkgs):
+            result = adapter.update_media_buy(
+                media_buy_id="bs_12345",
+                buyer_ref="buyer_123",
+                action="pause_media_buy",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
+            )
 
         from src.core.schemas import UpdateMediaBuySuccess
 
         assert isinstance(result, UpdateMediaBuySuccess)
+        assert len(result.affected_packages) == 1
+        assert result.affected_packages[0].paused is True
+
+    def test_update_media_buy_resume_dry_run(self, mock_principal, mock_config):
+        """Test resuming media buy in dry-run mode queries DB and returns success."""
+        adapter = BroadstreetAdapter(
+            config=mock_config,
+            principal=mock_principal,
+            dry_run=True,
+        )
+
+        db_pkgs = [_make_mock_db_package()]
+
+        with _mock_db_session(db_pkgs):
+            result = adapter.update_media_buy(
+                media_buy_id="bs_12345",
+                buyer_ref="buyer_123",
+                action="resume_media_buy",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
+            )
+
+        from src.core.schemas import UpdateMediaBuySuccess
+
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert len(result.affected_packages) == 1
+        assert result.affected_packages[0].paused is False
+
+    def test_update_media_buy_pause_no_packages(self, mock_principal, mock_config):
+        """Test pause returns error when no packages found in DB."""
+        adapter = BroadstreetAdapter(
+            config=mock_config,
+            principal=mock_principal,
+            dry_run=True,
+        )
+
+        with _mock_db_session([]):
+            result = adapter.update_media_buy(
+                media_buy_id="bs_12345",
+                buyer_ref="buyer_123",
+                action="pause_media_buy",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
+            )
+
+        from src.core.schemas import UpdateMediaBuyError
+
+        assert isinstance(result, UpdateMediaBuyError)
+        assert any("no_packages_found" in str(err.code) for err in result.errors)
+
+    def test_update_media_buy_pause_package_dry_run(self, mock_principal, mock_config):
+        """Test pausing a single package in dry-run mode."""
+        adapter = BroadstreetAdapter(
+            config=mock_config,
+            principal=mock_principal,
+            dry_run=True,
+        )
+
+        db_pkgs = [_make_mock_db_package(package_id="pkg_1")]
+
+        with _mock_db_session(db_pkgs):
+            result = adapter.update_media_buy(
+                media_buy_id="bs_12345",
+                buyer_ref="buyer_123",
+                action="pause_package",
+                package_id="pkg_1",
+                budget=None,
+                today=datetime.now(UTC),
+            )
+
+        from src.core.schemas import UpdateMediaBuySuccess
+
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert result.affected_packages[0].package_id == "pkg_1"
+        assert result.affected_packages[0].paused is True
 
     def test_update_media_buy_unsupported_action(self, mock_principal, mock_config):
-        """Test update with unsupported action returns error."""
+        """Test update with unsupported action returns error without DB call."""
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,

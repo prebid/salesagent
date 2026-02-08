@@ -23,7 +23,6 @@ class TestPlacementInfo:
         assert info.product_id == "prod_1"
         assert info.zone_ids == ["zone_1", "zone_2"]
         assert info.advertisement_ids == []
-        assert info.paused is False
         assert info.placement_ids == []
 
     def test_init_full(self):
@@ -33,11 +32,9 @@ class TestPlacementInfo:
             product_id="prod_1",
             zone_ids=["zone_1"],
             advertisement_ids=["ad_1", "ad_2"],
-            paused=True,
         )
 
         assert info.advertisement_ids == ["ad_1", "ad_2"]
-        assert info.paused is True
 
     def test_to_dict(self):
         """Test PlacementInfo serialization."""
@@ -54,7 +51,6 @@ class TestPlacementInfo:
         assert result["product_id"] == "prod_1"
         assert result["zone_ids"] == ["zone_1"]
         assert result["placement_ids"] == ["placement_1"]
-        assert result["paused"] is False
 
 
 class TestBroadstreetPlacementManager:
@@ -169,108 +165,6 @@ class TestBroadstreetPlacementManager:
 
         assert results == []
 
-    def test_pause_package(self, manager):
-        """Test pausing a package."""
-        manager.register_package(
-            media_buy_id="mb_1",
-            package_id="pkg_1",
-            product_id="prod_1",
-            impl_config={"targeted_zone_ids": ["zone_1"]},
-        )
-
-        result = manager.pause_package("mb_1", "pkg_1")
-        assert result is True
-
-        info = manager.get_package_info("mb_1", "pkg_1")
-        assert info.paused is True
-
-    def test_pause_package_not_found(self, manager):
-        """Test pausing non-existent package."""
-        result = manager.pause_package("mb_1", "pkg_unknown")
-        assert result is False
-
-    def test_resume_package(self, manager):
-        """Test resuming a paused package."""
-        manager.register_package(
-            media_buy_id="mb_1",
-            package_id="pkg_1",
-            product_id="prod_1",
-            impl_config={"targeted_zone_ids": ["zone_1"]},
-        )
-
-        # Pause then resume
-        manager.pause_package("mb_1", "pkg_1")
-        result = manager.resume_package("mb_1", "pkg_1")
-        assert result is True
-
-        info = manager.get_package_info("mb_1", "pkg_1")
-        assert info.paused is False
-
-    def test_update_package_budget(self, manager):
-        """Test updating package budget."""
-        manager.register_package(
-            media_buy_id="mb_1",
-            package_id="pkg_1",
-            product_id="prod_1",
-            impl_config={"targeted_zone_ids": ["zone_1"]},
-        )
-
-        result = manager.update_package_budget("mb_1", "pkg_1", 10000)
-        assert result is True
-
-    def test_update_package_budget_not_found(self, manager):
-        """Test updating budget for non-existent package."""
-        result = manager.update_package_budget("mb_1", "pkg_unknown", 10000)
-        assert result is False
-
-    def test_update_package_impressions(self, manager):
-        """Test updating package impressions."""
-        manager.register_package(
-            media_buy_id="mb_1",
-            package_id="pkg_1",
-            product_id="prod_1",
-            impl_config={"targeted_zone_ids": ["zone_1"]},
-        )
-
-        result = manager.update_package_impressions("mb_1", "pkg_1", 100000)
-        assert result is True
-
-    def test_get_package_status(self, manager):
-        """Test getting package status."""
-        manager.register_package(
-            media_buy_id="mb_1",
-            package_id="pkg_1",
-            product_id="prod_1",
-            impl_config={"targeted_zone_ids": ["zone_1", "zone_2"]},
-        )
-
-        status = manager.get_package_status("mb_1", "pkg_1")
-
-        assert status["package_id"] == "pkg_1"
-        assert status["product_id"] == "prod_1"
-        assert status["status"] == "active"
-        assert status["zone_count"] == 2
-        assert status["placement_count"] == 0
-        assert status["creative_count"] == 0
-
-    def test_get_package_status_paused(self, manager):
-        """Test getting status for paused package."""
-        manager.register_package(
-            media_buy_id="mb_1",
-            package_id="pkg_1",
-            product_id="prod_1",
-            impl_config={"targeted_zone_ids": ["zone_1"]},
-        )
-        manager.pause_package("mb_1", "pkg_1")
-
-        status = manager.get_package_status("mb_1", "pkg_1")
-        assert status["status"] == "paused"
-
-    def test_get_package_status_not_found(self, manager):
-        """Test getting status for non-existent package."""
-        status = manager.get_package_status("mb_1", "pkg_unknown")
-        assert status["status"] == "not_found"
-
     def test_isolation_between_media_buys(self, manager):
         """Test that packages are isolated between media buys."""
         manager.register_package(
@@ -286,13 +180,11 @@ class TestBroadstreetPlacementManager:
             impl_config={"targeted_zone_ids": ["zone_2"]},
         )
 
-        # Pause only in mb_1
-        manager.pause_package("mb_1", "pkg_1")
-
-        # mb_1 should be paused
+        # Packages should be independently tracked
         info1 = manager.get_package_info("mb_1", "pkg_1")
-        assert info1.paused is True
-
-        # mb_2 should not be affected
         info2 = manager.get_package_info("mb_2", "pkg_1")
-        assert info2.paused is False
+
+        assert info1.product_id == "prod_1"
+        assert info2.product_id == "prod_2"
+        assert info1.zone_ids == ["zone_1"]
+        assert info2.zone_ids == ["zone_2"]

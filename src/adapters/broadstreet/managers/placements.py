@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class PlacementInfo:
-    """Tracks placement state for a package."""
+    """Tracks placement state for a package during creation."""
 
     def __init__(
         self,
@@ -25,13 +25,11 @@ class PlacementInfo:
         product_id: str | None,
         zone_ids: list[str],
         advertisement_ids: list[str] | None = None,
-        paused: bool = False,
     ):
         self.package_id = package_id
         self.product_id = product_id
         self.zone_ids = zone_ids
         self.advertisement_ids = advertisement_ids or []
-        self.paused = paused
         self.placement_ids: list[str] = []
 
     def to_dict(self) -> dict[str, Any]:
@@ -42,7 +40,6 @@ class PlacementInfo:
             "zone_ids": self.zone_ids,
             "advertisement_ids": self.advertisement_ids,
             "placement_ids": self.placement_ids,
-            "paused": self.paused,
         }
 
 
@@ -51,6 +48,10 @@ class BroadstreetPlacementManager:
 
     Placements in Broadstreet link advertisements to zones within campaigns.
     Each AdCP package maps to placements for its configured zones.
+
+    Note: This manager handles same-request placement creation only.
+    Cross-request operations (pause/resume) are handled directly in the
+    adapter via database queries, following the GAM adapter pattern.
     """
 
     def __init__(
@@ -73,7 +74,7 @@ class BroadstreetPlacementManager:
         self.dry_run = dry_run
         self.log = log_func or (lambda msg: logger.info(msg))
 
-        # Track placement state per media buy
+        # Track placement state per media buy (same-request only)
         # Structure: {media_buy_id: {package_id: PlacementInfo}}
         self._placement_cache: dict[str, dict[str, PlacementInfo]] = {}
 
@@ -209,141 +210,3 @@ class BroadstreetPlacementManager:
         info.advertisement_ids.extend(advertisement_ids)
 
         return results
-
-    def pause_package(self, media_buy_id: str, package_id: str) -> bool:
-        """Pause a package (mark placements as paused).
-
-        Note: Broadstreet may not support pausing individual placements.
-        This tracks the paused state locally.
-
-        Args:
-            media_buy_id: Media buy ID
-            package_id: Package ID
-
-        Returns:
-            True if successful
-        """
-        info = self.get_package_info(media_buy_id, package_id)
-        if not info:
-            self.log(f"[yellow]Package {package_id} not found[/yellow]")
-            return False
-
-        if self.dry_run:
-            self.log(f"Would pause package {package_id}")
-        else:
-            self.log(f"Pausing package {package_id} (tracking state locally)")
-            # Note: Broadstreet API may need campaign-level pause
-            # For now, track state locally
-
-        info.paused = True
-        return True
-
-    def resume_package(self, media_buy_id: str, package_id: str) -> bool:
-        """Resume a paused package.
-
-        Args:
-            media_buy_id: Media buy ID
-            package_id: Package ID
-
-        Returns:
-            True if successful
-        """
-        info = self.get_package_info(media_buy_id, package_id)
-        if not info:
-            self.log(f"[yellow]Package {package_id} not found[/yellow]")
-            return False
-
-        if self.dry_run:
-            self.log(f"Would resume package {package_id}")
-        else:
-            self.log(f"Resuming package {package_id}")
-
-        info.paused = False
-        return True
-
-    def update_package_budget(
-        self,
-        media_buy_id: str,
-        package_id: str,
-        budget: int,
-    ) -> bool:
-        """Update budget for a package.
-
-        Note: Broadstreet doesn't have package-level budgets.
-        This would typically be handled at the campaign level.
-
-        Args:
-            media_buy_id: Media buy ID
-            package_id: Package ID
-            budget: New budget in cents
-
-        Returns:
-            True if successful
-        """
-        info = self.get_package_info(media_buy_id, package_id)
-        if not info:
-            self.log(f"[yellow]Package {package_id} not found[/yellow]")
-            return False
-
-        if self.dry_run:
-            self.log(f"Would update budget for package {package_id} to ${budget / 100:.2f}")
-        else:
-            self.log("[yellow]Broadstreet: Package-level budgets not directly supported[/yellow]")
-            self.log(f"Budget update for {package_id}: ${budget / 100:.2f}")
-
-        return True
-
-    def update_package_impressions(
-        self,
-        media_buy_id: str,
-        package_id: str,
-        impressions: int,
-    ) -> bool:
-        """Update impression goal for a package.
-
-        Args:
-            media_buy_id: Media buy ID
-            package_id: Package ID
-            impressions: New impression goal
-
-        Returns:
-            True if successful
-        """
-        info = self.get_package_info(media_buy_id, package_id)
-        if not info:
-            self.log(f"[yellow]Package {package_id} not found[/yellow]")
-            return False
-
-        if self.dry_run:
-            self.log(f"Would update impressions for package {package_id} to {impressions:,}")
-        else:
-            self.log("[yellow]Broadstreet: Package-level impressions not directly supported[/yellow]")
-            self.log(f"Impression update for {package_id}: {impressions:,}")
-
-        return True
-
-    def get_package_status(self, media_buy_id: str, package_id: str) -> dict[str, Any]:
-        """Get status for a package.
-
-        Args:
-            media_buy_id: Media buy ID
-            package_id: Package ID
-
-        Returns:
-            Status dictionary
-        """
-        info = self.get_package_info(media_buy_id, package_id)
-        if not info:
-            return {
-                "package_id": package_id,
-                "status": "not_found",
-            }
-
-        return {
-            "package_id": package_id,
-            "product_id": info.product_id,
-            "status": "paused" if info.paused else "active",
-            "zone_count": len(info.zone_ids),
-            "placement_count": len(info.placement_ids),
-            "creative_count": len(info.advertisement_ids),
-        }

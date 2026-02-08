@@ -189,6 +189,71 @@ class BroadstreetAdapter(AdServerAdapter):
             logger.warning(f"Unexpected media_buy_id format: {media_buy_id}, using as-is")
             return media_buy_id
 
+    def _persist_advertisement_ids(self, media_buy_id: str, advertisement_ids: list[str]) -> None:
+        """Persist Broadstreet advertisement IDs to package_config in the database.
+
+        Stores the IDs so that update_media_buy can toggle their active state
+        for pause/resume operations across requests.
+
+        Args:
+            media_buy_id: Media buy ID
+            advertisement_ids: List of Broadstreet advertisement IDs
+        """
+        from sqlalchemy import select
+        from sqlalchemy.orm import attributes
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import MediaPackage as DBMediaPackage
+
+        try:
+            with get_db_session() as session:
+                stmt = select(DBMediaPackage).where(DBMediaPackage.media_buy_id == media_buy_id)
+                packages = session.scalars(stmt).all()
+
+                for pkg in packages:
+                    existing_ids = pkg.package_config.get("broadstreet_advertisement_ids", [])
+                    # Merge without duplicates
+                    merged = list(set(existing_ids + advertisement_ids))
+                    pkg.package_config["broadstreet_advertisement_ids"] = merged
+                    attributes.flag_modified(pkg, "package_config")
+
+                session.commit()
+                self.log(f"Persisted {len(advertisement_ids)} Broadstreet ad IDs to {len(packages)} packages")
+        except Exception as e:
+            logger.error(f"Failed to persist advertisement IDs: {e}", exc_info=True)
+
+    def _toggle_advertisements(self, advertisement_ids: list[str], active: bool) -> list[str]:
+        """Toggle active state on Broadstreet advertisements.
+
+        Args:
+            advertisement_ids: Broadstreet advertisement IDs to toggle
+            active: True to activate, False to deactivate
+
+        Returns:
+            List of advertisement IDs that failed to update
+        """
+        if not self.client or not self.advertiser_id:
+            return []
+
+        failed: list[str] = []
+        active_value = 1 if active else 0
+        action_verb = "Activating" if active else "Deactivating"
+        advertiser_id = self.advertiser_id
+
+        for ad_id in advertisement_ids:
+            try:
+                self.client.update_advertisement(
+                    advertiser_id=advertiser_id,
+                    advertisement_id=ad_id,
+                    params={"active": active_value},
+                )
+                self.log(f"{action_verb} advertisement {ad_id}")
+            except Exception as e:
+                logger.error(f"Failed to update advertisement {ad_id}: {e}", exc_info=True)
+                failed.append(ad_id)
+
+        return failed
+
     def get_supported_pricing_models(self) -> set[str]:
         """Return supported pricing models.
 
@@ -403,13 +468,20 @@ class BroadstreetAdapter(AdServerAdapter):
                 packages=packages,
             )
 
-        return CreateMediaBuySuccess(
+        response = CreateMediaBuySuccess(
             buyer_ref=request.buyer_ref or "unknown",
             media_buy_id=media_buy_id,
             creative_deadline=creative_deadline,
             packages=package_responses,
             workflow_step_id=workflow_step_id,
         )
+
+        # Persist campaign ID so update_media_buy can reconstruct state from DB
+        # Core layer (media_buy_create.py) stores this as package_config["platform_line_item_id"]
+        campaign_id = self._extract_campaign_id(media_buy_id)
+        object.__setattr__(response, "_platform_line_item_ids", {pkg.package_id: campaign_id for pkg in packages})
+
+        return response
 
     def add_creative_assets(
         self,
@@ -455,6 +527,11 @@ class BroadstreetAdapter(AdServerAdapter):
                     package_id=pkg_info.package_id,
                     advertisement_ids=broadstreet_ad_ids,
                 )
+
+        # Persist Broadstreet advertisement IDs to package_config for cross-request access
+        # (update_media_buy needs these IDs to toggle active state for pause/resume)
+        if broadstreet_ad_ids and not self.dry_run:
+            self._persist_advertisement_ids(media_buy_id, broadstreet_ad_ids)
 
         return results
 
@@ -650,13 +727,9 @@ class BroadstreetAdapter(AdServerAdapter):
     ) -> UpdateMediaBuyResponse:
         """Update a media buy with a specific action.
 
-        Supported actions:
-        - pause_media_buy: Pause the entire campaign
-        - resume_media_buy: Resume the entire campaign
-        - pause_package: Pause a specific package
-        - resume_package: Resume a specific package
-        - update_package_budget: Update package budget
-        - update_package_impressions: Update package impression goal
+        Reconstructs state from database (not in-memory caches) so operations
+        work across requests. For pause/resume, toggles the active flag on
+        Broadstreet advertisements via their API.
 
         Args:
             media_buy_id: Media buy (campaign) ID
@@ -669,6 +742,12 @@ class BroadstreetAdapter(AdServerAdapter):
         Returns:
             Update response
         """
+        from sqlalchemy import select
+        from sqlalchemy.orm import attributes
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import MediaPackage as DBMediaPackage
+
         self.log(
             f"Broadstreet.update_media_buy for '{media_buy_id}' with action '{action}'",
             dry_run_prefix=False,
@@ -685,50 +764,128 @@ class BroadstreetAdapter(AdServerAdapter):
                 ],
             )
 
-        campaign_id = self._extract_campaign_id(media_buy_id)
+        is_pause = action in ("pause_media_buy", "pause_package")
+        is_resume = action in ("resume_media_buy", "resume_package")
 
-        # Handle campaign-level actions
-        if action == "pause_media_buy":
-            self.log(f"Pausing campaign {campaign_id}")
-            # Pause all packages
-            for pkg_info in self.placement_manager.get_all_packages(media_buy_id):
-                self.placement_manager.pause_package(media_buy_id, pkg_info.package_id)
+        # Campaign-level pause/resume: toggle all advertisements across all packages
+        if action in ("pause_media_buy", "resume_media_buy"):
+            action_verb = "Pausing" if is_pause else "Resuming"
 
-            return UpdateMediaBuySuccess(
-                media_buy_id=media_buy_id,
-                buyer_ref=buyer_ref,
-                affected_packages=[],
-                implementation_date=today,
-            )
+            with get_db_session() as session:
+                stmt = select(DBMediaPackage).where(DBMediaPackage.media_buy_id == media_buy_id)
+                db_packages = session.scalars(stmt).all()
 
-        elif action == "resume_media_buy":
-            self.log(f"Resuming campaign {campaign_id}")
-            # Resume all packages
-            for pkg_info in self.placement_manager.get_all_packages(media_buy_id):
-                self.placement_manager.resume_package(media_buy_id, pkg_info.package_id)
+                if not db_packages:
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="no_packages_found",
+                                message=f"No packages found for media buy {media_buy_id}",
+                                details=None,
+                            )
+                        ],
+                    )
 
-            return UpdateMediaBuySuccess(
-                media_buy_id=media_buy_id,
-                buyer_ref=buyer_ref,
-                affected_packages=[],
-                implementation_date=today,
-            )
+                # Collect all advertisement IDs across packages
+                all_ad_ids: list[str] = []
+                for pkg in db_packages:
+                    ad_ids = pkg.package_config.get("broadstreet_advertisement_ids", [])
+                    all_ad_ids.extend(ad_ids)
 
-        # Handle package-level actions
-        elif action == "pause_package":
+                # Deduplicate (ads are shared across packages)
+                unique_ad_ids = list(set(all_ad_ids))
+
+                if unique_ad_ids:
+                    self.log(f"{action_verb} {len(unique_ad_ids)} advertisements")
+                    if self.dry_run:
+                        self.log(f"Would toggle active={'1' if is_resume else '0'} on {len(unique_ad_ids)} ads")
+                    else:
+                        failed = self._toggle_advertisements(unique_ad_ids, active=is_resume)
+                        if failed:
+                            return UpdateMediaBuyError(
+                                errors=[
+                                    Error(
+                                        code="partial_failure",
+                                        message=f"Failed to update {len(failed)} advertisements",
+                                        details={"failed_advertisement_ids": failed},
+                                    )
+                                ],
+                            )
+                else:
+                    self.log(f"[yellow]No Broadstreet advertisement IDs found for {media_buy_id}[/yellow]")
+
+                affected = [
+                    AffectedPackage(
+                        package_id=pkg.package_id,
+                        buyer_ref=buyer_ref or pkg.package_id,
+                        paused=is_pause,
+                        changes_applied=None,
+                        buyer_package_ref=None,
+                    )
+                    for pkg in db_packages
+                ]
+
+                return UpdateMediaBuySuccess(
+                    media_buy_id=media_buy_id,
+                    buyer_ref=buyer_ref,
+                    affected_packages=affected,
+                    implementation_date=today,
+                )
+
+        # Package-level pause/resume
+        if action in ("pause_package", "resume_package"):
             if not package_id:
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
                             code="missing_package_id",
-                            message="package_id is required for pause_package action",
+                            message=f"package_id is required for {action} action",
                             details=None,
                         )
                     ],
                 )
 
-            success = self.placement_manager.pause_package(media_buy_id, package_id)
-            if success:
+            action_verb = "Pausing" if is_pause else "Resuming"
+
+            with get_db_session() as session:
+                stmt = select(DBMediaPackage).where(
+                    DBMediaPackage.package_id == package_id,
+                    DBMediaPackage.media_buy_id == media_buy_id,
+                )
+                db_package = session.scalars(stmt).first()
+
+                if not db_package:
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="package_not_found",
+                                message=f"Package {package_id} not found in media buy {media_buy_id}",
+                                details=None,
+                            )
+                        ],
+                    )
+
+                ad_ids = db_package.package_config.get("broadstreet_advertisement_ids", [])
+
+                if ad_ids:
+                    self.log(f"{action_verb} {len(ad_ids)} advertisements for package {package_id}")
+                    if self.dry_run:
+                        self.log(f"Would toggle active={'1' if is_resume else '0'} on {len(ad_ids)} ads")
+                    else:
+                        failed = self._toggle_advertisements(ad_ids, active=is_resume)
+                        if failed:
+                            return UpdateMediaBuyError(
+                                errors=[
+                                    Error(
+                                        code="api_update_failed",
+                                        message=f"Failed to update {len(failed)} advertisements",
+                                        details={"failed_advertisement_ids": failed},
+                                    )
+                                ],
+                            )
+                else:
+                    self.log(f"[yellow]No Broadstreet advertisement IDs for package {package_id}[/yellow]")
+
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
                     buyer_ref=buyer_ref,
@@ -736,64 +893,16 @@ class BroadstreetAdapter(AdServerAdapter):
                         AffectedPackage(
                             package_id=package_id,
                             buyer_ref=buyer_ref,
-                            paused=True,
+                            paused=is_pause,
                             changes_applied=None,
                             buyer_package_ref=None,
                         )
                     ],
                     implementation_date=today,
                 )
-            else:
-                return UpdateMediaBuyError(
-                    errors=[
-                        Error(
-                            code="package_not_found",
-                            message=f"Package {package_id} not found in media buy {media_buy_id}",
-                            details=None,
-                        )
-                    ],
-                )
 
-        elif action == "resume_package":
-            if not package_id:
-                return UpdateMediaBuyError(
-                    errors=[
-                        Error(
-                            code="missing_package_id",
-                            message="package_id is required for resume_package action",
-                            details=None,
-                        )
-                    ],
-                )
-
-            success = self.placement_manager.resume_package(media_buy_id, package_id)
-            if success:
-                return UpdateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
-                    affected_packages=[
-                        AffectedPackage(
-                            package_id=package_id,
-                            buyer_ref=buyer_ref,
-                            paused=False,
-                            changes_applied=None,
-                            buyer_package_ref=None,
-                        )
-                    ],
-                    implementation_date=today,
-                )
-            else:
-                return UpdateMediaBuyError(
-                    errors=[
-                        Error(
-                            code="package_not_found",
-                            message=f"Package {package_id} not found in media buy {media_buy_id}",
-                            details=None,
-                        )
-                    ],
-                )
-
-        elif action == "update_package_budget":
+        # Budget update: persist to database (Broadstreet has no budget API)
+        if action == "update_package_budget":
             if not package_id:
                 return UpdateMediaBuyError(
                     errors=[
@@ -815,34 +924,45 @@ class BroadstreetAdapter(AdServerAdapter):
                     ],
                 )
 
-            success = self.placement_manager.update_package_budget(media_buy_id, package_id, budget)
-            if success:
-                return UpdateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
-                    affected_packages=[
-                        AffectedPackage(
-                            package_id=package_id,
-                            buyer_ref=buyer_ref,
-                            paused=False,
-                            changes_applied={"budget": budget},
-                            buyer_package_ref=None,
-                        )
-                    ],
-                    implementation_date=today,
+            with get_db_session() as session:
+                stmt = select(DBMediaPackage).where(
+                    DBMediaPackage.package_id == package_id,
+                    DBMediaPackage.media_buy_id == media_buy_id,
                 )
-            else:
-                return UpdateMediaBuyError(
-                    errors=[
-                        Error(
-                            code="package_not_found",
-                            message=f"Package {package_id} not found",
-                            details=None,
-                        )
-                    ],
-                )
+                db_package = session.scalars(stmt).first()
 
-        elif action == "update_package_impressions":
+                if not db_package:
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="package_not_found",
+                                message=f"Package {package_id} not found",
+                                details=None,
+                            )
+                        ],
+                    )
+
+                db_package.package_config["budget"] = float(budget)
+                attributes.flag_modified(db_package, "package_config")
+                session.commit()
+                self.log(f"Updated budget for package {package_id} to ${budget / 100:.2f}")
+
+            return UpdateMediaBuySuccess(
+                media_buy_id=media_buy_id,
+                buyer_ref=buyer_ref,
+                affected_packages=[
+                    AffectedPackage(
+                        package_id=package_id,
+                        buyer_ref=buyer_ref,
+                        paused=False,
+                        changes_applied={"budget": budget},
+                        buyer_package_ref=None,
+                    )
+                ],
+                implementation_date=today,
+            )
+        # Impressions update: persist to database (Broadstreet has no impressions API)
+        if action == "update_package_impressions":
             if not package_id:
                 return UpdateMediaBuyError(
                     errors=[
@@ -864,34 +984,45 @@ class BroadstreetAdapter(AdServerAdapter):
                     ],
                 )
 
-            success = self.placement_manager.update_package_impressions(media_buy_id, package_id, budget)
-            if success:
-                return UpdateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
-                    affected_packages=[
-                        AffectedPackage(
-                            package_id=package_id,
-                            buyer_ref=buyer_ref,
-                            paused=False,
-                            changes_applied={"impressions": budget},
-                            buyer_package_ref=None,
-                        )
-                    ],
-                    implementation_date=today,
+            with get_db_session() as session:
+                stmt = select(DBMediaPackage).where(
+                    DBMediaPackage.package_id == package_id,
+                    DBMediaPackage.media_buy_id == media_buy_id,
                 )
-            else:
-                return UpdateMediaBuyError(
-                    errors=[
-                        Error(
-                            code="package_not_found",
-                            message=f"Package {package_id} not found",
-                            details=None,
-                        )
-                    ],
-                )
+                db_package = session.scalars(stmt).first()
 
-        # Fallback for any unhandled actions
+                if not db_package:
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="package_not_found",
+                                message=f"Package {package_id} not found",
+                                details=None,
+                            )
+                        ],
+                    )
+
+                db_package.package_config["impressions"] = budget
+                attributes.flag_modified(db_package, "package_config")
+                session.commit()
+                self.log(f"Updated impressions for package {package_id} to {budget:,}")
+
+            return UpdateMediaBuySuccess(
+                media_buy_id=media_buy_id,
+                buyer_ref=buyer_ref,
+                affected_packages=[
+                    AffectedPackage(
+                        package_id=package_id,
+                        buyer_ref=buyer_ref,
+                        paused=False,
+                        changes_applied={"impressions": budget},
+                        buyer_package_ref=None,
+                    )
+                ],
+                implementation_date=today,
+            )
+
+        # Should not reach here - all actions are handled above
         return UpdateMediaBuySuccess(
             media_buy_id=media_buy_id,
             buyer_ref=buyer_ref,
