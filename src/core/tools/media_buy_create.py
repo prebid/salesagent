@@ -2699,21 +2699,96 @@ async def _create_media_buy_impl(
                         )
                     raise ValueError(error_msg)
 
-                # Preserve original format objects for format_ids_to_use
-                format_ids_to_use = cast(list[FormatId], list(matching_package.format_ids))
+                # Merge dimensions from product's format_ids if request format_ids don't have them
+                # This handles the case where buyer specifies format_id but not dimensions
+                # Build lookup of product format dimensions by (normalized_url, id)
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
+                if pkg_product.format_ids:
+                    for fmt in pkg_product.format_ids:
+                        # pkg_product.format_ids are dicts from database JSONB
+                        if isinstance(fmt, dict):
+                            agent_url = fmt.get("agent_url")
+                            fmt_id = fmt.get("id")
+                        else:
+                            agent_url = getattr(fmt, "agent_url", None)
+                            fmt_id = getattr(fmt, "id", None)
+                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
+                        if fmt_id:
+                            if isinstance(fmt, dict):
+                                width = fmt.get("width")
+                                height = fmt.get("height")
+                                duration_ms = fmt.get("duration_ms")
+                            else:
+                                width = getattr(fmt, "width", None)
+                                height = getattr(fmt, "height", None)
+                                duration_ms = getattr(fmt, "duration_ms", None)
+                            product_format_dimensions[(normalized_url, fmt_id)] = (width, height, duration_ms)
+
+                # Process request format_ids, merging dimensions from product if missing
+                for req_fmt in matching_package.format_ids:
+                    normalized_url = str(req_fmt.agent_url).rstrip("/") if req_fmt.agent_url else None
+                    # Check if request format has dimensions
+                    if req_fmt.width is not None and req_fmt.height is not None:
+                        # Request has dimensions, convert to our FormatId type
+                        format_ids_to_use.append(
+                            FormatId(
+                                agent_url=req_fmt.agent_url,
+                                id=req_fmt.id,
+                                width=req_fmt.width,
+                                height=req_fmt.height,
+                                duration_ms=req_fmt.duration_ms,
+                            )
+                        )
+                    else:
+                        # Try to get dimensions from product's format_ids
+                        product_dims = product_format_dimensions.get((normalized_url, req_fmt.id))
+                        if product_dims and (product_dims[0] is not None or product_dims[1] is not None):
+                            # Merge dimensions from product
+                            format_ids_to_use.append(
+                                FormatId(
+                                    agent_url=req_fmt.agent_url,
+                                    id=req_fmt.id,
+                                    width=product_dims[0],
+                                    height=product_dims[1],
+                                    duration_ms=product_dims[2] if product_dims[2] is not None else req_fmt.duration_ms,
+                                )
+                            )
+                        else:
+                            # No dimensions in product either, convert to our FormatId type
+                            # GAM adapter will try regex extraction from format_id string
+                            format_ids_to_use.append(
+                                FormatId(
+                                    agent_url=req_fmt.agent_url,
+                                    id=req_fmt.id,
+                                    width=req_fmt.width,
+                                    height=req_fmt.height,
+                                    duration_ms=req_fmt.duration_ms,
+                                )
+                            )
 
             # Fallback to product's formats if no request format_ids
             if not format_ids_to_use:
                 if pkg_product.format_ids:
-                    # Convert product.format_ids to FormatId objects if they're strings
+                    # Convert product.format_ids to FormatId objects if they're strings or dicts
                     # Get default creative agent URL from tenant config (tenant is dict[str, Any])
                     default_agent_url = tenant.get("creative_agent_url") or "https://creative.adcontextprotocol.org"
                     for fmt_item in pkg_product.format_ids:
                         if isinstance(fmt_item, str):
                             # Convert legacy string format to FormatId object
                             format_ids_to_use.append(FormatId(agent_url=make_url(default_agent_url), id=fmt_item))
+                        elif isinstance(fmt_item, dict):
+                            # Convert dict to FormatId object (preserves width/height/duration_ms)
+                            # Ensure agent_url is set
+                            if "agent_url" not in fmt_item or not fmt_item["agent_url"]:
+                                fmt_item = {**fmt_item, "agent_url": default_agent_url}
+                            format_ids_to_use.append(FormatId(**fmt_item))
+                        elif isinstance(fmt_item, FormatId):
+                            # Already a FormatId object
+                            format_ids_to_use.append(fmt_item)
                         else:
-                            # Already a FormatId or FormatReference object
+                            # Unknown type - try to cast (backward compatibility)
                             format_ids_to_use.append(cast(FormatId, fmt_item))
                 else:
                     format_ids_to_use = []
