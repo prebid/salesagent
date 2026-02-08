@@ -1,0 +1,139 @@
+{#
+Broadstreet Adapter Product Configuration Template Fragment
+
+This template is included in the product add/edit form when the Broadstreet adapter is selected.
+Zone targeting is the primary configuration for Broadstreet products.
+
+Expected context variables:
+- implementation_config: dict with current product implementation config
+- scriptRoot: URL prefix for reverse proxy support
+#}
+
+<div class="adapter-product-config" data-adapter-type="broadstreet">
+    <div class="form-section">
+        <h3>Broadstreet Zone Targeting</h3>
+        <p class="text-muted" style="margin-bottom: 1rem;">
+            Select which Broadstreet zones this product will deliver to.
+        </p>
+
+        <div class="form-group">
+            <label for="impl_targeted_zone_ids">Target Zone IDs *</label>
+            <input type="text" id="impl_targeted_zone_ids" name="impl_targeted_zone_ids"
+                   value="{{ (implementation_config.get('targeted_zone_ids', [])|join(', ')) if implementation_config else '' }}"
+                   placeholder="e.g., 12345, 67890">
+            <small class="form-text text-muted">
+                Comma-separated list of Broadstreet zone IDs.
+            </small>
+        </div>
+
+        <div style="margin-bottom: 1.5rem;">
+            <button type="button" onclick="loadBroadstreetZones()" class="btn btn-secondary btn-sm">
+                Load Available Zones
+            </button>
+            <span id="zones-loading-status" style="margin-left: 0.5rem;"></span>
+        </div>
+
+        <div id="available-zones-list" style="display: none; margin-bottom: 1.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px; max-height: 200px; overflow-y: auto;">
+            <!-- Zones will be loaded here -->
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="impl_delivery_rate">Delivery Pacing</label>
+                <select id="impl_delivery_rate" name="impl_delivery_rate" class="form-control">
+                    <option value="EVEN" {% if not implementation_config or implementation_config.get('delivery_rate', 'EVEN') == 'EVEN' %}selected{% endif %}>
+                        Even (Spread evenly)
+                    </option>
+                    <option value="FRONTLOADED" {% if implementation_config and implementation_config.get('delivery_rate') == 'FRONTLOADED' %}selected{% endif %}>
+                        Frontloaded
+                    </option>
+                    <option value="ASAP" {% if implementation_config and implementation_config.get('delivery_rate') == 'ASAP' %}selected{% endif %}>
+                        ASAP
+                    </option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="impl_frequency_cap">Frequency Cap (per day)</label>
+                <input type="number" id="impl_frequency_cap" name="impl_frequency_cap"
+                       value="{{ implementation_config.get('frequency_cap', '') if implementation_config else '' }}"
+                       min="1" placeholder="No cap">
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function loadBroadstreetZones() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const statusEl = document.getElementById('zones-loading-status');
+    const listEl = document.getElementById('available-zones-list');
+
+    statusEl.innerHTML = '<span style="color: #6b7280;">Loading zones...</span>';
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/broadstreet/zones', {
+        method: 'GET',
+        credentials: 'same-origin'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.zones && data.zones.length > 0) {
+            statusEl.innerHTML = '<span style="color: #10b981;">' + data.zones.length + ' zones found</span>';
+            listEl.style.display = 'block';
+            listEl.innerHTML = '<strong>Available Zones (click to add):</strong><br>' +
+                data.zones.map(zone =>
+                    '<label style="display: block; margin: 0.25rem 0; cursor: pointer;">' +
+                    '<input type="checkbox" value="' + zone.id + '" onchange="toggleZone(this)"' +
+                    (isZoneSelected(zone.id) ? ' checked' : '') + '> ' +
+                    zone.name + ' (ID: ' + zone.id + ')' +
+                    '</label>'
+                ).join('');
+        } else {
+            statusEl.innerHTML = '<span style="color: #f59e0b;">No zones found</span>';
+            listEl.style.display = 'none';
+        }
+    })
+    .catch(error => {
+        statusEl.innerHTML = '<span style="color: #ef4444;">Error: ' + error.message + '</span>';
+    });
+}
+
+function isZoneSelected(zoneId) {
+    const input = document.getElementById('impl_targeted_zone_ids');
+    const currentIds = input.value.split(',').map(id => id.trim()).filter(id => id);
+    return currentIds.includes(String(zoneId));
+}
+
+function toggleZone(checkbox) {
+    const input = document.getElementById('impl_targeted_zone_ids');
+    const currentIds = input.value.split(',').map(id => id.trim()).filter(id => id);
+
+    if (checkbox.checked) {
+        if (!currentIds.includes(checkbox.value)) {
+            currentIds.push(checkbox.value);
+        }
+    } else {
+        const index = currentIds.indexOf(checkbox.value);
+        if (index > -1) {
+            currentIds.splice(index, 1);
+        }
+    }
+
+    input.value = currentIds.join(', ');
+}
+
+// Collect Broadstreet implementation config values
+function getBroadstreetImplementationConfig() {
+    const zoneIds = document.getElementById('impl_targeted_zone_ids')?.value
+        .split(',')
+        .map(id => id.trim())
+        .filter(id => id) || [];
+
+    return {
+        targeted_zone_ids: zoneIds,
+        delivery_rate: document.getElementById('impl_delivery_rate')?.value || 'EVEN',
+        frequency_cap: parseInt(document.getElementById('impl_frequency_cap')?.value) || null
+    };
+}
+</script>

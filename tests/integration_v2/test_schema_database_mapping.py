@@ -52,6 +52,8 @@ class TestSchemaFieldMapping:
             "publisher_properties",  # Populated from property_tags database column
             # AdCP 2.12.0+ protocol extension field - not stored in database
             "ext",  # Protocol extension field for future protocol additions
+            # AdCP 3.2.0 library field - capability flag, not persisted
+            "property_targeting_allowed",  # Boolean flag from AdCP spec, computed from product config
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)

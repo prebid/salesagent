@@ -433,6 +433,13 @@ def validate_creative_format_against_product(
     if not creative_agent_url or not creative_id:
         return False, "Creative format_id is missing agent_url or id"
 
+    # Helper to normalize URLs for comparison (strip trailing slashes)
+    # Pydantic AnyUrl adds trailing slash when converting to string, causing mismatches
+    def normalize_url(url_val: Any) -> str:
+        if not url_val:
+            return ""
+        return str(url_val).rstrip("/")
+
     # Simple equality check: does creative's format_id match any product format_id?
     for product_format in product_format_ids:
         # Handle both FormatId objects and dicts (database stores as dicts)
@@ -450,8 +457,8 @@ def validate_creative_format_against_product(
         if not product_agent_url or not product_fmt_id:
             continue
 
-        # Format IDs match if both agent_url and id are equal
-        if str(creative_agent_url) == str(product_agent_url) and creative_id == product_fmt_id:
+        # Format IDs match if both agent_url and id are equal (normalized to strip trailing slashes)
+        if normalize_url(creative_agent_url) == normalize_url(product_agent_url) and creative_id == product_fmt_id:
             return True, None
 
     # Build error message with supported formats
@@ -469,9 +476,10 @@ def validate_creative_format_against_product(
             continue
 
         if agent_url and fmt_id:
-            supported_formats.append(f"{agent_url}/{fmt_id}")
+            # Use normalized URL in display to avoid double slashes
+            supported_formats.append(f"{normalize_url(agent_url)}/{fmt_id}")
 
-    creative_format_display = f"{creative_agent_url}/{creative_id}"
+    creative_format_display = f"{normalize_url(creative_agent_url)}/{creative_id}"
     error_msg = (
         f"Creative format '{creative_format_display}' does not match product '{product_name}' ({product_id}). "
         f"Supported formats: {supported_formats}"

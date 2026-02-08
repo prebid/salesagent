@@ -1985,7 +1985,8 @@ class AdCPRequestHandler(RequestHandler):
                 tool_context = MinimalContext.from_request_context()
 
             # Map A2A parameters to ListAuthorizedPropertiesRequest
-            from adcp import ListAuthorizedPropertiesRequest
+            # Note: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0, use local schema
+            from src.core.schemas import ListAuthorizedPropertiesRequest
 
             # Warn about deprecated 'tags' parameter (removed in AdCP 2.5)
             if "tags" in parameters:

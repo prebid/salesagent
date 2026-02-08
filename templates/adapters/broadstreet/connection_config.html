@@ -1,0 +1,153 @@
+{#
+Broadstreet Adapter Connection Configuration Template
+
+This template is included in the settings page when the Broadstreet adapter is selected.
+It provides form fields for BroadstreetConnectionConfig schema fields.
+
+Expected context variables:
+- adapter_config: dict with current adapter configuration
+- scriptRoot: URL prefix for reverse proxy support
+#}
+
+<div class="adapter-connection-config" data-adapter-type="broadstreet">
+    <div class="form-section">
+        <h3>Broadstreet Ads Configuration</h3>
+        <p class="text-muted" style="margin-bottom: 1.5rem;">
+            Connect to your Broadstreet Ads account to enable zone-based ad serving.
+            You can find your API credentials in the Broadstreet dashboard under Settings > API.
+        </p>
+
+        <div class="form-group">
+            <label for="broadstreet_network_id">Network ID *</label>
+            <input type="text" id="broadstreet_network_id" name="broadstreet_network_id"
+                   value="{{ adapter_config.get('network_id', '') if adapter_config else '' }}"
+                   placeholder="e.g., 12345"
+                   required>
+            <small class="form-text text-muted">
+                Your Broadstreet network identifier. Found in the URL when logged into Broadstreet.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="broadstreet_api_key">API Key *</label>
+            <input type="password" id="broadstreet_api_key" name="broadstreet_api_key"
+                   value="{{ adapter_config.get('api_key', '') if adapter_config else '' }}"
+                   placeholder="Enter your Broadstreet API key"
+                   required>
+            <small class="form-text text-muted">
+                API access token from Broadstreet Settings > API > Access Tokens.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="broadstreet_default_advertiser_id">Default Advertiser ID</label>
+            <input type="text" id="broadstreet_default_advertiser_id" name="broadstreet_default_advertiser_id"
+                   value="{{ adapter_config.get('default_advertiser_id', '') if adapter_config else '' }}"
+                   placeholder="Optional - used when principal has no mapping">
+            <small class="form-text text-muted">
+                Fallback advertiser ID for principals without explicit Broadstreet mappings.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="broadstreet_manual_approval_required">
+                <input type="checkbox" id="broadstreet_manual_approval_required" name="broadstreet_manual_approval_required"
+                       {% if adapter_config and adapter_config.get('manual_approval_required') %}checked{% endif %}>
+                Require Manual Approval
+            </label>
+            <small class="form-text text-muted">
+                When enabled, media buy operations require human approval before execution.
+            </small>
+        </div>
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 1rem; align-items: center;">
+            <button type="button" onclick="saveBroadstreetConfig()" class="btn btn-primary">
+                Save Configuration
+            </button>
+            <button type="button" onclick="testBroadstreetConnection()" class="btn btn-secondary">
+                Test Connection
+            </button>
+            <span id="broadstreet-connection-status"></span>
+        </div>
+    </div>
+</div>
+
+<script>
+function saveBroadstreetConfig() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const config = {
+        network_id: document.getElementById('broadstreet_network_id').value,
+        api_key: document.getElementById('broadstreet_api_key').value,
+        default_advertiser_id: document.getElementById('broadstreet_default_advertiser_id').value || null,
+        manual_approval_required: document.getElementById('broadstreet_manual_approval_required').checked
+    };
+
+    // Validate required fields
+    if (!config.network_id || !config.api_key) {
+        showNotification('Network ID and API Key are required', 'error');
+        return;
+    }
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapter-config', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            adapter_type: 'broadstreet',
+            config: config
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showNotification('Configuration saved successfully', 'success');
+        } else {
+            showNotification('Failed to save: ' + (data.error || 'Unknown error'), 'error');
+        }
+    })
+    .catch(error => {
+        showNotification('Error saving configuration: ' + error.message, 'error');
+    });
+}
+
+function testBroadstreetConnection() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const statusEl = document.getElementById('broadstreet-connection-status');
+    const networkId = document.getElementById('broadstreet_network_id').value;
+    const apiKey = document.getElementById('broadstreet_api_key').value;
+
+    if (!networkId || !apiKey) {
+        showNotification('Network ID and API Key are required to test connection', 'error');
+        return;
+    }
+
+    statusEl.innerHTML = '<span style="color: #6b7280;">Testing...</span>';
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/broadstreet/test-connection', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            network_id: networkId,
+            api_key: apiKey
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            statusEl.innerHTML = '<span style="color: #10b981;">✓ Connected to ' + (data.network_name || 'Broadstreet') + '</span>';
+        } else {
+            statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Connection failed') + '</span>';
+        }
+    })
+    .catch(error => {
+        statusEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + error.message + '</span>';
+    });
+}
+</script>

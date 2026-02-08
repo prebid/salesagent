@@ -6,6 +6,7 @@ from .base import AdServerAdapter as AdServerAdapter
 from .base import BaseConnectionConfig as BaseConnectionConfig
 from .base import BaseProductConfig as BaseProductConfig
 from .base import TargetingCapabilities as TargetingCapabilities
+from .broadstreet import BroadstreetAdapter
 from .creative_engine import CreativeEngineAdapter
 from .google_ad_manager import GoogleAdManager as GAMAdapter
 from .kevel import Kevel as KevelAdapter
@@ -16,6 +17,7 @@ from .triton_digital import TritonDigital as TritonAdapter
 ADAPTER_REGISTRY = {
     "gam": GAMAdapter,
     "google_ad_manager": GAMAdapter,
+    "broadstreet": BroadstreetAdapter,
     "kevel": KevelAdapter,
     "mock": MockAdapter,
     "triton": TritonAdapter,

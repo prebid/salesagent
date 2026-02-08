@@ -133,7 +133,7 @@ def setup_adapter(tenant_id, **kwargs):
     return jsonify({"error": "Not yet implemented"}), 501
 
 
-@adapters_bp.route("/api/adapter-config", methods=["POST"])
+@adapters_bp.route("/api/tenant/<tenant_id>/adapter-config", methods=["POST"])
 @log_admin_action("update_adapter_config")
 @require_tenant_access()
 def save_adapter_config(tenant_id, **kwargs):
@@ -221,3 +221,84 @@ def get_adapter_capabilities(adapter_type, tenant_id, **kwargs):
         return jsonify(asdict(schemas.capabilities))
     else:
         return jsonify({})
+
+
+# Broadstreet-specific endpoints
+
+
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/broadstreet/test-connection", methods=["POST"])
+@require_tenant_access()
+def test_broadstreet_connection(tenant_id, **kwargs):
+    """Test Broadstreet API connection with provided credentials."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "No JSON data provided"}), 400
+
+        network_id = data.get("network_id")
+        api_key = data.get("api_key")
+
+        if not network_id or not api_key:
+            return jsonify({"success": False, "error": "network_id and api_key are required"}), 400
+
+        # Test connection by fetching network info
+        from src.adapters.broadstreet import BroadstreetClient
+
+        client = BroadstreetClient(access_token=api_key, network_id=network_id)
+        network_info = client.get_network()
+
+        if network_info:
+            return jsonify(
+                {
+                    "success": True,
+                    "network_name": network_info.get("name", "Unknown"),
+                    "network_id": network_id,
+                }
+            )
+        else:
+            return jsonify({"success": False, "error": "Could not retrieve network information"})
+
+    except Exception as e:
+        logger.error(f"Broadstreet connection test failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/broadstreet/zones", methods=["GET"])
+@require_tenant_access()
+def list_broadstreet_zones(tenant_id, **kwargs):
+    """List available zones from Broadstreet for the tenant's configured account."""
+    try:
+        # Get adapter config for this tenant
+        with get_db_session() as session:
+            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
+            adapter_config = session.scalars(stmt).first()
+
+            if not adapter_config:
+                return jsonify({"zones": [], "error": "No adapter configured"}), 200
+
+            # Get Broadstreet credentials from config_json or legacy columns
+            config = adapter_config.config_json or {}
+            network_id = config.get("network_id") or getattr(adapter_config, "broadstreet_network_id", None)
+            api_key = config.get("api_key") or getattr(adapter_config, "broadstreet_api_key", None)
+
+            if not network_id or not api_key:
+                return jsonify({"zones": [], "error": "Broadstreet not configured"}), 200
+
+            # Fetch zones from Broadstreet
+            from src.adapters.broadstreet import BroadstreetClient
+
+            client = BroadstreetClient(access_token=api_key, network_id=network_id)
+            zones = client.get_zones()
+
+            return jsonify(
+                {
+                    "zones": [
+                        {"id": str(zone.get("id")), "name": zone.get("name", f"Zone {zone.get('id')}")}
+                        for zone in zones
+                    ]
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Error fetching Broadstreet zones: {e}", exc_info=True)
+        return jsonify({"zones": [], "error": str(e)}), 500
