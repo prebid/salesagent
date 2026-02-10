@@ -92,20 +92,62 @@ def get_aee_signal_dimensions() -> list[str]:
     return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.axe_signal]
 
 
+# Explicit mapping from Targeting field names to capability dimension names.
+# v3 structured fields (geo_countries, geo_regions, etc.) map directly without
+# suffix-stripping.  Both inclusion and exclusion variants map to the same
+# capability so exclusion fields are validated alongside inclusion fields.
+FIELD_TO_DIMENSION: dict[str, str] = {
+    # v3 geo fields — inclusion
+    "geo_countries": "geo_country",
+    "geo_regions": "geo_region",
+    "geo_metros": "geo_metro",
+    "geo_postal_areas": "geo_zip",
+    # v3 geo fields — exclusion
+    "geo_countries_exclude": "geo_country",
+    "geo_regions_exclude": "geo_region",
+    "geo_metros_exclude": "geo_metro",
+    "geo_postal_areas_exclude": "geo_zip",
+    # Device / OS / Browser
+    "device_type_any_of": "device_type",
+    "device_type_none_of": "device_type",
+    "os_any_of": "os",
+    "os_none_of": "os",
+    "browser_any_of": "browser",
+    "browser_none_of": "browser",
+    # Content
+    "content_cat_any_of": "content_category",
+    "content_cat_none_of": "content_category",
+    # Media
+    "media_type_any_of": "media_type",
+    "media_type_none_of": "media_type",
+    # Audience
+    "audiences_any_of": "audience_segment",
+    "audiences_none_of": "audience_segment",
+    # Frequency capping
+    "frequency_cap": "frequency_cap",
+    # Managed-only fields
+    "key_value_pairs": "key_value_pairs",
+    # Custom
+    "custom": "custom",
+}
+
+
 def validate_overlay_targeting(targeting: dict[str, Any]) -> list[str]:
-    """
-    Validate that targeting only uses allowed overlay dimensions.
+    """Validate that targeting only uses allowed overlay dimensions.
+
+    Uses an explicit field-to-dimension mapping (FIELD_TO_DIMENSION) instead of
+    suffix-stripping heuristics.  Both inclusion and exclusion field variants
+    are mapped so that exclusion fields are validated alongside their inclusion
+    counterparts.
 
     Returns list of violations (managed-only dimensions used).
     """
     violations = []
-    managed_only = get_managed_only_dimensions()
+    managed_only = set(get_managed_only_dimensions())
 
     for key in targeting:
-        # Check base dimension (remove _any_of/_none_of suffix)
-        base_dimension = key.replace("_any_of", "").replace("_none_of", "")
-
-        if base_dimension in managed_only:
+        dimension = FIELD_TO_DIMENSION.get(key)
+        if dimension and dimension in managed_only:
             violations.append(f"{key} is managed-only and cannot be set via overlay")
 
     return violations
