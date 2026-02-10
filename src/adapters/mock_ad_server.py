@@ -789,12 +789,12 @@ class MockAdServer(AdServerAdapter):
             for package in packages:
                 if package.targeting_overlay:
                     targeting = package.targeting_overlay
-                    if getattr(targeting, "geo_country_any_of", None):
-                        self.log(f"      'countries': {targeting.geo_country_any_of},")
-                    if getattr(targeting, "geo_region_any_of", None):
-                        self.log(f"      'regions': {targeting.geo_region_any_of},")
-                    if getattr(targeting, "geo_metro_any_of", None):
-                        self.log(f"      'metros': {targeting.geo_metro_any_of},")
+                    if targeting.geo_countries:
+                        self.log(f"      'countries': {targeting.geo_countries},")
+                    if targeting.geo_regions:
+                        self.log(f"      'regions': {targeting.geo_regions},")
+                    if targeting.geo_metros:
+                        self.log(f"      'metros': {targeting.geo_metros},")
                     if getattr(targeting, "key_value_pairs", None):
                         self.log(f"      'key_values': {targeting.key_value_pairs},")
                     if getattr(targeting, "media_type_any_of", None):

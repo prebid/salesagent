@@ -106,17 +106,18 @@ class Kevel(AdServerAdapter):
 
         kevel_targeting = {}
 
-        # Geographic targeting
+        # Geographic targeting (v3 structured fields)
         geo = {}
-        if targeting_overlay.geo_country_any_of:
-            geo["countries"] = targeting_overlay.geo_country_any_of
-        if targeting_overlay.geo_region_any_of:
-            geo["regions"] = targeting_overlay.geo_region_any_of
-        if targeting_overlay.geo_metro_any_of:
-            # Convert string metro codes to integers
-            geo["metros"] = [int(m) for m in targeting_overlay.geo_metro_any_of]
-        if targeting_overlay.geo_city_any_of:
-            geo["cities"] = targeting_overlay.geo_city_any_of
+        if targeting_overlay.geo_countries:
+            geo["countries"] = [c.root if hasattr(c, "root") else str(c) for c in targeting_overlay.geo_countries]
+        if targeting_overlay.geo_regions:
+            geo["regions"] = [r.root if hasattr(r, "root") else str(r) for r in targeting_overlay.geo_regions]
+        if targeting_overlay.geo_metros:
+            # Extract metro values from structured objects and convert to integers
+            metro_values = []
+            for metro in targeting_overlay.geo_metros:
+                metro_values.extend(metro.values)
+            geo["metros"] = [int(m) for m in metro_values]
 
         if geo:
             kevel_targeting["geo"] = geo
@@ -292,7 +293,7 @@ class Kevel(AdServerAdapter):
                         if getattr(freq_cap, "scope", None) == "package":
                             self.log("    'FreqCap': 1,  # Suppress after 1 impression")
                             self.log(
-                                f"    'FreqCapDuration': {max(1, freq_cap.suppress_minutes // 60)},  # {freq_cap.suppress_minutes} minutes"
+                                f"    'FreqCapDuration': {int(max(1, freq_cap.suppress_minutes // 60))},  # {freq_cap.suppress_minutes} minutes"
                             )
                             self.log("    'FreqCapType': 1  # per user")
 
@@ -351,9 +352,9 @@ class Kevel(AdServerAdapter):
                             # Kevel's FreqCap = 1 impression
                             # FreqCapDuration in hours, convert from minutes
                             flight_payload["FreqCap"] = 1
-                            flight_payload["FreqCapDuration"] = max(
-                                1, freq_cap.suppress_minutes // 60
-                            )  # Convert to hours, minimum 1
+                            flight_payload["FreqCapDuration"] = int(
+                                max(1, freq_cap.suppress_minutes // 60)
+                            )  # Convert to hours, minimum 1 (int for Kevel API)
                             flight_payload["FreqCapType"] = 1  # 1 = per user (cookie-based)
 
                 flight_response = requests.post(f"{self.base_url}/flight", headers=self.headers, json=flight_payload)

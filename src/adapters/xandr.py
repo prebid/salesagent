@@ -650,20 +650,18 @@ class XandrAdapter(AdServerAdapter):
             }
         }
 
-        # Map targeting to Xandr format
-        if "geo" in targeting:
-            geo = targeting["geo"]
-            if "countries" in geo:
-                profile_data["profile"]["country_targets"] = geo["countries"]
-            if "regions" in geo:
-                profile_data["profile"]["region_targets"] = geo["regions"]
-            if "cities" in geo:
-                profile_data["profile"]["city_targets"] = geo["cities"]
+        # Map v3 targeting fields to Xandr format
+        if "geo_countries" in targeting:
+            profile_data["profile"]["country_targets"] = targeting["geo_countries"]
+        if "geo_regions" in targeting:
+            profile_data["profile"]["region_targets"] = targeting["geo_regions"]
 
-        if "device_types" in targeting:
+        if "device_type_any_of" in targeting:
             # Map to Xandr device types - convert to strings for API
             device_map = {"desktop": "1", "mobile": "2", "tablet": "3", "ctv": "4"}
-            profile_data["profile"]["device_type_targets"] = [device_map.get(d, "1") for d in targeting["device_types"]]
+            profile_data["profile"]["device_type_targets"] = [
+                device_map.get(d, "1") for d in targeting["device_type_any_of"]
+            ]
 
         response = self._make_request("POST", "/profile", profile_data)
         return response["response"]["profile"]["id"]
