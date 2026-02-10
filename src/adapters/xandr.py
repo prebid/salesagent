@@ -333,8 +333,10 @@ class XandrAdapter(AdServerAdapter):
         try:
             # Use V3 consolidated pricing types
             from adcp.types import CpmPricingOption, DeliveryMeasurement, DeliveryType
-            from adcp.types import PriceGuidance as AdCPPriceGuidance
             from adcp.types.generated_poc.core.publisher_property_selector import PublisherPropertySelector1
+            from adcp.types.generated_poc.pricing_options.price_guidance import (
+                PriceGuidance as AdCPPriceGuidance,
+            )
 
             from src.core.schemas import FormatId
 
@@ -357,7 +359,7 @@ class XandrAdapter(AdServerAdapter):
                             pricing_model="cpm",
                             currency="USD",
                             floor_price=0.50,  # V3: floor moved to top-level
-                            price_guidance=AdCPPriceGuidance(p75=10.0),  # type: ignore[arg-type]
+                            price_guidance=AdCPPriceGuidance(p75=10.0),
                         )
                     ],
                     publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
@@ -386,7 +388,7 @@ class XandrAdapter(AdServerAdapter):
                             pricing_model="cpm",
                             currency="USD",
                             floor_price=10.0,  # V3: floor moved to top-level
-                            price_guidance=AdCPPriceGuidance(p75=30.0),  # type: ignore[arg-type]
+                            price_guidance=AdCPPriceGuidance(p75=30.0),
                         )
                     ],
                     publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
@@ -415,7 +417,7 @@ class XandrAdapter(AdServerAdapter):
                             pricing_model="cpm",
                             currency="USD",
                             floor_price=2.0,  # V3: floor moved to top-level
-                            price_guidance=AdCPPriceGuidance(p75=15.0),  # type: ignore[arg-type]
+                            price_guidance=AdCPPriceGuidance(p75=15.0),
                         )
                     ],
                     publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
@@ -445,7 +447,7 @@ class XandrAdapter(AdServerAdapter):
                             pricing_model="cpm",
                             currency="USD",
                             floor_price=5.0,  # V3: floor moved to top-level
-                            price_guidance=AdCPPriceGuidance(p75=25.0),  # type: ignore[arg-type]
+                            price_guidance=AdCPPriceGuidance(p75=25.0),
                         )
                     ],
                     publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]

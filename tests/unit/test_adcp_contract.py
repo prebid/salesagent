@@ -84,9 +84,9 @@ class TestSchemaMatchesLibrary:
         from adcp import (
             GetSignalsRequest as LibGetSignalsRequest,
         )
-        from adcp import (
-            ListAuthorizedPropertiesRequest as LibListAuthorizedPropertiesRequest,
-        )
+
+        # NOTE: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0
+        # We define it locally in src/core/schemas.py
         from adcp import (
             ListCreativeFormatsRequest as LibListCreativeFormatsRequest,
         )
@@ -106,9 +106,8 @@ class TestSchemaMatchesLibrary:
         from src.core.schemas import (
             GetSignalsRequest as LocalGetSignalsRequest,
         )
-        from src.core.schemas import (
-            ListAuthorizedPropertiesRequest as LocalListAuthorizedPropertiesRequest,
-        )
+
+        # NOTE: ListAuthorizedPropertiesRequest comparison skipped - removed from adcp 3.2.0
         from src.core.schemas import (
             ListCreativeFormatsRequest as LocalListCreativeFormatsRequest,
         )
@@ -148,12 +147,8 @@ class TestSchemaMatchesLibrary:
         local_fields = set(LocalListCreativeFormatsRequest.model_fields.keys())
         assert lib_fields == local_fields, f"ListCreativeFormatsRequest drift: lib={lib_fields}, local={local_fields}"
 
-        # ListAuthorizedPropertiesRequest - now extends library, should match
-        lib_fields = set(LibListAuthorizedPropertiesRequest.model_fields.keys())
-        local_fields = set(LocalListAuthorizedPropertiesRequest.model_fields.keys())
-        assert (
-            lib_fields == local_fields
-        ), f"ListAuthorizedPropertiesRequest drift: lib={lib_fields}, local={local_fields}"
+        # NOTE: ListAuthorizedPropertiesRequest comparison skipped - type removed from adcp 3.2.0
+        # We define it locally in src/core/schemas.py with fields: context, ext, property_tags, publisher_domains
 
         # GetSignalsRequest - now has ext field, should match
         lib_fields = set(LibGetSignalsRequest.model_fields.keys())
@@ -2262,14 +2257,15 @@ class TestAdCPContract:
     def test_list_authorized_properties_request_adcp_compliance(self):
         """Test that ListAuthorizedPropertiesRequest complies with AdCP list-authorized-properties-request schema."""
         # Create request with optional fields per spec
-        # Per AdCP spec: context, ext, publisher_domains are all optional
+        # Per AdCP spec: context, ext, publisher_domains, property_tags are all optional
+        # Note: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0, we define it locally
         request = ListAuthorizedPropertiesRequest(publisher_domains=["example.com", "news.example.com"])
 
         # Test AdCP-compliant response - use exclude_none=False to see all fields
         adcp_response = request.model_dump(exclude_none=False)
 
         # Per AdCP spec, all fields are optional
-        optional_fields = ["context", "ext", "publisher_domains"]
+        optional_fields = ["context", "ext", "publisher_domains", "property_tags"]
         for field in optional_fields:
             assert field in adcp_response
 
@@ -2277,8 +2273,8 @@ class TestAdCPContract:
         if adcp_response["publisher_domains"] is not None:
             assert isinstance(adcp_response["publisher_domains"], list)
 
-        # Verify field count expectations - all 3 optional fields
-        assert len(adcp_response) == 3
+        # Verify field count expectations - all 4 optional fields
+        assert len(adcp_response) == 4
 
     def test_list_authorized_properties_response_adcp_compliance(self):
         """Test that ListAuthorizedPropertiesResponse complies with AdCP v2.4 list-authorized-properties-response schema."""
