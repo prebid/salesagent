@@ -525,9 +525,7 @@ class GAMTargetingManager:
                 is_exclude = criterion.get("exclude", False)
 
                 if not key_id or not values:
-                    logger.warning(
-                        f"Skipping malformed criterion in groups targeting: " f"keyId={key_id}, values={values}"
-                    )
+                    logger.warning(f"Skipping malformed criterion in groups targeting: keyId={key_id}, values={values}")
                     continue
 
                 # Resolve values to GAM value IDs

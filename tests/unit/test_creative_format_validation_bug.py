@@ -85,7 +85,8 @@ class TestCreativeFormatValidationBug:
         """Verify validation correctly detects format mismatch."""
         # Creative has a different format than product supports
         creative_format_id = FormatId(
-            agent_url="https://creative.adcontextprotocol.org/", id="video_300x250"  # Different format
+            agent_url="https://creative.adcontextprotocol.org/",
+            id="video_300x250",  # Different format
         )
 
         # Product only supports display format

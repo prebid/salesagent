@@ -45,8 +45,7 @@ def test_incremental_sync_should_skip_stale_marking_in_source():
     has_full_mode_check = 'sync_mode == "full"' in preceding_lines or "sync_mode == 'full'" in preceding_lines
 
     assert has_full_mode_check, (
-        f"_mark_stale_inventory should only be called when sync_mode == 'full'.\n"
-        f"Preceding lines:\n{preceding_lines}"
+        f"_mark_stale_inventory should only be called when sync_mode == 'full'.\nPreceding lines:\n{preceding_lines}"
     )
 
 

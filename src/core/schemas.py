@@ -67,6 +67,11 @@ from adcp.types import (
     CppPricingOption,
     CpvPricingOption,
     FlatRatePricingOption,
+    GeoCountry,
+    GeoMetro,
+    GeoPostalArea,
+    GeoRegion,
+    TargetingOverlay,
     VcpmPricingOption,  # V3: consolidated from VcpmAuctionPricingOption/VcpmFixedRatePricingOption
 )
 
@@ -74,6 +79,9 @@ from adcp.types import (
 from adcp.types import CreativeAsset as LibraryCreativeAsset
 from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
+
+# V3: Structured geo targeting types
+from adcp.types import FrequencyCap as LibraryFrequencyCap
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import Product as LibraryProduct
 from adcp.types import Property as LibraryProperty
@@ -837,14 +845,13 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
     return formats
 
 
-class FrequencyCap(BaseModel):
-    """Simple frequency capping configuration.
+class FrequencyCap(LibraryFrequencyCap):
+    """Frequency capping extending AdCP library type with scope.
 
-    Provides basic impression suppression at the media buy or package level.
-    More sophisticated frequency management is handled by the AXE layer.
+    Inherits suppress_minutes: float from library.
+    Adds scope field for media buy vs package level capping.
     """
 
-    suppress_minutes: int = Field(..., gt=0, description="Suppress impressions for this many minutes after serving")
     scope: Literal["media_buy", "package"] = Field("media_buy", description="Apply at media buy or package level")
 
 
@@ -858,32 +865,36 @@ class TargetingCapability(BaseModel):
     axe_signal: bool | None = False  # Whether this is an AXE signal dimension
 
 
-class Targeting(BaseModel):
-    """Comprehensive targeting options for media buys.
+class Targeting(TargetingOverlay):
+    """Targeting extending AdCP TargetingOverlay with internal dimensions.
 
-    All fields are optional and can be combined for precise audience targeting.
-    Platform adapters will map these to their specific targeting capabilities.
-    Uses any_of/none_of pattern for consistent include/exclude across all dimensions.
+    Inherits v3 structured geo fields from library:
+    - geo_countries, geo_regions, geo_metros, geo_postal_areas
+    - frequency_cap, axe_include_segment, axe_exclude_segment
 
-    Note: Some targeting dimensions are managed-only and cannot be set via overlay.
-    These are typically used for AXE signal integration.
+    Adds exclusion extensions, internal dimensions, and a legacy normalizer
+    that converts flat DB fields to v3 structured format.
     """
 
-    # Geographic targeting - aligned with OpenRTB (overlay access)
-    geo_country_any_of: list[str] | None = None  # ISO country codes: ["US", "CA", "GB"]
-    geo_country_none_of: list[str] | None = None
+    # --- Inherited from TargetingOverlay (7 fields): ---
+    # geo_countries: list[GeoCountry] | None
+    # geo_regions: list[GeoRegion] | None
+    # geo_metros: list[GeoMetro] | None
+    # geo_postal_areas: list[GeoPostalArea] | None
+    # frequency_cap: FrequencyCap | None  (overridden below)
+    # axe_include_segment: str | None
+    # axe_exclude_segment: str | None
 
-    geo_region_any_of: list[str] | None = None  # Region codes: ["NY", "CA", "ON"]
-    geo_region_none_of: list[str] | None = None
+    # Override frequency_cap to use our extended FrequencyCap with scope
+    frequency_cap: FrequencyCap | None = None
 
-    geo_metro_any_of: list[str] | None = None  # Metro/DMA codes: ["501", "803"]
-    geo_metro_none_of: list[str] | None = None
+    # --- Geo exclusion extensions (not in library) ---
+    geo_countries_exclude: list[GeoCountry] | None = None
+    geo_regions_exclude: list[GeoRegion] | None = None
+    geo_metros_exclude: list[GeoMetro] | None = None
+    geo_postal_areas_exclude: list[GeoPostalArea] | None = None
 
-    geo_city_any_of: list[str] | None = None  # City names: ["New York", "Los Angeles"]
-    geo_city_none_of: list[str] | None = None
-
-    geo_zip_any_of: list[str] | None = None  # Postal codes: ["10001", "90210"]
-    geo_zip_none_of: list[str] | None = None
+    # --- Internal dimensions (unchanged) ---
 
     # Device and platform targeting
     device_type_any_of: list[str] | None = None  # ["mobile", "desktop", "tablet", "ctv", "audio", "dooh"]
@@ -913,13 +924,6 @@ class Targeting(BaseModel):
     media_type_any_of: list[str] | None = None  # ["video", "audio", "display", "native"]
     media_type_none_of: list[str] | None = None
 
-    # Frequency control
-    frequency_cap: FrequencyCap | None = None  # Impression limits per user/period
-
-    # AXE segment targeting (AdCP 3.0.3)
-    axe_include_segment: str | None = None  # AXE segment ID to include for targeting
-    axe_exclude_segment: str | None = None  # AXE segment ID to exclude from targeting
-
     # Connection type targeting
     connection_type_any_of: list[int] | None = None  # OpenRTB connection types
     connection_type_none_of: list[int] | None = None
@@ -936,6 +940,147 @@ class Targeting(BaseModel):
     created_at: datetime | None = Field(None, description="Internal: Creation timestamp")
     updated_at: datetime | None = Field(None, description="Internal: Last update timestamp")
     metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_geo(cls, values: Any) -> Any:
+        """Convert flat DB geo fields to v3 structured format.
+
+        Handles reconstruction from legacy database JSON where fields were stored as:
+        - geo_country_any_of: ["US", "CA"] → geo_countries: [GeoCountry("US"), ...]
+        - geo_region_any_of: ["CA", "NY"] → geo_regions: [GeoRegion("US-CA"), ...] (if already ISO 3166-2)
+        - geo_metro_any_of: ["501"] → geo_metros: [{system: "nielsen_dma", values: ["501"]}]
+        - geo_zip_any_of: ["10001"] → geo_postal_areas: [{system: "us_zip", values: ["10001"]}]
+        - *_none_of variants → *_exclude variants
+        """
+        if not isinstance(values, dict):
+            return values
+
+        # Country: flat list → GeoCountry strings
+        if "geo_country_any_of" in values and "geo_countries" not in values:
+            v = values.pop("geo_country_any_of")
+            if v:
+                values["geo_countries"] = v  # GeoCountry is RootModel[str], accepts plain strings
+        if "geo_country_none_of" in values and "geo_countries_exclude" not in values:
+            v = values.pop("geo_country_none_of")
+            if v:
+                values["geo_countries_exclude"] = v
+
+        # Region: flat list → GeoRegion strings (assumes already ISO 3166-2 format)
+        if "geo_region_any_of" in values and "geo_regions" not in values:
+            v = values.pop("geo_region_any_of")
+            if v:
+                values["geo_regions"] = v  # GeoRegion is RootModel[str]
+        if "geo_region_none_of" in values and "geo_regions_exclude" not in values:
+            v = values.pop("geo_region_none_of")
+            if v:
+                values["geo_regions_exclude"] = v
+
+        # Metro: flat list → structured {system, values}
+        if "geo_metro_any_of" in values and "geo_metros" not in values:
+            v = values.pop("geo_metro_any_of")
+            if v:
+                values["geo_metros"] = [{"system": "nielsen_dma", "values": v}]
+        if "geo_metro_none_of" in values and "geo_metros_exclude" not in values:
+            v = values.pop("geo_metro_none_of")
+            if v:
+                values["geo_metros_exclude"] = [{"system": "nielsen_dma", "values": v}]
+
+        # Zip/Postal: flat list → structured {system, values}
+        if "geo_zip_any_of" in values and "geo_postal_areas" not in values:
+            v = values.pop("geo_zip_any_of")
+            if v:
+                values["geo_postal_areas"] = [{"system": "us_zip", "values": v}]
+        if "geo_zip_none_of" in values and "geo_postal_areas_exclude" not in values:
+            v = values.pop("geo_zip_none_of")
+            if v:
+                values["geo_postal_areas_exclude"] = [{"system": "us_zip", "values": v}]
+
+        # Remove city fields (no longer supported, no adapter ever used them)
+        values.pop("geo_city_any_of", None)
+        values.pop("geo_city_none_of", None)
+
+        return values
+
+    # --- Backward-compatible properties for adapters (remove after salesagent-oee/fwm) ---
+
+    @property
+    def geo_country_any_of(self) -> list[str] | None:
+        """Legacy accessor: extract flat country codes from geo_countries."""
+        if not self.geo_countries:
+            return None
+        return [c.root if hasattr(c, "root") else str(c) for c in self.geo_countries]
+
+    @property
+    def geo_country_none_of(self) -> list[str] | None:
+        """Legacy accessor: extract flat country codes from geo_countries_exclude."""
+        if not self.geo_countries_exclude:
+            return None
+        return [c.root if hasattr(c, "root") else str(c) for c in self.geo_countries_exclude]
+
+    @property
+    def geo_region_any_of(self) -> list[str] | None:
+        """Legacy accessor: extract flat region codes from geo_regions."""
+        if not self.geo_regions:
+            return None
+        return [r.root if hasattr(r, "root") else str(r) for r in self.geo_regions]
+
+    @property
+    def geo_region_none_of(self) -> list[str] | None:
+        """Legacy accessor: extract flat region codes from geo_regions_exclude."""
+        if not self.geo_regions_exclude:
+            return None
+        return [r.root if hasattr(r, "root") else str(r) for r in self.geo_regions_exclude]
+
+    @property
+    def geo_metro_any_of(self) -> list[str] | None:
+        """Legacy accessor: flatten metro values from geo_metros."""
+        if not self.geo_metros:
+            return None
+        result = []
+        for metro in self.geo_metros:
+            result.extend(metro.values)
+        return result or None
+
+    @property
+    def geo_metro_none_of(self) -> list[str] | None:
+        """Legacy accessor: flatten metro values from geo_metros_exclude."""
+        if not self.geo_metros_exclude:
+            return None
+        result = []
+        for metro in self.geo_metros_exclude:
+            result.extend(metro.values)
+        return result or None
+
+    @property
+    def geo_zip_any_of(self) -> list[str] | None:
+        """Legacy accessor: flatten postal values from geo_postal_areas."""
+        if not self.geo_postal_areas:
+            return None
+        result = []
+        for area in self.geo_postal_areas:
+            result.extend(area.values)
+        return result or None
+
+    @property
+    def geo_zip_none_of(self) -> list[str] | None:
+        """Legacy accessor: flatten postal values from geo_postal_areas_exclude."""
+        if not self.geo_postal_areas_exclude:
+            return None
+        result = []
+        for area in self.geo_postal_areas_exclude:
+            result.extend(area.values)
+        return result or None
+
+    @property
+    def geo_city_any_of(self) -> None:
+        """Legacy accessor: city targeting removed in v3."""
+        return None
+
+    @property
+    def geo_city_none_of(self) -> None:
+        """Legacy accessor: city targeting removed in v3."""
+        return None
 
     def model_dump(self, **kwargs):
         """Override to provide AdCP-compliant responses while preserving internal fields."""
@@ -1250,19 +1395,18 @@ class Product(LibraryProduct):
                         result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt["id"]))
                 else:
                     raise ValueError(f"Invalid format dict: {fmt}")
-            else:
-                # Other object types (like FormatReference)
-                if hasattr(fmt, "agent_url") and hasattr(fmt, "id"):
-                    result.append(FormatId(agent_url=url(str(fmt.agent_url)), id=fmt.id))
-                elif hasattr(fmt, "format_id"):
-                    from src.core.format_cache import upgrade_legacy_format_id
+            # Other object types (like FormatReference)
+            elif hasattr(fmt, "agent_url") and hasattr(fmt, "id"):
+                result.append(FormatId(agent_url=url(str(fmt.agent_url)), id=fmt.id))
+            elif hasattr(fmt, "format_id"):
+                from src.core.format_cache import upgrade_legacy_format_id
 
-                    try:
-                        result.append(upgrade_legacy_format_id(fmt.format_id))
-                    except ValueError:
-                        result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt.format_id))
-                else:
-                    raise ValueError(f"Cannot serialize format: {fmt}")
+                try:
+                    result.append(upgrade_legacy_format_id(fmt.format_id))
+                except ValueError:
+                    result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt.format_id))
+            else:
+                raise ValueError(f"Cannot serialize format: {fmt}")
 
         return result
 

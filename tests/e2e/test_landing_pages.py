@@ -101,9 +101,9 @@ class TestLandingPages:
                 has_mcp = 'href="/mcp' in content or "mcp endpoint" in content
                 is_pending = "pending configuration" in content or "not configured" in content
 
-                assert (
-                    has_mcp or is_pending
-                ), "Landing page should either show MCP endpoint or pending configuration message"
+                assert has_mcp or is_pending, (
+                    "Landing page should either show MCP endpoint or pending configuration message"
+                )
 
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip(f"Server not running at {base_url}")
@@ -132,9 +132,9 @@ class TestLandingPages:
                 has_a2a = 'href="/a2a' in content or "a2a endpoint" in content
                 is_pending = "pending configuration" in content or "not configured" in content
 
-                assert (
-                    has_a2a or is_pending
-                ), "Landing page should either show A2A endpoint or pending configuration message"
+                assert has_a2a or is_pending, (
+                    "Landing page should either show A2A endpoint or pending configuration message"
+                )
 
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip(f"Server not running at {base_url}")
@@ -158,9 +158,9 @@ class TestLandingPages:
             )
 
             # Should route based on Apx-Incoming-Host (admin domain -> login redirect)
-            assert (
-                response.status_code == 302
-            ), f"Proxied admin domain should redirect to login (302), got {response.status_code}"
+            assert response.status_code == 302, (
+                f"Proxied admin domain should redirect to login (302), got {response.status_code}"
+            )
 
             location = response.headers.get("Location", "")
             assert "/login" in location, f"Proxied admin domain should redirect to /login, got {location}"
@@ -234,9 +234,9 @@ class TestAuthOptionalEndpoints:
             )
 
             # Should succeed with auth
-            assert (
-                response.status_code == 200
-            ), f"list_creative_formats with auth should succeed, got {response.status_code}"
+            assert response.status_code == 200, (
+                f"list_creative_formats with auth should succeed, got {response.status_code}"
+            )
 
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip(f"MCP server not running at {base_url}")
@@ -295,9 +295,9 @@ class TestAuthOptionalEndpoints:
             )
 
             # Should succeed with auth
-            assert (
-                response.status_code == 200
-            ), f"list_authorized_properties with auth should succeed, got {response.status_code}"
+            assert response.status_code == 200, (
+                f"list_authorized_properties with auth should succeed, got {response.status_code}"
+            )
 
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip(f"MCP server not running at {base_url}")
@@ -410,9 +410,9 @@ class TestAuthOptionalEndpoints:
 
                         # pricing_options should be empty or missing for anonymous users
                         pricing_options = product.get("pricing_options", [])
-                        assert (
-                            len(pricing_options) == 0
-                        ), f"Anonymous users should not see pricing, got {len(pricing_options)} options"
+                        assert len(pricing_options) == 0, (
+                            f"Anonymous users should not see pricing, got {len(pricing_options)} options"
+                        )
 
                         # Verify no other sensitive pricing fields leak through
                         sensitive_fields = ["cost", "rate", "price", "cpm", "cpc", "vcpm"]
@@ -458,9 +458,9 @@ class TestProductionLandingPages:
                 allow_redirects=True,
             )
 
-            assert (
-                response.status_code == 200
-            ), f"AccuWeather landing page should return 200, got {response.status_code}"
+            assert response.status_code == 200, (
+                f"AccuWeather landing page should return 200, got {response.status_code}"
+            )
 
             content = response.content.decode("utf-8").lower()
 
@@ -495,9 +495,9 @@ class TestProductionLandingPages:
             content = response.content.decode("utf-8").lower()
 
             # Should contain agent endpoints
-            assert (
-                'href="/mcp' in content or 'href="/a2a' in content
-            ), "test-agent landing page should contain agent endpoints"
+            assert 'href="/mcp' in content or 'href="/a2a' in content, (
+                "test-agent landing page should contain agent endpoints"
+            )
 
         except requests.RequestException as e:
             pytest.skip(f"Could not reach production URL: {e}")

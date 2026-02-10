@@ -182,9 +182,7 @@ class TestTenantBlueprintIntegration:
         mock_session.query.return_value.filter_by.return_value.first.return_value = mock_tenant
         mock_session.query.return_value.filter_by.return_value.count.return_value = 0
         mock_session.query.return_value.filter_by.return_value.filter.return_value.all.return_value = []
-        mock_session.query.return_value.join.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
-            []
-        )
+        mock_session.query.return_value.join.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
 
         response = client.get("/tenant/tenant_123")
         # Will redirect due to decorator, but shows route exists

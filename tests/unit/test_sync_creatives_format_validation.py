@@ -400,7 +400,6 @@ class TestSyncCreativesFormatValidation:
             async def mock_get_format(agent_url, format_id):
                 if "offline.example.com" in agent_url:
                     raise ConnectionError("Connection refused")
-                return None  # Format not found
 
             mock_registry = Mock()
             mock_registry.list_all_formats = mock_list_all_formats

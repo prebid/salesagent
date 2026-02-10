@@ -8,6 +8,7 @@ Usage:
 Returns:
     Exit code 0 if all prerequisites met, 1 otherwise
 """
+
 import os
 import sys
 

@@ -93,9 +93,7 @@ class MediaBuyStatusScheduler:
                         old_status = media_buy.status
                         media_buy.status = new_status
                         updated_count += 1
-                        logger.info(
-                            f"Updated media buy {media_buy.media_buy_id} status: " f"{old_status} -> {new_status}"
-                        )
+                        logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
 
                 if updated_count > 0:
                     session.commit()

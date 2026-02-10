@@ -187,7 +187,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -237,7 +239,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -292,7 +296,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -351,7 +357,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -422,7 +430,9 @@ class TestA2ASkillInvocation:
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             from src.a2a_server import adcp_a2a_server
 
@@ -468,7 +478,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -511,7 +523,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -757,7 +771,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -820,7 +836,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -854,7 +872,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -896,7 +916,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -929,7 +951,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -960,7 +984,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -991,7 +1017,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -1021,7 +1049,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -1051,7 +1081,9 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
+        with (
+            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+        ):
             mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB

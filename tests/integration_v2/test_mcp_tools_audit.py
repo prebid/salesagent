@@ -231,9 +231,9 @@ class TestMCPToolsAudit:
                 if field_name in internal_dict:
                     internal_value = internal_dict[field_name]
                     # Values should be compatible (allowing for type conversions)
-                    assert type(external_value) is type(
-                        internal_value
-                    ), f"Field '{field_name}' type mismatch: {type(external_value)} vs {type(internal_value)}"
+                    assert type(external_value) is type(internal_value), (
+                        f"Field '{field_name}' type mismatch: {type(external_value)} vs {type(internal_value)}"
+                    )
         else:
             # MediaBuyDeliveryData doesn't have model_dump_internal, so model_dump() is used
             # This means we need to ensure model_dump() produces reconstruction-compatible output
@@ -471,8 +471,8 @@ class TestMCPToolsAudit:
                         else:
                             assert modified_value == original_value, f"Date value changed for '{key}'"
                     else:
-                        assert (
-                            modified_value == original_value
-                        ), f"Value changed for '{key}': {original_value} → {modified_value}"
+                        assert modified_value == original_value, (
+                            f"Value changed for '{key}': {original_value} → {modified_value}"
+                        )
 
         print("✅ Testing hooks preserve essential data correctly")

@@ -85,7 +85,6 @@ async def test_force_trigger_delivery_webhook_bypasses_duplicate_check(integrati
         ) as mock_send,
         patch("src.services.delivery_webhook_scheduler._get_media_buy_delivery_impl", return_value=mock_response),
     ):
-
         # 2. Insert a fake log entry simulating a report sent today
         with get_db_session() as session:
             # Use the same logic as scheduler to calculate "today" for reporting

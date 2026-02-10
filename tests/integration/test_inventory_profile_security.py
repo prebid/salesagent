@@ -313,6 +313,6 @@ class TestInventoryProfileSecurity:
             profile_b_fresh = session.scalars(stmt).first()
 
             assert product_b_fresh.inventory_profile_id == profile_b, "Product B should still reference profile_b"
-            assert (
-                profile_b_fresh.format_ids == original_formats_b
-            ), "Profile B format_ids should be unchanged (verified from fresh query)"
+            assert profile_b_fresh.format_ids == original_formats_b, (
+                "Profile B format_ids should be unchanged (verified from fresh query)"
+            )

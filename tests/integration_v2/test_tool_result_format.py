@@ -184,6 +184,6 @@ async def test_tool_result_content_differs_from_structured(mcp_client):
         # Text should be human-readable (not necessarily shorter - empty results can have longer messages)
         assert "product" in text_content.lower(), "Text should describe products"
         # Common patterns: "Found N products" or "No products"
-        assert any(
-            phrase in text_content.lower() for phrase in ["found", "no products", "products matching"]
-        ), "Text should have human-readable summary"
+        assert any(phrase in text_content.lower() for phrase in ["found", "no products", "products matching"]), (
+            "Text should have human-readable summary"
+        )

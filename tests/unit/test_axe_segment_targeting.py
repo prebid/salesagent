@@ -121,7 +121,7 @@ def test_update_media_buy_request_with_axe_segments():
     assert len(request.packages) == 1
     assert request.packages[0].targeting_overlay is not None
     assert request.packages[0].targeting_overlay.axe_include_segment == "x8dj3k"
-    assert request.packages[0].targeting_overlay.geo_country_any_of == ["US", "CA"]
+    assert len(request.packages[0].targeting_overlay.geo_countries) == 2
 
     # Verify serialization
     data = request.model_dump()
@@ -147,22 +147,22 @@ def test_axe_segments_survive_roundtrip():
     # Verify fields survived
     assert reconstructed.axe_include_segment == "x8dj3k"
     assert reconstructed.axe_exclude_segment == "y9kl4m"
-    assert reconstructed.geo_country_any_of == ["US"]
+    assert len(reconstructed.geo_countries) == 1
 
 
 def test_axe_segments_with_other_targeting_dimensions():
     """Test that AXE segments work alongside other targeting dimensions."""
     targeting = Targeting(
         geo_country_any_of=["US"],
-        geo_region_any_of=["NY", "CA"],
+        geo_region_any_of=["US-NY", "US-CA"],
         device_type_any_of=["mobile", "desktop"],
         axe_include_segment="x8dj3k",
         axe_exclude_segment="y9kl4m",
     )
 
     # Verify all fields are present
-    assert targeting.geo_country_any_of == ["US"]
-    assert targeting.geo_region_any_of == ["NY", "CA"]
+    assert len(targeting.geo_countries) == 1
+    assert len(targeting.geo_regions) == 2
     assert targeting.device_type_any_of == ["mobile", "desktop"]
     assert targeting.axe_include_segment == "x8dj3k"
     assert targeting.axe_exclude_segment == "y9kl4m"

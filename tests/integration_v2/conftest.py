@@ -483,13 +483,12 @@ def add_required_setup_data(session, tenant_id: str):
             },
         )
         session.add(principal)
-    else:
-        # Update existing principal to include kevel mapping if missing
-        if existing_principal.platform_mappings and "kevel" not in existing_principal.platform_mappings:
-            existing_principal.platform_mappings["kevel"] = {
-                "advertiser_id": f"kevel_adv_{existing_principal.principal_id}"
-            }
-            attributes.flag_modified(existing_principal, "platform_mappings")
+    # Update existing principal to include kevel mapping if missing
+    elif existing_principal.platform_mappings and "kevel" not in existing_principal.platform_mappings:
+        existing_principal.platform_mappings["kevel"] = {
+            "advertiser_id": f"kevel_adv_{existing_principal.principal_id}"
+        }
+        attributes.flag_modified(existing_principal, "platform_mappings")
 
     # Create GAMInventory if not exists - CRITICAL for inventory sync status validation
     stmt_inventory = select(GAMInventory).filter_by(tenant_id=tenant_id)

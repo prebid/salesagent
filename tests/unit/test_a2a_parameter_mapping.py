@@ -64,9 +64,9 @@ class TestA2AParameterMapping:
 
             # Verify packages data is passed through (may have additional fields from Pydantic serialization)
             assert len(call_kwargs["packages"]) == len(parameters["packages"]), "Package count should match"
-            assert (
-                call_kwargs["packages"][0]["package_id"] == parameters["packages"][0]["package_id"]
-            ), "Package ID should match"
+            assert call_kwargs["packages"][0]["package_id"] == parameters["packages"][0]["package_id"], (
+                "Package ID should match"
+            )
 
             # Should NOT use legacy 'updates' parameter
             assert "updates" not in call_kwargs, "Should not pass legacy 'updates' parameter to core function"
@@ -149,9 +149,9 @@ class TestA2AParameterMapping:
 
             # Error message should mention required parameter
             error_message = str(exc_info.value).lower()
-            assert (
-                "media_buy_id" in error_message or "buyer_ref" in error_message
-            ), "Error message should mention required parameter"
+            assert "media_buy_id" in error_message or "buyer_ref" in error_message, (
+                "Error message should mention required parameter"
+            )
 
     def test_get_media_buy_delivery_uses_plural_media_buy_ids(self):
         """
