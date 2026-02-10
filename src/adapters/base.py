@@ -302,3 +302,26 @@ class AdServerAdapter(ABC):
         """
         # Default implementation returns empty inventory
         return {"placements": [], "ad_units": [], "targeting_options": {}, "creative_specs": [], "properties": {}}
+
+    def get_creative_formats(self) -> list[dict[str, Any]]:
+        """Return creative formats provided by this adapter.
+
+        Override in adapters that act as both sales and creative agents.
+        Returns format definitions that will be included in list_creative_formats.
+
+        Each format dict should match AdCP Format schema:
+        {
+            "format_id": {"id": "cube_3d", "agent_url": "..."},
+            "name": "3D Cube Gallery",
+            "type": "display",
+            "assets": [
+                {"item_type": "individual", "asset_id": "front_image", "asset_type": "image", "required": True},
+                ...
+            ],
+            "description": "6-sided rotating cube with images",
+        }
+
+        Returns:
+            List of format dictionaries (empty by default)
+        """
+        return []

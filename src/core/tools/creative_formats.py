@@ -11,16 +11,10 @@ from typing import TypeVar
 from adcp import FormatId
 from adcp.types import Format as AdcpFormat
 from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.format import Assets, Assets5, AssetsRequired, AssetsRequired1
+from adcp.types.generated_poc.core.format import Assets, Assets5
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
 from adcp.types.generated_poc.enums.format_category import FormatCategory
-from adcp.utils.format_assets import (
-    get_format_assets,
-    get_required_assets,
-    has_assets,
-    normalize_assets_required,
-    uses_deprecated_assets_field,
-)
+from adcp.utils.format_assets import get_format_assets
 
 # TypeVar for Format to preserve subclass type through backward compatibility function
 FormatT = TypeVar("FormatT", bound=AdcpFormat)
@@ -35,47 +29,18 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
-    """Ensure a Format has both `assets` and `assets_required` fields for backward compatibility.
+    """Pass-through function for backward compatibility.
 
-    AdCP 2.18.0 introduced the new `assets` field which includes both required and optional assets.
-    The `assets_required` field is deprecated but must still be populated for old clients.
-
-    This function:
-    - If format has `assets` but not `assets_required`: populates `assets_required` from required assets
-    - If format has `assets_required` but not `assets`: populates `assets` using normalize_assets_required
-    - If format has both or neither: returns unchanged
+    Note: adcp 3.2.0 removed the deprecated `assets_required` field from Format.
+    The new `assets` field includes both required and optional assets with a `required` boolean.
+    This function is kept for API compatibility but now just returns the format unchanged.
 
     Args:
         f: Format object from creative agent
 
     Returns:
-        Format with both asset fields populated for backward compatibility
+        Format unchanged (backward compatibility code removed in adcp 3.2.0 upgrade)
     """
-    if uses_deprecated_assets_field(f) and f.assets_required is not None:
-        # Old format with deprecated assets_required only - populate new assets field
-        normalized: list[Assets | Assets5] = normalize_assets_required(f.assets_required)
-        if normalized:
-            return f.model_copy(update={"assets": normalized})
-
-    elif has_assets(f) and not f.assets_required:
-        # New format with assets only - populate deprecated assets_required for old clients
-        required_assets: list[Assets | Assets5] = get_required_assets(f)
-        if required_assets:
-            # Convert Assets to deprecated AssetsRequired format for backward compatibility
-            assets_required_list: list[AssetsRequired | AssetsRequired1] = []
-            for asset in required_assets:
-                asset_dict = asset.model_dump()
-                # Check if it's an individual asset or repeatable group
-                if asset_dict.get("item_type") == "individual":
-                    ar = AssetsRequired(**asset_dict)
-                    assets_required_list.append(ar)
-                else:
-                    # Repeatable group - use AssetsRequired1
-                    ar1 = AssetsRequired1(**asset_dict)
-                    assets_required_list.append(ar1)
-            return f.model_copy(update={"assets_required": assets_required_list})
-
-    # Both present, neither present, or conversion not needed
     return f
 
 
@@ -84,6 +49,28 @@ from src.core.auth import get_principal_from_context
 from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
 from src.core.validation_helpers import format_validation_error
+
+
+def _infer_asset_type(asset_id: str) -> str:
+    """Infer asset type from asset ID naming convention.
+
+    Args:
+        asset_id: Asset identifier (e.g., "front_image", "youtube_url", "headline")
+
+    Returns:
+        Asset type string (image, video, text, url)
+    """
+    asset_lower = asset_id.lower()
+    if "image" in asset_lower or "logo" in asset_lower:
+        return "image"
+    elif "video" in asset_lower or "youtube" in asset_lower:
+        return "video"
+    elif "url" in asset_lower or "click" in asset_lower:
+        return "url"
+    elif "html" in asset_lower:
+        return "html"
+    else:
+        return "text"  # Default to text for headlines, body, captions, etc.
 
 
 def _list_creative_formats_impl(
@@ -141,6 +128,80 @@ def _list_creative_formats_impl(
             formats = loop.run_until_complete(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
         finally:
             loop.close()
+
+    # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
+    # Check adapter type from tenant config and load formats without instantiating the full adapter
+    try:
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AdapterConfig
+
+        with get_db_session() as session:
+            stmt = select(AdapterConfig).filter_by(tenant_id=tenant["tenant_id"])
+            config_row = session.scalars(stmt).first()
+
+            adapter_type = config_row.adapter_type if config_row else None
+
+            if adapter_type == "broadstreet":
+                # Import Broadstreet templates and convert to formats
+                from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
+                from src.core.schemas import Format, FormatId, url
+
+                agent_url = f"broadstreet://{tenant['tenant_id']}"
+
+                for template_id, template in BROADSTREET_TEMPLATES.items():
+                    try:
+                        format_id = FormatId(
+                            id=f"broadstreet_{template_id}",
+                            agent_url=url(agent_url),
+                        )
+
+                        # Build assets list
+                        assets_list: list[Assets | Assets5] = []
+                        for asset_id in template.get("required_assets", []):
+                            asset_type = _infer_asset_type(asset_id)
+                            assets_list.append(
+                                Assets(
+                                    item_type="individual",
+                                    asset_id=asset_id,
+                                    asset_type=AssetContentType(asset_type),
+                                    required=True,
+                                )
+                            )
+                        for asset_id in template.get("optional_assets", []):
+                            asset_type = _infer_asset_type(asset_id)
+                            assets_list.append(
+                                Assets(
+                                    item_type="individual",
+                                    asset_id=asset_id,
+                                    asset_type=AssetContentType(asset_type),
+                                    required=False,
+                                )
+                            )
+
+                        fmt = Format(
+                            format_id=format_id,
+                            name=str(template["name"]),
+                            type=FormatCategory.display,
+                            description=str(template["description"]) if template.get("description") else None,
+                            assets=assets_list if assets_list else None,
+                            is_standard=False,
+                            platform_config=None,
+                            category=None,
+                            requirements=None,
+                            iab_specification=None,
+                            accepts_3p_tags=None,
+                        )
+                        formats.append(fmt)
+                    except Exception as e:
+                        logger.warning(f"Failed to parse Broadstreet template {template_id}: {e}")
+                        continue
+
+                logger.info(f"Added {len(BROADSTREET_TEMPLATES)} Broadstreet formats")
+    except Exception as e:
+        # Don't fail if adapter formats can't be retrieved
+        logger.debug(f"Could not get adapter formats: {e}")
 
     # Apply filters from request
     if req.type:

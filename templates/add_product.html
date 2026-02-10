@@ -142,6 +142,13 @@
             </div>
         </div>
 
+        <!-- Adapter-Specific Inventory/Targeting Configuration -->
+        {% if adapter_type %}
+        <div id="adapter-product-config" style="margin-top: 2rem;">
+            {% include "adapters/" ~ adapter_type ~ "/product_config.html" ignore missing %}
+        </div>
+        {% endif %}
+
         <h3 style="margin-top: 2rem;">Property Authorization (AdCP) *</h3>
         <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
             <strong>Required:</strong> Specify which properties this product covers so buyers can validate against their authorized properties (adagents.json).
@@ -187,13 +194,6 @@
                 Hold Ctrl/Cmd to select multiple. If none selected, product is visible to all principals.
             </small>
         </div>
-
-        <!-- Adapter-Specific Product Configuration -->
-        {% if adapter_type %}
-        <div id="adapter-product-config" style="margin-top: 2rem;">
-            {% include "adapters/" ~ adapter_type ~ "/product_config.html" ignore missing %}
-        </div>
-        {% endif %}
 
         <!-- Product Details (AdCP Compliance) -->
         <h3 style="margin-top: 2rem;">

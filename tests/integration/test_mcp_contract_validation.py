@@ -8,13 +8,14 @@ preventing validation errors like the 'brief' is required issue.
 from unittest.mock import Mock, patch
 
 import pytest
-from adcp import GetProductsRequest, ListAuthorizedPropertiesRequest
+from adcp import GetProductsRequest
 
 from src.core.schemas import (
     ActivateSignalRequest,
     CreateMediaBuyRequest,
     GetMediaBuyDeliveryRequest,
     GetSignalsRequest,
+    ListAuthorizedPropertiesRequest,  # Removed from adcp 3.2.0, defined locally
     SignalDeliverTo,
     UpdateMediaBuyRequest,
 )

@@ -28,12 +28,11 @@ class TestListAuthorizedPropertiesRequest:
         """Test request with publisher_domains filter."""
         request = ListAuthorizedPropertiesRequest(publisher_domains=["example.com", "news.example.com"])
 
-        # Library wraps strings in PublisherDomain type
+        # Note: adcp 3.2.0 removed ListAuthorizedPropertiesRequest from library
+        # Our local version uses simple list[str] instead of RootModel wrappers
         assert request.publisher_domains is not None
         assert len(request.publisher_domains) == 2
-        # Access the root value for comparison
-        domains = [str(d.root) for d in request.publisher_domains]
-        assert domains == ["example.com", "news.example.com"]
+        assert request.publisher_domains == ["example.com", "news.example.com"]
 
     def test_adcp_compliance(self):
         """Test that ListAuthorizedPropertiesRequest complies with AdCP schema."""
@@ -44,11 +43,12 @@ class TestListAuthorizedPropertiesRequest:
         adcp_response = request.model_dump(exclude_none=False)
 
         # Verify spec fields are present (all optional per spec)
-        spec_fields = {"context", "ext", "publisher_domains"}
+        # Note: adcp 3.2.0 removed this type from library, we define it locally with 4 fields
+        spec_fields = {"context", "ext", "publisher_domains", "property_tags"}
         assert set(adcp_response.keys()) == spec_fields
 
         # Verify field count matches expectation
-        assert len(adcp_response) == 3
+        assert len(adcp_response) == 4
 
 
 class TestProperty:

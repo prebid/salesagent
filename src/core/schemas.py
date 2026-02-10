@@ -30,7 +30,6 @@ from adcp.types import (
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
-from adcp.types import ListAuthorizedPropertiesRequest as LibraryListAuthorizedPropertiesRequest
 from adcp.types import ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest
 from adcp.types import ListCreativeFormatsResponse as LibraryListCreativeFormatsResponse
 from adcp.types import ListCreativesRequest as LibraryListCreativesRequest
@@ -51,6 +50,7 @@ from adcp.types.aliases import (
 from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
+from adcp.types.generated_poc.core.context import ContextObject
 
 # V3: Two Pagination types - batch-based for delivery, page-based for list responses
 from adcp.types.generated_poc.media_buy.list_creatives_response import Pagination as LibraryResponsePagination
@@ -1481,6 +1481,10 @@ class GetProductsRequest(AdCPBaseModel):
         None,
         description="Proposal ID for referencing a previously generated proposal",
     )
+    account_id: str | None = Field(
+        None,
+        description="Account ID for filtering products (adcp 3.2.0+)",
+    )
 
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):
@@ -1898,6 +1902,10 @@ class SyncCreativesRequest(AdCPBaseModel):
     validation_mode: Literal["strict", "lenient"] = Field(
         "strict",
         description="Validation strictness. 'strict' fails entire sync on any validation error. 'lenient' processes valid creatives and reports errors.",
+    )
+    account_id: str | None = Field(
+        None,
+        description="Account ID for scoping creatives (adcp 3.2.0+)",
     )
 
 
@@ -3507,16 +3515,22 @@ class PropertyTagMetadata(BaseModel):
     description: str = Field(..., description="Description of what this tag represents")
 
 
-class ListAuthorizedPropertiesRequest(LibraryListAuthorizedPropertiesRequest):
-    """Extends library ListAuthorizedPropertiesRequest from AdCP spec.
+class ListAuthorizedPropertiesRequest(AdCPBaseModel):
+    """Request payload for list_authorized_properties task (AdCP spec).
 
-    Inherits all AdCP-compliant fields from adcp library:
-    - context: Application-level context
-    - ext: Extension object for custom fields
-    - publisher_domains: Filter to specific publisher domains
+    Note: This type was removed from adcp 3.2.0, so we define it locally.
+
+    Fields:
+    - context: Application-level context (optional)
+    - ext: Extension object for custom fields (optional)
+    - property_tags: Filter to specific property tags (optional)
+    - publisher_domains: Filter to specific publisher domains (optional)
     """
 
-    pass
+    context: ContextObject | None = Field(default=None, description="Application-level context")
+    ext: dict[str, Any] | None = Field(default=None, description="Extension object for custom fields")
+    property_tags: list[str] | None = Field(default=None, description="Filter to specific property tags")
+    publisher_domains: list[str] | None = Field(default=None, description="Filter to specific publisher domains")
 
 
 class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, AdCPBaseModel):

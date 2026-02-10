@@ -153,7 +153,8 @@ class TestCreativeLifecycleMCP:
             session.commit()  # Commit media_buy first so foreign key exists
 
             # Create test media packages for creative assignments
-            from src.core.database.models import MediaPackage
+            from src.core.database.models import MediaPackage, PricingOption
+            from src.core.database.models import Product as DBProduct
 
             package_1 = MediaPackage(
                 media_buy_id="test_media_buy_1",
@@ -173,7 +174,37 @@ class TestCreativeLifecycleMCP:
             session.add(package_1)
             session.add(package_2)
             session.add(package_buyer_ref)
-            session.commit()  # Commit media_packages
+
+            # Create test product for create_media_buy tests
+            # (create_media_buy queries DB directly, not get_product_catalog)
+            # Include all formats from sample_creatives fixture
+            test_product = DBProduct(
+                tenant_id="creative_test",
+                product_id="prod_1",
+                name="Test Product",
+                description="Test product for creative lifecycle test",
+                format_ids=[
+                    {"agent_url": "https://test.com", "id": "display_300x250_image"},
+                    {"agent_url": "https://test.com", "id": "video_instream_15s"},
+                    {"agent_url": "https://test.com", "id": "display_728x90_image"},
+                ],
+                targeting_template={},
+                delivery_type="non_guaranteed",
+                properties=[{"publisher_domain": "test.com", "selection_type": "all"}],
+            )
+            session.add(test_product)
+
+            # Create pricing option for the product
+            pricing_option = PricingOption(
+                tenant_id="creative_test",
+                product_id="prod_1",
+                pricing_model="cpm",
+                currency="USD",
+                is_fixed=False,
+                price_guidance={"floor": 5.0, "p50": 10.0, "p75": 12.0, "p90": 15.0},
+            )
+            session.add(pricing_option)
+            session.commit()  # Commit media_packages and product
 
         # Store test data for easy access
         self.test_tenant_id = "creative_test"
@@ -192,12 +223,13 @@ class TestCreativeLifecycleMCP:
 
         NOTE: Uses structured format objects with agent_url to avoid deprecated string format_ids.
         Available formats from creative agent: display_300x250_image, display_728x90_image, etc.
+        Uses "https://test.com" as agent_url to match test products in setup_test_data.
         """
         return [
             {
                 "creative_id": "creative_display_1",
                 "name": "Banner Ad 300x250",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+                "format_id": {"agent_url": "https://test.com", "id": "display_300x250_image"},
                 "url": "https://example.com/banner.jpg",
                 "click_url": "https://advertiser.com/landing",
                 "width": 300,
@@ -206,7 +238,7 @@ class TestCreativeLifecycleMCP:
             {
                 "creative_id": "creative_video_1",
                 "name": "Video Ad 30sec",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_instream_15s"},
+                "format_id": {"agent_url": "https://test.com", "id": "video_instream_15s"},
                 "url": "https://example.com/video.mp4",
                 "click_url": "https://advertiser.com/video-landing",
                 "width": 640,
@@ -216,7 +248,7 @@ class TestCreativeLifecycleMCP:
             {
                 "creative_id": "creative_display_2",
                 "name": "Leaderboard Ad 728x90",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90_image"},
+                "format_id": {"agent_url": "https://test.com", "id": "display_728x90_image"},
                 "url": "https://example.com/leaderboard.jpg",
                 "click_url": "https://advertiser.com/landing2",
                 "width": 728,
@@ -1068,6 +1100,8 @@ class TestCreativeLifecycleMCP:
                     attributes.flag_modified(creative, "data")
             session.commit()
 
+        # Note: Product and PricingOption are created in setup_test_data fixture
+
         # Import create_media_buy tool
         from src.core.tools import create_media_buy_raw
 
@@ -1078,6 +1112,15 @@ class TestCreativeLifecycleMCP:
             patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
             patch(
                 "src.core.tools.creatives.get_current_tenant",
+                return_value={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
+            ),
+            # Patch media_buy_create module's imports (separate from creatives module)
+            patch(
+                "src.core.tools.media_buy_create.get_principal_id_from_context",
+                return_value=self.test_principal_id,
+            ),
+            patch(
+                "src.core.tools.media_buy_create.get_current_tenant",
                 return_value={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
             ),
             patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
@@ -1161,6 +1204,7 @@ class TestCreativeLifecycleMCP:
                     product_id="prod_1",
                     pricing_option_id="cpm_usd_auction",  # Required by adcp 2.5.0
                     budget=5000.0,  # Float budget, currency from pricing_option
+                    bid_price=10.0,  # Required for auction pricing (floor=5.0, p50=10.0)
                     creative_ids=creative_ids,  # Provide creative_ids
                 )
             ]
@@ -1178,6 +1222,11 @@ class TestCreativeLifecycleMCP:
 
             # Verify response (domain response doesn't have status field)
             # Note: media_buy_id may be transformed by naming template (e.g., "buy_PO-TEST-123")
+            # Debug: print response to understand failures
+            print(f"DEBUG create_media_buy response: {response}")
+            if "errors" in response:
+                print(f"DEBUG errors: {response['errors']}")
+            assert "media_buy_id" in response, f"Expected media_buy_id in response, got: {response.keys()}"
             assert response["media_buy_id"]  # Just verify it exists
             actual_media_buy_id = response["media_buy_id"]
             # Protocol envelope adds status field - domain response just has media_buy_id

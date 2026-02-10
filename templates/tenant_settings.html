@@ -834,6 +834,15 @@
                         <p>API-first ad serving for developers</p>
                     </div>
 
+                    <div class="adapter-card {% if active_adapter == 'broadstreet' %}current{% endif %}"
+                         onclick="selectAdapter('broadstreet')">
+                        {% if active_adapter == 'broadstreet' %}
+                        <span class="adapter-badge">Current</span>
+                        {% endif %}
+                        <h4>Broadstreet Ads</h4>
+                        <p>Simple ad serving for local publishers</p>
+                    </div>
+
                     <div class="adapter-card {% if active_adapter == 'triton' %}current{% endif %}"
                          onclick="selectAdapter('triton')">
                         {% if active_adapter == 'triton' %}
