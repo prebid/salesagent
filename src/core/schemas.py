@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
 from enum import Enum
-from typing import Any, Literal, TypeAlias, Union
+from typing import Any, Literal, TypeAlias
 
 from adcp import Error
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
@@ -2604,6 +2604,8 @@ class PackageRequest(LibraryPackageRequest):
         description="Internal: List of creative IDs to assign (alternative to full creatives objects)",
         exclude=True,
     )
+    # Override library TargetingOverlay -> our Targeting with internal fields + legacy normalizer
+    targeting_overlay: Targeting | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -2999,8 +3001,7 @@ class MediaPackage(BaseModel):
     # Accept library FormatId (not our extended FormatId) to avoid validation errors
     # when Product from library returns LibraryFormatId instances
     format_ids: list[LibraryFormatId]  # FormatId objects per AdCP spec
-    # Accept both Targeting (internal) and TargetingOverlay (adcp library) for compatibility
-    targeting_overlay: Union["Targeting", Any] | None = None
+    targeting_overlay: Targeting | None = None
     buyer_ref: str | None = None  # Optional buyer reference from request package
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option

@@ -88,6 +88,7 @@ from src.core.schemas import (
     PackageRequest,
     Principal,
     Product,
+    Targeting,
 )
 from src.core.schemas import (
     url as make_url,
@@ -664,11 +665,13 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         }
 
                     # Get targeting_overlay from package_config if present
+                    # Fallback to "targeting" key for data written before salesagent-dzr fix
                     targeting_overlay = None
-                    if "targeting_overlay" in package_config and package_config["targeting_overlay"]:
+                    targeting_raw = package_config.get("targeting_overlay") or package_config.get("targeting")
+                    if targeting_raw:
                         from src.core.schemas import Targeting
 
-                        targeting_overlay = Targeting(**package_config["targeting_overlay"])
+                        targeting_overlay = Targeting(**targeting_raw)
 
                     # Create MediaPackage object (what adapters expect)
                     # Note: Product model has 'formats' not 'format_ids'
@@ -2850,10 +2853,11 @@ async def _create_media_buy_impl(
                     cpm=cpm,
                     impressions=int(total_budget / cpm * 1000),
                     format_ids=cast(list[Any], format_ids_to_use),
-                    targeting_overlay=(
+                    targeting_overlay=cast(
+                        "Targeting | None",
                         matching_package.targeting_overlay
                         if matching_package and hasattr(matching_package, "targeting_overlay")
-                        else None
+                        else None,
                     ),
                     buyer_ref=package_buyer_ref,
                     product_id=pkg_product.product_id,  # Include product_id
