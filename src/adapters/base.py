@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from src.core.schemas import Targeting
 
 from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
@@ -48,6 +53,65 @@ class TargetingCapabilities:
     de_plz: bool = False  # German PLZ
     fr_code_postal: bool = False  # French postal code
     au_postcode: bool = False  # Australian postcode
+
+    # Maps from AdCP enum value → dataclass field name.
+    _METRO_FIELDS: ClassVar[tuple[str, ...]] = (
+        "nielsen_dma",
+        "eurostat_nuts2",
+        "uk_itl1",
+        "uk_itl2",
+    )
+    _POSTAL_FIELDS: ClassVar[tuple[str, ...]] = (
+        "us_zip",
+        "us_zip_plus_four",
+        "gb_outward",
+        "gb_full",
+        "ca_fsa",
+        "ca_full",
+        "de_plz",
+        "fr_code_postal",
+        "au_postcode",
+    )
+
+    def validate_geo_systems(self, targeting: Targeting) -> list[str]:
+        """Validate that targeting geo systems are supported by this adapter.
+
+        Checks both include and exclude fields for geo_metros and geo_postal_areas.
+        Returns list of errors naming the unsupported system and supported alternatives.
+        """
+        errors: list[str] = []
+
+        # Collect all metro items from include + exclude
+        metros: list[Any] = []
+        if targeting.geo_metros:
+            metros.extend(targeting.geo_metros)
+        if targeting.geo_metros_exclude:
+            metros.extend(targeting.geo_metros_exclude)
+
+        if metros:
+            supported = [f for f in self._METRO_FIELDS if getattr(self, f)]
+            for metro in metros:
+                system = metro.system.value if hasattr(metro.system, "value") else str(metro.system)
+                if not getattr(self, system, False):
+                    alt = ", ".join(supported) if supported else "none"
+                    errors.append(f"Unsupported metro system '{system}'. This adapter supports: {alt}")
+
+        # Collect all postal items from include + exclude
+        postals: list[Any] = []
+        if targeting.geo_postal_areas:
+            postals.extend(targeting.geo_postal_areas)
+        if targeting.geo_postal_areas_exclude:
+            postals.extend(targeting.geo_postal_areas_exclude)
+
+        if postals:
+            supported = [f for f in self._POSTAL_FIELDS if getattr(self, f)]
+            for area in postals:
+                system = area.system.value if hasattr(area.system, "value") else str(area.system)
+                if not getattr(self, system, False):
+                    alt = ", ".join(supported) if supported else "none"
+                    errors.append(f"Unsupported postal system '{system}'. This adapter supports: {alt}")
+
+        return errors
 
 
 @dataclass
