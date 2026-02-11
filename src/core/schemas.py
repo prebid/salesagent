@@ -1023,6 +1023,7 @@ class Targeting(TargetingOverlay):
 
     def model_dump(self, **kwargs):
         """Override to provide AdCP-compliant responses while preserving internal fields."""
+        kwargs.setdefault("mode", "json")
         # Default to excluding internal and managed fields for AdCP compliance
         exclude = kwargs.get("exclude", set())
         if isinstance(exclude, set):
@@ -1043,6 +1044,7 @@ class Targeting(TargetingOverlay):
 
     def model_dump_internal(self, **kwargs):
         """Dump including internal and managed fields for database storage and internal processing."""
+        kwargs.setdefault("mode", "json")
         # Don't exclude internal fields or managed fields
         kwargs.pop("exclude", None)  # Remove any exclude parameter
         kwargs["exclude"] = {"_had_city_targeting"}  # Always exclude transient flags
