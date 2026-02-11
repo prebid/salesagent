@@ -859,7 +859,7 @@ class TargetingCapability(BaseModel):
     """Defines targeting dimension capabilities and restrictions."""
 
     dimension: str  # e.g., "geo_country", "key_value"
-    access: Literal["overlay", "managed_only", "both"] = "overlay"
+    access: Literal["overlay", "managed_only", "both", "removed"] = "overlay"
     description: str | None = None
     allowed_values: list[str] | None = None  # For restricted value sets
     axe_signal: bool | None = False  # Whether this is an AXE signal dimension

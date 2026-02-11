@@ -17,7 +17,11 @@ TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
     ),
     "geo_region": TargetingCapability(dimension="geo_region", access="overlay", description="State/province targeting"),
     "geo_metro": TargetingCapability(dimension="geo_metro", access="overlay", description="Metro/DMA targeting"),
-    "geo_city": TargetingCapability(dimension="geo_city", access="overlay", description="City-level targeting"),
+    "geo_city": TargetingCapability(
+        dimension="geo_city",
+        access="removed",
+        description="City-level targeting (removed in v3, no adapter supports it)",
+    ),
     "geo_zip": TargetingCapability(dimension="geo_zip", access="overlay", description="Postal code targeting"),
     # Device targeting - available for overlay
     "device_type": TargetingCapability(
@@ -87,6 +91,11 @@ def get_managed_only_dimensions() -> list[str]:
     return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access == "managed_only"]
 
 
+def get_removed_dimensions() -> list[str]:
+    """Get list of dimensions that have been removed."""
+    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access == "removed"]
+
+
 def get_aee_signal_dimensions() -> list[str]:
     """Get list of dimensions used for AEE signals."""
     return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.axe_signal]
@@ -125,6 +134,9 @@ FIELD_TO_DIMENSION: dict[str, str] = {
     "audiences_none_of": "audience_segment",
     # Frequency capping
     "frequency_cap": "frequency_cap",
+    # Removed fields (city targeting removed in v3)
+    "geo_city_any_of": "geo_city",
+    "geo_city_none_of": "geo_city",
     # Managed-only fields
     "key_value_pairs": "key_value_pairs",
     # Custom
@@ -144,10 +156,15 @@ def validate_overlay_targeting(targeting: dict[str, Any]) -> list[str]:
     """
     violations = []
     managed_only = set(get_managed_only_dimensions())
+    removed = set(get_removed_dimensions())
 
     for key in targeting:
         dimension = FIELD_TO_DIMENSION.get(key)
-        if dimension and dimension in managed_only:
+        if not dimension:
+            continue
+        if dimension in managed_only:
             violations.append(f"{key} is managed-only and cannot be set via overlay")
+        elif dimension in removed:
+            violations.append(f"{key} is not supported (targeting dimension '{dimension}' has been removed)")
 
     return violations
