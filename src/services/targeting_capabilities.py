@@ -186,3 +186,89 @@ def validate_overlay_targeting(targeting: dict[str, Any]) -> list[str]:
             violations.append(f"{key} is not supported (targeting dimension '{dimension}' has been removed)")
 
     return violations
+
+
+# Geo inclusion/exclusion field pairs for same-value overlap detection.
+# Per adcp PR #1010: sellers SHOULD reject when the same value appears in both
+# the inclusion and exclusion field at the same level.
+_GEO_SIMPLE_PAIRS: list[tuple[str, str]] = [
+    ("geo_countries", "geo_countries_exclude"),
+    ("geo_regions", "geo_regions_exclude"),
+]
+_GEO_STRUCTURED_PAIRS: list[tuple[str, str]] = [
+    ("geo_metros", "geo_metros_exclude"),
+    ("geo_postal_areas", "geo_postal_areas_exclude"),
+]
+
+
+def _extract_simple_values(items: list) -> set[str]:
+    """Extract string values from a list of GeoCountry/GeoRegion (RootModel[str]) or plain strings."""
+    result: set[str] = set()
+    for item in items:
+        if hasattr(item, "root"):
+            result.add(str(item.root))
+        else:
+            result.add(str(item))
+    return result
+
+
+def _extract_system_values(items: list) -> dict[str, set[str]]:
+    """Extract {system: set(values)} from a list of GeoMetro/GeoPostalArea objects or dicts."""
+    by_system: dict[str, set[str]] = {}
+    for item in items:
+        if hasattr(item, "system"):
+            system = str(item.system.value) if hasattr(item.system, "value") else str(item.system)
+            vals = set(item.values) if hasattr(item, "values") else set()
+        elif isinstance(item, dict):
+            raw_sys = item.get("system", "")
+            system = str(raw_sys.value) if hasattr(raw_sys, "value") else str(raw_sys)
+            vals = set(item.get("values", []))
+        else:
+            continue
+        by_system.setdefault(system, set()).update(vals)
+    return by_system
+
+
+def validate_geo_overlap(targeting: dict[str, Any]) -> list[str]:
+    """Reject same-value overlap between geo inclusion and exclusion fields.
+
+    Per AdCP spec (adcp PR #1010): sellers SHOULD reject requests where the
+    same value appears in both the inclusion and exclusion field at the same
+    level (e.g., geo_countries: ["US"] with geo_countries_exclude: ["US"]).
+
+    Returns list of violation messages.
+    """
+    violations: list[str] = []
+
+    # Simple fields: countries, regions (RootModel[str] or plain strings)
+    for include_field, exclude_field in _GEO_SIMPLE_PAIRS:
+        include_vals = targeting.get(include_field)
+        exclude_vals = targeting.get(exclude_field)
+        if not include_vals or not exclude_vals:
+            continue
+        inc_set = _extract_simple_values(include_vals)
+        exc_set = _extract_simple_values(exclude_vals)
+        overlap = sorted(inc_set & exc_set)
+        if overlap:
+            violations.append(
+                f"{include_field}/{exclude_field} conflict: "
+                f"values {', '.join(overlap)} appear in both inclusion and exclusion"
+            )
+
+    # Structured fields: metros, postal_areas (system + values)
+    for include_field, exclude_field in _GEO_STRUCTURED_PAIRS:
+        include_vals = targeting.get(include_field)
+        exclude_vals = targeting.get(exclude_field)
+        if not include_vals or not exclude_vals:
+            continue
+        inc_by_system = _extract_system_values(include_vals)
+        exc_by_system = _extract_system_values(exclude_vals)
+        for system in sorted(set(inc_by_system) & set(exc_by_system)):
+            overlap = sorted(inc_by_system[system] & exc_by_system[system])
+            if overlap:
+                violations.append(
+                    f"{include_field}/{exclude_field} conflict in system '{system}': "
+                    f"values {', '.join(overlap)} appear in both inclusion and exclusion"
+                )
+
+    return violations

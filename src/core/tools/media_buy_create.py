@@ -1901,6 +1901,7 @@ async def _create_media_buy_impl(
             for pkg in req.packages:
                 if hasattr(pkg, "targeting_overlay") and pkg.targeting_overlay:
                     from src.services.targeting_capabilities import (
+                        validate_geo_overlap,
                         validate_overlay_targeting,
                         validate_unknown_targeting_fields,
                     )
@@ -1916,7 +1917,10 @@ async def _create_media_buy_impl(
                     )
                     access_violations = validate_overlay_targeting(targeting_data)
 
-                    violations = unknown_violations + access_violations
+                    # Reject same-value geo inclusion/exclusion overlap (AdCP SHOULD requirement)
+                    geo_overlap_violations = validate_geo_overlap(targeting_data)
+
+                    violations = unknown_violations + access_violations + geo_overlap_violations
                     if violations:
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
                         raise ValueError(error_msg)
@@ -2713,9 +2717,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         # pkg_product.format_ids are dicts from database JSONB
