@@ -941,16 +941,17 @@ class GAMOrdersManager:
                 # AdCP: suppress_minutes (e.g., 60 = 1 hour)
                 # GAM: maxImpressions=1, numTimeUnits=X, timeUnit="MINUTE"/"HOUR"/"DAY"
 
-                # Determine best GAM time unit
+                # Determine best GAM time unit (int() cast needed because
+                # suppress_minutes is float after salesagent-rlb, GAM API expects int)
                 if freq_cap.suppress_minutes < 60:
                     time_unit = "MINUTE"
-                    num_time_units = freq_cap.suppress_minutes
+                    num_time_units = int(freq_cap.suppress_minutes)
                 elif freq_cap.suppress_minutes < 1440:  # Less than 24 hours
                     time_unit = "HOUR"
-                    num_time_units = freq_cap.suppress_minutes // 60
+                    num_time_units = int(freq_cap.suppress_minutes // 60)
                 else:
                     time_unit = "DAY"
-                    num_time_units = freq_cap.suppress_minutes // 1440
+                    num_time_units = int(freq_cap.suppress_minutes // 1440)
 
                 frequency_caps.append(
                     {

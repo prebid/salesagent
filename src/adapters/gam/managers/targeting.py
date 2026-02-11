@@ -569,16 +569,21 @@ class GAMTargetingManager:
         }
 
     def _lookup_region_id(self, region_code: str) -> str | None:
-        """Look up region ID across all countries.
+        """Look up region ID, accepting ISO 3166-2 format ("US-CA") or bare codes.
 
         Args:
-            region_code: The region code to look up
+            region_code: Region code in ISO 3166-2 ("US-CA") or bare ("CA") format
 
         Returns:
             GAM region ID if found, None otherwise
         """
-        # First check if we have country context (not implemented yet)
-        # For now, search across all countries
+        # ISO 3166-2 format: use country prefix for direct lookup
+        if "-" in region_code:
+            country, region = region_code.split("-", 1)
+            country_regions = self.geo_region_map.get(country, {})
+            return country_regions.get(region)
+
+        # Bare code: search across all countries (backward compat)
         for _country, regions in self.geo_region_map.items():
             if region_code in regions:
                 return regions[region_code]
@@ -614,10 +619,12 @@ class GAMTargetingManager:
         if targeting_overlay.media_type_any_of and "audio" in targeting_overlay.media_type_any_of:
             unsupported.append("Audio media type not supported by Google Ad Manager")
 
-        # City and postal targeting require GAM API lookups (not implemented)
-        if targeting_overlay.geo_city_any_of or targeting_overlay.geo_city_none_of:
-            unsupported.append("City targeting requires GAM geo service integration (not implemented)")
-        if targeting_overlay.geo_zip_any_of or targeting_overlay.geo_zip_none_of:
+        # City targeting removed in v3; check transient flag from normalizer
+        if getattr(targeting_overlay, "_had_city_targeting", False):
+            unsupported.append("City targeting is not supported (removed in v3)")
+
+        # Postal code targeting requires GAM geo service integration (not implemented)
+        if targeting_overlay.geo_postal_areas or targeting_overlay.geo_postal_areas_exclude:
             unsupported.append("Postal code targeting requires GAM geo service integration (not implemented)")
 
         # GAM supports all other standard targeting dimensions
@@ -644,95 +651,102 @@ class GAMTargetingManager:
         # Geographic targeting
         geo_targeting: dict[str, Any] = {}
 
-        # Build targeted locations - only for supported geo features
+        # City targeting removed in v3; check transient flag from normalizer
+        if getattr(targeting_overlay, "_had_city_targeting", False):
+            raise ValueError(
+                "City targeting requested but not supported (removed in v3). "
+                "Use geo_metros for metropolitan area targeting instead."
+            )
+
+        # Postal code targeting not implemented in static mapping - fail loudly
+        if targeting_overlay.geo_postal_areas:
+            raise ValueError(
+                f"Postal code targeting requested but not implemented in GAM static mapping. "
+                f"Cannot fulfill buyer contract for postal areas: {targeting_overlay.geo_postal_areas}."
+            )
+        if targeting_overlay.geo_postal_areas_exclude:
+            raise ValueError(
+                f"Postal code exclusion requested but not implemented in GAM static mapping. "
+                f"Cannot fulfill buyer contract for excluded postal areas: {targeting_overlay.geo_postal_areas_exclude}."
+            )
+
+        # Build targeted locations
         if any(
             [
-                targeting_overlay.geo_country_any_of,
-                targeting_overlay.geo_region_any_of,
-                targeting_overlay.geo_metro_any_of,
+                targeting_overlay.geo_countries,
+                targeting_overlay.geo_regions,
+                targeting_overlay.geo_metros,
             ]
         ):
             geo_targeting["targetedLocations"] = []
 
-            # Map countries
-            if targeting_overlay.geo_country_any_of:
-                for country in targeting_overlay.geo_country_any_of:
-                    if country in self.geo_country_map:
-                        geo_targeting["targetedLocations"].append({"id": self.geo_country_map[country]})
+            # Map countries (GeoCountry.root → plain string)
+            if targeting_overlay.geo_countries:
+                for country in targeting_overlay.geo_countries:
+                    code = country.root if hasattr(country, "root") else str(country)
+                    if code in self.geo_country_map:
+                        geo_targeting["targetedLocations"].append({"id": self.geo_country_map[code]})
                     else:
-                        logger.warning(f"Country code '{country}' not in GAM mapping")
+                        logger.warning(f"Country code '{code}' not in GAM mapping")
 
-            # Map regions
-            if targeting_overlay.geo_region_any_of:
-                for region in targeting_overlay.geo_region_any_of:
-                    region_id = self._lookup_region_id(region)
+            # Map regions (GeoRegion.root → ISO 3166-2 string)
+            if targeting_overlay.geo_regions:
+                for region in targeting_overlay.geo_regions:
+                    code = region.root if hasattr(region, "root") else str(region)
+                    region_id = self._lookup_region_id(code)
                     if region_id:
                         geo_targeting["targetedLocations"].append({"id": region_id})
                     else:
-                        logger.warning(f"Region code '{region}' not in GAM mapping")
+                        logger.warning(f"Region code '{code}' not in GAM mapping")
 
-            # Map metros (DMAs)
-            if targeting_overlay.geo_metro_any_of:
-                for metro in targeting_overlay.geo_metro_any_of:
-                    if metro in self.geo_metro_map:
-                        geo_targeting["targetedLocations"].append({"id": self.geo_metro_map[metro]})
-                    else:
-                        logger.warning(f"Metro code '{metro}' not in GAM mapping")
+            # Map metros (GeoMetro: validate system, extract values)
+            if targeting_overlay.geo_metros:
+                for metro in targeting_overlay.geo_metros:
+                    if metro.system.value != "nielsen_dma":
+                        raise ValueError(
+                            f"Unsupported metro system '{metro.system.value}'. GAM only supports nielsen_dma."
+                        )
+                    for dma_code in metro.values:
+                        if dma_code in self.geo_metro_map:
+                            geo_targeting["targetedLocations"].append({"id": self.geo_metro_map[dma_code]})
+                        else:
+                            logger.warning(f"Metro code '{dma_code}' not in GAM mapping")
 
-        # City and postal code targeting not supported - fail loudly
-        if targeting_overlay.geo_city_any_of:
-            raise ValueError(
-                f"City targeting requested but not supported. "
-                f"Cannot fulfill buyer contract for cities: {targeting_overlay.geo_city_any_of}. "
-                f"Use geo_metro_any_of for metropolitan area targeting instead."
-            )
-        if targeting_overlay.geo_zip_any_of:
-            raise ValueError(
-                f"Postal code targeting requested but not supported. "
-                f"Cannot fulfill buyer contract for postal codes: {targeting_overlay.geo_zip_any_of}. "
-                f"Use geo_metro_any_of for metropolitan area targeting instead."
-            )
-
-        # Build excluded locations - only for supported geo features
+        # Build excluded locations
         if any(
             [
-                targeting_overlay.geo_country_none_of,
-                targeting_overlay.geo_region_none_of,
-                targeting_overlay.geo_metro_none_of,
+                targeting_overlay.geo_countries_exclude,
+                targeting_overlay.geo_regions_exclude,
+                targeting_overlay.geo_metros_exclude,
             ]
         ):
             geo_targeting["excludedLocations"] = []
 
             # Map excluded countries
-            if targeting_overlay.geo_country_none_of:
-                for country in targeting_overlay.geo_country_none_of:
-                    if country in self.geo_country_map:
-                        geo_targeting["excludedLocations"].append({"id": self.geo_country_map[country]})
+            if targeting_overlay.geo_countries_exclude:
+                for country in targeting_overlay.geo_countries_exclude:
+                    code = country.root if hasattr(country, "root") else str(country)
+                    if code in self.geo_country_map:
+                        geo_targeting["excludedLocations"].append({"id": self.geo_country_map[code]})
 
             # Map excluded regions
-            if targeting_overlay.geo_region_none_of:
-                for region in targeting_overlay.geo_region_none_of:
-                    region_id = self._lookup_region_id(region)
+            if targeting_overlay.geo_regions_exclude:
+                for region in targeting_overlay.geo_regions_exclude:
+                    code = region.root if hasattr(region, "root") else str(region)
+                    region_id = self._lookup_region_id(code)
                     if region_id:
                         geo_targeting["excludedLocations"].append({"id": region_id})
 
             # Map excluded metros
-            if targeting_overlay.geo_metro_none_of:
-                for metro in targeting_overlay.geo_metro_none_of:
-                    if metro in self.geo_metro_map:
-                        geo_targeting["excludedLocations"].append({"id": self.geo_metro_map[metro]})
-
-        # City and postal code exclusions not supported - fail loudly
-        if targeting_overlay.geo_city_none_of:
-            raise ValueError(
-                f"City exclusion requested but not supported. "
-                f"Cannot fulfill buyer contract for excluded cities: {targeting_overlay.geo_city_none_of}."
-            )
-        if targeting_overlay.geo_zip_none_of:
-            raise ValueError(
-                f"Postal code exclusion requested but not supported. "
-                f"Cannot fulfill buyer contract for excluded postal codes: {targeting_overlay.geo_zip_none_of}."
-            )
+            if targeting_overlay.geo_metros_exclude:
+                for metro in targeting_overlay.geo_metros_exclude:
+                    if metro.system.value != "nielsen_dma":
+                        raise ValueError(
+                            f"Unsupported metro system '{metro.system.value}'. GAM only supports nielsen_dma."
+                        )
+                    for dma_code in metro.values:
+                        if dma_code in self.geo_metro_map:
+                            geo_targeting["excludedLocations"].append({"id": self.geo_metro_map[dma_code]})
 
         if geo_targeting:
             gam_targeting["geoTargeting"] = geo_targeting
