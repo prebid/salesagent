@@ -961,44 +961,63 @@ class Targeting(TargetingOverlay):
             v = values.pop("geo_country_any_of")
             if v:
                 values["geo_countries"] = v  # GeoCountry is RootModel[str], accepts plain strings
+        elif "geo_country_any_of" in values:
+            values.pop("geo_country_any_of")
         if "geo_country_none_of" in values and "geo_countries_exclude" not in values:
             v = values.pop("geo_country_none_of")
             if v:
                 values["geo_countries_exclude"] = v
+        elif "geo_country_none_of" in values:
+            values.pop("geo_country_none_of")
 
-        # Region: flat list → GeoRegion strings (assumes already ISO 3166-2 format)
+        # Region: flat list → GeoRegion strings
+        # Legacy data stores bare US state codes ("CA"); GeoRegion requires ISO 3166-2 ("US-CA").
+        # All legacy records are US-only, so bare codes without "-" get a "US-" prefix.
         if "geo_region_any_of" in values and "geo_regions" not in values:
             v = values.pop("geo_region_any_of")
             if v:
-                values["geo_regions"] = v  # GeoRegion is RootModel[str]
+                values["geo_regions"] = [r if "-" in r else f"US-{r}" for r in v]
+        elif "geo_region_any_of" in values:
+            values.pop("geo_region_any_of")
         if "geo_region_none_of" in values and "geo_regions_exclude" not in values:
             v = values.pop("geo_region_none_of")
             if v:
-                values["geo_regions_exclude"] = v
+                values["geo_regions_exclude"] = [r if "-" in r else f"US-{r}" for r in v]
+        elif "geo_region_none_of" in values:
+            values.pop("geo_region_none_of")
 
         # Metro: flat list → structured {system, values}
         if "geo_metro_any_of" in values and "geo_metros" not in values:
             v = values.pop("geo_metro_any_of")
             if v:
                 values["geo_metros"] = [{"system": "nielsen_dma", "values": v}]
+        elif "geo_metro_any_of" in values:
+            values.pop("geo_metro_any_of")
         if "geo_metro_none_of" in values and "geo_metros_exclude" not in values:
             v = values.pop("geo_metro_none_of")
             if v:
                 values["geo_metros_exclude"] = [{"system": "nielsen_dma", "values": v}]
+        elif "geo_metro_none_of" in values:
+            values.pop("geo_metro_none_of")
 
         # Zip/Postal: flat list → structured {system, values}
         if "geo_zip_any_of" in values and "geo_postal_areas" not in values:
             v = values.pop("geo_zip_any_of")
             if v:
                 values["geo_postal_areas"] = [{"system": "us_zip", "values": v}]
+        elif "geo_zip_any_of" in values:
+            values.pop("geo_zip_any_of")
         if "geo_zip_none_of" in values and "geo_postal_areas_exclude" not in values:
             v = values.pop("geo_zip_none_of")
             if v:
                 values["geo_postal_areas_exclude"] = [{"system": "us_zip", "values": v}]
+        elif "geo_zip_none_of" in values:
+            values.pop("geo_zip_none_of")
 
-        # Remove city fields (no longer supported, no adapter ever used them)
-        values.pop("geo_city_any_of", None)
-        values.pop("geo_city_none_of", None)
+        # City targeting removed in v3. Set a transient flag so downstream consumers
+        # (e.g. GAM build_targeting) can raise an explicit error instead of silently ignoring.
+        if values.pop("geo_city_any_of", None) or values.pop("geo_city_none_of", None):
+            values["_had_city_targeting"] = True
 
         return values
 
@@ -1095,6 +1114,7 @@ class Targeting(TargetingOverlay):
                     "created_at",
                     "updated_at",
                     "metadata",  # Internal fields
+                    "_had_city_targeting",  # Transient normalizer signal
                 }
             )
             kwargs["exclude"] = exclude
@@ -1105,6 +1125,7 @@ class Targeting(TargetingOverlay):
         """Dump including internal and managed fields for database storage and internal processing."""
         # Don't exclude internal fields or managed fields
         kwargs.pop("exclude", None)  # Remove any exclude parameter
+        kwargs["exclude"] = {"_had_city_targeting"}  # Always exclude transient flags
         return super().model_dump(**kwargs)
 
     def dict(self, **kwargs):
