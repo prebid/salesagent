@@ -1900,15 +1900,23 @@ async def _create_media_buy_impl(
         if req.packages:
             for pkg in req.packages:
                 if hasattr(pkg, "targeting_overlay") and pkg.targeting_overlay:
-                    from src.services.targeting_capabilities import validate_overlay_targeting
+                    from src.services.targeting_capabilities import (
+                        validate_overlay_targeting,
+                        validate_unknown_targeting_fields,
+                    )
 
-                    # Convert to dict for validation - TargetingOverlay always has model_dump
+                    # Reject unknown targeting fields (typos, bogus names) via model_extra
+                    unknown_violations = validate_unknown_targeting_fields(pkg.targeting_overlay)
+
+                    # Convert to dict for dimension-access validation
                     targeting_data: dict[str, Any] = (
                         pkg.targeting_overlay.model_dump(exclude_none=True)
                         if hasattr(pkg.targeting_overlay, "model_dump")
                         else dict(pkg.targeting_overlay)  # Fallback for dict-like objects
                     )
-                    violations = validate_overlay_targeting(targeting_data)
+                    access_violations = validate_overlay_targeting(targeting_data)
+
+                    violations = unknown_violations + access_violations
                     if violations:
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
                         raise ValueError(error_msg)

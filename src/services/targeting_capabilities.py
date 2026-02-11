@@ -144,6 +144,24 @@ FIELD_TO_DIMENSION: dict[str, str] = {
 }
 
 
+def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
+    """Reject unknown fields in a Targeting object via model_extra inspection.
+
+    Pydantic's extra='allow' accepts any field — unknown buyer fields (typos,
+    bogus names) land in model_extra.  This function checks model_extra and
+    reports them as unknown targeting fields.
+
+    This is separate from validate_overlay_targeting() which checks access
+    control (managed-only vs overlay) on *known* fields.
+
+    Returns list of violation messages for unknown fields.
+    """
+    model_extra = getattr(targeting_obj, "model_extra", None)
+    if not model_extra:
+        return []
+    return [f"{key} is not a recognized targeting field" for key in model_extra]
+
+
 def validate_overlay_targeting(targeting: dict[str, Any]) -> list[str]:
     """Validate that targeting only uses allowed overlay dimensions.
 
