@@ -115,7 +115,7 @@ class TestCreativeAssignment:
                 end_time=end_time,
                 brand_manifest={"name": "Creative Assignment Test Campaign"},
                 targeting_overlay={
-                    "geo_country_any_of": ["US"],
+                    "geo_countries": ["US"],
                 },
             )
 
@@ -326,14 +326,14 @@ class TestCreativeAssignment:
                     "product_id": product_id,
                     "pricing_option_id": "cpm_option_1",
                     "budget": 5000.0,
-                    "targeting_overlay": {"geo_country_any_of": ["US"]},
+                    "targeting_overlay": {"geo_countries": ["US"]},
                 },
                 {
                     "buyer_ref": pkg2_ref,
                     "product_id": product_id,
                     "pricing_option_id": "cpm_option_1",
                     "budget": 5000.0,
-                    "targeting_overlay": {"geo_country_any_of": ["CA"]},
+                    "targeting_overlay": {"geo_countries": ["CA"]},
                 },
             ]
 

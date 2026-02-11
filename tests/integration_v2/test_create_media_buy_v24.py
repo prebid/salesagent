@@ -296,7 +296,7 @@ class TestCreateMediaBuyV24Format:
                 pricing_option_id=setup_test_tenant["pricing_option_id_eur"],  # Required field
                 budget=8000.0,  # Float budget, currency from pricing_option
                 targeting_overlay=TargetingOverlay(
-                    geo_country_any_of=["US", "CA"],
+                    geo_countries=["US", "CA"],
                 ),
             )
         ]

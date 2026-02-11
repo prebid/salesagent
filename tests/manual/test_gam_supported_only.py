@@ -109,9 +109,9 @@ class SupportedTargetingTester:
             po_number="GEO_SUPPORTED",
             total_budget=1.00,
             targeting_overlay=Targeting(
-                geo_country_any_of=["US"],
-                geo_region_any_of=["CA", "NY"],
-                geo_metro_any_of=["501", "803"],  # NYC, LA
+                geo_countries=["US"],
+                geo_regions=["US-CA", "US-NY"],
+                geo_metros=[{"system": "nielsen_dma", "values": ["501", "803"]}],
             ),
         )
 
@@ -225,8 +225,8 @@ class SupportedTargetingTester:
             po_number="GEO_AEE_COMBINED",
             total_budget=3.00,
             targeting_overlay=Targeting(
-                geo_country_any_of=["US"],
-                geo_region_any_of=["CA"],
+                geo_countries=["US"],
+                geo_regions=["US-CA"],
                 key_value_pairs=key_value_pairs if key_value_pairs else None,
             ),
         )

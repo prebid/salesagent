@@ -130,7 +130,7 @@ mock_response = {
         ],
         "delivery_type": "guaranteed",
         "targeting_overlay": {
-            "geo_country_any_of": ["United States", "Canada"],
+            "geo_countries": ["United States", "Canada"],
             "device_type_any_of": ["desktop", "tablet"],
             "key_value_pairs": {"content_category": ["sports", "news"], "audience_segment": ["sports_enthusiasts"]},
             "dayparting": {

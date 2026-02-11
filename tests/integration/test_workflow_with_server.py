@@ -73,7 +73,7 @@ async def test_workflow_with_manual_approval():
                         "total_budget": 10000.0,
                         "flight_start_date": "2025-02-01",
                         "flight_end_date": "2025-02-28",
-                        "targeting_overlay": {"geo_country_any_of": ["US"]},
+                        "targeting_overlay": {"geo_countries": ["US"]},
                     }
                 },
             )

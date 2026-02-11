@@ -174,7 +174,7 @@ async def get_products(
 # AdCP Request
 {
   "targeting_overlay": {
-    "geo_country_any_of": ["US"],
+    "geo_countries": ["US"],
     "signals": ["sports_enthusiasts", "auto_intenders"]
   }
 }

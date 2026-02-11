@@ -31,7 +31,7 @@ RUN_OF_SITE_PRODUCTS = [
                 "delivery_options": {"hosted": {}},
             }
         ],
-        "targeting_template": {"geo_country_any_of": ["US", "CA", "UK", "AU"]},
+        "targeting_template": {"geo_countries": ["US", "CA", "UK", "AU"]},
         "delivery_type": "non_guaranteed",
         "is_fixed_price": True,
         "cpm": 2.50,
@@ -56,7 +56,7 @@ RUN_OF_SITE_PRODUCTS = [
                 "delivery_options": {"hosted": {}},
             }
         ],
-        "targeting_template": {"geo_country_any_of": ["US", "CA", "UK", "AU"]},
+        "targeting_template": {"geo_countries": ["US", "CA", "UK", "AU"]},
         "delivery_type": "non_guaranteed",
         "is_fixed_price": True,
         "cpm": 1.75,
@@ -82,7 +82,7 @@ RUN_OF_SITE_PRODUCTS = [
             }
         ],
         "targeting_template": {
-            "geo_country_any_of": ["US", "CA", "UK", "AU"],
+            "geo_countries": ["US", "CA", "UK", "AU"],
             "device_type_any_of": ["desktop", "tablet"],  # Not great on mobile
         },
         "delivery_type": "non_guaranteed",
@@ -109,7 +109,7 @@ RUN_OF_SITE_PRODUCTS = [
                 "delivery_options": {"hosted": {}},
             }
         ],
-        "targeting_template": {"geo_country_any_of": ["US", "CA", "UK", "AU"]},
+        "targeting_template": {"geo_countries": ["US", "CA", "UK", "AU"]},
         "delivery_type": "non_guaranteed",
         "is_fixed_price": False,
         "price_guidance": {"floor": 10.0, "p50": 15.0, "p75": 20.0},
@@ -139,7 +139,7 @@ PREMIUM_PRODUCTS = [
                 "delivery_options": {"hosted": {}},
             }
         ],
-        "targeting_template": {"content_cat_any_of": ["sports"], "geo_country_any_of": ["US"]},
+        "targeting_template": {"content_cat_any_of": ["sports"], "geo_countries": ["US"]},
         "delivery_type": "guaranteed",
         "is_fixed_price": False,
         "price_guidance": {"floor": 8.0, "p50": 12.0, "p75": 15.0},

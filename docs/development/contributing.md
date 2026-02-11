@@ -233,9 +233,9 @@ Each adapter translates AdCP targeting to platform-specific format:
 def _translate_targeting(self, overlay):
     platform_targeting = {}
 
-    if "geo_country_any_of" in overlay:
+    if "geo_countries" in overlay:
         platform_targeting["location"] = {
-            "countries": overlay["geo_country_any_of"]
+            "countries": overlay["geo_countries"]
         }
 
     if "signals" in overlay:

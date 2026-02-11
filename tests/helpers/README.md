@@ -104,7 +104,7 @@ pkg = create_test_package_request(
     budget=5000.0,
     pricing_option_id="premium_cpm",
     creative_ids=["creative_1", "creative_2"],
-    targeting_overlay={"geo_country_any_of": ["US", "CA"]},
+    targeting_overlay={"geo_countries": ["US", "CA"]},
 )
 
 # Use in CreateMediaBuyRequest

@@ -28,7 +28,7 @@ class TestTargetingStorageKey:
         # Create a package_config dict, simulate what update does, and check the key.
         from src.core.schemas import Targeting
 
-        targeting = Targeting(geo_country_any_of=["US"])
+        targeting = Targeting(geo_countries=["US"])
         targeting_dict = targeting.model_dump(exclude_none=True)
 
         # Simulate what media_buy_update SHOULD do
@@ -43,7 +43,7 @@ class TestTargetingStorageKey:
         """media_buy_create reads from 'targeting_overlay' key in package_config."""
         from src.core.schemas import Targeting
 
-        targeting = Targeting(geo_country_any_of=["US"], device_type_any_of=["mobile"])
+        targeting = Targeting(geo_countries=["US"], device_type_any_of=["mobile"])
         targeting_dict = targeting.model_dump(exclude_none=True)
 
         package_config = {"targeting_overlay": targeting_dict}
@@ -60,7 +60,7 @@ class TestTargetingStorageKey:
         """media_buy_create falls back to 'targeting' key for existing data."""
         from src.core.schemas import Targeting
 
-        targeting = Targeting(geo_country_any_of=["US"], device_type_any_of=["desktop"])
+        targeting = Targeting(geo_countries=["US"], device_type_any_of=["desktop"])
         targeting_dict = targeting.model_dump(exclude_none=True)
 
         # Legacy data stored under "targeting" key
@@ -81,7 +81,7 @@ class TestTargetingStorageKey:
 
         # Step 1: update stores targeting
         original = Targeting(
-            geo_country_any_of=["US", "CA"],
+            geo_countries=["US", "CA"],
             device_type_any_of=["mobile"],
         )
         targeting_dict = original.model_dump(exclude_none=True)

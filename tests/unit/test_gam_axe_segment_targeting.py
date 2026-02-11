@@ -55,7 +55,7 @@ def test_axe_include_segment_translates_to_custom_targeting(mock_adapter_config_
         manager = GAMTargetingManager("tenant_123", gam_client=mock_gam_client)
 
         targeting_overlay = Targeting(
-            geo_country_any_of=["US"],
+            geo_countries=["US"],
             axe_include_segment="x8dj3k",
         )
 
@@ -88,7 +88,7 @@ def test_axe_exclude_segment_translates_to_negative_custom_targeting(mock_adapte
         manager = GAMTargetingManager("tenant_123", gam_client=mock_gam_client)
 
         targeting_overlay = Targeting(
-            geo_country_any_of=["US"],
+            geo_countries=["US"],
             axe_exclude_segment="y9kl4m",
         )
 
@@ -120,7 +120,7 @@ def test_axe_segments_both_include_and_exclude(mock_adapter_config_three_keys):
         manager = GAMTargetingManager("tenant_123", gam_client=mock_gam_client)
 
         targeting_overlay = Targeting(
-            geo_country_any_of=["US"],
+            geo_countries=["US"],
             axe_include_segment="x8dj3k",
             axe_exclude_segment="y9kl4m",
         )
@@ -160,7 +160,7 @@ def test_axe_segments_combine_with_other_custom_targeting(mock_adapter_config_th
         # Test AXE segments work correctly - custom GAM key-values require numeric IDs
         # which is a different code path. Just test AXE alone here.
         targeting_overlay = Targeting(
-            geo_country_any_of=["US"],
+            geo_countries=["US"],
             axe_include_segment="x8dj3k",
         )
 
@@ -189,7 +189,7 @@ def test_axe_segments_optional(mock_adapter_config_three_keys):
         manager = GAMTargetingManager("tenant_123")
 
         targeting_overlay = Targeting(
-            geo_country_any_of=["US"],
+            geo_countries=["US"],
             # No axe_include_segment or axe_exclude_segment
         )
 
@@ -209,7 +209,7 @@ def test_axe_include_segment_fails_if_key_not_configured(mock_adapter_config_no_
         manager = GAMTargetingManager("tenant_123")
 
         targeting_overlay = Targeting(
-            geo_country_any_of=["US"],
+            geo_countries=["US"],
             axe_include_segment="x8dj3k",
         )
 
@@ -229,7 +229,7 @@ def test_axe_exclude_segment_fails_if_key_not_configured(mock_adapter_config_no_
         manager = GAMTargetingManager("tenant_123")
 
         targeting_overlay = Targeting(
-            geo_country_any_of=["US"],
+            geo_countries=["US"],
             axe_exclude_segment="y9kl4m",
         )
 

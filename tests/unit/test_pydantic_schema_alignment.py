@@ -153,7 +153,7 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             }
         if "targeting" in field_name.lower():
             return {
-                "geo_country_any_of": ["US"],
+                "geo_countries": ["US"],
             }
         if field_spec and "properties" in field_spec:
             # Generate a minimal object with required fields

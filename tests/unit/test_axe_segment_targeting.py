@@ -12,7 +12,7 @@ from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting, U
 def test_targeting_has_axe_segment_fields():
     """Test that Targeting class includes axe_include_segment and axe_exclude_segment fields."""
     targeting = Targeting(
-        geo_country_any_of=["US"],
+        geo_countries=["US"],
         axe_include_segment="x8dj3k",
         axe_exclude_segment="y9kl4m",
     )
@@ -29,7 +29,7 @@ def test_targeting_has_axe_segment_fields():
 
 def test_targeting_axe_segments_are_optional():
     """Test that AXE segment fields are optional."""
-    targeting = Targeting(geo_country_any_of=["US"])
+    targeting = Targeting(geo_countries=["US"])
 
     # Should not raise validation error
     assert targeting.axe_include_segment is None
@@ -49,7 +49,7 @@ def test_package_targeting_overlay_supports_axe_segments():
         budget=1000.0,  # Required per AdCP spec
         pricing_option_id="pricing_1",  # Required per AdCP spec
         targeting_overlay={
-            "geo_country_any_of": ["US"],
+            "geo_countries": ["US"],
             "axe_include_segment": "x8dj3k",
         },
     )
@@ -79,7 +79,7 @@ def test_create_media_buy_request_with_axe_segments():
                 budget=1000.0,  # Required per AdCP spec
                 pricing_option_id="pricing_1",  # Required per AdCP spec
                 targeting_overlay={
-                    "geo_country_any_of": ["US"],
+                    "geo_countries": ["US"],
                     "axe_include_segment": "x8dj3k",
                     "axe_exclude_segment": "y9kl4m",
                 },
@@ -110,7 +110,7 @@ def test_update_media_buy_request_with_axe_segments():
             AdCPPackageUpdate(
                 package_id="pkg_123",
                 targeting_overlay=Targeting(
-                    geo_country_any_of=["US", "CA"],
+                    geo_countries=["US", "CA"],
                     axe_include_segment="x8dj3k",
                 ),
             )
@@ -133,7 +133,7 @@ def test_axe_segments_survive_roundtrip():
     """Test that AXE segment fields survive serialization/deserialization roundtrip."""
     # Create targeting with AXE segments
     original = Targeting(
-        geo_country_any_of=["US"],
+        geo_countries=["US"],
         axe_include_segment="x8dj3k",
         axe_exclude_segment="y9kl4m",
     )
@@ -153,8 +153,8 @@ def test_axe_segments_survive_roundtrip():
 def test_axe_segments_with_other_targeting_dimensions():
     """Test that AXE segments work alongside other targeting dimensions."""
     targeting = Targeting(
-        geo_country_any_of=["US"],
-        geo_region_any_of=["US-NY", "US-CA"],
+        geo_countries=["US"],
+        geo_regions=["US-NY", "US-CA"],
         device_type_any_of=["mobile", "desktop"],
         axe_include_segment="x8dj3k",
         axe_exclude_segment="y9kl4m",
