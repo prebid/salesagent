@@ -307,7 +307,9 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
                             session.commit()
                         else:
-                            logger.info(f"Fetched real properties from {domain}: {domain_properties_created} created")
+                            logger.info(
+                                f"Fetched real properties from {domain}: " f"{domain_properties_created} created"
+                            )
 
                 return jsonify(
                     {

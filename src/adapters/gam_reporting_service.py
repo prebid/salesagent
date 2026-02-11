@@ -202,29 +202,30 @@ class GAMReportingService:
                 start_date = (now - timedelta(days=90)).replace(hour=0, minute=0, second=0, microsecond=0)
                 end_date = now
                 granularity = "total"
-        # Include DATE dimension for time-series data
-        elif date_range == "today":
-            # Today by hour - need both DATE and HOUR dimensions for hourly reporting
-            dimensions = ["DATE", "HOUR"] + base_dimensions
-            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date = now
-            granularity = "hourly"
-        elif date_range == "this_month":
-            # This month by day
-            dimensions = ["DATE"] + base_dimensions
-            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            end_date = now
-            granularity = "daily"
-        else:  # lifetime
-            # Lifetime by day - limit based on whether we're getting detailed dimensions
-            dimensions = ["DATE"] + base_dimensions
-            # Reduce to 30 days if we have ad unit or country dimensions to avoid timeouts
-            if include_country or include_ad_unit:
-                start_date = (now - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
-            else:
-                start_date = (now - timedelta(days=90)).replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date = now
-            granularity = "daily"
+        else:
+            # Include DATE dimension for time-series data
+            if date_range == "today":
+                # Today by hour - need both DATE and HOUR dimensions for hourly reporting
+                dimensions = ["DATE", "HOUR"] + base_dimensions
+                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = now
+                granularity = "hourly"
+            elif date_range == "this_month":
+                # This month by day
+                dimensions = ["DATE"] + base_dimensions
+                start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                end_date = now
+                granularity = "daily"
+            else:  # lifetime
+                # Lifetime by day - limit based on whether we're getting detailed dimensions
+                dimensions = ["DATE"] + base_dimensions
+                # Reduce to 30 days if we have ad unit or country dimensions to avoid timeouts
+                if include_country or include_ad_unit:
+                    start_date = (now - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+                else:
+                    start_date = (now - timedelta(days=90)).replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = now
+                granularity = "daily"
 
         return dimensions, start_date, end_date, granularity
 
@@ -583,11 +584,12 @@ class GAMReportingService:
             else:
                 # Yesterday's data should be complete
                 data_valid_until = (now - timedelta(days=1)).replace(hour=23, minute=59, second=59)
-        # Same as this_month for the most recent data
-        elif now.hour < 7:
-            data_valid_until = (now - timedelta(days=2)).replace(hour=23, minute=59, second=59)
-        else:
-            data_valid_until = (now - timedelta(days=1)).replace(hour=23, minute=59, second=59)
+        else:  # lifetime
+            # Same as this_month for the most recent data
+            if now.hour < 7:
+                data_valid_until = (now - timedelta(days=2)).replace(hour=23, minute=59, second=59)
+            else:
+                data_valid_until = (now - timedelta(days=1)).replace(hour=23, minute=59, second=59)
 
         return data_valid_until
 

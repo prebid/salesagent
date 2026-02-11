@@ -140,7 +140,7 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
                 except (TypeError, ValueError):
                     input_repr = repr(input_val)
                 error_details.append(
-                    f"  • {field_path}: Extra field not allowed by AdCP spec.\n    Received value: {input_repr}"
+                    f"  • {field_path}: Extra field not allowed by AdCP spec.\n" f"    Received value: {input_repr}"
                 )
             else:
                 error_details.append(f"  • {field_path}: Extra field not allowed by AdCP spec")

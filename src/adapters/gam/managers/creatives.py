@@ -934,7 +934,7 @@ class GAMCreativesManager:
                 else:
                     # No landing page to embed - ignore click tracker to avoid broken redirect
                     logger.warning(
-                        "Click tracker has {REDIRECT_URL} macro but no landing page provided. Click tracker ignored."
+                        "Click tracker has {REDIRECT_URL} macro but no landing page provided. " "Click tracker ignored."
                     )
             elif original_destination:
                 # Click tracker missing {REDIRECT_URL} - would lose landing page

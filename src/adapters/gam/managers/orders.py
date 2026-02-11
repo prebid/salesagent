@@ -708,10 +708,13 @@ class GAMOrdersManager:
                                 )
                         # If filtering removed all placeholders, keep originals (fail-safe)
                         # This shouldn't happen if creatives have valid dimensions
-            # No creatives in package - placeholders are optional
-            # Allow empty array if no format_ids and no creatives
-            elif not creative_placeholders:
-                log("  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]")
+            else:
+                # No creatives in package - placeholders are optional
+                # Allow empty array if no format_ids and no creatives
+                if not creative_placeholders:
+                    log(
+                        "  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]"
+                    )
 
             # Determine goal type and units
             goal_type = impl_config.get("primary_goal_type", "LIFETIME")
@@ -802,7 +805,8 @@ class GAMOrdersManager:
                 # GAM CPD = cost per day (e.g., $10/day for 10-day campaign)
                 if pricing_model == "flat_rate":
                     campaign_days = (end_time - start_time).days
-                    campaign_days = max(campaign_days, 1)  # Minimum 1 day for same-day campaigns
+                    if campaign_days < 1:
+                        campaign_days = 1  # Minimum 1 day for same-day campaigns
 
                     cpd_rate = rate / campaign_days
                     log(f"  FLAT_RATE: ${rate:,.2f} total cost / {campaign_days} days → ${cpd_rate:,.2f} CPD")
@@ -942,7 +946,7 @@ class GAMOrdersManager:
                 # GAM: maxImpressions=1, numTimeUnits=X, timeUnit="MINUTE"/"HOUR"/"DAY"
 
                 # Determine best GAM time unit (int() cast needed because
-                # suppress_minutes is float after salesagent-rlb, GAM API expects int)
+                # suppress_minutes is float after library type inheritance, GAM API expects int)
                 if freq_cap.suppress_minutes < 60:
                     time_unit = "MINUTE"
                     num_time_units = int(freq_cap.suppress_minutes)

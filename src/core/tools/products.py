@@ -206,14 +206,15 @@ async def _get_products_impl(
         elif hasattr(brand_manifest_unwrapped, "__str__") and str(brand_manifest_unwrapped).startswith("http"):
             # brand_manifest is AnyUrl object from Pydantic
             offering = f"Brand at {brand_manifest_unwrapped}"
-        # brand_manifest is a BrandManifest object or dict
-        # Per AdCP spec: either name OR url is required
-        elif hasattr(brand_manifest_unwrapped, "name") and brand_manifest_unwrapped.name:
-            offering = brand_manifest_unwrapped.name
-        elif hasattr(brand_manifest_unwrapped, "url") and brand_manifest_unwrapped.url:
-            offering = f"Brand at {brand_manifest_unwrapped.url}"
-        elif isinstance(brand_manifest_unwrapped, dict):
-            offering = brand_manifest_unwrapped.get("name") or brand_manifest_unwrapped.get("url", "")
+        else:
+            # brand_manifest is a BrandManifest object or dict
+            # Per AdCP spec: either name OR url is required
+            if hasattr(brand_manifest_unwrapped, "name") and brand_manifest_unwrapped.name:
+                offering = brand_manifest_unwrapped.name
+            elif hasattr(brand_manifest_unwrapped, "url") and brand_manifest_unwrapped.url:
+                offering = f"Brand at {brand_manifest_unwrapped.url}"
+            elif isinstance(brand_manifest_unwrapped, dict):
+                offering = brand_manifest_unwrapped.get("name") or brand_manifest_unwrapped.get("url", "")
 
     # Check brand_manifest_policy from tenant settings
     brand_manifest_policy = tenant.get("brand_manifest_policy", "require_auth")
@@ -754,9 +755,7 @@ async def _get_products_impl(
                         is_supported = pricing_model in supported_models
                         inner.supported = is_supported  # type: ignore[union-attr]
                         if not is_supported:
-                            inner.unsupported_reason = (  # type: ignore[union-attr]
-                                f"Current adapter does not support {pricing_model.upper()} pricing"  # type: ignore[union-attr]
-                            )
+                            inner.unsupported_reason = f"Current adapter does not support {pricing_model.upper()} pricing"  # type: ignore[union-attr]
         except Exception as e:
             logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
 

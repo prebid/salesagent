@@ -110,7 +110,7 @@ def _list_authorized_properties_impl(
             if not publisher_domains:
                 empty_response_data: dict[str, Any] = {"publisher_domains": []}
                 empty_response_data["portfolio_description"] = (
-                    "No publisher partnerships are currently configured. Publishers can be added via the Admin UI."
+                    "No publisher partnerships are currently configured. " "Publishers can be added via the Admin UI."
                 )
                 response = ListAuthorizedPropertiesResponse(**empty_response_data)
 

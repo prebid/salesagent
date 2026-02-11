@@ -1350,7 +1350,8 @@ def get_inventory_sizes(tenant_id):
             sorted_sizes = sorted(sizes, key=size_sort_key)
 
             logger.info(
-                f"Extracted {len(sorted_sizes)} unique sizes from {len(items)} inventory items for tenant {tenant_id}"
+                f"Extracted {len(sorted_sizes)} unique sizes from "
+                f"{len(items)} inventory items for tenant {tenant_id}"
             )
 
             return jsonify({"sizes": sorted_sizes, "count": len(sorted_sizes)})

@@ -433,19 +433,20 @@ class PolicyService:
                 # Delete currency
                 if currency_data.currency_code in existing_limits:
                     session.delete(existing_limits[currency_data.currency_code])
-            # Update or create currency
-            elif currency_data.currency_code in existing_limits:
-                # Update existing
-                limit = existing_limits[currency_data.currency_code]
-                limit.min_package_budget = currency_data.min_package_budget
-                limit.max_daily_package_spend = currency_data.max_daily_package_spend
-                limit.updated_at = datetime.now(UTC)
             else:
-                # Create new
-                limit = CurrencyLimit(
-                    tenant_id=tenant_id,
-                    currency_code=currency_data.currency_code,
-                    min_package_budget=currency_data.min_package_budget,
-                    max_daily_package_spend=currency_data.max_daily_package_spend,
-                )
-                session.add(limit)
+                # Update or create currency
+                if currency_data.currency_code in existing_limits:
+                    # Update existing
+                    limit = existing_limits[currency_data.currency_code]
+                    limit.min_package_budget = currency_data.min_package_budget
+                    limit.max_daily_package_spend = currency_data.max_daily_package_spend
+                    limit.updated_at = datetime.now(UTC)
+                else:
+                    # Create new
+                    limit = CurrencyLimit(
+                        tenant_id=tenant_id,
+                        currency_code=currency_data.currency_code,
+                        min_package_budget=currency_data.min_package_budget,
+                        max_daily_package_spend=currency_data.max_daily_package_spend,
+                    )
+                    session.add(limit)

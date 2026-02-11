@@ -320,7 +320,7 @@ class CreativeAgentRegistry:
                 error_msg = (
                     getattr(result, "error", None) or getattr(result, "message", None) or "No error details provided"
                 )
-                logger.error(f"Creative agent {agent.name} returned FAILED status. Error: {error_msg}")
+                logger.error(f"Creative agent {agent.name} returned FAILED status. " f"Error: {error_msg}")
                 debug_info = getattr(result, "debug_info", None)
                 if debug_info:
                     logger.debug(f"Debug info: {debug_info}")

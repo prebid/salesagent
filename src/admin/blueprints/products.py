@@ -455,9 +455,7 @@ def list_products(tenant_id):
                 formats_data = (
                     product.format_ids
                     if isinstance(product.format_ids, list)
-                    else json.loads(product.format_ids)
-                    if product.format_ids
-                    else []
+                    else json.loads(product.format_ids) if product.format_ids else []
                 )
 
                 # Debug: Log raw formats data
@@ -533,16 +531,12 @@ def list_products(tenant_id):
                     "countries": (
                         product.countries
                         if isinstance(product.countries, list)
-                        else json.loads(product.countries)
-                        if product.countries
-                        else []
+                        else json.loads(product.countries) if product.countries else []
                     ),
                     "implementation_config": (
                         product.implementation_config
                         if isinstance(product.implementation_config, dict)
-                        else json.loads(product.implementation_config)
-                        if product.implementation_config
-                        else {}
+                        else json.loads(product.implementation_config) if product.implementation_config else {}
                     ),
                     "created_at": product.created_at if hasattr(product, "created_at") else None,
                     "inventory_details": inventory_details.get(
@@ -1970,18 +1964,14 @@ def edit_product(tenant_id, product_id):
             implementation_config = (
                 product.implementation_config
                 if isinstance(product.implementation_config, dict)
-                else json.loads(product.implementation_config)
-                if product.implementation_config
-                else {}
+                else json.loads(product.implementation_config) if product.implementation_config else {}
             )
 
             # Parse targeting_template - build from implementation_config if not set
             targeting_template = (
                 product.targeting_template
                 if isinstance(product.targeting_template, dict)
-                else json.loads(product.targeting_template)
-                if product.targeting_template
-                else {}
+                else json.loads(product.targeting_template) if product.targeting_template else {}
             )
 
             # If targeting_template doesn't have key_value_pairs but implementation_config has custom_targeting_keys,
@@ -2000,16 +1990,12 @@ def edit_product(tenant_id, product_id):
                 "formats": (
                     product.format_ids
                     if isinstance(product.format_ids, list)
-                    else json.loads(product.format_ids)
-                    if product.format_ids
-                    else []
+                    else json.loads(product.format_ids) if product.format_ids else []
                 ),
                 "countries": (
                     product.countries
                     if isinstance(product.countries, list)
-                    else json.loads(product.countries)
-                    if product.countries
-                    else []
+                    else json.loads(product.countries) if product.countries else []
                 ),
                 "implementation_config": implementation_config,
                 "targeting_template": targeting_template,

@@ -4,9 +4,8 @@
 import sys
 from pathlib import Path
 
-from alembic.config import Config
-
 from alembic import command
+from alembic.config import Config
 
 
 def run_migrations(exit_on_error=True):

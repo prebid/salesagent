@@ -25,8 +25,6 @@ from dataclasses import dataclass
 class TestScenario:
     """Parsed test scenario from keyword parsing."""
 
-    __test__ = False  # Not a pytest test class — prevents PytestCollectionWarning
-
     # Timing control
     delay_seconds: int | None = None
     use_async: bool = False
