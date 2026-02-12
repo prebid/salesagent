@@ -316,7 +316,7 @@ class AdCPRequestHandler(RequestHandler):
             tool_name=tool_name,
             request_timestamp=datetime.now(UTC),
             metadata={"source": "a2a_server", "protocol": "a2a_jsonrpc"},
-            testing_context=AdCPTestContext().model_dump(),  # Default testing context for A2A requests
+            testing_context=AdCPTestContext().model_dump(mode="json"),  # Default testing context for A2A requests
         )
 
     def _tool_context_to_mcp_context(self, tool_context: ToolContext) -> ToolContext:
@@ -1031,7 +1031,7 @@ class AdCPRequestHandler(RequestHandler):
         # Yield a single event with the complete task
         # result can be Task, Message, or other A2A types - all have model_dump()
         # mypy doesn't understand that union members all have model_dump()
-        yield Event(type="task_update", data=result.model_dump())  # type: ignore[operator]
+        yield Event(type="task_update", data=result.model_dump(mode="json"))  # type: ignore[operator]
 
     async def on_get_task(
         self,
@@ -1531,7 +1531,7 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(response, dict):
                 response_data = response
             else:
-                response_data = response.model_dump()
+                response_data = response.model_dump(mode="json")
 
             # Add A2A protocol field: message for agent communication
             # All AdCP response types support __str__() for human-readable messages
@@ -1611,7 +1611,7 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(response, dict):
                 response_data = response
             else:
-                response_data = response.model_dump()
+                response_data = response.model_dump(mode="json")
 
             # Add A2A protocol fields: success indicator and message
             # Check if there are domain-level errors (per AdCP spec)
@@ -1670,7 +1670,7 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(response, dict):
                 response_data = response
             else:
-                response_data = response.model_dump()
+                response_data = response.model_dump(mode="json")
 
             # Add A2A protocol fields for agent communication
             # Success means the operation completed (even if some creatives had errors)
@@ -1716,7 +1716,7 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(response, dict):
                 response_data = response
             else:
-                response_data = response.model_dump()
+                response_data = response.model_dump(mode="json")
 
             # Add A2A protocol field: message for agent communication
             response_data["message"] = str(response)
@@ -1949,7 +1949,7 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(response, dict):
                 response_data = response
             else:
-                response_data = response.model_dump()
+                response_data = response.model_dump(mode="json")
 
             # Add A2A protocol field: message for agent communication
             response_data["message"] = str(response)
@@ -2008,7 +2008,7 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(response, dict):
                 return response
             else:
-                return response.model_dump()
+                return response.model_dump(mode="json")
 
         except Exception as e:
             logger.error(f"Error in list_authorized_properties skill: {e}")
@@ -2061,7 +2061,7 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(response, dict):
                 return response
             else:
-                return response.model_dump()
+                return response.model_dump(mode="json")
 
         except Exception as e:
             logger.error(f"Error in update_media_buy skill: {e}")
@@ -2113,7 +2113,7 @@ class AdCPRequestHandler(RequestHandler):
             )
 
             # Convert response to dict for A2A format
-            return response.model_dump() if hasattr(response, "model_dump") else response
+            return response.model_dump(mode="json") if hasattr(response, "model_dump") else response
 
         except Exception as e:
             logger.error(f"Error in get_media_buy_delivery skill: {e}")
@@ -2153,7 +2153,7 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(response, dict):
                 return response
             else:
-                return response.model_dump()
+                return response.model_dump(mode="json")
 
         except Exception as e:
             logger.error(f"Error in update_performance_index skill: {e}")
@@ -2189,7 +2189,7 @@ class AdCPRequestHandler(RequestHandler):
             )
 
             # Convert to A2A response format with v2.x backward compatibility
-            products = [product.model_dump() for product in response.products]
+            products = [product.model_dump(mode="json") for product in response.products]
             products = add_v2_compat_to_products(products)
             return {
                 "products": products,
@@ -2514,7 +2514,7 @@ def main():
 
         dynamic_card = create_dynamic_agent_card(request)
         # CORS middleware automatically adds CORS headers
-        return JSONResponse(dynamic_card.model_dump())
+        return JSONResponse(dynamic_card.model_dump(mode="json"))
 
     async def dynamic_agent_card_endpoint(request):
         """Override for /agent.json with tenant-specific URL."""
@@ -2526,7 +2526,7 @@ def main():
 
         dynamic_card = create_dynamic_agent_card(request)
         # CORS middleware automatically adds CORS headers
-        return JSONResponse(dynamic_card.model_dump())
+        return JSONResponse(dynamic_card.model_dump(mode="json"))
 
     # Find and replace the existing routes to ensure proper A2A specification compliance
     new_routes = []

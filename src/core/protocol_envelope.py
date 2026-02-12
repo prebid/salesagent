@@ -142,9 +142,9 @@ class ProtocolEnvelope(BaseModel):
             ...     message="Media buy created successfully"
             ... )
         """
-        # Convert Pydantic model to dict (using model_dump to exclude internal fields)
+        # Convert Pydantic model to dict at serialization boundary
         if hasattr(payload, "model_dump"):
-            payload_dict = payload.model_dump()
+            payload_dict = payload.model_dump(mode="json")
             # Generate message from __str__ if not provided
             if message is None and hasattr(payload, "__str__"):
                 message = str(payload)

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urlparse
 
+import pydantic_core
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
@@ -29,6 +30,15 @@ _scoped_session = None
 _last_health_check: float = 0.0
 _health_check_interval = 60  # Check health every 60 seconds
 _is_healthy = True
+
+
+def _pydantic_json_serializer(obj: Any) -> str:
+    """JSON serializer that handles Pydantic types (Enum, datetime, AnyUrl, etc.) natively.
+
+    Registered on create_engine() so all JSONB columns automatically get safe serialization
+    without needing mode='json' at every model_dump() call site.
+    """
+    return pydantic_core.to_json(obj, fallback=str).decode()
 
 
 def _is_pgbouncer_connection(connection_string: str) -> bool:
@@ -101,6 +111,7 @@ def get_engine():
                 pool_recycle=300,  # 5 minutes - shorter since PgBouncer manages connections
                 pool_pre_ping=False,  # Disable pre-ping with PgBouncer transaction pooling
                 echo=False,
+                json_serializer=_pydantic_json_serializer,
                 connect_args={
                     "connect_timeout": connect_timeout,
                 },
@@ -116,6 +127,7 @@ def get_engine():
                 pool_recycle=3600,  # Recycle connections after 1 hour
                 pool_pre_ping=True,  # Test connections before use
                 echo=False,  # Set to True for SQL logging in debug
+                json_serializer=_pydantic_json_serializer,
                 connect_args={
                     "connect_timeout": connect_timeout,  # Connection timeout in seconds
                 },
