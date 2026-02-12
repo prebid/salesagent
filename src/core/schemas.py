@@ -865,6 +865,27 @@ class TargetingCapability(BaseModel):
     axe_signal: bool | None = False  # Whether this is an AXE signal dimension
 
 
+# Mapping from legacy v2 geo fields to v3 structured fields.
+# Each tuple: (v2_field_name, v3_field_name, transform_fn_or_None).
+# transform_fn receives the truthy list value and returns the v3 value.
+# None means passthrough (value used as-is).
+def _prefix_us_regions(v: list[str]) -> list[str]:
+    """Legacy DB stores bare US state codes; GeoRegion requires ISO 3166-2."""
+    return [r if "-" in r else f"US-{r}" for r in v]
+
+
+_LEGACY_GEO_FIELDS: list[tuple[str, str, Any]] = [
+    ("geo_country_any_of", "geo_countries", None),
+    ("geo_country_none_of", "geo_countries_exclude", None),
+    ("geo_region_any_of", "geo_regions", _prefix_us_regions),
+    ("geo_region_none_of", "geo_regions_exclude", _prefix_us_regions),
+    ("geo_metro_any_of", "geo_metros", lambda v: [{"system": "nielsen_dma", "values": v}]),
+    ("geo_metro_none_of", "geo_metros_exclude", lambda v: [{"system": "nielsen_dma", "values": v}]),
+    ("geo_zip_any_of", "geo_postal_areas", lambda v: [{"system": "us_zip", "values": v}]),
+    ("geo_zip_none_of", "geo_postal_areas_exclude", lambda v: [{"system": "us_zip", "values": v}]),
+]
+
+
 class Targeting(TargetingOverlay):
     """Targeting extending AdCP TargetingOverlay with internal dimensions.
 
@@ -941,6 +962,11 @@ class Targeting(TargetingOverlay):
     updated_at: datetime | None = Field(None, description="Internal: Last update timestamp")
     metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata")
 
+    # Transient normalizer signal: set by normalize_legacy_geo when city targeting
+    # fields are encountered in legacy data. Consumed by adapters (e.g. GAM
+    # build_targeting) to raise an explicit error instead of silently ignoring.
+    had_city_targeting: bool = Field(default=False, exclude=True)
+
     @model_validator(mode="before")
     @classmethod
     def normalize_legacy_geo(cls, values: Any) -> Any:
@@ -948,7 +974,7 @@ class Targeting(TargetingOverlay):
 
         Handles reconstruction from legacy database JSON where fields were stored as:
         - geo_country_any_of: ["US", "CA"] → geo_countries: [GeoCountry("US"), ...]
-        - geo_region_any_of: ["CA", "NY"] → geo_regions: [GeoRegion("US-CA"), ...] (if already ISO 3166-2)
+        - geo_region_any_of: ["CA", "NY"] → geo_regions: [GeoRegion("US-CA"), ...]
         - geo_metro_any_of: ["501"] → geo_metros: [{system: "nielsen_dma", values: ["501"]}]
         - geo_zip_any_of: ["10001"] → geo_postal_areas: [{system: "us_zip", values: ["10001"]}]
         - *_none_of variants → *_exclude variants
@@ -956,68 +982,17 @@ class Targeting(TargetingOverlay):
         if not isinstance(values, dict):
             return values
 
-        # Country: flat list → GeoCountry strings
-        if "geo_country_any_of" in values and "geo_countries" not in values:
-            v = values.pop("geo_country_any_of")
-            if v:
-                values["geo_countries"] = v  # GeoCountry is RootModel[str], accepts plain strings
-        elif "geo_country_any_of" in values:
-            values.pop("geo_country_any_of")
-        if "geo_country_none_of" in values and "geo_countries_exclude" not in values:
-            v = values.pop("geo_country_none_of")
-            if v:
-                values["geo_countries_exclude"] = v
-        elif "geo_country_none_of" in values:
-            values.pop("geo_country_none_of")
-
-        # Region: flat list → GeoRegion strings
-        # Legacy data stores bare US state codes ("CA"); GeoRegion requires ISO 3166-2 ("US-CA").
-        # All legacy records are US-only, so bare codes without "-" get a "US-" prefix.
-        if "geo_region_any_of" in values and "geo_regions" not in values:
-            v = values.pop("geo_region_any_of")
-            if v:
-                values["geo_regions"] = [r if "-" in r else f"US-{r}" for r in v]
-        elif "geo_region_any_of" in values:
-            values.pop("geo_region_any_of")
-        if "geo_region_none_of" in values and "geo_regions_exclude" not in values:
-            v = values.pop("geo_region_none_of")
-            if v:
-                values["geo_regions_exclude"] = [r if "-" in r else f"US-{r}" for r in v]
-        elif "geo_region_none_of" in values:
-            values.pop("geo_region_none_of")
-
-        # Metro: flat list → structured {system, values}
-        if "geo_metro_any_of" in values and "geo_metros" not in values:
-            v = values.pop("geo_metro_any_of")
-            if v:
-                values["geo_metros"] = [{"system": "nielsen_dma", "values": v}]
-        elif "geo_metro_any_of" in values:
-            values.pop("geo_metro_any_of")
-        if "geo_metro_none_of" in values and "geo_metros_exclude" not in values:
-            v = values.pop("geo_metro_none_of")
-            if v:
-                values["geo_metros_exclude"] = [{"system": "nielsen_dma", "values": v}]
-        elif "geo_metro_none_of" in values:
-            values.pop("geo_metro_none_of")
-
-        # Zip/Postal: flat list → structured {system, values}
-        if "geo_zip_any_of" in values and "geo_postal_areas" not in values:
-            v = values.pop("geo_zip_any_of")
-            if v:
-                values["geo_postal_areas"] = [{"system": "us_zip", "values": v}]
-        elif "geo_zip_any_of" in values:
-            values.pop("geo_zip_any_of")
-        if "geo_zip_none_of" in values and "geo_postal_areas_exclude" not in values:
-            v = values.pop("geo_zip_none_of")
-            if v:
-                values["geo_postal_areas_exclude"] = [{"system": "us_zip", "values": v}]
-        elif "geo_zip_none_of" in values:
-            values.pop("geo_zip_none_of")
+        for v2_key, v3_key, transform in _LEGACY_GEO_FIELDS:
+            if v2_key not in values:
+                continue
+            v = values.pop(v2_key)
+            if v and v3_key not in values:
+                values[v3_key] = transform(v) if transform else v
 
         # City targeting removed in v3. Set a transient flag so downstream consumers
         # (e.g. GAM build_targeting) can raise an explicit error instead of silently ignoring.
         if values.pop("geo_city_any_of", None) or values.pop("geo_city_none_of", None):
-            values["_had_city_targeting"] = True
+            values["had_city_targeting"] = True
 
         return values
 
@@ -1035,7 +1010,6 @@ class Targeting(TargetingOverlay):
                     "created_at",
                     "updated_at",
                     "metadata",  # Internal fields
-                    "_had_city_targeting",  # Transient normalizer signal
                 }
             )
             kwargs["exclude"] = exclude
@@ -1047,7 +1021,6 @@ class Targeting(TargetingOverlay):
         kwargs.setdefault("mode", "json")
         # Don't exclude internal fields or managed fields
         kwargs.pop("exclude", None)  # Remove any exclude parameter
-        kwargs["exclude"] = {"_had_city_targeting"}  # Always exclude transient flags
         return super().model_dump(**kwargs)
 
     def dict(self, **kwargs):

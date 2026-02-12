@@ -2,7 +2,7 @@
 
 Regression tests for salesagent-oee: ensures GAM targeting manager correctly
 processes v3 structured geo fields (geo_countries, geo_regions, geo_metros,
-geo_postal_areas) and their exclusion variants, handles _had_city_targeting
+geo_postal_areas) and their exclusion variants, handles had_city_targeting
 flag, and applies int() cast to FrequencyCap float arithmetic.
 """
 
@@ -197,11 +197,11 @@ class TestBuildTargetingGeoPostalAreas:
 
 
 class TestBuildTargetingCityRemoved:
-    """_had_city_targeting flag must trigger ValueError in build_targeting."""
+    """had_city_targeting flag must trigger ValueError in build_targeting."""
 
     def test_city_flag_raises(self, gam_manager):
         targeting = Targeting(geo_countries=["US"], geo_city_any_of=["Chicago"])
-        assert getattr(targeting, "_had_city_targeting", False) is True
+        assert targeting.had_city_targeting is True
         with pytest.raises(ValueError, match="[Cc]ity"):
             gam_manager.build_targeting(targeting)
 

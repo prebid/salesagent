@@ -19,11 +19,10 @@ or with Docker Compose running for PostgreSQL.
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from adcp.types import TargetingOverlay
 from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
-from src.core.schemas import PackageRequest
+from src.core.schemas import PackageRequest, Targeting
 from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
@@ -288,14 +287,14 @@ class TestCreateMediaBuyV24Format:
 
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Create PackageRequest with nested TargetingOverlay object
+        # Create PackageRequest with nested Targeting object
         packages = [
             PackageRequest(
                 buyer_ref="pkg_targeting_test",
                 product_id=setup_test_tenant["product_id_eur"],  # Use EUR product
                 pricing_option_id=setup_test_tenant["pricing_option_id_eur"],  # Required field
                 budget=8000.0,  # Float budget, currency from pricing_option
-                targeting_overlay=TargetingOverlay(
+                targeting_overlay=Targeting(
                     geo_countries=["US", "CA"],
                 ),
             )

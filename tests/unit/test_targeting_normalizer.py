@@ -2,7 +2,7 @@
 
 Regression tests for salesagent-uca: ensures the legacy normalizer correctly
 converts bare region codes to ISO 3166-2, drops v2 keys when v3 present,
-and sets _had_city_targeting flag for city fields.
+and sets had_city_targeting flag for city fields.
 """
 
 from src.core.schemas import Targeting
@@ -99,37 +99,37 @@ class TestBothPresentGuard:
 
 
 class TestCityTargetingFlag:
-    """City fields must set _had_city_targeting flag instead of being silently dropped."""
+    """City fields must set had_city_targeting flag instead of being silently dropped."""
 
     def test_city_any_of_sets_flag(self):
         t = Targeting(**{"geo_city_any_of": ["Chicago"]})
-        assert getattr(t, "_had_city_targeting", False) is True
+        assert t.had_city_targeting is True
 
     def test_city_none_of_sets_flag(self):
         t = Targeting(**{"geo_city_none_of": ["LA"]})
-        assert getattr(t, "_had_city_targeting", False) is True
+        assert t.had_city_targeting is True
 
     def test_both_city_fields_set_flag(self):
         t = Targeting(**{"geo_city_any_of": ["NYC"], "geo_city_none_of": ["LA"]})
-        assert getattr(t, "_had_city_targeting", False) is True
+        assert t.had_city_targeting is True
 
     def test_no_city_fields_no_flag(self):
         t = Targeting(**{"geo_countries": ["US"]})
-        assert getattr(t, "_had_city_targeting", False) is False
+        assert t.had_city_targeting is False
 
     def test_flag_excluded_from_model_dump(self):
         t = Targeting(**{"geo_city_any_of": ["Chicago"], "geo_countries": ["US"]})
         d = t.model_dump()
-        assert "_had_city_targeting" not in d
+        assert "had_city_targeting" not in d
 
     def test_flag_excluded_from_model_dump_internal(self):
         t = Targeting(**{"geo_city_any_of": ["Chicago"], "geo_countries": ["US"]})
         d = t.model_dump_internal()
-        assert "_had_city_targeting" not in d
+        assert "had_city_targeting" not in d
 
-    def test_flag_accessible_via_getattr(self):
+    def test_flag_accessible_as_attribute(self):
         t = Targeting(**{"geo_city_any_of": ["NYC"]})
-        assert getattr(t, "_had_city_targeting", False) is True
+        assert t.had_city_targeting is True
 
 
 class TestRoundtrip:
@@ -149,8 +149,8 @@ class TestRoundtrip:
     def test_roundtrip_city_flag_not_persisted(self):
         t1 = Targeting(**{"geo_city_any_of": ["NYC"], "geo_countries": ["US"]})
         d = t1.model_dump(exclude_none=True)
-        assert "_had_city_targeting" not in d
+        assert "had_city_targeting" not in d
         assert "geo_city_any_of" not in d
         # Reconstruct — no flag on the new object
         t2 = Targeting(**d)
-        assert getattr(t2, "_had_city_targeting", False) is False
+        assert t2.had_city_targeting is False

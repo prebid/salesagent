@@ -3,6 +3,13 @@ Targeting capabilities configuration.
 
 Defines which targeting dimensions are available for overlay vs managed-only access.
 This is critical for AEE (Ad Effectiveness Engine) integration.
+
+AdCP TargetingOverlay defines: geo_countries, geo_regions, geo_metros,
+geo_postal_areas, frequency_cap, property_list, axe_include_segment,
+axe_exclude_segment.  Everything else here is a seller extension — standard
+ad-server dimensions (device, OS, browser, media type, audience) that AdCP
+does not yet define but that adapters actively support.  These are candidates
+for upstream inclusion in AdCP.
 """
 
 from typing import Any
@@ -11,19 +18,21 @@ from src.core.schemas import TargetingCapability
 
 # Define targeting capabilities for the platform
 TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
-    # Geographic targeting - available for overlay
+    # ── AdCP-defined dimensions ──────────────────────────────────────────
+    # These map directly to fields on adcp.types.TargetingOverlay.
     "geo_country": TargetingCapability(
         dimension="geo_country", access="overlay", description="Country-level targeting using ISO 3166-1 alpha-2 codes"
     ),
     "geo_region": TargetingCapability(dimension="geo_region", access="overlay", description="State/province targeting"),
     "geo_metro": TargetingCapability(dimension="geo_metro", access="overlay", description="Metro/DMA targeting"),
-    "geo_city": TargetingCapability(
-        dimension="geo_city",
-        access="removed",
-        description="City-level targeting (removed in v3, no adapter supports it)",
-    ),
     "geo_zip": TargetingCapability(dimension="geo_zip", access="overlay", description="Postal code targeting"),
-    # Device targeting - available for overlay
+    "frequency_cap": TargetingCapability(
+        dimension="frequency_cap", access="overlay", description="Impression frequency limits"
+    ),
+    # ── Seller extensions ────────────────────────────────────────────────
+    # Standard ad-server dimensions not yet in AdCP TargetingOverlay.
+    # Adapters (GAM, Kevel, Triton, Xandr) actively consume these.
+    # Candidates for upstream AdCP inclusion.
     "device_type": TargetingCapability(
         dimension="device_type",
         access="overlay",
@@ -35,7 +44,6 @@ TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
     ),
     "os": TargetingCapability(dimension="os", access="overlay", description="Operating system targeting"),
     "browser": TargetingCapability(dimension="browser", access="overlay", description="Browser targeting"),
-    # Content targeting - available for overlay
     "content_category": TargetingCapability(
         dimension="content_category", access="overlay", description="IAB content category targeting"
     ),
@@ -45,22 +53,23 @@ TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
     "content_rating": TargetingCapability(
         dimension="content_rating", access="overlay", description="Content rating targeting"
     ),
-    # Media targeting - available for overlay
     "media_type": TargetingCapability(
         dimension="media_type",
         access="overlay",
         description="Media type targeting",
         allowed_values=["video", "display", "native", "audio", "dooh"],
     ),
-    # Audience targeting - available for overlay
     "audience_segment": TargetingCapability(
         dimension="audience_segment", access="overlay", description="Third-party audience segments"
     ),
-    # Frequency capping - available for overlay
-    "frequency_cap": TargetingCapability(
-        dimension="frequency_cap", access="overlay", description="Impression frequency limits"
+    "custom": TargetingCapability(dimension="custom", access="both", description="Platform-specific custom targeting"),
+    # ── Removed dimensions ───────────────────────────────────────────────
+    "geo_city": TargetingCapability(
+        dimension="geo_city",
+        access="removed",
+        description="City-level targeting (removed in v3, no adapter supports it)",
     ),
-    # AEE Signal Dimensions - MANAGED ONLY
+    # ── Managed-only (AEE signal integration) ────────────────────────────
     "key_value_pairs": TargetingCapability(
         dimension="key_value_pairs",
         access="managed_only",
@@ -76,8 +85,6 @@ TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
     "aee_context": TargetingCapability(
         dimension="aee_context", access="managed_only", description="AEE contextual signals", axe_signal=True
     ),
-    # Platform-specific - both overlay and managed
-    "custom": TargetingCapability(dimension="custom", access="both", description="Platform-specific custom targeting"),
 }
 
 
@@ -102,45 +109,46 @@ def get_aee_signal_dimensions() -> list[str]:
 
 
 # Explicit mapping from Targeting field names to capability dimension names.
-# v3 structured fields (geo_countries, geo_regions, etc.) map directly without
-# suffix-stripping.  Both inclusion and exclusion variants map to the same
-# capability so exclusion fields are validated alongside inclusion fields.
+# Used by validate_overlay_targeting() to check access control (managed-only
+# vs overlay) on known fields.  Both inclusion and exclusion variants map to
+# the same capability dimension.
+#
+# AdCP TargetingOverlay defines only the geo fields, frequency_cap, axe
+# segments, and property_list.  The device/OS/browser/media/audience fields
+# are seller extensions carried forward from the original seller engine —
+# standard ad-server dimensions that adapters actively support but AdCP has
+# not yet adopted.  See module docstring for details.
 FIELD_TO_DIMENSION: dict[str, str] = {
-    # v3 geo fields — inclusion
+    # ── AdCP-defined fields (from adcp.types.TargetingOverlay) ───────────
     "geo_countries": "geo_country",
     "geo_regions": "geo_region",
     "geo_metros": "geo_metro",
     "geo_postal_areas": "geo_zip",
-    # v3 geo fields — exclusion
+    "frequency_cap": "frequency_cap",
+    # ── Geo exclusion extensions (PR #1006, not yet in AdCP) ─────────────
     "geo_countries_exclude": "geo_country",
     "geo_regions_exclude": "geo_region",
     "geo_metros_exclude": "geo_metro",
     "geo_postal_areas_exclude": "geo_zip",
-    # Device / OS / Browser
+    # ── Seller extensions (not in AdCP, consumed by adapters) ────────────
     "device_type_any_of": "device_type",
     "device_type_none_of": "device_type",
     "os_any_of": "os",
     "os_none_of": "os",
     "browser_any_of": "browser",
     "browser_none_of": "browser",
-    # Content
     "content_cat_any_of": "content_category",
     "content_cat_none_of": "content_category",
-    # Media
     "media_type_any_of": "media_type",
     "media_type_none_of": "media_type",
-    # Audience
     "audiences_any_of": "audience_segment",
     "audiences_none_of": "audience_segment",
-    # Frequency capping
-    "frequency_cap": "frequency_cap",
-    # Removed fields (city targeting removed in v3)
+    "custom": "custom",
+    # ── Removed dimensions ───────────────────────────────────────────────
     "geo_city_any_of": "geo_city",
     "geo_city_none_of": "geo_city",
-    # Managed-only fields
+    # ── Managed-only (not exposed via overlay) ───────────────────────────
     "key_value_pairs": "key_value_pairs",
-    # Custom
-    "custom": "custom",
 }
 
 
@@ -202,26 +210,23 @@ _GEO_STRUCTURED_PAIRS: list[tuple[str, str]] = [
 
 
 def _extract_simple_values(items: list) -> set[str]:
-    """Extract string values from a list of GeoCountry/GeoRegion (RootModel[str]) or plain strings."""
-    result: set[str] = set()
-    for item in items:
-        if hasattr(item, "root"):
-            result.add(str(item.root))
-        else:
-            result.add(str(item))
-    return result
+    """Extract string values from a list of plain strings (post-model_dump geo_countries/geo_regions)."""
+    return {str(item) for item in items}
 
 
 def _extract_system_values(items: list) -> dict[str, set[str]]:
     """Extract {system: set(values)} from a list of GeoMetro/GeoPostalArea objects or dicts."""
+    from adcp.types import GeoMetro, GeoPostalArea
+
+    from src.core.validation_helpers import resolve_enum_value
+
     by_system: dict[str, set[str]] = {}
     for item in items:
-        if hasattr(item, "system"):
-            system = str(item.system.value) if hasattr(item.system, "value") else str(item.system)
-            vals = set(item.values) if hasattr(item, "values") else set()
+        if isinstance(item, (GeoMetro, GeoPostalArea)):
+            system = resolve_enum_value(item.system)
+            vals = set(item.values)
         elif isinstance(item, dict):
-            raw_sys = item.get("system", "")
-            system = str(raw_sys.value) if hasattr(raw_sys, "value") else str(raw_sys)
+            system = resolve_enum_value(item.get("system", ""))
             vals = set(item.get("values", []))
         else:
             continue
