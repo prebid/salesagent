@@ -680,7 +680,7 @@ def extract_media_url_and_dimensions(
     Extraction priority:
     1. Format spec assets with asset_type in {image, video, audio}
     2. Known media asset IDs (fallback allowlist)
-    NOTE: Root-level 'url' field is NEVER used - it may contain click URLs
+    3. Root-level 'url', 'width', 'height' fields (legacy/simple creative fallback)
 
     Args:
         creative_data: Creative data dict from database
@@ -774,9 +774,29 @@ def extract_media_url_and_dimensions(
                         if url and width and height:
                             break
 
-    # NOTE: We intentionally do NOT fall back to root-level 'url' field
-    # because it may contain click URLs instead of media URLs.
-    # If no media URL is found in assets, return None.
+    # Priority 3: Fallback to root-level fields for simple creatives without assets
+    # This supports legacy/simple creative formats that don't use the assets structure
+    if not url:
+        root_url = creative_data.get("url")
+        if root_url:
+            url = root_url
+            logger.debug("Extracted media URL from root-level 'url' field (legacy fallback)")
+
+    if not width:
+        raw_width = creative_data.get("width")
+        if raw_width is not None:
+            try:
+                width = int(raw_width)
+            except (ValueError, TypeError):
+                pass
+
+    if not height:
+        raw_height = creative_data.get("height")
+        if raw_height is not None:
+            try:
+                height = int(raw_height)
+            except (ValueError, TypeError):
+                pass
 
     return url, width, height
 
