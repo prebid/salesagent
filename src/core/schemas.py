@@ -2635,8 +2635,9 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     - reporting_webhook: dict (webhook configuration)
     """
 
-    # Note: packages field uses LibraryPackageRequest from parent class.
-    # Internal fields (pricing_model, impressions) are accessed via getattr() for backward compatibility.
+    # Override packages to use our PackageRequest (which overrides targeting_overlay
+    # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
+    packages: list[PackageRequest] | None = None
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):
