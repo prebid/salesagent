@@ -74,7 +74,13 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.helpers import get_principal_id_from_context, log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.helpers.creative_helpers import _convert_creative_to_adapter_asset, process_and_upload_package_creatives
+from src.core.helpers.creative_helpers import (
+    _convert_creative_to_adapter_asset,
+    extract_click_url,
+    extract_impression_tracker_url,
+    extract_media_url_and_dimensions,
+    process_and_upload_package_creatives,
+)
 from src.core.schema_helpers import to_context_object, to_reporting_webhook
 from src.core.schemas import (
     CreateMediaBuyError,
@@ -175,132 +181,6 @@ def _determine_media_buy_status(
     return MediaBuyStatus.active.value
 
 
-def _extract_creative_url_and_dimensions(
-    creative_data: dict[str, Any], format_spec: Any | None
-) -> tuple[str | None, int | None, int | None]:
-    """Extract URL and dimensions from creative data.
-
-    All production creatives now use AdCP v2.4+ format with data.assets[asset_id]
-    containing typed asset objects per the creative format specification.
-
-    Extraction priority:
-    1. Format spec assets (using get_format_assets utility for backward compat - AdCP 2.6 format spec)
-    2. First available asset with URL (fallback if no format spec)
-
-    Args:
-        creative_data: Creative data dict from database
-        format_spec: Format specification with assets (or deprecated assets_required)
-
-    Returns:
-        Tuple of (url, width, height). Values are None if not found.
-
-    Note:
-        - URL extracted from asset types: image, video, url
-        - Dimensions extracted from asset types: image, video
-        - Type validation: width/height must be int or coercible to int
-        - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
-    """
-    # Extract URL from assets using format specification
-    url = None
-    if creative_data.get("assets") and format_spec and has_assets(format_spec):
-        # Use format spec to find the correct asset_id for image/video/url assets
-        # Note: We only support individual assets here (not repeatable groups).
-        # This matches previous behavior - repeatable groups were never supported in this function.
-        for asset_spec in get_individual_assets(format_spec):
-            # Type guard: get_individual_assets only returns Assets, not Assets5 (repeatable groups)
-            if not isinstance(asset_spec, Assets):
-                continue
-            asset_type = str(asset_spec.asset_type).lower()
-            if asset_type in ["image", "video", "url"]:
-                asset_id = asset_spec.asset_id
-                if asset_id in creative_data["assets"]:
-                    asset_obj = creative_data["assets"][asset_id]
-                    if isinstance(asset_obj, dict) and asset_obj.get("url"):
-                        url = asset_obj["url"]
-                        break
-
-    # Extract dimensions from assets using format specification
-    width = None
-    height = None
-    if creative_data.get("assets") and format_spec and has_assets(format_spec):
-        # Use format spec to find the correct asset_id for image/video assets
-        # Note: We only support individual assets here (not repeatable groups).
-        # This matches previous behavior - repeatable groups were never supported in this function.
-        for asset_spec in get_individual_assets(format_spec):
-            # Type guard: get_individual_assets only returns Assets, not Assets5 (repeatable groups)
-            if not isinstance(asset_spec, Assets):
-                continue
-            asset_type = str(asset_spec.asset_type).lower()
-            if asset_type in ["image", "video"]:
-                asset_id = asset_spec.asset_id
-                if asset_id in creative_data["assets"]:
-                    asset_obj = creative_data["assets"][asset_id]
-                    if isinstance(asset_obj, dict):
-                        raw_width = asset_obj.get("width")
-                        raw_height = asset_obj.get("height")
-                        # Type validation: ensure int
-                        if raw_width is not None:
-                            try:
-                                width = int(raw_width)
-                            except (ValueError, TypeError):
-                                logger.warning(
-                                    f"Invalid width type in creative assets: {raw_width} (type={type(raw_width)})"
-                                )
-                        if raw_height is not None:
-                            try:
-                                height = int(raw_height)
-                            except (ValueError, TypeError):
-                                logger.warning(
-                                    f"Invalid height type in creative assets: {raw_height} (type={type(raw_height)})"
-                                )
-                        if width and height:
-                            break
-
-    # Fallback: If format spec didn't work, iterate through all assets
-    if not url or not width or not height:
-        if creative_data.get("assets"):
-            for _asset_id, asset_obj in creative_data["assets"].items():
-                if isinstance(asset_obj, dict):
-                    # Extract URL if not found yet
-                    if not url and asset_obj.get("url"):
-                        url = asset_obj["url"]
-
-                    # Extract dimensions if not found yet
-                    if not width or not height:
-                        raw_width = asset_obj.get("width")
-                        raw_height = asset_obj.get("height")
-                        if raw_width is not None and not width:
-                            try:
-                                width = int(raw_width)
-                            except (ValueError, TypeError):
-                                pass
-                        if raw_height is not None and not height:
-                            try:
-                                height = int(raw_height)
-                            except (ValueError, TypeError):
-                                pass
-
-                    # Stop if we found everything
-                    if url and width and height:
-                        break
-
-    # Last resort: Check top-level fields
-    if not url:
-        url = creative_data.get("url")
-    if not width:
-        try:
-            width = int(creative_data["width"]) if creative_data.get("width") else None
-        except (ValueError, TypeError):
-            pass
-    if not height:
-        try:
-            height = int(creative_data["height"]) if creative_data.get("height") else None
-        except (ValueError, TypeError):
-            pass
-
-    return url, width, height
-
-
 def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     """Get format specification synchronously using asyncio.run().
 
@@ -395,7 +275,7 @@ def _validate_creatives_before_adapter_call(packages: list[Package], tenant_id: 
 
         # Only validate reference creatives (formats we can directly use)
         # Extract URL and dimensions using shared helper
-        url, width, height = _extract_creative_url_and_dimensions(creative_data, format_spec)
+        url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
 
         if not url:
             validation_errors.append(
@@ -919,7 +799,13 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         )
 
                     # Extract URL and dimensions using shared helper
-                    url, width, height = _extract_creative_url_and_dimensions(creative_data, format_spec)
+                    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
+
+                    # Extract click-through URL separately from media URL (with macro substitution)
+                    click_url = extract_click_url(creative_data, format_spec)
+
+                    # Extract impression tracker URL
+                    impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
 
                     asset = {
                         "creative_id": creative.creative_id,
@@ -928,9 +814,18 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         "width": width,
                         "height": height,
                         "url": url,
+                        "click_url": click_url,  # Separate click-through URL for GAM destinationUrl
                         "asset_type": creative_data.get("asset_type", "image"),
                         "name": creative.name or f"Creative {creative.creative_id}",
                     }
+
+                    # Add impression tracker URL in the format expected by GAM adapter
+                    if impression_tracker_url:
+                        asset["delivery_settings"] = {
+                            "tracking_urls": {
+                                "impression": [impression_tracker_url]
+                            }
+                        }
 
                     # GAM requires width, height, and url for creative upload
                     # Validate required fields and accumulate all errors
@@ -3282,9 +3177,15 @@ async def _create_media_buy_impl(
                                             )
 
                                     # Extract URL and dimensions using shared helper
-                                    url, width, height = _extract_creative_url_and_dimensions(
+                                    url, width, height = extract_media_url_and_dimensions(
                                         creative_data, format_spec
                                     )
+
+                                    # Extract click-through URL separately from media URL (with macro substitution)
+                                    click_url = extract_click_url(creative_data, format_spec)
+
+                                    # Extract impression tracker URL
+                                    impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
 
                                     # Build simple asset dict (same as manual approval flow)
                                     asset = {
@@ -3293,9 +3194,18 @@ async def _create_media_buy_impl(
                                         "width": width,
                                         "height": height,
                                         "url": url,
+                                        "click_url": click_url,  # Separate click-through URL for GAM destinationUrl
                                         "asset_type": creative_data.get("asset_type", "image"),
                                         "name": creative.name or f"Creative {creative.creative_id}",
                                     }
+
+                                    # Add impression tracker URL in the format expected by GAM adapter
+                                    if impression_tracker_url:
+                                        asset["delivery_settings"] = {
+                                            "tracking_urls": {
+                                                "impression": [impression_tracker_url]
+                                            }
+                                        }
 
                                     # Validate required fields - FAIL FAST, do not skip
                                     validation_errors = []

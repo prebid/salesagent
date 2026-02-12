@@ -1,5 +1,6 @@
 """Creative format parsing and asset conversion helpers."""
 
+import logging
 from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
@@ -11,6 +12,8 @@ if TYPE_CHECKING:
     from src.core.tool_context import ToolContext
 
 from src.core.schemas import Creative
+
+logger = logging.getLogger(__name__)
 
 
 class FormatParameters(TypedDict, total=False):
@@ -605,3 +608,337 @@ def process_and_upload_package_creatives(
             raise ToolError("CREATIVES_UPLOAD_FAILED", error_msg) from e
 
     return updated_packages, uploaded_by_product
+
+
+# =============================================================================
+# URL Extraction Helpers
+# =============================================================================
+# These functions extract media URLs, click-through URLs, and impression tracker
+# URLs from creative data. They are used by both media_buy_create.py and
+# creatives.py to ensure consistent URL extraction logic.
+# =============================================================================
+
+# Asset types that contain media content with URLs
+# Based on AdCP creative agent format specs:
+# - image: banner_image, main_image, thumbnail, billboard_image, etc.
+# - video: video_file
+# - audio: audio_file
+# NOT included:
+# - url: Used for clickthrough URLs and trackers (url_type field distinguishes them)
+# - html/javascript/vast/text: These have 'content' field, not 'url' field
+MEDIA_ASSET_TYPES = {"image", "video", "audio"}
+
+# Known media asset IDs for fallback when format spec is not available
+# Based on AdCP creative agent format specs + common conventions
+MEDIA_ASSET_FALLBACK_IDS = {
+    # image assets
+    "banner_image",
+    "billboard_image",
+    "icon",
+    "main_image",
+    "product_image",
+    "screen_image",
+    "thumbnail",
+    # video assets
+    "video_file",
+    # audio assets
+    "audio_file",
+    # common conventions
+    "main",
+    "image",
+    "video",
+    "audio",
+}
+
+# Common asset IDs for clickthrough URLs
+CLICKTHROUGH_ASSET_IDS = {
+    "click_url",
+    "clickthrough",
+    "click",
+    "landing_page",
+    "landing_url",
+    "destination_url",
+}
+
+# Common asset IDs for impression trackers
+IMPRESSION_TRACKER_ASSET_IDS = {
+    "impression_tracker",
+    "tracker_pixel",
+    "pixel",
+    "impression_pixel",
+}
+
+
+def extract_media_url_and_dimensions(
+    creative_data: dict[str, Any], format_spec: Any | None
+) -> tuple[str | None, int | None, int | None]:
+    """Extract media URL and dimensions from creative data.
+
+    All production creatives now use AdCP v2.4+ format with data.assets[asset_id]
+    containing typed asset objects per the creative format specification.
+
+    Extraction priority:
+    1. Format spec assets with asset_type in {image, video, audio}
+    2. Known media asset IDs (fallback allowlist)
+    3. Root-level 'url', 'width', 'height' fields (legacy/simple creative fallback)
+
+    Args:
+        creative_data: Creative data dict from database
+        format_spec: Format specification with assets (or deprecated assets_required)
+
+    Returns:
+        Tuple of (url, width, height). Values are None if not found.
+
+    Note:
+        - Media URL extracted from asset types: image, video, audio
+        - Dimensions extracted from asset types: image, video
+        - Type validation: width/height must be int or coercible to int
+        - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
+    """
+    # Lazy import to avoid circular dependencies
+    from adcp.types.generated_poc.core.format import Assets
+    from adcp.utils import get_individual_assets, has_assets
+
+    url = None
+    width = None
+    height = None
+
+    # Priority 1: Use format spec to find media assets
+    if creative_data.get("assets") and format_spec and has_assets(format_spec):
+        for asset_spec in get_individual_assets(format_spec):
+            # Type guard: get_individual_assets only returns Assets, not Assets5 (repeatable groups)
+            if not isinstance(asset_spec, Assets):
+                continue
+            asset_type = str(asset_spec.asset_type).lower()
+            if asset_type in MEDIA_ASSET_TYPES:
+                asset_id = asset_spec.asset_id
+                if asset_id in creative_data["assets"]:
+                    asset_obj = creative_data["assets"][asset_id]
+                    if isinstance(asset_obj, dict):
+                        # Extract URL
+                        if not url and asset_obj.get("url"):
+                            url = asset_obj["url"]
+                            logger.debug(f"Extracted media URL from format spec asset '{asset_id}'")
+
+                        # Extract dimensions (only for image/video)
+                        if asset_type in ["image", "video"]:
+                            raw_width = asset_obj.get("width")
+                            raw_height = asset_obj.get("height")
+                            if raw_width is not None and not width:
+                                try:
+                                    width = int(raw_width)
+                                except (ValueError, TypeError):
+                                    logger.warning(
+                                        f"Invalid width type in creative assets: {raw_width} (type={type(raw_width)})"
+                                    )
+                            if raw_height is not None and not height:
+                                try:
+                                    height = int(raw_height)
+                                except (ValueError, TypeError):
+                                    logger.warning(
+                                        f"Invalid height type in creative assets: {raw_height} (type={type(raw_height)})"
+                                    )
+
+                        # Stop if we found everything
+                        if url and width and height:
+                            break
+
+    # Priority 2: Fallback to known media asset IDs (allowlist approach)
+    if not url or not width or not height:
+        if creative_data.get("assets"):
+            for asset_id in MEDIA_ASSET_FALLBACK_IDS:
+                if asset_id in creative_data["assets"]:
+                    asset_obj = creative_data["assets"][asset_id]
+                    if isinstance(asset_obj, dict):
+                        # Extract URL if not found yet
+                        if not url and asset_obj.get("url"):
+                            url = asset_obj["url"]
+                            logger.debug(f"Extracted media URL from fallback asset '{asset_id}'")
+
+                        # Extract dimensions if not found yet
+                        if not width or not height:
+                            raw_width = asset_obj.get("width")
+                            raw_height = asset_obj.get("height")
+                            if raw_width is not None and not width:
+                                try:
+                                    width = int(raw_width)
+                                except (ValueError, TypeError):
+                                    pass
+                            if raw_height is not None and not height:
+                                try:
+                                    height = int(raw_height)
+                                except (ValueError, TypeError):
+                                    pass
+
+                        # Stop if we found everything
+                        if url and width and height:
+                            break
+
+    # Priority 3: Fallback to root-level fields for simple creatives without assets
+    # This supports legacy/simple creative formats that don't use the assets structure
+    if not url:
+        root_url = creative_data.get("url")
+        if root_url:
+            url = root_url
+            logger.debug("Extracted media URL from root-level 'url' field (legacy fallback)")
+
+    if not width:
+        raw_width = creative_data.get("width")
+        if raw_width is not None:
+            try:
+                width = int(raw_width)
+            except (ValueError, TypeError):
+                pass
+
+    if not height:
+        raw_height = creative_data.get("height")
+        if raw_height is not None:
+            try:
+                height = int(raw_height)
+            except (ValueError, TypeError):
+                pass
+
+    return url, width, height
+
+
+def extract_click_url(
+    creative_data: dict[str, Any],
+    format_spec: Any | None,
+    apply_macro_substitution: bool = True,
+) -> str | None:
+    """Extract click-through URL from creative data.
+
+    Extraction priority:
+    1. Format spec assets with requirements.url_type == 'clickthrough'
+    2. Fallback to known clickthrough asset_id names (click_url, etc.)
+
+    Args:
+        creative_data: Creative data dict from database
+        format_spec: Format specification with assets
+        apply_macro_substitution: If True, apply AdCP-to-GAM macro substitution
+
+    Returns:
+        Click-through URL string (optionally with macros substituted), or None if not found.
+    """
+    # Lazy import to avoid circular dependencies
+    from adcp.types.generated_poc.core.format import Assets
+    from adcp.utils import get_individual_assets, has_assets
+
+    click_url = None
+
+    # Priority 1: Use format spec to find clickthrough URL (url_type == 'clickthrough')
+    if creative_data.get("assets") and format_spec and has_assets(format_spec):
+        for asset_spec in get_individual_assets(format_spec):
+            if not isinstance(asset_spec, Assets):
+                continue
+            asset_type = str(asset_spec.asset_type).lower()
+            if asset_type == "url":
+                requirements = getattr(asset_spec, "requirements", None)
+                if requirements:
+                    req_url_type = None
+                    if isinstance(requirements, dict):
+                        req_url_type = requirements.get("url_type")
+                    elif hasattr(requirements, "url_type"):
+                        req_url_type = requirements.url_type
+                    if req_url_type == "clickthrough":
+                        asset_id = asset_spec.asset_id
+                        if asset_id in creative_data["assets"]:
+                            asset_obj = creative_data["assets"][asset_id]
+                            if isinstance(asset_obj, dict) and asset_obj.get("url"):
+                                click_url = asset_obj["url"]
+                                logger.debug(f"Extracted click URL from format spec asset '{asset_id}'")
+                                break
+
+    # Priority 2: Fallback to known clickthrough asset_id names
+    if not click_url and creative_data.get("assets"):
+        for asset_id in CLICKTHROUGH_ASSET_IDS:
+            if asset_id in creative_data["assets"]:
+                asset_obj = creative_data["assets"][asset_id]
+                if isinstance(asset_obj, dict) and asset_obj.get("url"):
+                    click_url = asset_obj["url"]
+                    logger.debug(f"Extracted click URL from fallback asset '{asset_id}'")
+                    break
+
+    # Apply macro substitution if requested
+    if click_url and apply_macro_substitution:
+        try:
+            from src.adapters.gam.utils.macros import substitute_macros
+
+            click_url = substitute_macros(click_url)
+        except ImportError:
+            # GAM adapter not available, skip macro substitution
+            pass
+
+    return click_url
+
+
+def extract_impression_tracker_url(
+    creative_data: dict[str, Any], format_spec: Any | None
+) -> str | None:
+    """Extract impression tracker URL from creative data.
+
+    Looks for impression tracker URL in the creative's assets, checking:
+    1. Format spec assets with asset_type 'url' AND requirements.url_type == 'tracker_pixel'
+    2. Assets with url_type 'tracker_pixel'
+    3. Assets with common impression tracker asset_id names
+
+    Args:
+        creative_data: Creative data dict from database
+        format_spec: Format specification with assets (or deprecated assets_required)
+
+    Returns:
+        Impression tracker URL string or None if not found.
+    """
+    # Lazy import to avoid circular dependencies
+    from adcp.types.generated_poc.core.format import Assets
+    from adcp.utils import get_individual_assets, has_assets
+
+    tracker_url = None
+
+    # Priority 1: Use format spec to find impression tracker
+    # Match url assets where requirements.url_type == 'tracker_pixel'
+    if creative_data.get("assets") and format_spec and has_assets(format_spec):
+        for asset_spec in get_individual_assets(format_spec):
+            if not isinstance(asset_spec, Assets):
+                continue
+            asset_type = str(asset_spec.asset_type).lower()
+            if asset_type == "url":
+                # Check if this is a tracker_pixel by looking at requirements.url_type
+                requirements = getattr(asset_spec, "requirements", None)
+                if requirements:
+                    req_url_type = None
+                    if isinstance(requirements, dict):
+                        req_url_type = requirements.get("url_type")
+                    elif hasattr(requirements, "url_type"):
+                        req_url_type = requirements.url_type
+                    # Only match tracker_pixel type
+                    if req_url_type == "tracker_pixel":
+                        asset_id = asset_spec.asset_id
+                        if asset_id in creative_data["assets"]:
+                            asset_obj = creative_data["assets"][asset_id]
+                            if isinstance(asset_obj, dict) and asset_obj.get("url"):
+                                tracker_url = asset_obj["url"]
+                                logger.debug(f"Extracted impression tracker from format spec asset '{asset_id}'")
+                                break
+
+    # Priority 2: Look for assets with tracker_pixel url_type
+    if not tracker_url and creative_data.get("assets"):
+        for asset_id, asset_obj in creative_data["assets"].items():
+            if isinstance(asset_obj, dict):
+                url_type = asset_obj.get("url_type", "")
+                if url_type == "tracker_pixel" and asset_obj.get("url"):
+                    tracker_url = asset_obj["url"]
+                    logger.debug(f"Extracted impression tracker from asset '{asset_id}' with url_type='tracker_pixel'")
+                    break
+
+    # Priority 3: Check common impression tracker asset_id names
+    if not tracker_url and creative_data.get("assets"):
+        for asset_id in IMPRESSION_TRACKER_ASSET_IDS:
+            if asset_id in creative_data["assets"]:
+                asset_obj = creative_data["assets"][asset_id]
+                if isinstance(asset_obj, dict) and asset_obj.get("url"):
+                    tracker_url = asset_obj["url"]
+                    logger.debug(f"Extracted impression tracker from fallback asset '{asset_id}'")
+                    break
+
+    return tracker_url
