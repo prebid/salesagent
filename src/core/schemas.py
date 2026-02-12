@@ -153,10 +153,10 @@ class NestedModelSerializerMixin:
             # Handle list of Pydantic models
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             # Handle single Pydantic model
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
@@ -286,11 +286,13 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
                 if isinstance(field_value[0], BaseModel):
                     # Exclude internal fields from Package objects in AdCP responses
                     if field_name == "packages":
-                        data[field_name] = [item.model_dump(exclude={"platform_line_item_id"}) for item in field_value]
+                        data[field_name] = [
+                            item.model_dump(exclude={"platform_line_item_id"}, mode=info.mode) for item in field_value
+                        ]
                     else:
-                        data[field_name] = [item.model_dump() for item in field_value]
+                        data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
@@ -382,7 +384,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
         # Explicitly serialize affected_packages to ensure AffectedPackage.model_dump() is called
         # This ensures internal fields (changes_applied, buyer_package_ref) are excluded via exclude=True
         if "affected_packages" in data and self.affected_packages:
-            data["affected_packages"] = [pkg.model_dump() for pkg in self.affected_packages]
+            data["affected_packages"] = [pkg.model_dump(mode=info.mode) for pkg in self.affected_packages]
 
         # Auto-handle other nested Pydantic models
         for field_name in self.__class__.model_fields:
@@ -395,9 +397,9 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
 
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
@@ -1748,10 +1750,6 @@ class Creative(LibraryCreative):
         data.pop("updated_at", None)
         data.pop("format", None)  # format_id is the spec field
 
-        # Convert status enum to string value for AdCP compliance
-        if "status" in data and hasattr(data["status"], "value"):
-            data["status"] = data["status"].value
-
         return data
 
     def model_dump_internal(self, **kwargs):
@@ -1766,10 +1764,6 @@ class Creative(LibraryCreative):
         # Manually add excluded fields
         if hasattr(self, "principal_id") and self.principal_id is not None:
             data["principal_id"] = self.principal_id
-
-        # Convert status enum to string value for database storage
-        if "status" in data and hasattr(data["status"], "value"):
-            data["status"] = data["status"].value
 
         return data
 
@@ -2060,11 +2054,11 @@ class SyncCreativesResponse(AdCPBaseModel):
             # Handle list of Pydantic models
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
 
             # Handle single Pydantic model
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
@@ -2219,9 +2213,9 @@ class CreateCreativeResponse(AdCPBaseModel):
 
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
@@ -2294,9 +2288,9 @@ class GetCreativesResponse(AdCPBaseModel):
 
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
