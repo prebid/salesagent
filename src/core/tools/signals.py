@@ -268,7 +268,7 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
         ToolResult with GetSignalsResponse data
     """
     response = await _get_signals_impl(req, context)
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 async def _activate_signal_impl(
@@ -396,7 +396,7 @@ async def activate_signal(
         ToolResult with ActivateSignalResponse data
     """
     response = await _activate_signal_impl(signal_id, campaign_id, media_buy_id, context, ctx)
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 async def get_signals_raw(req: GetSignalsRequest, ctx: Context | ToolContext | None = None) -> GetSignalsResponse:

@@ -132,10 +132,11 @@ class TestListCreativeFormatsMCPToolSignature:
         MCP validates types from JSON input and coerces to the appropriate Pydantic models.
         The tool then converts these to dicts internally for the request.
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from adcp import FormatId
 
+        from src.core.schemas import ListCreativeFormatsResponse
         from src.core.tools.creative_formats import list_creative_formats
 
         # MCP validates and coerces JSON to FormatId objects
@@ -144,11 +145,9 @@ class TestListCreativeFormatsMCPToolSignature:
             FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
         ]
 
-        # Mock the implementation to avoid needing full context
+        # Use a real response model instead of MagicMock — tests behavior, not implementation
         with patch("src.core.tools.creative_formats._list_creative_formats_impl") as mock_impl:
-            mock_response = MagicMock()
-            mock_response.model_dump.return_value = {"formats": []}
-            mock_impl.return_value = mock_response
+            mock_impl.return_value = ListCreativeFormatsResponse(formats=[])
 
             # This should NOT raise a validation error
             result = list_creative_formats(format_ids=format_ids)

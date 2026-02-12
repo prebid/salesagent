@@ -388,7 +388,7 @@ def list_creative_formats(
         raise ToolError(format_validation_error(e, context="list_creative_formats request")) from e
 
     response = _list_creative_formats_impl(req, ctx)
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def list_creative_formats_raw(

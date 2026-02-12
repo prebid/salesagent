@@ -1744,7 +1744,7 @@ async def sync_creatives(
         context=context_dict,
         ctx=ctx,
     )
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def _list_creatives_impl(
@@ -2246,7 +2246,7 @@ async def list_creatives(
         context=context_dict,
         ctx=ctx,
     )
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def sync_creatives_raw(

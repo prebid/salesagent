@@ -528,7 +528,7 @@ def get_media_buy_delivery(
 
         response = _get_media_buy_delivery_impl(req, ctx)
 
-        return ToolResult(content=str(response), structured_content=response.model_dump())
+        return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:
         raise ToolError(format_validation_error(e, context="get_media_buy_delivery request"))
 

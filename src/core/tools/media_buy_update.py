@@ -1478,7 +1478,7 @@ def update_media_buy(
         context=context_dict,
         ctx=ctx,
     )
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def update_media_buy_raw(

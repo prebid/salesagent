@@ -147,7 +147,7 @@ def update_performance_index(
     # FastMCP already coerced JSON inputs to these types
     context_dict = context.model_dump(mode="json") if context else None
     response = _update_performance_index_impl(media_buy_id, performance_data, context_dict, ctx)
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def update_performance_index_raw(

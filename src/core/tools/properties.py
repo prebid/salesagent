@@ -296,10 +296,7 @@ def list_authorized_properties(
 
     response = _list_authorized_properties_impl(cast(ListAuthorizedPropertiesRequest | None, req), tool_context)
 
-    # Return ToolResult with human-readable text and structured data
-    # The __str__() method provides the human-readable message
-    # The model_dump() provides the structured JSON data
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def list_authorized_properties_raw(

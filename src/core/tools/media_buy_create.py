@@ -3851,7 +3851,7 @@ async def create_media_buy(
     )
     return ToolResult(
         content=str(response),
-        structured_content={"status": status.value, **response.model_dump()},
+        structured_content={"status": status.value, **response.model_dump(mode="json")},
     )
 
 
