@@ -48,6 +48,8 @@ dependencies = [
     "urllib3>=2.6.3",  # GHSA-38jv-5279-wg99
     "werkzeug>=3.1.5",  # GHSA-87hc-h4r5-73f7
     "jaraco-context>=6.1.0",  # GHSA-58pv-8j8x-9vj2
+    "cryptography>=46.0.5",  # GHSA-r6ph-v2qm-q3c2
+    "pillow>=12.1.1",  # GHSA-cfh3-3jmp-rvhc
     "python-multipart>=0.0.22",  # GHSA-wp53-j4wj-2cfg
 ]
 
