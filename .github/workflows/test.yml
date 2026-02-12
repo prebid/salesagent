@@ -29,7 +29,12 @@ jobs:
       # No fix available yet - affects all versions through 6.33.4
       # Transitive dependency from google-ads, google-api-core, logfire, a2a-sdk
       # Remove --ignore-vulns when protobuf releases a patched version
-      run: uvx uv-secure --ignore-vulns GHSA-7gcm-g887-7qv7
+      #
+      # GHSA-w8v5-vhqr-4h9v: diskcache pickle deserialization (CVE-2025-69872)
+      # Transitive dependency: fastmcp -> py-key-value-aio[disk] -> diskcache
+      # Not exploitable: salesagent does not use diskcache or pickle serialization
+      # Tracking: https://github.com/jlowin/fastmcp/issues/3166
+      run: uvx uv-secure --ignore-vulns GHSA-7gcm-g887-7qv7 GHSA-w8v5-vhqr-4h9v
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)
