@@ -157,6 +157,7 @@ ignore = [
     "B904",    # 47 raise-without-from in adapter error handling; TODO: add `from e` systematically
     "B027",    # 6 empty methods in BaseAdapter — intentional optional interface, not abstract
     "F841",    # 5 remaining unused vars in complex destructuring; each reviewed, kept for clarity
+    "C901",    # 216 complex functions — structural; fix incrementally per-module
     "PLR2004", # 158 magic values — too noisy for signal; numeric constants in config/tests are readable
     "PLR0911", # 68 too-many-return-statements — structural; fix incrementally
     "PLR0912", # 148 too-many-branches — structural; fix incrementally

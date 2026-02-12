@@ -116,9 +116,7 @@ def test_filtering_by_type(integration_db, sample_tenant):
 
         # All returned formats should be video type
         if len(formats) > 0:
-            assert all(f.type == FormatCategory.video or f.type == "video" for f in formats), (
-                "All formats should be video type"
-            )
+            assert all(f.type in (FormatCategory.video, "video") for f in formats), "All formats should be video type"
         # Note: Test may return empty list if mock registry not working - this is OK for integration test
 
 
@@ -263,7 +261,7 @@ def test_filtering_combined(integration_db, sample_tenant):
 
         # Should return only display formats with width >= 500 (Display 728x90)
         if len(formats) > 0:
-            assert all((f.type == FormatCategory.display or f.type == "display") for f in formats), (
+            assert all(f.type in (FormatCategory.display, "display") for f in formats), (
                 "All formats should be display type"
             )
             assert len(formats) == 1, "Should only return Display 728x90"

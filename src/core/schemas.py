@@ -1250,19 +1250,18 @@ class Product(LibraryProduct):
                         result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt["id"]))
                 else:
                     raise ValueError(f"Invalid format dict: {fmt}")
-            else:
-                # Other object types (like FormatReference)
-                if hasattr(fmt, "agent_url") and hasattr(fmt, "id"):
-                    result.append(FormatId(agent_url=url(str(fmt.agent_url)), id=fmt.id))
-                elif hasattr(fmt, "format_id"):
-                    from src.core.format_cache import upgrade_legacy_format_id
+            # Other object types (like FormatReference)
+            elif hasattr(fmt, "agent_url") and hasattr(fmt, "id"):
+                result.append(FormatId(agent_url=url(str(fmt.agent_url)), id=fmt.id))
+            elif hasattr(fmt, "format_id"):
+                from src.core.format_cache import upgrade_legacy_format_id
 
-                    try:
-                        result.append(upgrade_legacy_format_id(fmt.format_id))
-                    except ValueError:
-                        result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt.format_id))
-                else:
-                    raise ValueError(f"Cannot serialize format: {fmt}")
+                try:
+                    result.append(upgrade_legacy_format_id(fmt.format_id))
+                except ValueError:
+                    result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt.format_id))
+            else:
+                raise ValueError(f"Cannot serialize format: {fmt}")
 
         return result
 

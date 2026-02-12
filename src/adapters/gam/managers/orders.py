@@ -708,13 +708,10 @@ class GAMOrdersManager:
                                 )
                         # If filtering removed all placeholders, keep originals (fail-safe)
                         # This shouldn't happen if creatives have valid dimensions
-            else:
-                # No creatives in package - placeholders are optional
-                # Allow empty array if no format_ids and no creatives
-                if not creative_placeholders:
-                    log(
-                        "  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]"
-                    )
+            # No creatives in package - placeholders are optional
+            # Allow empty array if no format_ids and no creatives
+            elif not creative_placeholders:
+                log("  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]")
 
             # Determine goal type and units
             goal_type = impl_config.get("primary_goal_type", "LIFETIME")
@@ -805,8 +802,7 @@ class GAMOrdersManager:
                 # GAM CPD = cost per day (e.g., $10/day for 10-day campaign)
                 if pricing_model == "flat_rate":
                     campaign_days = (end_time - start_time).days
-                    if campaign_days < 1:
-                        campaign_days = 1  # Minimum 1 day for same-day campaigns
+                    campaign_days = max(campaign_days, 1)  # Minimum 1 day for same-day campaigns
 
                     cpd_rate = rate / campaign_days
                     log(f"  FLAT_RATE: ${rate:,.2f} total cost / {campaign_days} days → ${cpd_rate:,.2f} CPD")

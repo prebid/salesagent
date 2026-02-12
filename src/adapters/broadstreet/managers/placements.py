@@ -182,29 +182,28 @@ class BroadstreetPlacementManager:
                         }
                     )
                     info.placement_ids.append(placement_id)
-                else:
-                    if self.client:
-                        try:
-                            placement_data = self.client.create_placement(
-                                advertiser_id=self.advertiser_id,
-                                campaign_id=campaign_id,
-                                zone_id=zone_id,
-                                advertisement_id=ad_id,
-                            )
-                            placement_id = str(placement_data.get("id", f"placement_{zone_id}_{ad_id}"))
-                            results.append(
-                                {
-                                    "id": placement_id,
-                                    "zone_id": zone_id,
-                                    "advertisement_id": ad_id,
-                                    "campaign_id": campaign_id,
-                                }
-                            )
-                            info.placement_ids.append(placement_id)
-                            self.log(f"Created placement {placement_id}: ad {ad_id} → zone {zone_id}")
-                        except Exception as e:
-                            logger.error(f"Error creating placement for zone {zone_id}: {e}", exc_info=True)
-                            self.log(f"Error creating placement: {e}")
+                elif self.client:
+                    try:
+                        placement_data = self.client.create_placement(
+                            advertiser_id=self.advertiser_id,
+                            campaign_id=campaign_id,
+                            zone_id=zone_id,
+                            advertisement_id=ad_id,
+                        )
+                        placement_id = str(placement_data.get("id", f"placement_{zone_id}_{ad_id}"))
+                        results.append(
+                            {
+                                "id": placement_id,
+                                "zone_id": zone_id,
+                                "advertisement_id": ad_id,
+                                "campaign_id": campaign_id,
+                            }
+                        )
+                        info.placement_ids.append(placement_id)
+                        self.log(f"Created placement {placement_id}: ad {ad_id} → zone {zone_id}")
+                    except Exception as e:
+                        logger.error(f"Error creating placement for zone {zone_id}: {e}", exc_info=True)
+                        self.log(f"Error creating placement: {e}")
 
         # Update advertisement IDs
         info.advertisement_ids.extend(advertisement_ids)

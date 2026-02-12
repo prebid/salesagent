@@ -50,13 +50,12 @@ def test_brand_manifest_extraction_logic():
             offering = f"Brand at {brand_manifest}"
         elif hasattr(brand_manifest, "__str__") and str(brand_manifest).startswith("http"):
             offering = f"Brand at {brand_manifest}"
-        else:
-            if hasattr(brand_manifest, "name") and brand_manifest.name:
-                offering = brand_manifest.name
-            elif hasattr(brand_manifest, "url") and brand_manifest.url:
-                offering = f"Brand at {brand_manifest.url}"
-            elif isinstance(brand_manifest, dict):
-                offering = brand_manifest.get("name") or brand_manifest.get("url", "")
+        elif hasattr(brand_manifest, "name") and brand_manifest.name:
+            offering = brand_manifest.name
+        elif hasattr(brand_manifest, "url") and brand_manifest.url:
+            offering = f"Brand at {brand_manifest.url}"
+        elif isinstance(brand_manifest, dict):
+            offering = brand_manifest.get("name") or brand_manifest.get("url", "")
 
     assert offering == "Test Brand", f"Expected 'Test Brand', got '{offering}'"
 

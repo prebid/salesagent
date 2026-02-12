@@ -3488,7 +3488,7 @@ async def _create_media_buy_impl(
             if not isinstance(adapter_paused, bool):
                 # Convert common values to boolean
                 if isinstance(adapter_paused, str):
-                    adapter_paused = adapter_paused.lower() in ("true", "1", "yes", "active" == False)
+                    adapter_paused = adapter_paused.lower() in ("true", "1", "yes", "active")
                 else:
                     adapter_paused = bool(adapter_paused)
 
