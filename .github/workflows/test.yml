@@ -34,7 +34,7 @@ jobs:
       # Transitive dependency: fastmcp -> py-key-value-aio[disk] -> diskcache
       # Not exploitable: salesagent does not use diskcache or pickle serialization
       # Tracking: https://github.com/jlowin/fastmcp/issues/3166
-      run: uvx uv-secure . --ignore-vulns GHSA-7gcm-g887-7qv7 GHSA-w8v5-vhqr-4h9v
+      run: uvx uv-secure --ignore-vulns GHSA-7gcm-g887-7qv7,GHSA-w8v5-vhqr-4h9v
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)
