@@ -28,9 +28,9 @@ ADCP_TO_GAM_MACRO_MAP: dict[str, str | None] = {
     # ==========================================================================
     # Common Macros
     # ==========================================================================
-    "{MEDIA_BUY_ID}": None,  # Media Buy ID (should already be filled)
-    "{PACKAGE_ID}": None,  # Package ID (should already be filled)
-    "{CREATIVE_ID}": None,  # Creative ID (should already be filled)
+    "{MEDIA_BUY_ID}": "%ebuy!",  # GAM Order ID
+    "{PACKAGE_ID}": "%eaid!",  # GAM Line Item ID
+    "{CREATIVE_ID}": "%ecid!",  # GAM Creative ID
     "{CACHEBUSTER}": "%%CACHEBUSTER%%",
     "{TIMESTAMP}": None,  # Not in GAM docs (use CACHEBUSTER for cache-busting)
     "{CLICK_URL}": "%%CLICK_URL_ESC%%",
@@ -39,9 +39,10 @@ ADCP_TO_GAM_MACRO_MAP: dict[str, str | None] = {
     # Privacy & Compliance Macros
     # ==========================================================================
     "{GDPR}": "${GDPR}",
-    "{GDPR_CONSENT}": None,  # Should already be filled
-    "{US_PRIVACY}": "%%TAG_PARAM:us_privacy%%",  # https://support.google.com/admanager/answer/2376981?hl=en#tag-parameter&zippy=%2Ctag-parameter
-    "{GPP_STRING}": None,  # Should already be filled
+    "{GDPR_CONSENT}": "${GDPR_CONSENT_XXX}",  # TCF consent string
+    "{US_PRIVACY}": "${US_PRIVACY}",  # CCPA string
+    "{GPP_STRING}": "${GPP_STRING}",  # GPP consent string
+    "{GPP_SID}": "${GPP_SID}",  # GPP Section IDs
     "{LIMIT_AD_TRACKING}": "%%ADVERTISING_IDENTIFIER_IS_LAT%%",
     # ==========================================================================
     # Device & Environment Macros
@@ -103,7 +104,7 @@ ADCP_TO_GAM_MACRO_MAP: dict[str, str | None] = {
     # ==========================================================================
     # Other Macros
     # ==========================================================================
-    "{AXEM}": "%{AXEM}",  # Filled by prebid RTD module at render time
+    "{AXEM}": "%%PATTERN:axem%%",  # Filled by prebid RTD module at render time
 }
 
 

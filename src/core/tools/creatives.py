@@ -38,8 +38,10 @@ from src.core.audit_logger import get_audit_logger
 from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.helpers import (
+    MEDIA_ASSET_FALLBACK_IDS,
     _extract_format_info,
     _validate_creative_assets,
+    extract_media_url_and_dimensions,
     get_principal_id_from_context,
     log_tool_activity,
 )
@@ -391,37 +393,22 @@ def _sync_creatives_impl(
 
                         # Store creative properties in data field
                         # AdCP 2.5: Full upsert semantics (replace all data, not merge)
-                        # Extract URL from assets if not provided at top level
-                        # Use same priority logic as schema_data above
-                        url = creative.get("url")
-                        if not url and creative.get("assets"):
-                            assets = creative["assets"]
+                        # Extract URL from assets using shared helper
+                        # NOTE: We pass None for format_spec here since we don't have it yet
+                        # The helper will use fallback logic with MEDIA_ASSET_FALLBACK_IDS
+                        url, width, height = extract_media_url_and_dimensions(creative, None)
 
-                            # Priority 1: Try common asset_ids
-                            for priority_key in ["main", "image", "video", "creative", "content"]:
-                                if priority_key in assets and isinstance(assets[priority_key], dict):
-                                    url = assets[priority_key].get("url")
-                                    if url:
-                                        logger.debug(
-                                            f"[sync_creatives] Extracted URL from assets.{priority_key}.url for data storage"
-                                        )
-                                        break
-
-                            # Priority 2: First available asset URL
-                            if not url:
-                                for asset_id, asset_data in assets.items():
-                                    if isinstance(asset_data, dict) and asset_data.get("url"):
-                                        url = asset_data["url"]
-                                        logger.debug(
-                                            f"[sync_creatives] Extracted URL from assets.{asset_id}.url for data storage (fallback)"
-                                        )
-                                        break
+                        # Use extracted dimensions if not provided in creative
+                        if width is None:
+                            width = creative.get("width")
+                        if height is None:
+                            height = creative.get("height")
 
                         data = {
                             "url": url,
                             "click_url": creative.get("click_url"),
-                            "width": creative.get("width"),
-                            "height": creative.get("height"),
+                            "width": width,
+                            "height": height,
                             "duration": creative.get("duration"),
                         }
                         if creative.get("assets"):
@@ -799,36 +786,22 @@ def _sync_creatives_impl(
                         creative_id = creative.get("creative_id", "unknown")
 
                         # Prepare data field with all creative properties
-                        # Extract URL from assets if not provided at top level
-                        url = creative.get("url")
-                        if not url and creative.get("assets"):
-                            assets = creative["assets"]
+                        # Extract URL from assets using shared helper
+                        # NOTE: We pass None for format_spec here since we don't have it yet
+                        # The helper will use fallback logic with MEDIA_ASSET_FALLBACK_IDS
+                        url, width, height = extract_media_url_and_dimensions(creative, None)
 
-                            # Priority 1: Try common asset_ids
-                            for priority_key in ["main", "image", "video", "creative", "content"]:
-                                if priority_key in assets and isinstance(assets[priority_key], dict):
-                                    url = assets[priority_key].get("url")
-                                    if url:
-                                        logger.debug(
-                                            f"[sync_creatives] Extracted URL from assets.{priority_key}.url for create"
-                                        )
-                                        break
-
-                            # Priority 2: First available asset URL
-                            if not url:
-                                for asset_id, asset_data in assets.items():
-                                    if isinstance(asset_data, dict) and asset_data.get("url"):
-                                        url = asset_data["url"]
-                                        logger.debug(
-                                            f"[sync_creatives] Extracted URL from assets.{asset_id}.url for create (fallback)"
-                                        )
-                                        break
+                        # Use extracted dimensions if not provided in creative
+                        if width is None:
+                            width = creative.get("width")
+                        if height is None:
+                            height = creative.get("height")
 
                         data = {
                             "url": url,
                             "click_url": creative.get("click_url"),
-                            "width": creative.get("width"),
-                            "height": creative.get("height"),
+                            "width": width,
+                            "height": height,
                             "duration": creative.get("duration"),
                         }
 
