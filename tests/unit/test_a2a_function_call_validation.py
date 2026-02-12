@@ -187,7 +187,9 @@ class TestFunctionCallIntegration:
         # This tests the integration without mocking everything
         try:
             # Mock only the external dependencies, not the function calls themselves
-            with (pytest.MonkeyPatch().context() as m,):
+            with (
+                pytest.MonkeyPatch().context() as m,
+            ):
                 # Mock external auth functions (updated signature: token, tenant_id)
                 m.setattr(
                     "src.a2a_server.adcp_a2a_server.get_principal_from_token",
@@ -246,7 +248,9 @@ class TestFunctionCallIntegration:
 
             async def test_call():
                 # Mock the database and other external dependencies
-                with (pytest.MonkeyPatch().context() as m,):
+                with (
+                    pytest.MonkeyPatch().context() as m,
+                ):
                     # Mock database session and queries
                     m.setattr("src.core.main.get_db_session", lambda: Mock())
 

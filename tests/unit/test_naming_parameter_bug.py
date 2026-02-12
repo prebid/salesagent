@@ -59,7 +59,11 @@ class TestBuildOrderNameContextParameters:
 
         # Correct usage - using keyword argument
         context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_gemini_key=gemini_key  # Correct!
+            request,
+            packages,
+            start_time,
+            end_time,
+            tenant_gemini_key=gemini_key,  # Correct!
         )
 
         assert "brand_name" in context

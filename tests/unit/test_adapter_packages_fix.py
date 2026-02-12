@@ -340,9 +340,9 @@ class TestXandrAdapterPackages:
             # Assert - Each package must have package_id (AdCP spec requirement)
             # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec
             for i, pkg in enumerate(response.packages):
-                assert (
-                    hasattr(pkg, "package_id") and pkg.package_id is not None
-                ), f"Xandr package {i} missing package_id"
+                assert hasattr(pkg, "package_id") and pkg.package_id is not None, (
+                    f"Xandr package {i} missing package_id"
+                )
 
             # Assert - Package IDs must match input packages
             returned_ids = {pkg.package_id for pkg in response.packages}

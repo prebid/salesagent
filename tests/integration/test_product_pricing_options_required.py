@@ -269,9 +269,9 @@ def test_product_without_eager_loading_fails_validation(integration_db):
         except Exception as e:
             # Expected: ValidationError for missing required field
             assert "pricing_options" in str(e).lower(), f"Expected pricing_options error, got: {e}"
-            assert (
-                "required" in str(e).lower() or "missing" in str(e).lower()
-            ), f"Expected required/missing error, got: {e}"
+            assert "required" in str(e).lower() or "missing" in str(e).lower(), (
+                f"Expected required/missing error, got: {e}"
+            )
 
 
 @pytest.mark.requires_db

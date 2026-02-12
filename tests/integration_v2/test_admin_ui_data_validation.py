@@ -230,9 +230,9 @@ class TestPrincipalsDataValidation:
         # Principals page renders successfully
         # Actual display depends on template and filters
         # Just verify page contains principal-related content
-        assert (
-            "principal" in html.lower() or "advertiser" in html.lower()
-        ), "Principals page should contain principal/advertiser-related content"
+        assert "principal" in html.lower() or "advertiser" in html.lower(), (
+            "Principals page should contain principal/advertiser-related content"
+        )
 
 
 class TestInventoryDataValidation:
@@ -274,9 +274,9 @@ class TestInventoryDataValidation:
         # Inventory page renders successfully even if empty
         # This test just verifies the page loads without errors
         # The actual inventory sync would require GAM adapter integration
-        assert (
-            "inventory" in html.lower() or "ad units" in html.lower()
-        ), "Inventory page should contain inventory-related content"
+        assert "inventory" in html.lower() or "ad units" in html.lower(), (
+            "Inventory page should contain inventory-related content"
+        )
 
 
 class TestDashboardDataValidation:
@@ -398,9 +398,9 @@ class TestMediaBuysDataValidation:
 
         # Media buy should appear exactly once (not 3 times for 3 packages)
         count = html.count("test_mb_duplicate_check")
-        assert (
-            count == 1
-        ), f"Media buy appears {count} times in HTML (expected 1). Check for joinedload() without .unique() bug."
+        assert count == 1, (
+            f"Media buy appears {count} times in HTML (expected 1). Check for joinedload() without .unique() bug."
+        )
 
     def test_media_buys_list_shows_all_statuses(
         self, authenticated_admin_session, test_tenant_with_data, integration_db
@@ -516,9 +516,9 @@ class TestWorkflowsDataValidation:
         # Workflows page renders successfully
         # Actual workflow display depends on filters/status
         # Just verify page contains workflow-related content
-        assert (
-            "workflow" in html.lower() or "step" in html.lower() or "task" in html.lower()
-        ), "Workflows page should contain workflow-related content"
+        assert "workflow" in html.lower() or "step" in html.lower() or "task" in html.lower(), (
+            "Workflows page should contain workflow-related content"
+        )
 
 
 # NOTE: TestAuthorizedPropertiesDataValidation tests removed - authorized_properties_list.html

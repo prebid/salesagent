@@ -24,9 +24,9 @@ def test_brand_manifest_rootmodel_unwrapping():
     assert hasattr(req.brand_manifest, "root"), "brand_manifest should have .root attribute"
 
     # The wrapper does NOT have .name directly
-    assert (
-        not hasattr(req.brand_manifest, "name") or req.brand_manifest.name is None
-    ), "brand_manifest wrapper should not have .name directly accessible"
+    assert not hasattr(req.brand_manifest, "name") or req.brand_manifest.name is None, (
+        "brand_manifest wrapper should not have .name directly accessible"
+    )
 
     # But .root does have .name
     assert req.brand_manifest.root.name == "Test Brand"

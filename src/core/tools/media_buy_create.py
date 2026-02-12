@@ -2702,9 +2702,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         # pkg_product.format_ids are dicts from database JSONB

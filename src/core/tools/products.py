@@ -755,7 +755,9 @@ async def _get_products_impl(
                         is_supported = pricing_model in supported_models
                         inner.supported = is_supported  # type: ignore[union-attr]
                         if not is_supported:
-                            inner.unsupported_reason = f"Current adapter does not support {pricing_model.upper()} pricing"  # type: ignore[union-attr]
+                            inner.unsupported_reason = (
+                                f"Current adapter does not support {pricing_model.upper()} pricing"  # type: ignore[union-attr]
+                            )
         except Exception as e:
             logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
 

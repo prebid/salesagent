@@ -116,7 +116,7 @@ async def review_creative_async(
         result = await agent.run(prompt)
         # pydantic-ai 1.x uses .output for structured data
         output = result.output
-        logger.info(f"Creative review result: decision={output.decision}, " f"confidence={output.confidence}")
+        logger.info(f"Creative review result: decision={output.decision}, confidence={output.confidence}")
         return output
 
     except Exception as e:

@@ -221,9 +221,9 @@ class TestSchemaFieldMapping:
             db_columns = {column.name for column in model_class.__table__.columns}
 
             for field in required_fields:
-                assert (
-                    field in db_columns
-                ), f"Required field '{field}' missing from {model_class.__name__} database model"
+                assert field in db_columns, (
+                    f"Required field '{field}' missing from {model_class.__name__} database model"
+                )
 
     def test_pydantic_model_field_access_patterns(self):
         """Test patterns for safely accessing Pydantic model fields."""

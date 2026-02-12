@@ -41,7 +41,6 @@ class TestAuthOptionalSkills:
             patch("src.a2a_server.adcp_a2a_server.core_list_creative_formats_tool") as mock_tool,
             patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create_context,
         ):
-
             mock_tool.return_value = {"formats": []}
             mock_create_context.return_value = MagicMock()
 
@@ -81,7 +80,6 @@ class TestAuthOptionalSkills:
             patch("src.a2a_server.adcp_a2a_server.core_list_authorized_properties_tool") as mock_tool,
             patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create_context,
         ):
-
             mock_tool.return_value = {"publisher_domains": []}
             mock_create_context.return_value = MagicMock()
 
@@ -122,7 +120,6 @@ class TestAuthOptionalSkills:
             patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_tool,
             patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create_context,
         ):
-
             mock_tool.return_value = {"products": []}
             mock_create_context.return_value = MagicMock()
 

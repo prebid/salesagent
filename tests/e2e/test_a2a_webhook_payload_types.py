@@ -458,9 +458,9 @@ class TestA2AWebhookPayloadTypes:
             if status in final_states:
                 assert payload_type == "Task", f"Final state '{status}' should use Task payload, got {payload_type}"
             elif status in intermediate_states:
-                assert (
-                    payload_type == "TaskStatusUpdateEvent"
-                ), f"Intermediate state '{status}' should use TaskStatusUpdateEvent payload, got {payload_type}"
+                assert payload_type == "TaskStatusUpdateEvent", (
+                    f"Intermediate state '{status}' should use TaskStatusUpdateEvent payload, got {payload_type}"
+                )
             # Unknown states are logged but not asserted
 
 
