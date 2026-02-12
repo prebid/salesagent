@@ -267,22 +267,11 @@ async def _get_products_impl(
             # Use advertising_policy settings for tenant-specific rules
             tenant_policies = advertising_policy if advertising_policy else {}
 
-            # Convert brand_manifest to dict if it's a BrandManifest object
-            # Use brand_manifest_unwrapped (already unwrapped from RootModel above)
-            brand_manifest_dict = None
-            if brand_manifest_unwrapped:
-                if hasattr(brand_manifest_unwrapped, "model_dump"):
-                    brand_manifest_dict = brand_manifest_unwrapped.model_dump()
-                elif isinstance(brand_manifest_unwrapped, dict):
-                    brand_manifest_dict = brand_manifest_unwrapped
-                else:
-                    brand_manifest_dict = brand_manifest_unwrapped  # URL string
-
             try:
                 policy_result = await policy_service.check_brief_compliance(
                     brief=brief_text,
                     promoted_offering=offering,  # Use extracted offering from brand_manifest
-                    brand_manifest=brand_manifest_dict,
+                    brand_manifest=brand_manifest_unwrapped,
                     tenant_policies=tenant_policies if tenant_policies else None,
                 )
 
@@ -639,7 +628,7 @@ async def _get_products_impl(
     if policy_result and policy_check_enabled:
         # Policy checks are enabled - filter products based on policy compliance
         for product in products:
-            is_eligible, reason = policy_service.check_product_eligibility(policy_result, product.model_dump())
+            is_eligible, reason = policy_service.check_product_eligibility(policy_result, product)
 
             if is_eligible:
                 # Product passed policy checks - add to eligible products

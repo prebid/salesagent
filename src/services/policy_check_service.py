@@ -4,8 +4,10 @@ import logging
 from datetime import UTC, datetime
 from enum import Enum
 
+from adcp import BrandManifest
 from pydantic import BaseModel, Field
 
+from src.core.schemas import Product
 from src.services.ai import AIServiceFactory, TenantAIConfig
 from src.services.ai.agents.policy_agent import (
     check_policy_compliance,
@@ -87,7 +89,7 @@ class PolicyCheckService:
         self,
         brief: str,
         promoted_offering: str | None = None,
-        brand_manifest: dict | str | None = None,
+        brand_manifest: BrandManifest | str | None = None,
         tenant_policies: dict | None = None,
     ) -> PolicyCheckResult:
         """Check if an advertising brief complies with policies.
@@ -95,7 +97,7 @@ class PolicyCheckService:
         Args:
             brief: The advertising brief description
             promoted_offering: DEPRECATED: Use brand_manifest instead (still supported)
-            brand_manifest: Brand manifest dict or URL string (preferred over promoted_offering)
+            brand_manifest: BrandManifest model or URL string (preferred over promoted_offering)
             tenant_policies: Optional tenant-specific policy overrides
 
         Returns:
@@ -104,11 +106,11 @@ class PolicyCheckService:
         # Extract brand info from brand_manifest if provided
         brand_info = None
         if brand_manifest:
-            if isinstance(brand_manifest, dict):
-                # Extract name and description from manifest
-                brand_name = brand_manifest.get("name", "")
-                brand_description = brand_manifest.get("description", "")
-                brand_info = f"{brand_name} - {brand_description}" if brand_description else brand_name
+            if isinstance(brand_manifest, BrandManifest):
+                # Extract name and tagline from typed model
+                brand_name = brand_manifest.name
+                brand_tagline = brand_manifest.tagline or ""
+                brand_info = f"{brand_name} - {brand_tagline}" if brand_tagline else brand_name
             elif isinstance(brand_manifest, str):
                 # URL string - use as-is
                 brand_info = f"Brand manifest URL: {brand_manifest}"
@@ -150,15 +152,12 @@ class PolicyCheckService:
         # Return allowed by default
         return PolicyCheckResult(status=PolicyStatus.ALLOWED, warnings=[])
 
-    def check_product_eligibility(
-        self, policy_result: PolicyCheckResult, product: dict, advertiser_category: str | None = None
-    ) -> tuple[bool, str | None]:
-        """Check if a product is eligible based on policy result and audience compatibility.
+    def check_product_eligibility(self, policy_result: PolicyCheckResult, product: Product) -> tuple[bool, str | None]:
+        """Check if a product is eligible based on policy result.
 
         Args:
             policy_result: Result from brief compliance check
-            product: Product dictionary with audience characteristic fields
-            advertiser_category: Optional advertiser category (e.g., 'alcohol', 'gambling')
+            product: Product model instance
 
         Returns:
             Tuple of (is_eligible, reason_if_not)
@@ -166,52 +165,5 @@ class PolicyCheckService:
         # Blocked briefs can't use any products
         if policy_result.status == PolicyStatus.BLOCKED:
             return False, policy_result.reason
-
-        # Check age-based compatibility
-        targeted_ages = product.get("targeted_ages")
-        verified_minimum_age = product.get("verified_minimum_age")
-
-        # Extract advertiser category from restrictions if not provided
-        if not advertiser_category and policy_result.restrictions:
-            # Try to infer category from restrictions
-            restriction_text = " ".join(policy_result.restrictions).lower()
-            if any(term in restriction_text for term in ["alcohol", "beer", "wine", "liquor"]):
-                advertiser_category = "alcohol"
-            elif any(term in restriction_text for term in ["gambling", "casino", "betting"]):
-                advertiser_category = "gambling"
-            elif any(term in restriction_text for term in ["tobacco", "cigarettes", "vaping"]):
-                advertiser_category = "tobacco"
-            elif any(term in restriction_text for term in ["cannabis", "marijuana", "cbd"]):
-                advertiser_category = "cannabis"
-
-        # Age-restricted categories require appropriate audience
-        age_restricted_categories = ["alcohol", "gambling", "tobacco", "cannabis"]
-
-        if advertiser_category in age_restricted_categories:
-            # Cannot run on child-focused content
-            if targeted_ages == "children":
-                return False, f"{advertiser_category} advertising cannot run on child-focused content"
-
-            # Check minimum age requirements
-            if advertiser_category == "alcohol":
-                required_age = 21
-            else:  # gambling, tobacco, cannabis
-                required_age = 18
-
-            # Check if product has appropriate age verification
-            if verified_minimum_age and verified_minimum_age >= required_age:
-                # Product has age gating that meets requirements
-                pass
-            elif targeted_ages == "teens":
-                # Teens content without age verification cannot have restricted ads
-                return False, f"{advertiser_category} advertising requires {required_age}+ audience or age verification"
-            elif not verified_minimum_age and targeted_ages != "adults":
-                # No age verification and not explicitly adults-only
-                return False, f"{advertiser_category} advertising requires age-gated content or adults-only audience"
-
-        # Check for compatibility with restricted content
-        if policy_result.status == PolicyStatus.RESTRICTED and targeted_ages == "children":
-            # Children's content may not be suitable for restricted advertisers
-            return False, "Children's content not compatible with restricted advertising"
 
         return True, None
