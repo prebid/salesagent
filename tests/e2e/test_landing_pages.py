@@ -22,10 +22,12 @@ class TestLandingPages:
     """Test landing page routing for different domain types."""
 
     def _get_base_url(self) -> str:
-        """Get base URL for tests (defaults to localhost)."""
-        return os.getenv("TEST_BASE_URL", "http://localhost:8001")
+        """Get base URL for tests (supports dynamic ports via ADMIN_UI_PORT env var)."""
+        port = os.getenv("ADMIN_UI_PORT", "8001")
+        return os.getenv("TEST_BASE_URL", f"http://localhost:{port}")
 
     @pytest.mark.integration
+    @pytest.mark.xfail(reason="Requires nginx proxy for Host-based domain routing")
     def test_admin_domain_redirects_to_login(self):
         """Admin domain should return 302 redirect to login page."""
         base_url = self._get_base_url()
@@ -50,6 +52,7 @@ class TestLandingPages:
             pytest.skip(f"Server not running at {base_url}")
 
     @pytest.mark.integration
+    @pytest.mark.xfail(reason="Requires nginx proxy for Host-based domain routing")
     def test_admin_login_page_shows_login_form(self):
         """Admin login page should contain login form when following redirect."""
         base_url = self._get_base_url()
@@ -140,6 +143,7 @@ class TestLandingPages:
             pytest.skip(f"Server not running at {base_url}")
 
     @pytest.mark.integration
+    @pytest.mark.xfail(reason="Requires nginx proxy for Host-based domain routing")
     def test_approximated_header_precedence_for_admin(self):
         """Apx-Incoming-Host header should take precedence over Host header for admin routing."""
         base_url = self._get_base_url()
@@ -150,7 +154,7 @@ class TestLandingPages:
             response = requests.get(
                 f"{base_url}/",
                 headers={
-                    "Host": "localhost:8001",  # Backend host
+                    "Host": f"localhost:{os.getenv('ADMIN_UI_PORT', '8001')}",  # Backend host
                     "Apx-Incoming-Host": "admin.sales-agent.example.com",  # Proxied admin host
                 },
                 timeout=5,
@@ -173,8 +177,9 @@ class TestAuthOptionalEndpoints:
     """Test auth-optional MCP endpoints (list_creative_formats, list_authorized_properties, get_products)."""
 
     def _get_base_url(self) -> str:
-        """Get base URL for tests (defaults to localhost MCP port)."""
-        return os.getenv("TEST_BASE_URL", "http://localhost:8080")
+        """Get base URL for tests (supports dynamic ports via ADCP_SALES_PORT env var)."""
+        port = os.getenv("ADCP_SALES_PORT", "8080")
+        return os.getenv("TEST_BASE_URL", f"http://localhost:{port}")
 
     def _get_test_token(self) -> str | None:
         """Get test auth token from environment."""

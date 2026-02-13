@@ -19,6 +19,13 @@ import requests
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+
+def _a2a_base_url() -> str:
+    """Get A2A server base URL from environment (supports dynamic ports)."""
+    port = os.getenv("A2A_PORT", "8091")
+    return f"http://localhost:{port}"
+
+
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, create_agent_card
 
 logger = logging.getLogger(__name__)
@@ -100,7 +107,7 @@ class TestAgentCardURLRegression:
         """Integration test: Verify actual HTTP endpoint returns correct URL format."""
         # This test requires the server to be running - skip if not available
         try:
-            response = requests.get("http://localhost:8091/.well-known/agent.json", timeout=2)
+            response = requests.get(f"{_a2a_base_url()}/.well-known/agent.json", timeout=2)
             if response.status_code == 200:
                 agent_card = response.json()
                 url = agent_card.get("url")
@@ -109,7 +116,7 @@ class TestAgentCardURLRegression:
                     assert not url.endswith("/"), f"HTTP endpoint returned URL with trailing slash: {url}"
                     assert url.endswith("/a2a"), f"HTTP endpoint URL should end with '/a2a': {url}"
         except (requests.ConnectionError, requests.Timeout):
-            pytest.skip("A2A server not running on localhost:8091 - skipping HTTP integration test")
+            pytest.skip(f"A2A server not running at {_a2a_base_url()} - skipping HTTP integration test")
 
 
 class TestFunctionCallRegression:
@@ -238,7 +245,7 @@ class TestHTTPBehaviorRegression:
         for endpoint in endpoints_to_test:
             try:
                 # Use allow_redirects=False to catch any redirects
-                response = requests.get(f"http://localhost:8091{endpoint}", allow_redirects=False, timeout=2)
+                response = requests.get(f"{_a2a_base_url()}{endpoint}", allow_redirects=False, timeout=2)
 
                 if response.status_code == 200:
                     # Should be 200, not a redirect (301, 302, etc.)
