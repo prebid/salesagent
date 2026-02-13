@@ -1750,12 +1750,6 @@ class Creative(LibraryCreative):
         data.pop("updated_at", None)
         data.pop("format", None)  # format_id is the spec field
 
-        # Ensure status enum is always a string regardless of serialization mode.
-        # Creative status is consumed as string by business logic and DB storage,
-        # so we normalize it here rather than requiring mode='json' everywhere.
-        if "status" in data and hasattr(data["status"], "value"):
-            data["status"] = data["status"].value
-
         return data
 
     def model_dump_internal(self, **kwargs):
