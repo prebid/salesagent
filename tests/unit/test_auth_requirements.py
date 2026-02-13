@@ -100,30 +100,30 @@ class TestAuthenticationRequirements:
         """create_media_buy must reject requests without authentication."""
         import asyncio
 
+        from src.core.schemas import CreateMediaBuyRequest
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         mock_tenant.return_value = {"tenant_id": "test_tenant"}
 
-        # Minimal required params per AdCP spec
-        params = {
-            "buyer_ref": "test_buyer",
-            "brand_manifest": {"name": "Test Brand"},
-            "packages": [
+        # Construct spec-compliant request at the test boundary (matches refactored _impl signature)
+        req = CreateMediaBuyRequest(
+            buyer_ref="test_buyer",
+            brand_manifest={"name": "Test Brand"},
+            packages=[
                 {
                     "buyer_ref": "pkg1",
                     "product_id": "prod1",
-                    "budget": 1000.0,  # AdCP v2.2.0: budget is a number, not an object
+                    "budget": 1000.0,
                     "pricing_option_id": "test_pricing",
                 }
             ],
-            "start_time": "2025-01-01T00:00:00Z",
-            "end_time": "2025-01-31T23:59:59Z",
-            "context": None,  # No auth
-        }
+            start_time="2025-01-01T00:00:00Z",
+            end_time="2025-01-31T23:59:59Z",
+        )
 
-        # Call without context (no auth)
+        # Call without ctx (no auth)
         with pytest.raises(ToolError) as exc_info:
-            asyncio.run(_create_media_buy_impl(**params))
+            asyncio.run(_create_media_buy_impl(req=req))
 
         error_msg = str(exc_info.value)
         # create_media_buy validates context presence first, then auth

@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.schemas import CreateMediaBuyRequest
 from tests.helpers.adcp_factories import create_test_package_request
 
 
@@ -83,14 +84,14 @@ class TestDuplicateProductValidation:
             end_time = start_time + timedelta(days=7)
 
             # Should return error response about duplicate products
-            result, _ = await _create_media_buy_impl(
+            req = CreateMediaBuyRequest(
                 buyer_ref="test_media_buy_duplicate",
                 brand_manifest={"name": "Test Brand"},
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
-                ctx=mock_context,
             )
+            result, _ = await _create_media_buy_impl(req=req, ctx=mock_context)
 
             # Verify response contains error about duplicate products
             assert result.errors is not None and len(result.errors) > 0, f"Expected errors in response, got: {result}"
@@ -173,14 +174,14 @@ class TestDuplicateProductValidation:
             end_time = start_time + timedelta(days=7)
 
             # Should return error response listing both duplicate products
-            result, _ = await _create_media_buy_impl(
+            req = CreateMediaBuyRequest(
                 buyer_ref="test_media_buy_multiple_duplicates",
                 brand_manifest={"name": "Test Brand"},
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
-                ctx=mock_context,
             )
+            result, _ = await _create_media_buy_impl(req=req, ctx=mock_context)
 
             # Verify both duplicate products are mentioned
             assert result.errors is not None and len(result.errors) > 0, f"Expected errors in response, got: {result}"
@@ -245,14 +246,15 @@ class TestDuplicateProductValidation:
 
             # Should fail on currency validation (since we didn't set that up)
             # but NOT on duplicate product validation
+            req = CreateMediaBuyRequest(
+                buyer_ref="test_media_buy_different",
+                brand_manifest={"name": "Test Brand"},
+                packages=packages,
+                start_time=start_time,
+                end_time=end_time,
+            )
             with pytest.raises((ValueError, Exception)) as exc_info:
-                await _create_media_buy_impl(
-                    buyer_ref="test_media_buy_different",
-                    brand_manifest={"name": "Test Brand"},
-                    packages=packages,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
+                await _create_media_buy_impl(req=req)
 
             # Should NOT be about duplicate products
             error_msg = str(exc_info.value)

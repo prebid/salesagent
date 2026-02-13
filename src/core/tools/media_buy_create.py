@@ -1298,41 +1298,15 @@ from src.services.slack_notifier import get_slack_notifier
 
 
 async def _create_media_buy_impl(
-    buyer_ref: str,
-    brand_manifest: Any,  # BrandManifest | str - REQUIRED per AdCP v2.2.0 spec
-    packages: list[Any],  # REQUIRED per AdCP spec (each has targeting_overlay)
-    start_time: Any,  # datetime | Literal["asap"] | str - REQUIRED per AdCP spec
-    end_time: Any,  # datetime | str - REQUIRED per AdCP spec
-    po_number: str | None = None,
-    pacing: Literal["even", "asap", "daily_budget"] = "even",
-    daily_budget: float | None = None,
-    creatives: list[Any] | None = None,
-    reporting_webhook: dict[str, Any] | None = None,
-    required_axe_signals: list[str] | None = None,
-    enable_creative_macro: bool = False,
-    strategy_id: str | None = None,
+    req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | None = None,
-    context: dict[str, Any] | None = None,  # Optional application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ) -> tuple[CreateMediaBuySuccess | CreateMediaBuyError, AdcpTaskStatus]:
     """Create a media buy with the specified parameters.
 
     Args:
-        buyer_ref: Buyer reference for tracking (REQUIRED per AdCP spec)
-        brand_manifest: Brand information manifest - inline object or URL string (REQUIRED per AdCP v2.2.0 spec)
-        packages: Array of packages with products, budgets, and targeting_overlay (REQUIRED)
-        start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)
-        end_time: Campaign end time ISO 8601 (REQUIRED)
-        po_number: Purchase order number (optional)
-        pacing: Pacing strategy (even, asap, daily_budget)
-        daily_budget: Daily budget limit
-        creatives: Creative assets for the campaign
-        reporting_webhook: Webhook configuration for automated reporting delivery
-        required_axe_signals: Required targeting signals
-        enable_creative_macro: Enable AXE to provide creative_macro signal
-        strategy_id: Optional strategy ID for linking operations
-        push_notification_config: Push notification config for status updates (MCP/A2A)
-        context: Application level context per adcp spec
+        req: Validated CreateMediaBuyRequest with all protocol fields
+        push_notification_config: Push notification config for status updates (A2A only)
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -1341,43 +1315,16 @@ async def _create_media_buy_impl(
     request_start_time = time.time()
 
     # Warn if unsupported reporting_webhook frequency is requested
-    if reporting_webhook and isinstance(reporting_webhook, dict):
-        raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
+    if req.reporting_webhook:
+        raw_freq = str(getattr(req.reporting_webhook, "reporting_frequency", None) or "daily").lower()
         if raw_freq != "daily":
             logger.warning(
                 "CreateMediaBuy requested reporting webhook frequency '%s' for buyer_ref '%s', "
                 "but only 'daily' frequency is currently supported. "
                 "Hourly and monthly reporting will be ignored until implemented.",
                 raw_freq,
-                buyer_ref,
+                req.buyer_ref,
             )
-
-    # Parse ISO 8601 strings to datetime if needed
-    effective_start_time = start_time
-    effective_end_time = end_time
-    if isinstance(effective_start_time, str) and effective_start_time != "asap":
-        effective_start_time = datetime.fromisoformat(effective_start_time)
-    if isinstance(effective_end_time, str):
-        effective_end_time = datetime.fromisoformat(effective_end_time)
-
-    # Create spec-compliant request object
-    # Non-spec fields (pacing, daily_budget, creatives,
-    # required_axe_signals, enable_creative_macro, strategy_id, push_notification_config)
-    # are used directly below, not passed to the request
-    try:
-        req = CreateMediaBuyRequest(
-            buyer_ref=buyer_ref,
-            brand_manifest=brand_manifest,
-            packages=packages,
-            start_time=effective_start_time,
-            end_time=effective_end_time,
-            po_number=po_number,
-            reporting_webhook=to_reporting_webhook(reporting_webhook),
-            context=to_context_object(context),
-        )
-    except ValidationError as e:
-        # Format validation errors with helpful context using shared helper
-        raise ToolError(format_validation_error(e, context="request")) from e
 
     # Extract testing context first
     if ctx is None:
@@ -2075,29 +2022,26 @@ async def _create_media_buy_impl(
                 from src.core.schemas import Package
 
                 # Create Package object from request package, adding generated fields
-                # Must map PackageRequest fields to Package fields:
-                # - format_ids (request) -> format_ids_to_provide (response)
-                # - creative_ids/creatives (request) -> creative_assignments (response) [handled separately]
-                pkg_data = pkg.model_dump(exclude_none=True)
-
-                # Remove PackageRequest-only fields that aren't in Package schema
-                pkg_data.pop("format_ids", None)  # Use format_ids_to_provide instead
-                pkg_data.pop("creative_ids", None)  # These become creative_assignments
-                pkg_data.pop("creatives", None)  # These become creative_assignments
-
-                # Map format_ids to format_ids_to_provide if present
-                if pkg.format_ids:
-                    pkg_data["format_ids_to_provide"] = pkg.format_ids
-
-                # Add Package-specific fields
-                pkg_data.update(
-                    {
-                        "package_id": package_id,
-                        "buyer_ref": pkg.buyer_ref,  # Include buyer_ref from request package
-                        "paused": False,  # Initial state is not paused (AdCP 2.12.0)
-                    }
+                # Maps PackageRequest fields to Package fields directly:
+                # - format_ids (request) → format_ids_to_provide (response)
+                # - creative_ids/creatives (request) → creative_assignments (response) [handled separately]
+                pending_packages.append(
+                    Package(
+                        package_id=package_id,
+                        buyer_ref=pkg.buyer_ref,
+                        paused=False,  # Initial state is not paused (AdCP 2.12.0)
+                        product_id=pkg.product_id,
+                        budget=pkg.budget,
+                        bid_price=pkg.bid_price,
+                        pricing_option_id=pkg.pricing_option_id,
+                        targeting_overlay=pkg.targeting_overlay,
+                        pacing=pkg.pacing,
+                        impressions=getattr(pkg, "impressions", None),
+                        ext=pkg.ext,
+                        creative_assignments=pkg.creative_assignments,
+                        format_ids_to_provide=pkg.format_ids,
+                    )
                 )
-                pending_packages.append(Package(**pkg_data))
 
                 # Update the package in raw_request with the generated package_id so UI can find it
                 raw_request_dict["packages"][idx - 1]["package_id"] = package_id
@@ -2211,35 +2155,19 @@ async def _create_media_buy_impl(
                                         "total": float(req_pkg.budget),
                                         "currency": package_currency,
                                     }
-                                elif hasattr(req_pkg.budget, "model_dump"):
-                                    # ADCP 2.3 object format: store as-is
-                                    budget_value = req_pkg.budget.model_dump()
                                 else:
-                                    # Fallback: treat as dict or convert to dict
-                                    budget_value = (
-                                        dict(req_pkg.budget)
-                                        if isinstance(req_pkg.budget, dict)
-                                        else {"total": float(req_pkg.budget), "currency": request_currency}
-                                    )
+                                    # ADCP 2.3 object format or other: _pydantic_json_serializer handles it
+                                    budget_value = req_pkg.budget
 
-                            # Serialize format_ids to dicts for JSON storage
-                            # Use mode='json' to convert AnyUrl to string
-                            format_ids_serialized = None
-                            if hasattr(req_pkg, "format_ids") and req_pkg.format_ids:
-                                format_ids_serialized = [
-                                    fmt.model_dump(mode="json") if hasattr(fmt, "model_dump") else fmt
-                                    for fmt in req_pkg.format_ids
-                                ]
-
+                            # _pydantic_json_serializer on the engine handles Pydantic models,
+                            # AnyUrl, enums, and datetimes in JSONType columns automatically
                             package_config.update(
                                 {
                                     "product_id": req_pkg.product_id,
                                     "budget": budget_value,
-                                    "targeting_overlay": (
-                                        req_pkg.targeting_overlay.model_dump() if req_pkg.targeting_overlay else None
-                                    ),
+                                    "targeting_overlay": req_pkg.targeting_overlay,
                                     "creative_ids": _get_creative_ids(req_pkg),
-                                    "format_ids": format_ids_serialized,
+                                    "format_ids": req_pkg.format_ids,
                                     "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                                     "impressions": getattr(
                                         req_pkg, "impressions", None
@@ -2415,7 +2343,7 @@ async def _create_media_buy_impl(
                     buyer_ref=response_buyer_ref,
                     media_buy_id=media_buy_id,
                     creative_deadline=None,
-                    packages=cast(list[Any], pending_packages),
+                    packages=pending_packages,
                     workflow_step_id=step.step_id,  # Client can track approval via this ID
                     context=to_context_object(req.context),
                 ),
@@ -2526,10 +2454,10 @@ async def _create_media_buy_impl(
                 # - buyer_ref (required): Buyer's reference identifier
                 # - package_id (required): Publisher's unique identifier
                 response_packages.append(
-                    {
-                        "buyer_ref": pkg.buyer_ref,
-                        "package_id": package_id,
-                    }
+                    Package(
+                        buyer_ref=pkg.buyer_ref,
+                        package_id=package_id,
+                    )
                 )
 
             # Send Slack notification for configuration-based approval requirement
@@ -2577,7 +2505,7 @@ async def _create_media_buy_impl(
                 CreateMediaBuySuccess(
                     buyer_ref=req.buyer_ref if req.buyer_ref else "unknown",
                     media_buy_id=media_buy_id,
-                    packages=cast(list[Any], response_packages),
+                    packages=response_packages,
                     workflow_step_id=step.step_id,
                     context=to_context_object(req.context),
                 ),
@@ -3456,20 +3384,24 @@ async def _create_media_buy_impl(
 
         assert req.packages is not None, "packages required - validated earlier"
         for i, package in enumerate(req.packages):
-            # Get package_id from adapter response
+            # Get package_id and paused from adapter response
             if i < len(adapter_packages):
                 # adapter_packages may be Package Pydantic objects (adcp v1.2.1) or dicts
                 response_package = adapter_packages[i]
-                if hasattr(response_package, "model_dump"):
-                    response_package_dict = response_package.model_dump(exclude_none=True, mode="python")
+                if hasattr(response_package, "package_id"):
+                    adapter_package_id = response_package.package_id
+                    adapter_paused = getattr(response_package, "paused", False)
+                elif isinstance(response_package, dict):
+                    adapter_package_id = response_package.get("package_id")
+                    adapter_paused = response_package.get("paused", False)
                 else:
-                    response_package_dict = response_package if isinstance(response_package, dict) else {}
-
-                adapter_package_id = response_package_dict.get("package_id")
+                    adapter_package_id = None
+                    adapter_paused = False
             else:
                 # Fallback if adapter didn't return enough packages
                 logger.warning(f"Adapter returned fewer packages than request. Using request package {i}")
                 adapter_package_id = None
+                adapter_paused = False
 
             # Validate that adapter returned package_id
             if not adapter_package_id:
@@ -3477,82 +3409,42 @@ async def _create_media_buy_impl(
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 
-            # Build full Package response per AdCP 2.9.0 spec
-            # Return all package fields from request, plus package_id and status from adapter
-
-            # Extract status from adapter response, defaulting to "active" if missing
-            # Get paused field from adapter response (adcp 2.12.0: replaced status enum with paused bool)
-            adapter_paused = response_package_dict.get("paused", False)
-
             # Ensure paused is a boolean
             if not isinstance(adapter_paused, bool):
-                # Convert common values to boolean
                 if isinstance(adapter_paused, str):
                     adapter_paused = adapter_paused.lower() in ("true", "1", "yes", "active")
                 else:
                     adapter_paused = bool(adapter_paused)
 
-            # Build full package dict with all fields from request
-            full_package_dict = {
-                "package_id": adapter_package_id,  # From adapter (required)
-                "paused": adapter_paused,  # From adapter (adcp 2.12.0)
-                "buyer_ref": package.buyer_ref,  # From request
-                "product_id": package.product_id,  # From request
-            }
-
-            # Add optional fields from request if present
-            if package.budget is not None:
-                full_package_dict["budget"] = (
-                    float(package.budget) if isinstance(package.budget, (int, float)) else package.budget
+            # Build Package response directly from request fields + adapter fields
+            response_packages.append(
+                Package(
+                    package_id=adapter_package_id,
+                    paused=adapter_paused,
+                    buyer_ref=package.buyer_ref,
+                    product_id=package.product_id,
+                    budget=package.budget,
+                    bid_price=package.bid_price,
+                    pricing_option_id=package.pricing_option_id,
+                    pacing=package.pacing,
+                    targeting_overlay=package.targeting_overlay,
+                    impressions=getattr(package, "impressions", None),
+                    creative_assignments=package.creative_assignments,
+                    format_ids_to_provide=getattr(package, "format_ids", None),
                 )
+            )
 
-            # Legacy impressions field (use getattr for backward compatibility)
-            package_impressions = getattr(package, "impressions", None)
-            if package_impressions is not None:
-                full_package_dict["impressions"] = float(package_impressions)
-
-            if package.bid_price is not None:
-                full_package_dict["bid_price"] = float(package.bid_price)
-
-            if package.pricing_option_id is not None:
-                full_package_dict["pricing_option_id"] = package.pricing_option_id
-
-            if package.pacing is not None:
-                full_package_dict["pacing"] = (
-                    package.pacing.model_dump() if hasattr(package.pacing, "model_dump") else package.pacing
-                )
-
-            if package.targeting_overlay is not None:
-                full_package_dict["targeting_overlay"] = (
-                    package.targeting_overlay.model_dump()
-                    if hasattr(package.targeting_overlay, "model_dump")
-                    else package.targeting_overlay
-                )
-
-            if hasattr(package, "creative_assignments") and package.creative_assignments:
-                full_package_dict["creative_assignments"] = [
-                    ca.model_dump() if hasattr(ca, "model_dump") else ca for ca in package.creative_assignments
-                ]
-
-            if hasattr(package, "format_ids_to_provide") and package.format_ids_to_provide:
-                full_package_dict["format_ids_to_provide"] = package.format_ids_to_provide
-
-            response_packages.append(full_package_dict)
-
-        # Ensure buyer_ref is set (defensive check)
-        buyer_ref_value = req.buyer_ref if req.buyer_ref else buyer_ref
+        # Ensure buyer_ref is set (defensive check — buyer_ref is required in CreateMediaBuyRequest)
+        buyer_ref_value = req.buyer_ref
         if not buyer_ref_value:
-            logger.error(f"🚨 buyer_ref is missing! req.buyer_ref={req.buyer_ref}, buyer_ref={buyer_ref}")
+            logger.error(f"🚨 buyer_ref is missing! req.buyer_ref={req.buyer_ref}")
             buyer_ref_value = f"missing-{response.media_buy_id}"
 
-        # Create AdCP response (protocol fields like status are added by ProtocolEnvelope wrapper)
-        # NOTE: response_packages is a list of dicts, not Pydantic objects
-        # The AdCP library will validate and convert these dicts to Package objects internally
-        # When the response is serialized (via .model_dump()), they'll be converted back to dicts
+        # Create AdCP response with typed Package objects
         adcp_response = CreateMediaBuySuccess(
             buyer_ref=buyer_ref_value,
             media_buy_id=response.media_buy_id,
-            packages=cast(list[Any], response_packages),
+            packages=response_packages,
             creative_deadline=response.creative_deadline,
             context=to_context_object(req.context),
         )
@@ -3591,11 +3483,7 @@ async def _create_media_buy_impl(
         # Apply testing hooks to response with campaign information (resolved from 'asap' if needed)
         campaign_info = {"start_date": start_time, "end_date": end_time, "total_budget": total_budget}
 
-        response_data = (
-            adcp_response.model_dump_internal()
-            if hasattr(adcp_response, "model_dump_internal")
-            else adcp_response.model_dump()
-        )
+        response_data = adcp_response.model_dump()
 
         response_data = apply_testing_hooks(response_data, testing_ctx, "create_media_buy", campaign_info)
 
@@ -3829,26 +3717,23 @@ async def create_media_buy(
     Returns:
         ToolResult with CreateMediaBuyResponse data
     """
-    # Convert typed Pydantic models to dicts for the impl
-    # FastMCP already coerced JSON inputs to these types
-    brand_manifest_val = (
-        brand_manifest.model_dump(mode="json") if isinstance(brand_manifest, BrandManifest) else brand_manifest
-    )
-    packages_dicts = [p.model_dump(mode="json") for p in packages]
-    reporting_webhook_dict = reporting_webhook.model_dump(mode="json") if reporting_webhook else None
-    context_dict = context.model_dump(mode="json") if context else None
+    # Construct spec-compliant request object at the boundary — validation happens here
+    # FastMCP already coerced JSON inputs to typed Pydantic models
+    try:
+        req = CreateMediaBuyRequest(
+            buyer_ref=buyer_ref,
+            brand_manifest=brand_manifest,
+            packages=packages,
+            start_time=start_time,
+            end_time=end_time,
+            po_number=po_number,
+            reporting_webhook=reporting_webhook,
+            context=context,
+        )
+    except ValidationError as e:
+        raise ToolError(format_validation_error(e, context="request")) from e
 
-    response, status = await _create_media_buy_impl(
-        buyer_ref=buyer_ref,
-        brand_manifest=brand_manifest_val,
-        po_number=po_number,
-        packages=packages_dicts,
-        start_time=start_time,
-        end_time=end_time,
-        reporting_webhook=reporting_webhook_dict,
-        context=context_dict,
-        ctx=ctx,
-    )
+    response, status = await _create_media_buy_impl(req=req, ctx=ctx)
     return ToolResult(
         content=str(response),
         structured_content={"status": status.value, **response.model_dump(mode="json")},
@@ -3909,16 +3794,25 @@ async def create_media_buy_raw(
     Returns:
         Dict with status and CreateMediaBuyResponse data
     """
+    # Construct spec-compliant request object at the boundary — validation happens here
+    # A2A server sends dict inputs which Pydantic coerces to typed models
+    try:
+        req = CreateMediaBuyRequest(
+            buyer_ref=buyer_ref,
+            brand_manifest=brand_manifest,
+            packages=packages,
+            start_time=start_time,
+            end_time=end_time,
+            po_number=po_number,
+            reporting_webhook=to_reporting_webhook(reporting_webhook),
+            context=to_context_object(context),
+        )
+    except ValidationError as e:
+        raise ToolError(format_validation_error(e, context="request")) from e
+
     response, status = await _create_media_buy_impl(
-        buyer_ref=buyer_ref,
-        brand_manifest=brand_manifest,
-        po_number=po_number,
-        packages=packages,
-        start_time=start_time,
-        end_time=end_time,
-        reporting_webhook=reporting_webhook,
+        req=req,
         push_notification_config=push_notification_config,
-        context=context,
         ctx=ctx,
     )
     return {"status": status.value, **response.model_dump()}

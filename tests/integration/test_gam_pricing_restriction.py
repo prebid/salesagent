@@ -312,14 +312,7 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     # GAM adapter rejects unsupported pricing models by returning CreateMediaBuyError
-    response, _ = await _create_media_buy_impl(
-        buyer_ref=request.buyer_ref,
-        brand_manifest=request.brand_manifest,
-        packages=request.packages,
-        start_time=request.start_time,
-        end_time=request.end_time,
-        ctx=context,
-    )
+    response, _ = await _create_media_buy_impl(req=request, ctx=context)
 
     # Verify adapter returned error response
     assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
@@ -363,14 +356,7 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     )
 
     # This should succeed
-    response, _ = await _create_media_buy_impl(
-        buyer_ref=request.buyer_ref,
-        brand_manifest=request.brand_manifest,
-        packages=request.packages,
-        start_time=request.start_time,
-        end_time=request.end_time,
-        ctx=context,
-    )
+    response, _ = await _create_media_buy_impl(req=request, ctx=context)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -417,14 +403,7 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
     from src.core.schemas import CreateMediaBuyError
 
     # GAM adapter rejects unsupported pricing models by returning CreateMediaBuyError
-    response, _ = await _create_media_buy_impl(
-        buyer_ref=request.buyer_ref,
-        brand_manifest=request.brand_manifest,
-        packages=request.packages,
-        start_time=request.start_time,
-        end_time=request.end_time,
-        ctx=context,
-    )
+    response, _ = await _create_media_buy_impl(req=request, ctx=context)
 
     # Verify adapter returned error response
     assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
@@ -468,14 +447,7 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     )
 
     # This should succeed - buyer chose CPM from multi-option product
-    response, _ = await _create_media_buy_impl(
-        buyer_ref=request.buyer_ref,
-        brand_manifest=request.brand_manifest,
-        packages=request.packages,
-        start_time=request.start_time,
-        end_time=request.end_time,
-        ctx=context,
-    )
+    response, _ = await _create_media_buy_impl(req=request, ctx=context)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
