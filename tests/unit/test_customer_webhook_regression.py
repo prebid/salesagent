@@ -73,7 +73,7 @@ def test_other_response_types():
 
     # Test SyncCreativesResponse (generates message via __str__() from creatives list)
     response2 = SyncCreativesResponse(
-        creatives=[SyncCreativeResult(buyer_ref="test-001", creative_id="cr-001", status="approved", action="created")],
+        creatives=[SyncCreativeResult(creative_id="cr-001", status="approved", action="created")],
         dry_run=False,
     )
     msg2 = str(response2)

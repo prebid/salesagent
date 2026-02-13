@@ -1230,8 +1230,8 @@ class TestAdCPContract:
         assert len(adcp_response["currency"]) == 3, "Currency must be 3-letter ISO code"
         assert adcp_response["pacing"] in ["even", "asap", "daily_budget"], "Invalid pacing value"
 
-        # Verify field count (Budget has 5 fields including auto_pause_on_budget_exhaustion)
-        assert len(adcp_response) == 5, f"Budget response should have exactly 5 fields, got {len(adcp_response)}"
+        # Verify field count: 4 fields present (auto_pause_on_budget_exhaustion=None excluded by exclude_none)
+        assert len(adcp_response) == 4, f"Budget response should have exactly 4 fields, got {len(adcp_response)}"
 
     def test_measurement_adcp_compliance(self):
         """Test that Measurement model complies with AdCP measurement schema."""

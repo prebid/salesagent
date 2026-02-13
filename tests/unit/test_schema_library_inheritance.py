@@ -219,7 +219,7 @@ class TestSchemaLibraryInheritance:
         assert not new_violations, (
             f"New schemas must extend library types when available:\n"
             f"  {new_violations}\n\n"
-            f"To fix: Change 'class {new_violations[0]}(AdCPBaseModel)' to "
+            f"To fix: Change 'class {new_violations[0]}(SalesAgentBaseModel)' to "
             f"'class {new_violations[0]}(Library{new_violations[0]})'\n"
             f"See GetMediaBuyDeliveryRequest for example pattern."
         )

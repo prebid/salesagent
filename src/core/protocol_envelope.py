@@ -40,7 +40,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from src.core.schemas import AdCPBaseModel
+from src.core.schemas import SalesAgentBaseModel
 
 # Task status values per AdCP spec
 TaskStatus = Literal[
@@ -112,7 +112,7 @@ class ProtocolEnvelope(BaseModel):
     @classmethod
     def wrap(
         cls,
-        payload: AdCPBaseModel | dict[str, Any],
+        payload: SalesAgentBaseModel | dict[str, Any],
         status: TaskStatus,
         message: str | None = None,
         task_id: str | None = None,
