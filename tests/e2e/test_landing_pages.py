@@ -27,7 +27,7 @@ class TestLandingPages:
         return os.getenv("TEST_BASE_URL", f"http://localhost:{port}")
 
     @pytest.mark.integration
-    @pytest.mark.xfail(reason="Requires nginx proxy for Host-based domain routing")
+    @pytest.mark.xfail(reason="Requires nginx proxy for Host-based domain routing (not in docker-compose.e2e.yml)")
     def test_admin_domain_redirects_to_login(self):
         """Admin domain should return 302 redirect to login page."""
         base_url = self._get_base_url()
@@ -52,7 +52,7 @@ class TestLandingPages:
             pytest.skip(f"Server not running at {base_url}")
 
     @pytest.mark.integration
-    @pytest.mark.xfail(reason="Requires nginx proxy for Host-based domain routing")
+    @pytest.mark.xfail(reason="Requires nginx proxy for Host-based domain routing (not in docker-compose.e2e.yml)")
     def test_admin_login_page_shows_login_form(self):
         """Admin login page should contain login form when following redirect."""
         base_url = self._get_base_url()
@@ -143,7 +143,7 @@ class TestLandingPages:
             pytest.skip(f"Server not running at {base_url}")
 
     @pytest.mark.integration
-    @pytest.mark.xfail(reason="Requires nginx proxy for Host-based domain routing")
+    @pytest.mark.xfail(reason="Requires nginx proxy for Host-based domain routing (not in docker-compose.e2e.yml)")
     def test_approximated_header_precedence_for_admin(self):
         """Apx-Incoming-Host header should take precedence over Host header for admin routing."""
         base_url = self._get_base_url()

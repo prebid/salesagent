@@ -116,11 +116,15 @@ class TestA2AEndpointsActual:
             pytest.skip(f"A2A server not running at {_a2a_base_url()}")
 
     @pytest.mark.integration
-    @pytest.mark.xfail(reason="A2A server does not return CORS headers without nginx proxy")
     def test_cors_headers_present(self):
         """Test that CORS headers are present for browser compatibility."""
         try:
-            response = requests.get(f"{_a2a_base_url()}/.well-known/agent.json", timeout=2)
+            # CORS headers are only returned when an Origin header is present (standard behavior)
+            response = requests.get(
+                f"{_a2a_base_url()}/.well-known/agent.json",
+                headers={"Origin": "http://example.com"},
+                timeout=2,
+            )
 
             if response.status_code == 200:
                 # Should have CORS headers
