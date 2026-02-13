@@ -7,6 +7,7 @@ This type uses native JSONB storage with additional validation.
 import logging
 from typing import Any
 
+from pydantic import BaseModel
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
@@ -68,16 +69,16 @@ class JSONType(TypeDecorator):
         if value is None:
             return None
 
-        # Validate that we're storing proper JSON-serializable types
-        if not isinstance(value, dict | list):
+        # Accept dict, list, and Pydantic BaseModel instances.
+        # The engine's _pydantic_json_serializer (pydantic_core.to_json) handles
+        # BaseModel serialization correctly — no need to model_dump() here.
+        if not isinstance(value, dict | list | BaseModel):
             logger.warning(
                 f"JSONType received non-JSON type: {type(value).__name__}. "
                 f"Converting to empty dict to prevent data corruption."
             )
             value = {}
 
-        # PostgreSQL JSONB handles serialization automatically
-        # Just return the Python object - psycopg2 driver does the rest
         return value
 
     def process_result_value(self, value: Any, dialect: Dialect) -> dict | list | None:

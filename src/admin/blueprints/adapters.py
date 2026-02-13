@@ -160,38 +160,41 @@ def save_adapter_config(tenant_id, **kwargs):
         if not adapter_type:
             return jsonify({"success": False, "error": "adapter_type is required"}), 400
 
-        # Get schema for validation
+        # Validate config against adapter schema (keeps Pydantic model flowing)
         schemas = get_adapter_schemas(adapter_type)
+        validated_config = None
         if schemas and schemas.connection_config:
             try:
-                # Validate config against schema
                 validated_config = schemas.connection_config(**config_data)
-                config_data = validated_config.model_dump()
             except ValidationError as e:
                 return jsonify({"success": False, "error": f"Validation error: {e}"}), 400
+
+        # Use the validated model for DB write (JSONType + engine json_serializer
+        # handle BaseModel serialization). Fall back to raw dict if no schema.
+        config_value = validated_config if validated_config is not None else config_data
 
         with get_db_session() as session:
             stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
             adapter_config = session.scalars(stmt).first()
 
             if not adapter_config:
-                # Create new adapter config
                 adapter_config = AdapterConfig(
                     tenant_id=tenant_id,
                     adapter_type=adapter_type,
-                    config_json=config_data,
+                    config_json=config_value,
                 )
                 session.add(adapter_config)
             else:
-                # Update existing
                 adapter_config.adapter_type = adapter_type
-                adapter_config.config_json = config_data
+                adapter_config.config_json = config_value
                 attributes.flag_modified(adapter_config, "config_json")
 
             # Write to legacy columns for backwards compatibility
-            if adapter_type == "mock":
-                adapter_config.mock_dry_run = config_data.get("dry_run", False)
-                adapter_config.mock_manual_approval_required = config_data.get("manual_approval_required", False)
+            if adapter_type == "mock" and validated_config is not None:
+                adapter_config.mock_dry_run = getattr(validated_config, "dry_run", False)
+                adapter_config.mock_manual_approval_required = getattr(
+                    validated_config, "manual_approval_required", False
+                )
             # Note: GAM, Kevel, Triton will be added as their schemas are created
 
             session.commit()
