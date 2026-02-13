@@ -2637,7 +2637,7 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
-    packages: list[PackageRequest] | None = None
+    packages: list[PackageRequest] | None = None  # type: ignore[assignment]
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):

@@ -1966,7 +1966,7 @@ async def _create_media_buy_impl(
                     testing_ctx=testing_ctx,
                 )
                 # Replace packages with updated versions (functional approach)
-                req.packages = cast(list[AdcpPackageRequest], updated_packages)
+                req.packages = cast(list[AdcpPackageRequest], updated_packages)  # type: ignore[assignment]
                 logger.info("[INLINE_CREATIVE_DEBUG] Updated req.packages with creative_ids")
                 if uploaded_ids:
                     logger.info(f"Successfully uploaded creatives for {len(uploaded_ids)} packages: {uploaded_ids}")

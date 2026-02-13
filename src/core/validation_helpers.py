@@ -8,10 +8,18 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+from enum import Enum
 
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_enum_value(value: str | Enum) -> str:
+    """Return the string value of an enum member, or the string itself."""
+    if isinstance(value, Enum):
+        return str(value.value)
+    return str(value)
 
 
 def run_async_in_sync_context(coroutine):
