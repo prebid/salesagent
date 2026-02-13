@@ -25,7 +25,6 @@ class TestGAMValidationIntegration:
         self.principal = Principal(
             principal_id="test_principal",
             name="Test Principal",
-            access_token="test_token",
             platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
         )
 
@@ -322,7 +321,6 @@ class TestGAMValidationPerformance:
         self.principal = Principal(
             principal_id="test_principal",
             name="Test Principal",
-            access_token="test_token",
             platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
         )
 

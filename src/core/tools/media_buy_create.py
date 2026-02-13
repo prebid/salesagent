@@ -2015,7 +2015,7 @@ async def _create_media_buy_impl(
 
                 # Build Package object with complete package data (matching auto-approval path)
                 # NOTE: Package schema does NOT have a 'status' field - workflow state is tracked in WorkflowStep
-                from src.core.schemas import Package
+                # (Package is imported at module level)
 
                 # Create Package object from request package, adding generated fields
                 # Maps PackageRequest fields to Package fields directly:

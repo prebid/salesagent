@@ -90,7 +90,6 @@ class TestA2ASpecCompliance:
         response_data = {
             "creatives": [
                 SyncCreativeResult(
-                    buyer_ref="test-001",
                     creative_id="cr-001",
                     status="approved",
                     action="created",

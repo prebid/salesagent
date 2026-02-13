@@ -383,8 +383,8 @@ class TestCreativeSchemaContract:
             },
             "status": "approved",
             "principal_id": "test_principal",
-            "created_at": datetime.now(),
-            "updated_at": datetime.now(),
+            "created_date": datetime.now(),
+            "updated_date": datetime.now(),
         }
 
         # AdCP v2.5.0 spec required fields for creatives
@@ -413,8 +413,8 @@ class TestCreativeSchemaContract:
             },
             "status": "approved",  # Use valid status per adcp 2.5.0 Creative enum
             "principal_id": "test_principal",
-            "created_at": datetime.now(),
-            "updated_at": datetime.now(),
+            "created_date": datetime.now(),
+            "updated_date": datetime.now(),
         }
 
         # AdCP v2.5.0 spec required fields for creatives (duration_ms is in assets)

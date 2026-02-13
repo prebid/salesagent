@@ -227,10 +227,8 @@ class TestGAMTenantSetup:
 
         # Create principal with GAM platform mapping
         principal = Principal(
-            tenant_id="test_tenant",
             principal_id="test_principal",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"google_ad_manager": "12345"},
         )
 
