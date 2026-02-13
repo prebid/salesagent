@@ -16,13 +16,14 @@ This module handles all testing headers and provides isolated test execution:
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_http_headers
 from pydantic import BaseModel
 
-from src.core.tool_context import ToolContext
+if TYPE_CHECKING:
+    from src.core.tool_context import ToolContext
 
 
 class CampaignEvent(str, Enum):
@@ -481,7 +482,7 @@ class DeliverySimulator:
 _session_manager = TestSessionManager()
 
 
-def get_testing_context(context: Context | ToolContext) -> TestContext:
+def get_testing_context(context: "Context | ToolContext") -> TestContext:
     """Get testing context from FastMCP context or ToolContext.
 
     Args:
@@ -490,12 +491,11 @@ def get_testing_context(context: Context | ToolContext) -> TestContext:
     Returns:
         TestContext with testing hooks configuration
     """
-    # Handle ToolContext (already has testing_context as dict)
+    from src.core.tool_context import ToolContext
+
+    # Handle ToolContext (testing_context is already AdCPTestContext)
     if isinstance(context, ToolContext):
-        if context.testing_context:
-            # Convert dict back to TestContext object
-            return TestContext(**context.testing_context)
-        return TestContext()
+        return context.testing_context or TestContext()
 
     # Handle FastMCP Context (extract from headers)
     return TestContext.from_context(context)

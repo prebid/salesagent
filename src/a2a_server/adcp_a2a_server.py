@@ -316,7 +316,7 @@ class AdCPRequestHandler(RequestHandler):
             tool_name=tool_name,
             request_timestamp=datetime.now(UTC),
             metadata={"source": "a2a_server", "protocol": "a2a_jsonrpc"},
-            testing_context=AdCPTestContext().model_dump(mode="json"),  # Default testing context for A2A requests
+            testing_context=AdCPTestContext(),  # Default testing context for A2A requests
         )
 
     def _tool_context_to_mcp_context(self, tool_context: ToolContext) -> ToolContext:

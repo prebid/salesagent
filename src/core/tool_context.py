@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from src.core.testing_hooks import AdCPTestContext
+
 
 class ToolContext(BaseModel):
     """Simplified context passed to MCP tools.
@@ -36,7 +38,7 @@ class ToolContext(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional context metadata")
 
     # Testing context (if applicable)
-    testing_context: dict[str, Any] | None = Field(
+    testing_context: AdCPTestContext | None = Field(
         default=None, description="Testing hooks context (dry-run, mock-time, etc.)"
     )
 
@@ -46,12 +48,6 @@ class ToolContext(BaseModel):
     def is_async_operation(self) -> bool:
         """Check if this is an async operation requiring persistent context."""
         return self.workflow_id is not None
-
-    def get_test_header(self, header_name: str) -> str | None:
-        """Get a testing header value if present."""
-        if not self.testing_context:
-            return None
-        return self.testing_context.get(header_name)
 
     def add_to_history(self, message: dict[str, Any]) -> None:
         """Add a message to the conversation history."""

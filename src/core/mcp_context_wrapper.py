@@ -23,7 +23,6 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from fastmcp.server import Context as FastMCPContext
-from pydantic import BaseModel
 from rich.console import Console
 
 from src.core.config_loader import set_current_tenant
@@ -252,9 +251,8 @@ class MCPContextWrapper:
             # Synchronous operation without context
             context_id = f"ctx_{uuid.uuid4().hex[:12]}"
 
-        # Extract testing context and convert to dict
-        testing_context_obj = get_testing_context(fastmcp_context)
-        testing_context = testing_context_obj.model_dump() if testing_context_obj else None
+        # Extract testing context (preserves typed AdCPTestContext)
+        testing_context = get_testing_context(fastmcp_context) or None
 
         # Build metadata
         metadata = {
@@ -317,14 +315,13 @@ class MCPContextWrapper:
             # This would need to be implemented based on your persistence layer
             pass
 
-    def _serialize_result(self, result: Any) -> dict:
-        """Serialize a result for storage in conversation history."""
-        if isinstance(result, BaseModel):
-            return result.model_dump()
-        elif isinstance(result, dict):
-            return result
-        else:
-            return {"value": str(result)}
+    def _serialize_result(self, result: Any) -> Any:
+        """Serialize a result for storage in conversation history.
+
+        Pydantic models are preserved as-is — the engine json_serializer
+        handles them when stored in JSONType DB columns.
+        """
+        return result
 
     def _enhance_response(self, result: Any, tool_context: ToolContext) -> Any:
         """Enhance response with context_id at protocol layer.

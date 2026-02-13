@@ -79,10 +79,8 @@ def _list_authorized_properties_impl(
     from src.core.tool_context import ToolContext
 
     if isinstance(context, ToolContext):
-        # ToolContext has testing_context field directly
-        testing_context = AdCPTestContext(**context.testing_context) if context.testing_context else AdCPTestContext()
+        testing_context = context.testing_context or AdCPTestContext()
     else:
-        # FastMCP Context - use get_testing_context
         testing_context = get_testing_context(context) if context else AdCPTestContext()
 
     # Note: apply_testing_hooks signature is (data, testing_ctx, operation, campaign_info)
