@@ -3641,7 +3641,7 @@ async def _create_media_buy_impl(
 async def create_media_buy(
     buyer_ref: str,
     brand_manifest: BrandManifest | str,  # BrandManifest or URL string - REQUIRED per AdCP v2.2.0 spec
-    packages: list[AdcpPackageRequest],  # REQUIRED per AdCP spec - Package objects with all fields
+    packages: list[PackageRequest],  # REQUIRED per AdCP spec - Package objects with all fields
     start_time: str,  # datetime ISO 8601 or 'asap' - REQUIRED per AdCP spec
     end_time: str,  # datetime ISO 8601 - REQUIRED per AdCP spec
     budget: Any | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
