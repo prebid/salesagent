@@ -34,7 +34,7 @@ from src.core.schemas import (
     GetProductsResponse,
     Product,  # Extends library Product
 )
-from src.core.testing_hooks import apply_testing_hooks, get_testing_context
+from src.core.testing_hooks import get_testing_context
 from src.core.tool_context import ToolContext
 from src.core.validation_helpers import format_validation_error, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
@@ -756,12 +756,6 @@ async def _get_products_impl(
         # Set to empty list to hide pricing (will be excluded during serialization)
         for product in eligible_products:
             product.pricing_options = []
-
-    # Apply testing hooks to response (after modifications)
-    # AdCP library Product uses model_dump(), not model_dump_internal()
-    response_data = {"products": [p.model_dump() for p in eligible_products]}
-    if testing_ctx is not None:
-        response_data = apply_testing_hooks(response_data, testing_ctx, "get_products")
 
     # Our Product extends LibraryProduct - cast for type safety since list is invariant
     # When serialized, Pydantic automatically uses library Product fields

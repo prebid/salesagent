@@ -427,64 +427,13 @@ def _get_media_buy_delivery_impl(
                 "total_budget": float(first_buy.budget) if first_buy.budget else 0.0,
             }
 
-        # Convert to dict for testing hooks
-        response_data = response.model_dump()
-        response_data = apply_testing_hooks(response_data, testing_ctx, "get_media_buy_delivery", campaign_info)
-
-        # Reconstruct response from modified data - filter out testing hook fields
-        valid_fields = {
-            "reporting_period",
-            "currency",
-            "aggregated_totals",
-            "media_buy_deliveries",
-            "notification_type",
-            "partial_data",
-            "unavailable_count",
-            "sequence_number",
-            "next_expected_at",
-            "errors",
-        }
-        filtered_data = {k: v for k, v in response_data.items() if k in valid_fields}
-
-        # Ensure required fields are present (validator compliance)
-        if "reporting_period" not in filtered_data:
-            filtered_data["reporting_period"] = response_data.get("reporting_period", reporting_period)
-        if "currency" not in filtered_data:
-            filtered_data["currency"] = response_data.get("currency", "USD")
-        if "aggregated_totals" not in filtered_data:
-            filtered_data["aggregated_totals"] = response_data.get(
-                "aggregated_totals",
-                {
-                    "impressions": total_impressions,
-                    "spend": total_spend,
-                    "clicks": clicks,
-                    "video_completions": None,
-                    "media_buy_count": media_buy_count,
-                },
-            )
-        if "media_buy_deliveries" not in filtered_data:
-            filtered_data["media_buy_deliveries"] = response_data.get("media_buy_deliveries", [])
-
-        # Use explicit fields for validator (instead of **kwargs)
-        # Convert aggregated_totals dict to AggregatedTotals object if needed
-        agg_totals = filtered_data["aggregated_totals"]
-        if isinstance(agg_totals, dict):
-            agg_totals = AggregatedTotals(
-                impressions=agg_totals.get("impressions", 0.0),
-                spend=agg_totals.get("spend", 0.0),
-                clicks=agg_totals.get("clicks"),
-                video_completions=agg_totals.get("video_completions"),
-                media_buy_count=agg_totals.get("media_buy_count", 0),
-            )
-        # Convert context to dict if it's a ContextObject
-        context_dict = _context_to_dict(req.context)
-        response = GetMediaBuyDeliveryResponse(
-            reporting_period=filtered_data["reporting_period"],
-            currency=filtered_data["currency"],
-            aggregated_totals=agg_totals,
-            media_buy_deliveries=filtered_data["media_buy_deliveries"],
-            errors=filtered_data.get("errors"),
-            context=context_dict,
+        # Apply testing hooks for metadata (spend tracking, response headers)
+        # No mutations survive for delivery — response model stays unchanged
+        apply_testing_hooks(
+            testing_ctx,
+            "get_media_buy_delivery",
+            campaign_info,
+            spend_amount=float(response.aggregated_totals.spend or 0),
         )
 
     return response

@@ -3483,36 +3483,18 @@ async def _create_media_buy_impl(
         # Apply testing hooks to response with campaign information (resolved from 'asap' if needed)
         campaign_info = {"start_date": start_time, "end_date": end_time, "total_budget": total_budget}
 
-        response_data = adcp_response.model_dump()
-
-        response_data = apply_testing_hooks(response_data, testing_ctx, "create_media_buy", campaign_info)
-
-        # Reconstruct response from modified data
-        # Filter out testing hook fields that aren't part of CreateMediaBuyResponse schema
-        # Domain fields only (status/adcp_version are protocol fields, added by ProtocolEnvelope)
-        # Success branch fields only (no errors field in success path)
-        valid_fields = {
-            "buyer_ref",
-            "media_buy_id",
-            "creative_deadline",
-            "packages",
-            "workflow_step_id",
-        }
-        filtered_data = {k: v for k, v in response_data.items() if k in valid_fields}
-
-        # Ensure required fields are present (validator compliance)
-        if "buyer_ref" not in filtered_data:
-            filtered_data["buyer_ref"] = buyer_ref_value
-
-        # Use explicit fields for validator (instead of **kwargs)
-        # This is the success path - use Success model
-        modified_response = CreateMediaBuySuccess(
-            buyer_ref=filtered_data["buyer_ref"],
-            media_buy_id=filtered_data["media_buy_id"],
-            packages=filtered_data["packages"],
-            creative_deadline=filtered_data.get("creative_deadline"),
-            context=to_context_object(req.context),
+        hooks_result = apply_testing_hooks(
+            testing_ctx,
+            "create_media_buy",
+            campaign_info,
+            media_buy_id=adcp_response.media_buy_id,
+            spend_amount=total_budget,
         )
+
+        # Only mutation that survives: test_ prefix on media_buy_id in dry-run mode
+        modified_response = adcp_response
+        if hooks_result.media_buy_id_override:
+            modified_response = adcp_response.model_copy(update={"media_buy_id": hooks_result.media_buy_id_override})
 
         # Mark workflow step as completed on success
         ctx_manager.update_workflow_step(step.step_id, status="completed")

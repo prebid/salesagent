@@ -46,15 +46,11 @@ async def test_public_policy_allows_no_brand_manifest():
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.tools.products.get_db_session") as mock_db_session,
-        patch("src.core.tools.products.apply_testing_hooks") as mock_apply_hooks,
     ):
         # Setup mocks
         mock_get_principal.return_value = (None, mock_tenant)  # No auth (anonymous)
         mock_get_principal_obj.return_value = None
         mock_get_testing.return_value = None
-
-        # Mock apply_testing_hooks to return data unchanged
-        mock_apply_hooks.side_effect = lambda data, *args, **kwargs: data
 
         # Mock variants generation
         mock_generate_variants.return_value = []
@@ -148,15 +144,11 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.tools.products.get_db_session") as mock_db_session,
-        patch("src.core.tools.products.apply_testing_hooks") as mock_apply_hooks,
     ):
         # Setup mocks
         mock_get_principal.return_value = ("principal_123", mock_tenant)
         mock_get_principal_obj.return_value = None
         mock_get_testing.return_value = None
-
-        # Mock apply_testing_hooks to return data unchanged
-        mock_apply_hooks.side_effect = lambda data, *args, **kwargs: data
 
         # Mock variants
         mock_generate_variants.return_value = []
@@ -246,15 +238,11 @@ async def test_require_auth_policy_accepts_with_auth():
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.tools.products.get_db_session") as mock_db_session,
-        patch("src.core.tools.products.apply_testing_hooks") as mock_apply_hooks,
     ):
         # Setup mocks - WITH authentication
         mock_get_principal.return_value = ("principal_123", mock_tenant)  # Authenticated
         mock_get_principal_obj.return_value = None
         mock_get_testing.return_value = None
-
-        # Mock apply_testing_hooks to return data unchanged
-        mock_apply_hooks.side_effect = lambda data, *args, **kwargs: data
 
         # Mock variants
         mock_generate_variants.return_value = []

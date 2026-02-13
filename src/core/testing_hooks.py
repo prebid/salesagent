@@ -13,6 +13,7 @@ This module handles all testing headers and provides isolated test execution:
 - X-Simulated-Spend: Track simulated spending without real money
 """
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -515,15 +516,31 @@ def is_production_isolated(testing_ctx: TestContext) -> bool:
     return testing_ctx.dry_run or testing_ctx.test_session_id is not None or testing_ctx.simulated_spend
 
 
+@dataclass
+class TestingHooksResult:
+    """Metadata from testing hooks, separate from the response model."""
+
+    response_headers: dict[str, str] = field(default_factory=dict)
+    debug_info: dict[str, Any] | None = None
+    is_test: bool = False
+    media_buy_id_override: str | None = None
+
+
 def apply_testing_hooks(
-    data: dict[str, Any],
     testing_ctx: TestContext,
     operation: str = "unknown",
     campaign_info: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Apply testing hooks to modify operation data/results."""
+    media_buy_id: str | None = None,
+    spend_amount: float = 0.0,
+) -> TestingHooksResult:
+    """Apply testing hooks and return metadata.
 
-    # Always mark data as simulated if any testing hooks are active
+    Does NOT mutate response data. Callers use the result to apply
+    targeted changes (e.g. model_copy for media_buy_id override).
+    """
+    result = TestingHooksResult()
+
+    # Mark as test if any testing hooks are active
     if any(
         [
             testing_ctx.dry_run,
@@ -533,37 +550,26 @@ def apply_testing_hooks(
             testing_ctx.simulated_spend,
         ]
     ):
-        data["is_test"] = True
-        data["test_session_id"] = testing_ctx.test_session_id
+        result.is_test = True
 
-    # Add dry-run indicators
-    if testing_ctx.dry_run:
-        data["dry_run"] = True
-        if "media_buy_id" in data and not data["media_buy_id"].startswith("test_"):
-            data["media_buy_id"] = f"test_{data['media_buy_id']}"
-
-    # Add AdCP testing response headers
-    response_headers = {}
+    # Compute media_buy_id override for dry-run
+    if testing_ctx.dry_run and media_buy_id and not media_buy_id.startswith("test_"):
+        result.media_buy_id_override = f"test_{media_buy_id}"
 
     # Calculate progress and next event information
+    response_headers: dict[str, str] = {}
     if campaign_info and any([testing_ctx.auto_advance, testing_ctx.mock_time, testing_ctx.jump_to_event]):
         start_date = campaign_info.get("start_date")
         end_date = campaign_info.get("end_date")
         current_time = testing_ctx.mock_time or datetime.now()
 
         if start_date and end_date:
-            # Calculate current progress
             progress = TimeSimulator.calculate_campaign_progress(start_date, end_date, current_time)
-
-            # Get next event
             current_event = testing_ctx.jump_to_event
             next_event = NextEventCalculator.get_next_event(current_event, progress, testing_ctx)
 
             if next_event:
-                # Add X-Next-Event header
                 response_headers["X-Next-Event"] = next_event.value
-
-                # Add X-Next-Event-Time header
                 next_event_time = NextEventCalculator.calculate_next_event_time(
                     next_event, start_date, end_date, current_time
                 )
@@ -571,10 +577,9 @@ def apply_testing_hooks(
 
     # Add X-Simulated-Spend header
     if testing_ctx.simulated_spend or testing_ctx.test_session_id or testing_ctx.dry_run:
-        # Use spend from current response data
-        current_spend = data.get("total_spend", 0) or data.get("spend", 0)
+        current_spend = spend_amount
 
-        # If no spend in current data, check session tracker
+        # If no spend provided, check session tracker
         if current_spend == 0 and testing_ctx.test_session_id:
             session_manager = get_session_manager()
             current_spend = session_manager.get_session_spend(testing_ctx.test_session_id)
@@ -583,20 +588,15 @@ def apply_testing_hooks(
             response_headers["X-Simulated-Spend"] = f"{current_spend:.2f}"
 
     # Update session spend tracking
-    if testing_ctx.test_session_id and "total_spend" in data:
+    if testing_ctx.test_session_id and spend_amount > 0:
         session_manager = get_session_manager()
-        session_manager.update_session_spend(testing_ctx.test_session_id, data["total_spend"])
-    elif testing_ctx.test_session_id and "spend" in data:
-        session_manager = get_session_manager()
-        session_manager.update_session_spend(testing_ctx.test_session_id, data["spend"])
+        session_manager.update_session_spend(testing_ctx.test_session_id, spend_amount)
 
-    # Add response headers to data
-    if response_headers:
-        data["response_headers"] = response_headers
+    result.response_headers = response_headers
 
     # Add debug information if requested
     if testing_ctx.debug_mode:
-        data["debug_info"] = {
+        result.debug_info = {
             "operation": operation,
             "testing_context": testing_ctx.model_dump(),
             "timestamp": datetime.now().isoformat(),
@@ -604,4 +604,4 @@ def apply_testing_hooks(
             "campaign_info": campaign_info,
         }
 
-    return data
+    return result
