@@ -677,14 +677,12 @@ async def _get_products_impl(
                 agent = create_ranking_agent(model)
 
                 # Convert products to dicts for ranking
-                products_for_ranking = [p.model_dump() for p in eligible_products]
-
                 # Run AI ranking
                 ranking_result = await rank_products_async(
                     agent=agent,
                     custom_prompt=product_ranking_prompt,
                     brief=brief_text,
-                    products=products_for_ranking,
+                    products=eligible_products,
                 )
 
                 # Build a map of product_id -> (score, reason)

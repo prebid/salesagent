@@ -1,10 +1,13 @@
 """Pydantic AI agent for product ranking based on brief relevance."""
 
+import json
 import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
+
+from src.core.schemas import Product
 
 logger = logging.getLogger(__name__)
 
@@ -61,44 +64,27 @@ def create_ranking_agent(model: Any) -> Agent[None, ProductRankingResult]:
 def build_ranking_prompt(
     custom_prompt: str,
     brief: str,
-    products: list[dict],
+    products: list[Product],
 ) -> str:
     """Build the user prompt for product ranking.
 
     Args:
         custom_prompt: Tenant's custom ranking prompt
         brief: The buyer's brief/requirements
-        products: List of product dictionaries to rank
+        products: List of Product models to rank
 
     Returns:
         Formatted prompt string
     """
-    import json
-
-    def make_json_serializable(obj: Any) -> Any:
-        """Convert objects to JSON-serializable format."""
-        # Handle enums
-        if hasattr(obj, "value"):
-            return obj.value
-        # Handle Pydantic URLs and other objects with __str__
-        if hasattr(obj, "__str__") and not isinstance(obj, (dict, list, str, int, float, bool, type(None))):
-            return str(obj)
-        if isinstance(obj, dict):
-            return {k: make_json_serializable(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [make_json_serializable(item) for item in obj]
-        return obj
-
-    # Simplify product data for the prompt (only include relevant fields)
     simplified_products = []
     for p in products:
         simplified = {
-            "product_id": p.get("product_id"),
-            "name": p.get("name"),
-            "description": p.get("description"),
-            "format_ids": make_json_serializable(p.get("format_ids", [])),
-            "channels": make_json_serializable(p.get("channels", [])),
-            "delivery_type": make_json_serializable(p.get("delivery_type")),
+            "product_id": p.product_id,
+            "name": p.name,
+            "description": p.description,
+            "format_ids": [str(f) for f in (p.format_ids or [])],
+            "channels": p.channels or [],
+            "delivery_type": p.delivery_type.value if hasattr(p.delivery_type, "value") else str(p.delivery_type),
         }
         simplified_products.append(simplified)
 
@@ -121,7 +107,7 @@ async def rank_products_async(
     agent: Agent[None, ProductRankingResult],
     custom_prompt: str,
     brief: str,
-    products: list[dict],
+    products: list[Product],
 ) -> ProductRankingResult:
     """Rank products using the agent.
 
@@ -129,7 +115,7 @@ async def rank_products_async(
         agent: The ranking agent
         custom_prompt: Tenant's custom ranking prompt
         brief: The buyer's brief
-        products: List of product dictionaries
+        products: List of Product models
 
     Returns:
         ProductRankingResult with rankings for each product
