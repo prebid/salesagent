@@ -118,10 +118,14 @@ class TestSchemaMatchesLibrary:
             SyncCreativesRequest as LocalSyncCreativesRequest,
         )
 
-        # GetProductsRequest - should match exactly (fixed in this PR)
+        # GetProductsRequest - local extends library with spec fields not yet in library
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
-        assert lib_fields == local_fields, f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
+        # product_selectors and pagination are in AdCP spec but not yet in the library
+        local_extensions = {"product_selectors", "pagination"}
+        assert lib_fields == local_fields - local_extensions, (
+            f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
         # GetMediaBuyDeliveryRequest - local extends library with spec fields not yet in library
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())

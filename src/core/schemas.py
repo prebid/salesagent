@@ -79,8 +79,10 @@ from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import Product as LibraryProduct
+from adcp.types import PromotedProducts as LibraryPromotedProducts
 from adcp.types import Property as LibraryProperty
 from adcp.types import PropertyListReference as LibraryPropertyListReference  # V3: new field in GetProductsRequest
+from adcp.types import ReportingWebhook as LibraryReportingWebhook
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
 
 # Type alias for the union of all AdCP pricing option types (V3 consolidated)
@@ -1416,6 +1418,14 @@ class GetProductsRequest(SalesAgentBaseModel):
     account_id: str | None = Field(
         None,
         description="Account ID for filtering products (adcp 3.2.0+)",
+    )
+    product_selectors: LibraryPromotedProducts | None = Field(
+        None,
+        description="Selectors to filter the brand manifest product catalog for product discovery",
+    )
+    pagination: dict[str, Any] | None = Field(
+        None,
+        description="Cursor-based pagination parameters (max_results, cursor)",
     )
 
 
@@ -2876,6 +2886,10 @@ class UpdateMediaBuyRequest(SalesAgentBaseModel):
     )
     context: dict[str, Any] | None = Field(
         None, description="Application-level context provided by the client (echoed in responses)"
+    )
+    reporting_webhook: LibraryReportingWebhook | None = Field(
+        None,
+        description="Optional webhook configuration for automated reporting delivery",
     )
     ext: dict[str, Any] | None = Field(None, description="Extension fields for future protocol additions")
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
