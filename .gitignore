@@ -121,3 +121,9 @@ test_*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/
 .env.test
 test_sync.py
 .env.bak*
+
+# Agentic coding — local-only files
+.claude/research/
+.claude/settings.local.json
+.claude/agent-memory/
+.perles/

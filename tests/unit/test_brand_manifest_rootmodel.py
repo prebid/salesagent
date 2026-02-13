@@ -24,9 +24,9 @@ def test_brand_manifest_rootmodel_unwrapping():
     assert hasattr(req.brand_manifest, "root"), "brand_manifest should have .root attribute"
 
     # The wrapper does NOT have .name directly
-    assert (
-        not hasattr(req.brand_manifest, "name") or req.brand_manifest.name is None
-    ), "brand_manifest wrapper should not have .name directly accessible"
+    assert not hasattr(req.brand_manifest, "name") or req.brand_manifest.name is None, (
+        "brand_manifest wrapper should not have .name directly accessible"
+    )
 
     # But .root does have .name
     assert req.brand_manifest.root.name == "Test Brand"
@@ -50,13 +50,12 @@ def test_brand_manifest_extraction_logic():
             offering = f"Brand at {brand_manifest}"
         elif hasattr(brand_manifest, "__str__") and str(brand_manifest).startswith("http"):
             offering = f"Brand at {brand_manifest}"
-        else:
-            if hasattr(brand_manifest, "name") and brand_manifest.name:
-                offering = brand_manifest.name
-            elif hasattr(brand_manifest, "url") and brand_manifest.url:
-                offering = f"Brand at {brand_manifest.url}"
-            elif isinstance(brand_manifest, dict):
-                offering = brand_manifest.get("name") or brand_manifest.get("url", "")
+        elif hasattr(brand_manifest, "name") and brand_manifest.name:
+            offering = brand_manifest.name
+        elif hasattr(brand_manifest, "url") and brand_manifest.url:
+            offering = f"Brand at {brand_manifest.url}"
+        elif isinstance(brand_manifest, dict):
+            offering = brand_manifest.get("name") or brand_manifest.get("url", "")
 
     assert offering == "Test Brand", f"Expected 'Test Brand', got '{offering}'"
 

@@ -27,8 +27,8 @@ def test_convert_image_creative_from_assets():
             "click_url": {"url": "https://example.com/landing", "url_type": "clickthrough"},
         },
         principal_id="prin_123",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
+        created_date=datetime.now(UTC),
+        updated_date=datetime.now(UTC),
     )
 
     adapter_asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])

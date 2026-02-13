@@ -213,9 +213,7 @@ context_mgr = ContextManager()
 
 # --- Adapter Configuration ---
 # Get adapter from config, fallback to mock
-SELECTED_ADAPTER = (
-    (config.get("ad_server", {}).get("adapter") or "mock") if config else "mock"
-).lower()  # noqa: F841 - used below for adapter selection
+SELECTED_ADAPTER = ((config.get("ad_server", {}).get("adapter") or "mock") if config else "mock").lower()  # noqa: F841 - used below for adapter selection
 AVAILABLE_ADAPTERS = ["mock", "gam", "kevel", "triton", "triton_digital"]
 
 # --- In-Memory State (already initialized above, just adding context_map) ---

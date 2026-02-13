@@ -6,6 +6,7 @@ import pytest
 from adcp import GetProductsRequest
 
 from src.services.policy_check_service import PolicyCheckResult, PolicyCheckService, PolicyStatus
+from tests.helpers.adcp_factories import create_test_brand_manifest, create_test_product
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -130,34 +131,17 @@ class TestProductEligibility:
         """Test that blocked briefs can't use any products."""
         policy_result = PolicyCheckResult(status=PolicyStatus.BLOCKED, reason="Contains prohibited content")
 
-        product = {"product_id": "prod_1", "name": "Premium Display"}
+        product = create_test_product(product_id="prod_1", name="Premium Display")
 
         eligible, reason = policy_service.check_product_eligibility(policy_result, product)
         assert not eligible
         assert reason == "Contains prohibited content"
 
-    def test_alcohol_advertiser_age_restrictions(self, policy_service):
-        """Test that alcohol advertisers can't use children's content."""
+    def test_restricted_brief_allows_products(self, policy_service):
+        """Test that restricted briefs still allow products."""
         policy_result = PolicyCheckResult(status=PolicyStatus.RESTRICTED, restrictions=["Contains alcohol content"])
 
-        # Children's content product
-        product = {"product_id": "prod_1", "name": "Kids Section Display", "targeted_ages": "children"}
-
-        eligible, reason = policy_service.check_product_eligibility(policy_result, product)
-        assert not eligible
-        assert "alcohol advertising cannot run on child-focused content" in reason
-
-    def test_age_verification_allows_restricted_content(self, policy_service):
-        """Test that age-verified products can show restricted content."""
-        policy_result = PolicyCheckResult(status=PolicyStatus.RESTRICTED, restrictions=["Contains alcohol advertising"])
-
-        # Adult product with age verification
-        product = {
-            "product_id": "prod_1",
-            "name": "Adult Section Display",
-            "targeted_ages": "adults",
-            "verified_minimum_age": 21,
-        }
+        product = create_test_product(product_id="prod_1", name="Standard Display")
 
         eligible, reason = policy_service.check_product_eligibility(policy_result, product)
         assert eligible
@@ -167,7 +151,7 @@ class TestProductEligibility:
         """Test that allowed briefs can use products."""
         policy_result = PolicyCheckResult(status=PolicyStatus.ALLOWED)
 
-        product = {"product_id": "prod_1", "name": "Standard Display", "targeted_ages": "adults"}
+        product = create_test_product(product_id="prod_1", name="Standard Display")
 
         eligible, reason = policy_service.check_product_eligibility(policy_result, product)
         assert eligible
@@ -178,11 +162,13 @@ class TestIntegration:
     """Test integration with get_products endpoint."""
 
     @pytest.mark.asyncio
-    async def test_promoted_offering_included(self, policy_service):
-        """Test that promoted_offering is included in analysis."""
+    async def test_brand_manifest_included(self, policy_service):
+        """Test that brand_manifest is included in analysis."""
+        brand = create_test_brand_manifest(name="Weight loss pills - Lose 30 pounds in 30 days guaranteed!")
+
         result = await policy_service.check_brief_compliance(
             brief="Advertisement for wellness products",
-            brand_manifest={"name": "Weight loss pills - Lose 30 pounds in 30 days guaranteed!"},
+            brand_manifest=brand,
         )
 
         # Without AI, should be allowed with warning

@@ -91,7 +91,7 @@ class EnhancedMCPServer(FastMCP):
         """
         # Serialize the result
         if isinstance(result, BaseModel):
-            response_data = result.model_dump()
+            response_data = result.model_dump(mode="json")
         elif isinstance(result, dict):
             response_data = result
         else:

@@ -42,8 +42,8 @@ class TestImpressionTrackerFlow:
                 },
             },
             principal_id="principal_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
 
         # Convert to adapter asset format
@@ -72,8 +72,8 @@ class TestImpressionTrackerFlow:
                 },
             },
             principal_id="principal_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["package_1"])
@@ -105,8 +105,8 @@ class TestImpressionTrackerFlow:
                 },
             },
             principal_id="principal_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["package_1"])
@@ -130,8 +130,8 @@ class TestImpressionTrackerFlow:
                 },
             },
             principal_id="principal_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["package_1"])
@@ -165,8 +165,8 @@ class TestImpressionTrackerFlow:
                 },
             },
             principal_id="principal_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
 
         # Convert creative to adapter asset format
@@ -204,8 +204,8 @@ class TestImpressionTrackerFlow:
                 },
             },
             principal_id="principal_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["package_1"])
@@ -246,8 +246,8 @@ class TestImpressionTrackerFlow:
                 },
             },
             principal_id="principal_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["package_1"])
@@ -289,8 +289,8 @@ class TestImpressionTrackerFlow:
                 },
             },
             principal_id="principal_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["package_1"])

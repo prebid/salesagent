@@ -1,7 +1,7 @@
-"""Unit tests for Creative status enum serialization.
+"""Unit tests for Creative status enum serialization at boundaries.
 
-Tests that Creative.status enum is properly converted to string in model_dump().
-This is critical for AdCP compliance - status must be a string in responses.
+Tests that Creative.status enum is properly converted to string when serialized
+with mode='json' — the mode used at all serialization boundaries (A2A, MCP, DB).
 """
 
 from datetime import UTC, datetime
@@ -9,51 +9,51 @@ from datetime import UTC, datetime
 from src.core.schemas import Creative, CreativeStatus, FormatId
 
 
-def test_creative_status_serialized_as_string():
-    """Test that Creative.status enum is converted to string in model_dump()."""
-    # Create a Creative with status enum
+def test_creative_status_serialized_as_string_at_boundary():
+    """Test that Creative.model_dump(mode='json') serializes status as string.
+
+    Verifies that our custom model_dump() correctly propagates mode='json' to
+    super(), so Pydantic's built-in enum serialization produces strings at
+    serialization boundaries (A2A, MCP, DB).
+    """
     creative = Creative(
         creative_id="test_creative_1",
         name="Test Creative",
         format_id=FormatId(id="display_300x250", agent_url="https://creative.adcontextprotocol.org"),
-        status=CreativeStatus.approved,  # Enum value
+        status=CreativeStatus.approved,
         created_date=datetime.now(UTC),
         updated_date=datetime.now(UTC),
     )
 
-    # Serialize to dict
-    data = creative.model_dump()
+    data = creative.model_dump(mode="json")
 
-    # Status should be a string, not an enum
     assert isinstance(data["status"], str), f"Expected str, got {type(data['status'])}"
-    assert data["status"] == "approved", f"Expected 'approved', got {data['status']}"
+    assert data["status"] == "approved"
 
 
-def test_creative_status_serialized_in_model_dump_internal():
-    """Test that status enum is also converted in model_dump_internal()."""
+def test_creative_model_dump_internal_includes_principal_id():
+    """Test that model_dump_internal includes excluded internal fields."""
     creative = Creative(
         creative_id="test_creative_2",
         name="Test Creative 2",
         format_id=FormatId(id="display_728x90", agent_url="https://creative.adcontextprotocol.org"),
-        status=CreativeStatus.pending_review,  # Enum value
+        status=CreativeStatus.pending_review,
         created_date=datetime.now(UTC),
         updated_date=datetime.now(UTC),
-        principal_id="test_principal",  # Internal field
+        principal_id="test_principal",
     )
 
-    # Serialize with internal fields
     data = creative.model_dump_internal()
 
-    # Status should be a string
-    assert isinstance(data["status"], str)
-    assert data["status"] == "pending_review"
-
-    # Principal ID should be included (internal field)
+    # model_dump_internal exists specifically to include excluded fields
     assert data["principal_id"] == "test_principal"
+    # Status is a typed Python object in Python mode — engine json_serializer
+    # handles conversion to string when this data reaches the DB JSONB column
+    assert data["status"] == CreativeStatus.pending_review
 
 
-def test_creative_all_status_values():
-    """Test that all CreativeStatus enum values serialize correctly."""
+def test_creative_all_status_values_at_boundary():
+    """Test that all CreativeStatus enum values serialize to strings at boundaries."""
     statuses = [
         CreativeStatus.approved,
         CreativeStatus.rejected,
@@ -71,28 +71,27 @@ def test_creative_all_status_values():
             updated_date=datetime.now(UTC),
         )
 
-        data = creative.model_dump()
+        data = creative.model_dump(mode="json")
 
-        # Verify serialization
         assert isinstance(data["status"], str), f"Status should be str for {status_enum}"
-        assert data["status"] == status_enum.value, f"Expected {status_enum.value}, got {data['status']}"
+        assert data["status"] == status_enum.value
 
 
 def test_creative_status_string_passthrough():
-    """Test that passing status as string also works (backward compatibility)."""
-    # Create Creative with status as string (Pydantic will convert to enum internally)
+    """Test that passing status as string round-trips through enum and back."""
     creative = Creative(
         creative_id="test_creative_string",
         name="Test Creative String",
         format_id=FormatId(id="display_300x250", agent_url="https://creative.adcontextprotocol.org"),
-        status="approved",  # String value (Pydantic converts to enum)
+        status="approved",  # String → Pydantic coerces to enum
         created_date=datetime.now(UTC),
         updated_date=datetime.now(UTC),
     )
 
-    # Serialize to dict
-    data = creative.model_dump()
+    # Verify Pydantic coerced string to enum internally
+    assert creative.status == CreativeStatus.approved
 
-    # Should still output as string
+    # At boundaries, mode='json' converts enum back to string
+    data = creative.model_dump(mode="json")
     assert isinstance(data["status"], str)
     assert data["status"] == "approved"

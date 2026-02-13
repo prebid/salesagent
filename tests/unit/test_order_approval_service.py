@@ -278,6 +278,6 @@ def test_webhook_retries_on_failure():
         # Verify retry logic works - should be at least 3 attempts
         # Note: Due to test pollution in full suite, may see 4 calls, but minimum is 3
         assert call_counter["count"] >= 3, f"Expected at least 3 retry attempts, got {call_counter['count']}"
-        assert (
-            call_counter["count"] <= 4
-        ), f"Expected at most 4 retry attempts (3 + 1 pollution), got {call_counter['count']}"
+        assert call_counter["count"] <= 4, (
+            f"Expected at most 4 retry attempts (3 + 1 pollution), got {call_counter['count']}"
+        )

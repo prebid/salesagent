@@ -187,8 +187,8 @@ def _sync_creatives_impl(
                         "assets": creative.get("assets", {}),  # Required by AdCP v1 spec
                         # Internal fields (added by sales agent)
                         "principal_id": principal_id,
-                        "created_at": datetime.now(UTC),
-                        "updated_at": datetime.now(UTC),
+                        "created_date": datetime.now(UTC),
+                        "updated_date": datetime.now(UTC),
                         "status": CreativeStatusEnum.pending_review.value,
                     }
 
@@ -1744,7 +1744,7 @@ async def sync_creatives(
         context=context_dict,
         ctx=ctx,
     )
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def _list_creatives_impl(
@@ -1886,14 +1886,14 @@ def _list_creatives_impl(
         "performance_score": "performance_score",
     }
     mapped_field = field_mapping.get(sort_by, "created_date")
-    structured_sort = LibrarySort(field=mapped_field, direction=valid_sort_order)  # type: ignore[arg-type]
+    structured_sort = LibrarySort(field=mapped_field, direction=valid_sort_order)
 
     try:
         req = ListCreativesRequest(
             filters=structured_filters,
             pagination=structured_pagination,
             sort=structured_sort,
-            fields=fields,  # type: ignore[arg-type]
+            fields=fields,
             include_performance=include_performance,
             include_assignments=include_assignments,
             include_sub_assets=include_sub_assets,
@@ -2246,7 +2246,7 @@ async def list_creatives(
         context=context_dict,
         ctx=ctx,
     )
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def sync_creatives_raw(

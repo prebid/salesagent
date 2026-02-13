@@ -68,7 +68,6 @@ class TestListTasksTool:
             patch("src.core.main.set_current_tenant"),
             patch("src.core.main.get_db_session", return_value=mock_db_session),
         ):
-
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
             result = list_tasks_fn(context=Mock())
@@ -92,7 +91,6 @@ class TestListTasksTool:
             patch("src.core.main.set_current_tenant"),
             patch("src.core.main.get_db_session", return_value=mock_db_session),
         ):
-
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
             result = list_tasks_fn(status="requires_approval", context=Mock())
@@ -152,7 +150,6 @@ class TestGetTaskTool:
             patch("src.core.main.set_current_tenant"),
             patch("src.core.main.get_db_session", return_value=mock_db_session),
         ):
-
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
             result = get_task_fn(task_id="step_123", context=Mock())
@@ -171,7 +168,6 @@ class TestGetTaskTool:
             patch("src.core.main.set_current_tenant"),
             patch("src.core.main.get_db_session", return_value=mock_db_session),
         ):
-
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
             with pytest.raises(ValueError, match="not found"):
@@ -228,7 +224,6 @@ class TestCompleteTaskTool:
             patch("src.core.main.set_current_tenant"),
             patch("src.core.main.get_db_session", return_value=mock_db_session),
         ):
-
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
             result = complete_task_fn(task_id="step_123", status="completed", context=Mock())
@@ -245,7 +240,6 @@ class TestCompleteTaskTool:
             patch("src.core.main.get_principal_from_context") as mock_get_principal,
             patch("src.core.main.set_current_tenant"),
         ):
-
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
             with pytest.raises(ValueError, match="Invalid status"):

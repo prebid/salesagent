@@ -146,9 +146,9 @@ class TestResponseStrMethods:
 
         resp = SyncCreativesResponse(
             creatives=[
-                SyncCreativeResult(buyer_ref="test-001", creative_id="cr-001", status="approved", action="created"),
-                SyncCreativeResult(buyer_ref="test-002", creative_id="cr-002", status="approved", action="created"),
-                SyncCreativeResult(buyer_ref="test-003", creative_id="cr-003", status="approved", action="updated"),
+                SyncCreativeResult(creative_id="cr-001", status="approved", action="created"),
+                SyncCreativeResult(creative_id="cr-002", status="approved", action="created"),
+                SyncCreativeResult(creative_id="cr-003", status="approved", action="updated"),
             ],
             dry_run=False,
         )
@@ -169,11 +169,11 @@ class TestResponseStrMethods:
                 }
             },
             principal_id="prin_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
         resp = ListCreativesResponse(
-            query_summary=QuerySummary(total_matching=1, returned=1, has_more=False),
+            query_summary=QuerySummary(total_matching=1, returned=1),
             pagination=Pagination(limit=10, offset=0, has_more=False),
             creatives=[creative],
         )

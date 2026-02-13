@@ -70,15 +70,15 @@ class AdCPSchemaContractValidator:
         # Step 3: Validate required AdCP fields are present
         for field in adcp_spec_fields:
             assert field in adcp_output, f"Required AdCP field '{field}' missing from {schema_class.__name__} output"
-            assert (
-                adcp_output[field] is not None
-            ), f"Required AdCP field '{field}' is null in {schema_class.__name__} output"
+            assert adcp_output[field] is not None, (
+                f"Required AdCP field '{field}' is null in {schema_class.__name__} output"
+            )
 
         # Step 4: Validate internal fields are excluded from AdCP output
         for field in internal_only_fields:
-            assert (
-                field not in adcp_output
-            ), f"Internal field '{field}' should not appear in {schema_class.__name__} AdCP output"
+            assert field not in adcp_output, (
+                f"Internal field '{field}' should not appear in {schema_class.__name__} AdCP output"
+            )
 
         # Step 5: Test internal output (if available)
         if hasattr(model_instance, "model_dump_internal"):
@@ -97,9 +97,9 @@ class AdCPSchemaContractValidator:
                     else:
                         # Field has exclude=True and won't appear in any serialization
                         continue
-                assert (
-                    field in internal_output
-                ), f"Field '{field}' missing from internal output of {schema_class.__name__}"
+                assert field in internal_output, (
+                    f"Field '{field}' missing from internal output of {schema_class.__name__}"
+                )
 
         # Step 6: Test roundtrip conversion safety
         if hasattr(model_instance, "model_dump_internal"):
@@ -128,9 +128,9 @@ class AdCPSchemaContractValidator:
         for field in adcp_spec_fields:
             original_value = adcp_output.get(field)
             reconstructed_value = reconstructed_adcp.get(field)
-            assert (
-                reconstructed_value == original_value
-            ), f"Field '{field}' changed during roundtrip: {original_value} → {reconstructed_value}"
+            assert reconstructed_value == original_value, (
+                f"Field '{field}' changed during roundtrip: {original_value} → {reconstructed_value}"
+            )
 
     def validate_field_mapping_consistency(
         self, schema_class: type, test_data: dict[str, Any], internal_external_mappings: dict[str, str]
@@ -154,16 +154,16 @@ class AdCPSchemaContractValidator:
                 # Get value via external property/mapping
                 if hasattr(model_instance, external_field):
                     external_value = getattr(model_instance, external_field)
-                    assert (
-                        external_value == internal_value
-                    ), f"Field mapping inconsistency: {internal_field} ({internal_value}) != {external_field} ({external_value})"
+                    assert external_value == internal_value, (
+                        f"Field mapping inconsistency: {internal_field} ({internal_value}) != {external_field} ({external_value})"
+                    )
 
                 # Verify external field appears in AdCP output
                 adcp_output = model_instance.model_dump()
                 assert external_field in adcp_output, f"External field '{external_field}' missing from AdCP output"
-                assert (
-                    internal_field not in adcp_output
-                ), f"Internal field '{internal_field}' should not appear in AdCP output"
+                assert internal_field not in adcp_output, (
+                    f"Internal field '{internal_field}' should not appear in AdCP output"
+                )
 
 
 class TestProductSchemaContract:
@@ -383,8 +383,8 @@ class TestCreativeSchemaContract:
             },
             "status": "approved",
             "principal_id": "test_principal",
-            "created_at": datetime.now(),
-            "updated_at": datetime.now(),
+            "created_date": datetime.now(),
+            "updated_date": datetime.now(),
         }
 
         # AdCP v2.5.0 spec required fields for creatives
@@ -413,8 +413,8 @@ class TestCreativeSchemaContract:
             },
             "status": "approved",  # Use valid status per adcp 2.5.0 Creative enum
             "principal_id": "test_principal",
-            "created_at": datetime.now(),
-            "updated_at": datetime.now(),
+            "created_date": datetime.now(),
+            "updated_date": datetime.now(),
         }
 
         # AdCP v2.5.0 spec required fields for creatives (duration_ms is in assets)

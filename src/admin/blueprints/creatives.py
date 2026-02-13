@@ -533,7 +533,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
 
                 # Only check if media buy is waiting for creatives
-                if media_buy.status == "pending_creatives" or media_buy.status == "draft":
+                if media_buy.status in {"pending_creatives", "draft"}:
                     # Get all creative assignments for this media buy
                     stmt_all_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
                     all_assignments = db_session.scalars(stmt_all_assignments).all()

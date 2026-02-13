@@ -90,7 +90,6 @@ class TestA2ASpecCompliance:
         response_data = {
             "creatives": [
                 SyncCreativeResult(
-                    buyer_ref="test-001",
                     creative_id="cr-001",
                     status="approved",
                     action="created",
@@ -364,9 +363,9 @@ class TestMCPAndA2AResponseParity:
 
         for response_cls in response_types:
             # All our response adapters should have __str__
-            assert hasattr(
-                response_cls, "__str__"
-            ), f"{response_cls.__name__} must have __str__() for human-readable messages"
+            assert hasattr(response_cls, "__str__"), (
+                f"{response_cls.__name__} must have __str__() for human-readable messages"
+            )
 
 
 @pytest.mark.integration

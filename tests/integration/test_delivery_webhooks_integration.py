@@ -22,6 +22,7 @@ from src.core.database.models import (
     Product,
     Tenant,
 )
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 
@@ -380,7 +381,7 @@ async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
     # Helper to inject testing_context
     def create_test_context(*args, **kwargs):
         ctx = ToolContext(*args, **kwargs)
-        ctx.testing_context = {"dry_run": True}
+        ctx.testing_context = AdCPTestContext(dry_run=True)
         return ctx
 
     with (

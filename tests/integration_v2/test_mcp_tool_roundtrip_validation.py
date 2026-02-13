@@ -260,14 +260,13 @@ class TestMCPToolRoundtripValidation:
             # Step 1: Convert to internal dict (as get_products does)
             product_dict = product.model_dump_internal()
 
-            # Step 2: Apply testing hooks (simulates the problematic code path)
+            # Step 2: Apply testing hooks (returns metadata, does not modify data)
             testing_ctx = TestingContext(dry_run=True, test_session_id="test", auto_advance=False)
-            response_data = {"products": [product_dict]}
-            response_data = apply_testing_hooks(response_data, testing_ctx, "get_products")
+            hooks_result = apply_testing_hooks(testing_ctx, "get_products")
+            assert hooks_result.is_test is True
 
-            # Step 3: Reconstruct Product from modified data (THIS WAS FAILING)
-            modified_product_dict = response_data["products"][0]
-            reconstructed_product = ProductSchema(**modified_product_dict)
+            # Step 3: Reconstruct Product from dict (data is unchanged by hooks)
+            reconstructed_product = ProductSchema(**product_dict)
 
             # Step 4: Verify reconstruction succeeded
             assert reconstructed_product.product_id == product.product_id
@@ -408,13 +407,12 @@ class TestMCPToolRoundtripValidation:
                 # Step 1: Convert to internal dict (as get_products does)
                 product_dict = product.model_dump_internal()
 
-                # Step 2: Apply testing hooks (THIS CAN MODIFY DATA)
-                response_data = {"products": [product_dict]}
-                response_data = apply_testing_hooks(response_data, testing_ctx, "get_products")
+                # Step 2: Apply testing hooks (returns metadata, does not modify data)
+                hooks_result = apply_testing_hooks(testing_ctx, "get_products")
+                assert hooks_result.is_test is True
 
-                # Step 3: Reconstruct Product from potentially modified data (THIS WAS FAILING)
-                modified_product_dict = response_data["products"][0]
-                reconstructed_product = ProductSchema(**modified_product_dict)
+                # Step 3: Reconstruct Product from dict (data is unchanged by hooks)
+                reconstructed_product = ProductSchema(**product_dict)
 
                 # Step 4: Verify reconstruction succeeded
                 assert reconstructed_product.product_id == product.product_id
@@ -476,16 +474,13 @@ class TestMCPToolRoundtripValidation:
         assert product_dict["format_ids"][1]["id"] == "video_15s"
         assert "creative.adcontextprotocol.org" in str(product_dict["format_ids"][0]["agent_url"])
 
-        # Step 2: Simulate testing hooks modifying the data
+        # Step 2: Apply testing hooks (returns metadata, does not modify data)
         testing_ctx = TestingContext(dry_run=True, test_session_id="isolated_test")
-        response_data = {"products": [product_dict]}
-        modified_response = apply_testing_hooks(response_data, testing_ctx, "get_products")
+        hooks_result = apply_testing_hooks(testing_ctx, "get_products")
+        assert hooks_result.is_test is True
 
-        # Step 3: Reconstruct Product objects (THIS IS WHERE IT WAS FAILING)
-        modified_product_dicts = modified_response["products"]
-
-        # This is the exact line that was causing the validation error
-        reconstructed_products = [ProductSchema(**p) for p in modified_product_dicts]
+        # Step 3: Reconstruct Product objects (data unchanged by hooks)
+        reconstructed_products = [ProductSchema(**product_dict)]
 
         # Verify the roundtrip worked
         assert len(reconstructed_products) == 1

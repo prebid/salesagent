@@ -253,32 +253,31 @@ class DynamicPricingService:
                     new_guidance = PriceGuidance(p25=None, p50=None, p75=updated_p75, p90=None)
                     cpm_option.price_guidance = new_guidance  # type: ignore[union-attr]
                 logger.debug(f"Updated existing CPM pricing option for {product.product_id}")
-        else:
-            # Create new CPM pricing option with price_guidance
-            # V3: floor_price at top level, price_guidance only for percentiles
-            if floor_cpm is not None:
-                price_guidance_obj = (
-                    PriceGuidance(
-                        p25=None,
-                        p50=None,
-                        p75=recommended_cpm,  # p75 is the recommended value
-                        p90=None,
-                    )
-                    if recommended_cpm is not None
-                    else None
+        # Create new CPM pricing option with price_guidance
+        # V3: floor_price at top level, price_guidance only for percentiles
+        elif floor_cpm is not None:
+            price_guidance_obj = (
+                PriceGuidance(
+                    p25=None,
+                    p50=None,
+                    p75=recommended_cpm,  # p75 is the recommended value
+                    p90=None,
                 )
+                if recommended_cpm is not None
+                else None
+            )
 
-                new_option = PricingOption(  # type: ignore[call-arg]
-                    pricing_option_id=f"{product.product_id}_dynamic_cpm",
-                    pricing_model=PricingModel.CPM,
-                    floor_price=floor_cpm,  # V3: floor moved to top-level
-                    currency=pricing.get("currency", "USD"),
-                    price_guidance=price_guidance_obj,
-                    min_spend_per_package=None,
-                    supported=None,
-                    unsupported_reason=None,
-                )
-                # Pydantic validates PricingOption against discriminated union at runtime
-                # mypy doesn't understand this is compatible with CpmPricingOption
-                product.pricing_options.append(new_option)  # type: ignore[arg-type]
-                logger.debug(f"Created new CPM pricing option for {product.product_id}")
+            new_option = PricingOption(
+                pricing_option_id=f"{product.product_id}_dynamic_cpm",
+                pricing_model=PricingModel.CPM,
+                floor_price=floor_cpm,  # V3: floor moved to top-level
+                currency=pricing.get("currency", "USD"),
+                price_guidance=price_guidance_obj,
+                min_spend_per_package=None,
+                supported=None,
+                unsupported_reason=None,
+            )
+            # Pydantic validates PricingOption against discriminated union at runtime
+            # mypy doesn't understand this is compatible with CpmPricingOption
+            product.pricing_options.append(new_option)  # type: ignore[arg-type]
+            logger.debug(f"Created new CPM pricing option for {product.product_id}")

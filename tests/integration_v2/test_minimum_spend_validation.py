@@ -32,6 +32,7 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
+from src.core.schemas import CreateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.integration_v2.conftest import create_test_product_with_pricing, get_pricing_option_id
@@ -304,7 +305,7 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # Should fail validation and return errors in response
-        response, _ = await _create_media_buy_impl(
+        req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_1",
             brand_manifest={"name": "Test Campaign"},
             packages=[
@@ -317,8 +318,8 @@ class TestMinimumSpendValidation:
             ],
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
-            ctx=context,
         )
+        response, _ = await _create_media_buy_impl(req=req, ctx=context)
 
         # Verify validation failed
         assert response.errors is not None and len(response.errors) > 0
@@ -339,7 +340,7 @@ class TestMinimumSpendValidation:
 
         # Try to create media buy below product override ($5000)
         # Should fail validation and return errors in response
-        response, _ = await _create_media_buy_impl(
+        req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_2",
             brand_manifest={"name": "Test Campaign"},
             packages=[
@@ -352,8 +353,8 @@ class TestMinimumSpendValidation:
             ],
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
-            ctx=context,
         )
+        response, _ = await _create_media_buy_impl(req=req, ctx=context)
 
         # Verify validation failed
         assert response.errors is not None and len(response.errors) > 0
@@ -374,7 +375,7 @@ class TestMinimumSpendValidation:
 
         # Create media buy above product minimum ($500) but below currency limit ($1000)
         # Should succeed because product override is lower
-        response, _ = await _create_media_buy_impl(
+        req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_3",
             brand_manifest={"name": "Test Campaign"},
             packages=[
@@ -387,8 +388,8 @@ class TestMinimumSpendValidation:
             ],
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
-            ctx=context,
         )
+        response, _ = await _create_media_buy_impl(req=req, ctx=context)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None
@@ -405,7 +406,7 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # Create media buy above minimum - should succeed
-        response, _ = await _create_media_buy_impl(
+        req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_4",
             brand_manifest={"name": "Test Campaign"},
             packages=[
@@ -418,8 +419,8 @@ class TestMinimumSpendValidation:
             ],
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
-            ctx=context,
         )
+        response, _ = await _create_media_buy_impl(req=req, ctx=context)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None
@@ -437,22 +438,22 @@ class TestMinimumSpendValidation:
 
         # Try to create media buy with excessive budget
         # $100,000 USD is excessive and will be rejected by adapter
+        req = CreateMediaBuyRequest(
+            buyer_ref="minspend_test_5",
+            brand_manifest={"name": "Test Campaign"},
+            packages=[
+                create_test_package_request(
+                    buyer_ref="minspend_test_5",
+                    product_id="prod_global",
+                    budget=100000.0,  # Excessive budget per AdCP v2.2.0 float format
+                    pricing_option_id=setup_test_data["prod_global_usd"],  # Use actual database-generated ID
+                )
+            ],
+            start_time=start_time.isoformat(),
+            end_time=end_time.isoformat(),
+        )
         with pytest.raises(ToolError) as exc_info:
-            await _create_media_buy_impl(
-                buyer_ref="minspend_test_5",
-                brand_manifest={"name": "Test Campaign"},
-                packages=[
-                    create_test_package_request(
-                        buyer_ref="minspend_test_5",
-                        product_id="prod_global",
-                        budget=100000.0,  # Excessive budget per AdCP v2.2.0 float format
-                        pricing_option_id=setup_test_data["prod_global_usd"],  # Use actual database-generated ID
-                    )
-                ],
-                start_time=start_time.isoformat(),
-                end_time=end_time.isoformat(),
-                ctx=context,
-            )
+            await _create_media_buy_impl(req=req, ctx=context)
 
         # Verify the error message indicates adapter rejection
         error_message = str(exc_info.value)
@@ -470,7 +471,7 @@ class TestMinimumSpendValidation:
 
         # $800 should fail (below $1000 USD minimum)
         # Should fail validation and return errors in response
-        response, _ = await _create_media_buy_impl(
+        req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_6",
             brand_manifest={"name": "Test Campaign"},
             packages=[
@@ -483,8 +484,8 @@ class TestMinimumSpendValidation:
             ],
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
-            ctx=context,
         )
+        response, _ = await _create_media_buy_impl(req=req, ctx=context)
 
         # Verify validation failed with USD minimum
         assert response.errors is not None and len(response.errors) > 0
@@ -515,7 +516,7 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # Create media buy with low budget in GBP (should succeed - no minimum)
-        response, _ = await _create_media_buy_impl(
+        req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_7",
             brand_manifest={"name": "Test Campaign"},
             packages=[
@@ -528,8 +529,8 @@ class TestMinimumSpendValidation:
             ],
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
-            ctx=context,
         )
+        response, _ = await _create_media_buy_impl(req=req, ctx=context)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None

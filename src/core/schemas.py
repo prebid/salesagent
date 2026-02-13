@@ -50,10 +50,13 @@ from adcp.types.aliases import (
 from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
+from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.core.context import ContextObject
 
 # V3: Two Pagination types - batch-based for delivery, page-based for list responses
 from adcp.types.generated_poc.media_buy.list_creatives_response import Pagination as LibraryResponsePagination
+
+from src.core.config import get_pydantic_extra_mode
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
@@ -76,8 +79,10 @@ from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import Product as LibraryProduct
+from adcp.types import PromotedProducts as LibraryPromotedProducts
 from adcp.types import Property as LibraryProperty
 from adcp.types import PropertyListReference as LibraryPropertyListReference  # V3: new field in GetProductsRequest
+from adcp.types import ReportingWebhook as LibraryReportingWebhook
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
 
 # Type alias for the union of all AdCP pricing option types (V3 consolidated)
@@ -130,7 +135,7 @@ class NestedModelSerializerMixin:
     This approach is resilient to schema changes - no hardcoded field names.
 
     Usage:
-        class MyResponse(NestedModelSerializerMixin, AdCPBaseModel):
+        class MyResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
             nested_field: NestedModel
             # Automatically serializes nested_field correctly
     """
@@ -153,103 +158,30 @@ class NestedModelSerializerMixin:
             # Handle list of Pydantic models
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             # Handle single Pydantic model
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
 
-class AdCPBaseModel(BaseModel):
-    """Base model for all AdCP request/response schemas.
+class SalesAgentBaseModel(LibraryAdCPBaseModel):
+    """Base model for all internal salesagent schemas.
 
-    Provides environment-aware validation:
+    Extends the adcp library's AdCPBaseModel to add environment-aware validation:
     - Production: extra="ignore" (forward compatible, accepts future schema fields)
     - Non-production: extra="forbid" (strict, catches bugs early)
 
-    This allows clients to use newer schema versions in production without breaking,
-    while maintaining strict validation during development and testing.
+    Inherits from library base:
+    - model_dump(exclude_none=True) — AdCP spec compliance
+    - model_dump_json(exclude_none=True) — AdCP spec compliance
+    - model_summary() — human-readable protocol responses
 
-    The validation mode is determined at runtime based on the ENVIRONMENT variable.
+    The validation mode is set at class definition time based on the ENVIRONMENT variable.
     """
 
-    # Default to ignoring extra fields (will be overridden in __init__ based on environment)
-    model_config = ConfigDict(extra="ignore")
-
-    def __init__(self, **data):
-        """Initialize model with environment-aware validation."""
-        from src.core.config import is_production
-
-        # Check if child class overrides extra handling
-        child_model_config = getattr(self.__class__, "model_config", {})
-        child_extra_setting = child_model_config.get("extra", "ignore")
-
-        # In non-production, validate strictly (forbid extra fields)
-        # UNLESS child class explicitly allows extras
-        if not is_production() and child_extra_setting != "allow":
-            # Get all valid field names AND aliases for this model
-            valid_fields = set(self.__class__.model_fields.keys())
-            # Also add field aliases
-            for _field_name, field_info in self.__class__.model_fields.items():
-                if field_info.alias:
-                    valid_fields.add(field_info.alias)
-
-            provided_fields = set(data.keys())
-            extra_fields = provided_fields - valid_fields
-
-            if extra_fields:
-                from pydantic import ValidationError
-
-                raise ValidationError.from_exception_data(
-                    self.__class__.__name__,
-                    [
-                        {
-                            "type": "extra_forbidden",
-                            "loc": (field,),
-                            "msg": "Extra inputs are not permitted",
-                            "input": data[field],
-                        }
-                        for field in extra_fields
-                    ],
-                )
-
-        # Call parent __init__ which will ignore extra fields in production
-        super().__init__(**data)
-
-    def model_dump(self, **kwargs):
-        """Dump model with AdCP-compliant defaults.
-
-        By default, excludes None values to match AdCP spec where optional fields
-        should be omitted rather than set to null. This prevents JSON validation
-        errors from AdCP consumers that use "additionalProperties": false and don't
-        allow null for optional fields.
-
-        Examples:
-            response = ListAuthorizedPropertiesResponse(publisher_domains=["example.com"])
-            # Only includes publisher_domains, omits all None-valued optional fields
-            data = response.model_dump()  # exclude_none=True by default
-        """
-        if "exclude_none" not in kwargs:
-            kwargs["exclude_none"] = True
-        return super().model_dump(**kwargs)
-
-    def model_dump_json(self, **kwargs):
-        """Dump model to JSON string with AdCP-compliant defaults.
-
-        By default, excludes None values to match AdCP spec where optional fields
-        should be omitted rather than set to null. This prevents JSON validation
-        errors from AdCP consumers that use "additionalProperties": false and don't
-        allow null for optional fields.
-
-        Examples:
-            response = ListAuthorizedPropertiesResponse(publisher_domains=["example.com"])
-            # Only includes publisher_domains, omits all None-valued optional fields
-            json_str = response.model_dump_json()  # exclude_none=True by default
-        """
-        if "exclude_none" not in kwargs:
-            kwargs["exclude_none"] = True
-        return super().model_dump_json(**kwargs)
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
 class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
@@ -286,11 +218,13 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
                 if isinstance(field_value[0], BaseModel):
                     # Exclude internal fields from Package objects in AdCP responses
                     if field_name == "packages":
-                        data[field_name] = [item.model_dump(exclude={"platform_line_item_id"}) for item in field_value]
+                        data[field_name] = [
+                            item.model_dump(exclude={"platform_line_item_id"}, mode=info.mode) for item in field_value
+                        ]
                     else:
-                        data[field_name] = [item.model_dump() for item in field_value]
+                        data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
@@ -382,7 +316,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
         # Explicitly serialize affected_packages to ensure AffectedPackage.model_dump() is called
         # This ensures internal fields (changes_applied, buyer_package_ref) are excluded via exclude=True
         if "affected_packages" in data and self.affected_packages:
-            data["affected_packages"] = [pkg.model_dump() for pkg in self.affected_packages]
+            data["affected_packages"] = [pkg.model_dump(mode=info.mode) for pkg in self.affected_packages]
 
         # Auto-handle other nested Pydantic models
         for field_name in self.__class__.model_fields:
@@ -395,9 +329,9 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
 
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
@@ -498,7 +432,7 @@ class PricingModel(str, Enum):
 # The library version has the same fields and behavior as our previous local class
 
 
-class PricingParameters(BaseModel):
+class PricingParameters(SalesAgentBaseModel):
     """Additional parameters specific to pricing models per AdCP spec."""
 
     # CPP parameters
@@ -538,7 +472,7 @@ class PricingParameters(BaseModel):
     )
 
 
-class PricingOption(BaseModel):
+class PricingOption(SalesAgentBaseModel):
     """A pricing model option offered by a publisher for a product per AdCP spec.
 
     V3 Migration: Consolidated pricing fields:
@@ -627,7 +561,7 @@ class PricingOption(BaseModel):
         return super().model_dump(**kwargs)
 
 
-class AssetRequirement(BaseModel):
+class AssetRequirement(SalesAgentBaseModel):
     """Asset requirement specification per AdCP spec."""
 
     asset_id: str = Field(..., description="Asset identifier used as key in creative manifest assets object")
@@ -638,7 +572,7 @@ class AssetRequirement(BaseModel):
     requirements: dict[str, Any] | None = Field(None, description="Specific requirements for this asset type")
 
 
-class FormatReference(BaseModel):
+class FormatReference(SalesAgentBaseModel):
     """Reference to a format from a specific creative agent.
 
     DEPRECATED: Use FormatId instead. This class is maintained for backward compatibility.
@@ -826,9 +760,8 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
             formats.append(format_obj)
         else:
             # For unknown format IDs, create a minimal Format object with FormatId
-            # mypy doesn't recognize Pydantic model kwargs pattern for library types
             formats.append(
-                Format(  # type: ignore[call-arg]
+                Format(
                     format_id=FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id=format_id),
                     name=format_id.replace("_", " ").title(),
                     type=FormatTypeEnum.display,  # Default to display type
@@ -837,7 +770,7 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
     return formats
 
 
-class FrequencyCap(BaseModel):
+class FrequencyCap(SalesAgentBaseModel):
     """Simple frequency capping configuration.
 
     Provides basic impression suppression at the media buy or package level.
@@ -848,7 +781,7 @@ class FrequencyCap(BaseModel):
     scope: Literal["media_buy", "package"] = Field("media_buy", description="Apply at media buy or package level")
 
 
-class TargetingCapability(BaseModel):
+class TargetingCapability(SalesAgentBaseModel):
     """Defines targeting dimension capabilities and restrictions."""
 
     dimension: str  # e.g., "geo_country", "key_value"
@@ -858,7 +791,7 @@ class TargetingCapability(BaseModel):
     axe_signal: bool | None = False  # Whether this is an AXE signal dimension
 
 
-class Targeting(BaseModel):
+class Targeting(SalesAgentBaseModel):
     """Comprehensive targeting options for media buys.
 
     All fields are optional and can be combined for precise audience targeting.
@@ -868,6 +801,8 @@ class Targeting(BaseModel):
     Note: Some targeting dimensions are managed-only and cannot be set via overlay.
     These are typically used for AXE signal integration.
     """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Geographic targeting - aligned with OpenRTB (overlay access)
     geo_country_any_of: list[str] | None = None  # ISO country codes: ["US", "CA", "GB"]
@@ -970,7 +905,7 @@ class Targeting(BaseModel):
         return super().dict(**kwargs)
 
 
-class Budget(BaseModel):
+class Budget(SalesAgentBaseModel):
     """Budget object with multi-currency support (AdCP spec compliant)."""
 
     total: float = Field(..., description="Total budget amount (AdCP spec field name)")
@@ -1040,7 +975,7 @@ class Measurement(LibraryMeasurement):
     pass  # All fields inherited from library
 
 
-class CreativePolicy(BaseModel):
+class CreativePolicy(SalesAgentBaseModel):
     """Creative requirements and restrictions for a product per AdCP spec."""
 
     co_branding: Literal["required", "optional", "none"] = Field(..., description="Co-branding requirement")
@@ -1050,7 +985,7 @@ class CreativePolicy(BaseModel):
     templates_available: bool = Field(..., description="Whether creative templates are provided")
 
 
-class AIReviewPolicy(BaseModel):
+class AIReviewPolicy(SalesAgentBaseModel):
     """Configuration for AI-powered creative review with confidence thresholds.
 
     This policy defines how AI confidence scores map to approval decisions:
@@ -1091,7 +1026,7 @@ class DeliveryMeasurement(LibraryDeliveryMeasurement):
     pass  # All fields inherited from library
 
 
-class ProductCard(BaseModel):
+class ProductCard(SalesAgentBaseModel):
     """Visual card for displaying products in user interfaces per AdCP spec.
 
     Can be rendered via preview_creative or pre-generated.
@@ -1108,7 +1043,7 @@ class ProductCard(BaseModel):
     )
 
 
-class ProductCardDetailed(BaseModel):
+class ProductCardDetailed(SalesAgentBaseModel):
     """Detailed card with carousel and full specifications per AdCP spec.
 
     Provides rich product presentation similar to media kit pages.
@@ -1124,7 +1059,7 @@ class ProductCardDetailed(BaseModel):
     )
 
 
-class Placement(BaseModel):
+class Placement(SalesAgentBaseModel):
     """Specific placement within a product per AdCP spec.
 
     When provided, buyers can target specific placements when assigning creatives.
@@ -1250,19 +1185,18 @@ class Product(LibraryProduct):
                         result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt["id"]))
                 else:
                     raise ValueError(f"Invalid format dict: {fmt}")
-            else:
-                # Other object types (like FormatReference)
-                if hasattr(fmt, "agent_url") and hasattr(fmt, "id"):
-                    result.append(FormatId(agent_url=url(str(fmt.agent_url)), id=fmt.id))
-                elif hasattr(fmt, "format_id"):
-                    from src.core.format_cache import upgrade_legacy_format_id
+            # Other object types (like FormatReference)
+            elif hasattr(fmt, "agent_url") and hasattr(fmt, "id"):
+                result.append(FormatId(agent_url=url(str(fmt.agent_url)), id=fmt.id))
+            elif hasattr(fmt, "format_id"):
+                from src.core.format_cache import upgrade_legacy_format_id
 
-                    try:
-                        result.append(upgrade_legacy_format_id(fmt.format_id))
-                    except ValueError:
-                        result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt.format_id))
-                else:
-                    raise ValueError(f"Cannot serialize format: {fmt}")
+                try:
+                    result.append(upgrade_legacy_format_id(fmt.format_id))
+                except ValueError:
+                    result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt.format_id))
+            else:
+                raise ValueError(f"Cannot serialize format: {fmt}")
 
         return result
 
@@ -1324,7 +1258,7 @@ class Product(LibraryProduct):
 # --- Core Schemas ---
 
 
-class Principal(BaseModel):
+class Principal(SalesAgentBaseModel):
     """Principal object containing authentication and adapter mapping information."""
 
     principal_id: str
@@ -1368,13 +1302,13 @@ class Principal(BaseModel):
 
 
 # --- Performance Index ---
-class ProductPerformance(BaseModel):
+class ProductPerformance(SalesAgentBaseModel):
     product_id: str
     performance_index: float  # 1.0 = baseline, 1.2 = 20% better, 0.8 = 20% worse
     confidence_score: float | None = None  # 0.0 to 1.0
 
 
-class UpdatePerformanceIndexRequest(AdCPBaseModel):
+class UpdatePerformanceIndexRequest(SalesAgentBaseModel):
     media_buy_id: str
     performance_data: list[ProductPerformance]
     context: dict[str, Any] | None = Field(
@@ -1382,7 +1316,7 @@ class UpdatePerformanceIndexRequest(AdCPBaseModel):
     )
 
 
-class UpdatePerformanceIndexResponse(AdCPBaseModel):
+class UpdatePerformanceIndexResponse(SalesAgentBaseModel):
     status: str
     detail: str
     context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
@@ -1444,7 +1378,7 @@ class ProductFilters(LibraryFilters):
         return values
 
 
-class GetProductsRequest(AdCPBaseModel):
+class GetProductsRequest(SalesAgentBaseModel):
     """Request for getting available products.
 
     All fields are optional per AdCP spec. brand_manifest and brief provide
@@ -1484,6 +1418,14 @@ class GetProductsRequest(AdCPBaseModel):
     account_id: str | None = Field(
         None,
         description="Account ID for filtering products (adcp 3.2.0+)",
+    )
+    product_selectors: LibraryPromotedProducts | None = Field(
+        None,
+        description="Selectors to filter the brand manifest product catalog for product discovery",
+    )
+    pagination: dict[str, Any] | None = Field(
+        None,
+        description="Cursor-based pagination parameters (max_results, cursor)",
     )
 
 
@@ -1529,6 +1471,8 @@ class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
     Inherits all AdCP-compliant fields from adcp library,
     ensuring we stay in sync with spec updates.
     """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     @model_validator(mode="before")
     @classmethod
@@ -1583,7 +1527,7 @@ class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativ
 
 
 # --- Creative Lifecycle ---
-class CreativeGroup(BaseModel):
+class CreativeGroup(SalesAgentBaseModel):
     """Groups creatives for organizational and management purposes."""
 
     group_id: str
@@ -1656,8 +1600,7 @@ class Creative(LibraryCreative):
     - Backward compatible with existing test suite and database schemas
     """
 
-    # Allow extra fields (for backward compat with created_at/updated_at aliases)
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Override assets to accept simple dicts (instead of strict typed asset unions)
     assets: dict[str, Any] | None = Field(default=None, description="Assets for this creative, keyed by asset_role")
@@ -1693,7 +1636,8 @@ class Creative(LibraryCreative):
             try:
                 upgraded = upgrade_legacy_format_id(format_val)
                 values["format_id"] = upgraded
-                # Don't set 'format' - it's an alias in library, not a real field
+                # Remove 'format' alias to avoid extra field rejection
+                values.pop("format", None)
             except ValueError as e:
                 raise ValueError(f"Invalid format_id: {e}")
         return values
@@ -1730,31 +1674,6 @@ class Creative(LibraryCreative):
         """Alias for updated_date (backward compatibility)."""
         return self.updated_date
 
-    def model_dump(self, **kwargs):
-        """Override to exclude internal fields and extra fields for AdCP compliance.
-
-        Excludes:
-        - principal_id: Internal field (marked with exclude=True)
-        - created_at, updated_at, format: Extra fields used for backward compat (not in spec)
-
-        Includes:
-        - created_date, updated_date, status: These ARE in the AdCP spec
-        """
-        # Get default serialization (principal_id auto-excluded via exclude=True)
-        data = super().model_dump(**kwargs)
-
-        # Remove extra fields that leaked in due to extra="allow"
-        # These are backward compat aliases, not part of the spec
-        data.pop("created_at", None)
-        data.pop("updated_at", None)
-        data.pop("format", None)  # format_id is the spec field
-
-        # Convert status enum to string value for AdCP compliance
-        if "status" in data and hasattr(data["status"], "value"):
-            data["status"] = data["status"].value
-
-        return data
-
     def model_dump_internal(self, **kwargs):
         """Dump including internal fields for database storage.
 
@@ -1768,14 +1687,10 @@ class Creative(LibraryCreative):
         if hasattr(self, "principal_id") and self.principal_id is not None:
             data["principal_id"] = self.principal_id
 
-        # Convert status enum to string value for database storage
-        if "status" in data and hasattr(data["status"], "value"):
-            data["status"] = data["status"].value
-
         return data
 
 
-class CreativeAdaptation(BaseModel):
+class CreativeAdaptation(SalesAgentBaseModel):
     """Suggested adaptation or variant of a creative."""
 
     adaptation_id: str
@@ -1788,7 +1703,7 @@ class CreativeAdaptation(BaseModel):
     estimated_performance_lift: float | None = None  # Percentage improvement expected
 
 
-class CreativeApprovalStatus(BaseModel):
+class CreativeApprovalStatus(SalesAgentBaseModel):
     """Creative approval status result (different from CreativeStatus enum)."""
 
     creative_id: str
@@ -1798,7 +1713,7 @@ class CreativeApprovalStatus(BaseModel):
     suggested_adaptations: list[CreativeAdaptation] = Field(default_factory=list)
 
 
-class CreativeAssignment(BaseModel):
+class CreativeAssignment(SalesAgentBaseModel):
     """Maps creatives to packages with distribution control."""
 
     assignment_id: str
@@ -1834,7 +1749,7 @@ class CreativeAssignment(BaseModel):
         return self
 
 
-class AddCreativeAssetsRequest(AdCPBaseModel):
+class AddCreativeAssetsRequest(SalesAgentBaseModel):
     """Request to add creative assets to a media buy (AdCP spec compliant)."""
 
     media_buy_id: str | None = None
@@ -1854,7 +1769,7 @@ class AddCreativeAssetsRequest(AdCPBaseModel):
         return self.assets
 
 
-class AddCreativeAssetsResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class AddCreativeAssetsResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response from adding creative assets (AdCP spec compliant)."""
 
     statuses: list[CreativeApprovalStatus]
@@ -1865,7 +1780,7 @@ SubmitCreativesRequest = AddCreativeAssetsRequest
 SubmitCreativesResponse = AddCreativeAssetsResponse
 
 
-class SyncCreativesRequest(AdCPBaseModel):
+class SyncCreativesRequest(SalesAgentBaseModel):
     """Request to sync creative assets to centralized library (AdCP v2.5 spec compliant).
 
     NOTE: Uses Creative instead of library's CreativeAsset due to implementation differences.
@@ -1909,7 +1824,7 @@ class SyncCreativesRequest(AdCPBaseModel):
     )
 
 
-class SyncSummary(BaseModel):
+class SyncSummary(SalesAgentBaseModel):
     """Summary of sync operation results."""
 
     total_processed: int = Field(..., ge=0, description="Total number of creatives processed")
@@ -1920,7 +1835,7 @@ class SyncSummary(BaseModel):
     deleted: int = Field(0, ge=0, description="Number of creatives deleted/archived (when delete_missing=true)")
 
 
-class SyncCreativeResult(BaseModel):
+class SyncCreativeResult(SalesAgentBaseModel):
     """Detailed result for a single creative in sync operation."""
 
     creative_id: str = Field(..., description="Creative ID from the request")
@@ -1988,7 +1903,7 @@ class SyncCreativeResult(BaseModel):
         return super().model_dump(**kwargs)
 
 
-class AssignmentsSummary(BaseModel):
+class AssignmentsSummary(SalesAgentBaseModel):
     """Summary of assignment operations."""
 
     total_assignments_processed: int = Field(
@@ -1999,7 +1914,7 @@ class AssignmentsSummary(BaseModel):
     failed: int = Field(..., ge=0, description="Number of assignment operations that failed")
 
 
-class AssignmentResult(BaseModel):
+class AssignmentResult(SalesAgentBaseModel):
     """Detailed result for creative-package assignments."""
 
     creative_id: str = Field(..., description="Creative that was assigned/unassigned")
@@ -2014,7 +1929,7 @@ class AssignmentResult(BaseModel):
     )
 
 
-class SyncCreativesResponse(AdCPBaseModel):
+class SyncCreativesResponse(SalesAgentBaseModel):
     """Response from syncing creative assets (AdCP v2.4 spec compliant).
 
     NOTE: Does not extend library type due to incompatible discriminated union pattern.
@@ -2061,11 +1976,11 @@ class SyncCreativesResponse(AdCPBaseModel):
             # Handle list of Pydantic models
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
 
             # Handle single Pydantic model
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
@@ -2113,10 +2028,10 @@ class ListCreativesRequest(LibraryListCreativesRequest):
     - sort: Sort (structured sort object)
     """
 
-    pass
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
-class QuerySummary(BaseModel):
+class QuerySummary(SalesAgentBaseModel):
     """Summary of the query that was executed."""
 
     total_matching: int = Field(..., ge=0, description="Total creatives matching filters")
@@ -2135,7 +2050,7 @@ class Pagination(LibraryResponsePagination):
     pass  # Inherits all fields from library: limit, offset, total_pages, current_page, has_more
 
 
-class ListCreativesResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class ListCreativesResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response from listing creative assets (AdCP v2.4 spec compliant).
 
     NOTE: Does not extend library type yet because local Pagination, QuerySummary,
@@ -2166,26 +2081,26 @@ class ListCreativesResponse(NestedModelSerializerMixin, AdCPBaseModel):
             return f"Showing {count} of {total} creatives."
 
 
-class CheckCreativeStatusRequest(AdCPBaseModel):
+class CheckCreativeStatusRequest(SalesAgentBaseModel):
     creative_ids: list[str]
 
 
-class CheckCreativeStatusResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class CheckCreativeStatusResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     statuses: list[CreativeApprovalStatus]
 
 
 # New creative management endpoints
-class CreateCreativeGroupRequest(AdCPBaseModel):
+class CreateCreativeGroupRequest(SalesAgentBaseModel):
     name: str
     description: str | None = None
     tags: list[str] | None = []
 
 
-class CreateCreativeGroupResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class CreateCreativeGroupResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     group: CreativeGroup
 
 
-class CreateCreativeRequest(AdCPBaseModel):
+class CreateCreativeRequest(SalesAgentBaseModel):
     """Create a creative in the library (not tied to a media buy)."""
 
     group_id: str | None = None
@@ -2196,7 +2111,7 @@ class CreateCreativeRequest(AdCPBaseModel):
     metadata: dict[str, Any] | None = {}
 
 
-class CreateCreativeResponse(AdCPBaseModel):
+class CreateCreativeResponse(SalesAgentBaseModel):
     creative: Creative
     status: CreativeApprovalStatus
     suggested_adaptations: list[CreativeAdaptation] = Field(default_factory=list)
@@ -2220,9 +2135,9 @@ class CreateCreativeResponse(AdCPBaseModel):
 
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
@@ -2231,7 +2146,7 @@ class CreateCreativeResponse(AdCPBaseModel):
         return f"Creative {self.creative.creative_id} created with status: {self.status.status}"
 
 
-class AssignCreativeRequest(AdCPBaseModel):
+class AssignCreativeRequest(SalesAgentBaseModel):
     """Assign a creative from the library to a package."""
 
     media_buy_id: str
@@ -2258,11 +2173,11 @@ class AssignCreativeRequest(AdCPBaseModel):
         return self
 
 
-class AssignCreativeResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class AssignCreativeResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     assignment: CreativeAssignment
 
 
-class GetCreativesRequest(AdCPBaseModel):
+class GetCreativesRequest(SalesAgentBaseModel):
     """Get creatives with optional filtering."""
 
     group_id: str | None = None
@@ -2272,7 +2187,7 @@ class GetCreativesRequest(AdCPBaseModel):
     include_assignments: bool = False
 
 
-class GetCreativesResponse(AdCPBaseModel):
+class GetCreativesResponse(SalesAgentBaseModel):
     creatives: list[Creative]
     assignments: list[CreativeAssignment] | None = None
 
@@ -2295,26 +2210,26 @@ class GetCreativesResponse(AdCPBaseModel):
 
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump() for item in field_value]
+                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump()
+                data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
 
 
 # Admin tools
-class GetPendingCreativesRequest(AdCPBaseModel):
+class GetPendingCreativesRequest(SalesAgentBaseModel):
     """Admin-only: Get all pending creatives across all principals."""
 
     principal_id: str | None = None  # Filter by principal if specified
     limit: int | None = 100
 
 
-class GetPendingCreativesResponse(AdCPBaseModel):
+class GetPendingCreativesResponse(SalesAgentBaseModel):
     pending_creatives: list[dict[str, Any]]  # Includes creative + principal info
 
 
-class ApproveCreativeRequest(AdCPBaseModel):
+class ApproveCreativeRequest(SalesAgentBaseModel):
     """Admin-only: Approve or reject a creative."""
 
     creative_id: str
@@ -2322,13 +2237,13 @@ class ApproveCreativeRequest(AdCPBaseModel):
     reason: str | None = None
 
 
-class ApproveCreativeResponse(AdCPBaseModel):
+class ApproveCreativeResponse(SalesAgentBaseModel):
     creative_id: str
     new_status: str
     detail: str
 
 
-class AdaptCreativeRequest(AdCPBaseModel):
+class AdaptCreativeRequest(SalesAgentBaseModel):
     media_buy_id: str
     original_creative_id: str
     target_format_id: str
@@ -2339,7 +2254,7 @@ class AdaptCreativeRequest(AdCPBaseModel):
 # --- Brand Manifest Models (AdCP v1.8.0) ---
 
 
-class LogoAsset(BaseModel):
+class LogoAsset(SalesAgentBaseModel):
     """Logo asset with metadata."""
 
     url: str = Field(..., description="URL to logo asset")
@@ -2348,7 +2263,7 @@ class LogoAsset(BaseModel):
     tags: list[str] | None = Field(None, description="Tags for logo usage (e.g., 'primary', 'square', 'white')")
 
 
-class BrandColors(BaseModel):
+class BrandColors(SalesAgentBaseModel):
     """Brand color palette."""
 
     primary: str | None = Field(None, pattern="^#[0-9A-Fa-f]{6}$", description="Primary brand color (hex)")
@@ -2358,7 +2273,7 @@ class BrandColors(BaseModel):
     text: str | None = Field(None, pattern="^#[0-9A-Fa-f]{6}$", description="Text color (hex)")
 
 
-class FontGuidance(BaseModel):
+class FontGuidance(SalesAgentBaseModel):
     """Typography guidelines."""
 
     primary: str | None = Field(None, description="Primary font family")
@@ -2366,7 +2281,7 @@ class FontGuidance(BaseModel):
     weights: list[str] | None = Field(None, description="Recommended font weights")
 
 
-class BrandAsset(BaseModel):
+class BrandAsset(SalesAgentBaseModel):
     """Multimedia brand asset."""
 
     url: str = Field(..., description="URL to brand asset")
@@ -2377,7 +2292,7 @@ class BrandAsset(BaseModel):
     duration: float | None = Field(None, ge=0, description="Duration in seconds (for video/audio)")
 
 
-class ProductCatalog(BaseModel):
+class ProductCatalog(SalesAgentBaseModel):
     """E-commerce product feed information."""
 
     url: str = Field(..., description="URL to product catalog feed")
@@ -2388,7 +2303,7 @@ class ProductCatalog(BaseModel):
 BrandManifest: TypeAlias = LibraryBrandManifest
 
 
-class BrandManifestRef(BaseModel):
+class BrandManifestRef(SalesAgentBaseModel):
     """Brand manifest reference - can be inline object or URL string.
 
     Per AdCP spec, this supports two formats:
@@ -2428,6 +2343,11 @@ class PackageRequest(LibraryPackageRequest):
     Library PackageRequest required fields per AdCP spec:
     - budget, buyer_ref, pricing_option_id, product_id
     """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Override targeting_overlay to use our Targeting model instead of library's TargetingOverlay
+    targeting_overlay: "Targeting | None" = None  # type: ignore[assignment]
 
     # Internal fields (not in AdCP spec) - excluded from API responses
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
@@ -2573,8 +2493,10 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     - reporting_webhook: dict (webhook configuration)
     """
 
-    # Note: packages field uses LibraryPackageRequest from parent class.
-    # Internal fields (pricing_model, impressions) are accessed via getattr() for backward compatibility.
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Override packages to use our PackageRequest (with extra='forbid' and internal fields)
+    packages: list[PackageRequest] | None = None  # type: ignore[assignment]
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):
@@ -2637,7 +2559,7 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
         return []
 
 
-class CheckMediaBuyStatusRequest(AdCPBaseModel):
+class CheckMediaBuyStatusRequest(SalesAgentBaseModel):
     media_buy_id: str | None = None
     buyer_ref: str | None = None
     strategy_id: str | None = Field(
@@ -2652,7 +2574,7 @@ class CheckMediaBuyStatusRequest(AdCPBaseModel):
         return values
 
 
-class CheckMediaBuyStatusResponse(AdCPBaseModel):
+class CheckMediaBuyStatusResponse(SalesAgentBaseModel):
     media_buy_id: str
     buyer_ref: str
     status: str  # pending_creative, active, paused, completed, failed
@@ -2662,7 +2584,7 @@ class CheckMediaBuyStatusResponse(AdCPBaseModel):
     creative_count: int = 0
 
 
-class LegacyUpdateMediaBuyRequest(AdCPBaseModel):
+class LegacyUpdateMediaBuyRequest(SalesAgentBaseModel):
     """Legacy update request - kept for backward compatibility."""
 
     media_buy_id: str
@@ -2687,11 +2609,17 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
     Use ext field for extensions until spec is updated.
     """
 
-    pass  # All fields inherited from library
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Field in AdCP spec but not yet in library (spec leads library)
+    account_id: str | None = Field(
+        None,
+        description="Filter delivery data to a specific account",
+    )
 
 
 # AdCP-compliant delivery models
-class DeliveryTotals(BaseModel):
+class DeliveryTotals(SalesAgentBaseModel):
     """Aggregate metrics for a media buy or package."""
 
     impressions: float = Field(ge=0, description="Total impressions delivered")
@@ -2704,7 +2632,7 @@ class DeliveryTotals(BaseModel):
     )
 
 
-class PackageDelivery(BaseModel):
+class PackageDelivery(SalesAgentBaseModel):
     """Metrics broken down by package."""
 
     package_id: str = Field(description="Publisher's package identifier")
@@ -2731,7 +2659,7 @@ class PackageDelivery(BaseModel):
     )
 
 
-class DailyBreakdown(BaseModel):
+class DailyBreakdown(SalesAgentBaseModel):
     """Day-by-day delivery metrics."""
 
     # Webhook-specific metadata (only present in webhook deliveries)
@@ -2761,7 +2689,7 @@ class DailyBreakdown(BaseModel):
     spend: float = Field(ge=0, description="Daily spend")
 
 
-class MediaBuyDeliveryData(BaseModel):
+class MediaBuyDeliveryData(SalesAgentBaseModel):
     """AdCP-compliant delivery data for a single media buy."""
 
     media_buy_id: str = Field(description="Publisher's media buy identifier")
@@ -2784,7 +2712,7 @@ class MediaBuyDeliveryData(BaseModel):
     daily_breakdown: list[DailyBreakdown] | None = Field(None, description="Day-by-day delivery")
 
 
-class ReportingPeriod(BaseModel):
+class ReportingPeriod(SalesAgentBaseModel):
     """Date range for the report."""
 
     start: str = Field(description="ISO 8601 start timestamp")
@@ -2800,7 +2728,7 @@ class AggregatedTotals(LibraryAggregatedTotals):
     pass  # All fields inherited from library
 
 
-class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """AdCP v2.4-compliant response for get_media_buy_delivery task.
 
     Per AdCP PR #113, this response contains ONLY domain data.
@@ -2828,14 +2756,14 @@ class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, AdCPBaseModel):
 
 
 # Deprecated - kept for backward compatibility
-class GetAllMediaBuyDeliveryRequest(AdCPBaseModel):
+class GetAllMediaBuyDeliveryRequest(SalesAgentBaseModel):
     """DEPRECATED: Use GetMediaBuyDeliveryRequest with filter='all' instead."""
 
     today: date
     media_buy_ids: list[str] | None = None
 
 
-class GetAllMediaBuyDeliveryResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class GetAllMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """DEPRECATED: Use GetMediaBuyDeliveryResponse instead."""
 
     deliveries: list[MediaBuyDeliveryData]
@@ -2846,7 +2774,7 @@ class GetAllMediaBuyDeliveryResponse(NestedModelSerializerMixin, AdCPBaseModel):
 
 
 # --- Additional Schema Classes ---
-class MediaPackage(BaseModel):
+class MediaPackage(SalesAgentBaseModel):
     package_id: str
     name: str
     delivery_type: Literal["guaranteed", "non_guaranteed"]
@@ -2863,12 +2791,12 @@ class MediaPackage(BaseModel):
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package
 
 
-class PackagePerformance(BaseModel):
+class PackagePerformance(SalesAgentBaseModel):
     package_id: str
     performance_index: float
 
 
-class AssetStatus(BaseModel):
+class AssetStatus(SalesAgentBaseModel):
     asset_id: str | None = None  # Asset identifier
     creative_id: str | None = None  # GAM creative ID (may be None for pending/failed)
     status: str  # Status: draft, active, submitted, failed, etc.
@@ -2877,7 +2805,7 @@ class AssetStatus(BaseModel):
 
 
 # Unified update models
-class PackageUpdate(BaseModel):
+class PackageUpdate(SalesAgentBaseModel):
     """Updates to apply to a specific package."""
 
     package_id: str
@@ -2892,7 +2820,7 @@ class PackageUpdate(BaseModel):
     targeting_overlay: Targeting | None = None  # Package-specific targeting refinements
 
 
-class UpdatePackageRequest(AdCPBaseModel):
+class UpdatePackageRequest(SalesAgentBaseModel):
     """Update one or more packages within a media buy.
 
     Uses PATCH semantics: Only packages mentioned are affected.
@@ -2907,7 +2835,7 @@ class UpdatePackageRequest(AdCPBaseModel):
 
 
 # AdCP-compliant supporting models for update-media-buy-request
-class AdCPPackageUpdate(BaseModel):
+class AdCPPackageUpdate(SalesAgentBaseModel):
     """Package-specific update per AdCP update-media-buy-request schema.
 
     Supports three creative management modes (adcp#208):
@@ -2931,7 +2859,7 @@ class AdCPPackageUpdate(BaseModel):
     # Schema validation at /schemas/v1/media-buy/update-media-buy-request.json enforces this
 
 
-class UpdateMediaBuyRequest(AdCPBaseModel):
+class UpdateMediaBuyRequest(SalesAgentBaseModel):
     """AdCP-compliant update media buy request per update-media-buy-request schema.
 
     Fully compliant with AdCP specification:
@@ -2958,6 +2886,10 @@ class UpdateMediaBuyRequest(AdCPBaseModel):
     )
     context: dict[str, Any] | None = Field(
         None, description="Application-level context provided by the client (echoed in responses)"
+    )
+    reporting_webhook: LibraryReportingWebhook | None = Field(
+        None,
+        description="Optional webhook configuration for automated reporting delivery",
     )
     ext: dict[str, Any] | None = Field(None, description="Extension fields for future protocol additions")
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
@@ -3021,13 +2953,13 @@ class UpdateMediaBuyRequest(AdCPBaseModel):
 
 
 # Adapter-specific response schemas
-class AdapterPackageDelivery(BaseModel):
+class AdapterPackageDelivery(SalesAgentBaseModel):
     package_id: str
     impressions: int
     spend: float
 
 
-class AdapterGetMediaBuyDeliveryResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class AdapterGetMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response from adapter's get_media_buy_delivery method"""
 
     media_buy_id: str
@@ -3041,7 +2973,7 @@ class AdapterGetMediaBuyDeliveryResponse(NestedModelSerializerMixin, AdCPBaseMod
 # --- Human-in-the-Loop Task Queue ---
 
 
-class HumanTask(BaseModel):
+class HumanTask(SalesAgentBaseModel):
     """Task requiring human intervention."""
 
     task_id: str
@@ -3076,7 +3008,7 @@ class HumanTask(BaseModel):
     resolved_by: str | None = None
 
 
-class CreateHumanTaskRequest(AdCPBaseModel):
+class CreateHumanTaskRequest(SalesAgentBaseModel):
     """Request to create a human task."""
 
     task_type: str
@@ -3094,7 +3026,7 @@ class CreateHumanTaskRequest(AdCPBaseModel):
     due_in_hours: int | None = None  # Hours until due
 
 
-class CreateHumanTaskResponse(AdCPBaseModel):
+class CreateHumanTaskResponse(SalesAgentBaseModel):
     """Response from creating a human task."""
 
     task_id: str
@@ -3106,7 +3038,7 @@ class CreateHumanTaskResponse(AdCPBaseModel):
         return f"Task {self.task_id} created with status: {self.status}"
 
 
-class GetPendingTasksRequest(AdCPBaseModel):
+class GetPendingTasksRequest(SalesAgentBaseModel):
     """Request for pending human tasks."""
 
     principal_id: str | None = None  # Filter by principal
@@ -3116,7 +3048,7 @@ class GetPendingTasksRequest(AdCPBaseModel):
     include_overdue: bool = True
 
 
-class GetPendingTasksResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class GetPendingTasksResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response with pending tasks."""
 
     tasks: list[HumanTask]
@@ -3124,14 +3056,14 @@ class GetPendingTasksResponse(NestedModelSerializerMixin, AdCPBaseModel):
     overdue_count: int
 
 
-class AssignTaskRequest(AdCPBaseModel):
+class AssignTaskRequest(SalesAgentBaseModel):
     """Request to assign a task."""
 
     task_id: str
     assigned_to: str
 
 
-class CompleteTaskRequest(AdCPBaseModel):
+class CompleteTaskRequest(SalesAgentBaseModel):
     """Request to complete a task."""
 
     task_id: str
@@ -3140,14 +3072,14 @@ class CompleteTaskRequest(AdCPBaseModel):
     resolved_by: str
 
 
-class VerifyTaskRequest(AdCPBaseModel):
+class VerifyTaskRequest(SalesAgentBaseModel):
     """Request to verify if a task was completed correctly."""
 
     task_id: str
     expected_outcome: dict[str, Any] | None = None  # What the task should have accomplished
 
 
-class VerifyTaskResponse(AdCPBaseModel):
+class VerifyTaskResponse(SalesAgentBaseModel):
     """Response from task verification."""
 
     task_id: str
@@ -3157,7 +3089,7 @@ class VerifyTaskResponse(AdCPBaseModel):
     discrepancies: list[str] = []
 
 
-class MarkTaskCompleteRequest(AdCPBaseModel):
+class MarkTaskCompleteRequest(SalesAgentBaseModel):
     """Admin request to mark a task as complete with verification."""
 
     task_id: str
@@ -3166,14 +3098,14 @@ class MarkTaskCompleteRequest(AdCPBaseModel):
 
 
 # Targeting capabilities
-class GetTargetingCapabilitiesRequest(AdCPBaseModel):
+class GetTargetingCapabilitiesRequest(SalesAgentBaseModel):
     """Query targeting capabilities for channels."""
 
     channels: list[str] | None = None  # If None, return all channels
     include_aee_dimensions: bool = True
 
 
-class TargetingDimensionInfo(BaseModel):
+class TargetingDimensionInfo(SalesAgentBaseModel):
     """Information about a single targeting dimension."""
 
     key: str
@@ -3184,7 +3116,7 @@ class TargetingDimensionInfo(BaseModel):
     values: list[str] | None = None
 
 
-class ChannelTargetingCapabilities(BaseModel):
+class ChannelTargetingCapabilities(SalesAgentBaseModel):
     """Targeting capabilities for a specific channel."""
 
     channel: str
@@ -3192,20 +3124,20 @@ class ChannelTargetingCapabilities(BaseModel):
     aee_dimensions: list[TargetingDimensionInfo] | None = None
 
 
-class GetTargetingCapabilitiesResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class GetTargetingCapabilitiesResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response with targeting capabilities."""
 
     capabilities: list[ChannelTargetingCapabilities]
 
 
-class CheckAXERequirementsRequest(AdCPBaseModel):
+class CheckAXERequirementsRequest(SalesAgentBaseModel):
     """Check if required AXE dimensions are supported."""
 
     channel: str
     required_dimensions: list[str]
 
 
-class CheckAXERequirementsResponse(AdCPBaseModel):
+class CheckAXERequirementsResponse(SalesAgentBaseModel):
     """Response for AXE requirements check."""
 
     supported: bool
@@ -3217,7 +3149,7 @@ class CheckAXERequirementsResponse(AdCPBaseModel):
 
 
 # --- Signal Discovery ---
-class SignalDeployment(BaseModel):
+class SignalDeployment(SalesAgentBaseModel):
     """Platform deployment information for a signal - AdCP spec compliant."""
 
     platform: str = Field(..., description="Platform name")
@@ -3228,14 +3160,14 @@ class SignalDeployment(BaseModel):
     estimated_activation_duration_minutes: float | None = Field(None, description="Time to activate if not live", gt=-1)
 
 
-class SignalPricing(BaseModel):
+class SignalPricing(SalesAgentBaseModel):
     """Pricing information for a signal - AdCP spec compliant."""
 
     cpm: float = Field(..., description="Cost per thousand impressions", gt=-1)
     currency: str = Field(..., description="Currency code", pattern="^[A-Z]{3}$")
 
 
-class Signal(BaseModel):
+class Signal(SalesAgentBaseModel):
     """Represents an available signal - AdCP spec compliant."""
 
     # Core AdCP fields (required)
@@ -3302,7 +3234,7 @@ class Signal(BaseModel):
 
 
 # AdCP-compliant supporting models for get-signals-request
-class SignalDeliverTo(BaseModel):
+class SignalDeliverTo(SalesAgentBaseModel):
     """Delivery requirements per AdCP get-signals-request schema."""
 
     platforms: str | list[str] = Field(
@@ -3324,7 +3256,7 @@ class SignalDeliverTo(BaseModel):
         return self
 
 
-class SignalFilters(BaseModel):
+class SignalFilters(SalesAgentBaseModel):
     """Signal filters per AdCP get-signals-request schema."""
 
     catalog_types: list[Literal["marketplace", "custom", "owned"]] | None = None
@@ -3333,7 +3265,7 @@ class SignalFilters(BaseModel):
     min_coverage_percentage: float | None = Field(None, ge=0, le=100, description="Minimum coverage requirement")
 
 
-class GetSignalsRequest(AdCPBaseModel):
+class GetSignalsRequest(SalesAgentBaseModel):
     """AdCP-compliant request to discover available signals per get-signals-request schema.
 
     NOTE: Does not extend library type yet because local SignalDeliverTo and SignalFilters
@@ -3367,7 +3299,7 @@ class GetSignalsRequest(AdCPBaseModel):
         return self.max_results
 
 
-class GetSignalsResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class GetSignalsResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response containing available signals (AdCP v2.4 spec compliant).
 
     NOTE: Does not extend library type yet because local Signal type differs
@@ -3393,7 +3325,7 @@ class GetSignalsResponse(NestedModelSerializerMixin, AdCPBaseModel):
 
 
 # --- Signal Activation ---
-class ActivateSignalRequest(AdCPBaseModel):
+class ActivateSignalRequest(SalesAgentBaseModel):
     """Request to activate a signal for use in campaigns."""
 
     signal_id: str = Field(..., description="Signal ID to activate")
@@ -3402,7 +3334,7 @@ class ActivateSignalRequest(AdCPBaseModel):
     context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
 
 
-class ActivateSignalResponse(AdCPBaseModel):
+class ActivateSignalResponse(SalesAgentBaseModel):
     """Response from signal activation (AdCP v2.4 spec compliant).
 
     Per AdCP PR #113, this response contains ONLY domain data.
@@ -3423,7 +3355,7 @@ class ActivateSignalResponse(AdCPBaseModel):
 
 
 # --- Simulation and Time Progression Control ---
-class SimulationControlRequest(AdCPBaseModel):
+class SimulationControlRequest(SalesAgentBaseModel):
     """Control simulation time progression and events."""
 
     strategy_id: str = Field(..., description="Strategy ID to control (must be simulation strategy with 'sim_' prefix)")
@@ -3432,7 +3364,7 @@ class SimulationControlRequest(AdCPBaseModel):
     context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
 
 
-class SimulationControlResponse(AdCPBaseModel):
+class SimulationControlResponse(SalesAgentBaseModel):
     """Response from simulation control operations."""
 
     status: Literal["ok", "error"] = "ok"
@@ -3508,14 +3440,14 @@ PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # Property-specific 
 Property: TypeAlias = LibraryProperty
 
 
-class PropertyTagMetadata(BaseModel):
+class PropertyTagMetadata(SalesAgentBaseModel):
     """Metadata for a property tag."""
 
     name: str = Field(..., description="Human-readable name for this tag")
     description: str = Field(..., description="Description of what this tag represents")
 
 
-class ListAuthorizedPropertiesRequest(AdCPBaseModel):
+class ListAuthorizedPropertiesRequest(SalesAgentBaseModel):
     """Request payload for list_authorized_properties task (AdCP spec).
 
     Note: This type was removed from adcp 3.2.0, so we define it locally.
@@ -3533,7 +3465,7 @@ class ListAuthorizedPropertiesRequest(AdCPBaseModel):
     publisher_domains: list[str] | None = Field(default=None, description="Filter to specific publisher domains")
 
 
-class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, AdCPBaseModel):
+class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response payload for list_authorized_properties task (AdCP v2.4 spec compliant).
 
     NOTE: Does not extend library type yet because local publisher_domains type

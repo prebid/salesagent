@@ -628,18 +628,17 @@ class BroadstreetAdvertisementManager:
 
         if self.dry_run:
             self.log(f"Would delete advertisement {creative_id}")
-        else:
-            if self.client:
-                try:
-                    self.client.delete_advertisement(
-                        advertiser_id=self.advertiser_id,
-                        advertisement_id=info.broadstreet_id,
-                    )
-                    self.log(f"Deleted advertisement {creative_id}")
-                except Exception as e:
-                    logger.error(f"Error deleting advertisement {creative_id}: {e}", exc_info=True)
-                    self.log(f"Error deleting advertisement: {e}")
-                    return False
+        elif self.client:
+            try:
+                self.client.delete_advertisement(
+                    advertiser_id=self.advertiser_id,
+                    advertisement_id=info.broadstreet_id,
+                )
+                self.log(f"Deleted advertisement {creative_id}")
+            except Exception as e:
+                logger.error(f"Error deleting advertisement {creative_id}: {e}", exc_info=True)
+                self.log(f"Error deleting advertisement: {e}")
+                return False
 
         # Remove from cache
         if media_buy_id in self._ad_cache:

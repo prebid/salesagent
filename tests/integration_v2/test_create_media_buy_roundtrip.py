@@ -27,7 +27,7 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.schemas import CreateMediaBuySuccess
-from src.core.testing_hooks import TestingContext, apply_testing_hooks
+from src.core.testing_hooks import TestingContext, TestingHooksResult, apply_testing_hooks
 from tests.integration_v2.conftest import create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -163,35 +163,22 @@ class TestCreateMediaBuyRoundtrip:
             "total_budget": 5000.0,
         }
 
-        # This adds extra fields: is_test, test_session_id, dry_run, response_headers, debug_info
-        modified_data = apply_testing_hooks(response_data, testing_ctx, "create_media_buy", campaign_info)
+        # apply_testing_hooks returns metadata separately — does NOT mutate response data
+        hooks_result = apply_testing_hooks(testing_ctx, "create_media_buy", campaign_info)
 
-        # Verify testing hooks added extra fields
-        assert "is_test" in modified_data, "apply_testing_hooks should add is_test"
-        assert "dry_run" in modified_data, "apply_testing_hooks should add dry_run"
-        assert "test_session_id" in modified_data, "apply_testing_hooks should add test_session_id"
-        assert modified_data["is_test"] is True
-        assert modified_data["dry_run"] is True
+        # Verify hooks result contains metadata
+        assert hooks_result.is_test is True, "should detect test context"
+        assert isinstance(hooks_result, TestingHooksResult)
+        assert hooks_result.debug_info is not None, "debug_mode=True should produce debug_info"
 
-        # Verify original fields still present
-        assert "buyer_ref" in modified_data
-        assert modified_data["buyer_ref"] == "test-buyer-ref-123"
+        # Verify original response data is UNCHANGED (hooks don't mutate data)
+        assert "buyer_ref" in response_data
+        assert response_data["buyer_ref"] == "test-buyer-ref-123"
+        assert "is_test" not in response_data, "hooks should not inject fields into response data"
+        assert "dry_run" not in response_data, "hooks should not inject fields into response data"
 
-        # Step 4: Reconstruct response (this is where the bug occurred)
-        # The fix at main.py:3747-3760 filters out non-schema fields
-        # Domain fields only (status/adcp_version are protocol fields, not domain fields)
-        valid_fields = {
-            "buyer_ref",
-            "media_buy_id",
-            "creative_deadline",
-            "packages",
-            "errors",
-            "workflow_step_id",
-        }
-        filtered_data = {k: v for k, v in modified_data.items() if k in valid_fields}
-
-        # This should NOT raise validation error
-        reconstructed_response = CreateMediaBuySuccess(**filtered_data)
+        # Step 4: Reconstruct response directly (no filtering needed)
+        reconstructed_response = CreateMediaBuySuccess(**response_data)
 
         # Step 5: Verify reconstruction succeeded
         assert reconstructed_response.buyer_ref == "test-buyer-ref-123"
@@ -238,32 +225,27 @@ class TestCreateMediaBuyRoundtrip:
 
         response_data = original_response.model_dump_internal()
 
-        # Apply testing hooks
+        # Apply testing hooks — returns metadata, does NOT modify response_data
         testing_ctx = TestingContext(dry_run=True, test_session_id="filter-test")
         campaign_info = {"start_date": datetime.now(UTC), "end_date": datetime.now(UTC), "total_budget": 1000}
-        modified_data = apply_testing_hooks(response_data, testing_ctx, "create_media_buy", campaign_info)
+        hooks_result = apply_testing_hooks(testing_ctx, "create_media_buy", campaign_info)
 
-        # Verify extra fields were added
-        assert "dry_run" in modified_data
-        assert "is_test" in modified_data
+        # Verify metadata is returned separately
+        assert hooks_result.is_test is True
+        assert isinstance(hooks_result, TestingHooksResult)
 
-        # Filter and reconstruct (domain fields only - no protocol fields)
-        valid_fields = {
-            "buyer_ref",
-            "media_buy_id",
-            "creative_deadline",
-            "packages",
-            "errors",
-            "workflow_step_id",
-        }
-        filtered_data = {k: v for k, v in modified_data.items() if k in valid_fields}
-        reconstructed = CreateMediaBuySuccess(**filtered_data)
+        # Verify response data is NOT modified (no filtering needed)
+        assert "dry_run" not in response_data, "hooks should not inject fields"
+        assert "is_test" not in response_data, "hooks should not inject fields"
 
-        # Verify extra fields don't exist in reconstructed response
+        # Reconstruct directly (no filtering needed since hooks don't mutate data)
+        reconstructed = CreateMediaBuySuccess(**response_data)
+
+        # Verify no testing metadata leaked into reconstructed response
         response_dict = reconstructed.model_dump()
-        assert "dry_run" not in response_dict, "Testing hook fields should be filtered out"
-        assert "is_test" not in response_dict, "Testing hook fields should be filtered out"
-        assert "test_session_id" not in response_dict, "Testing hook fields should be filtered out"
+        assert "dry_run" not in response_dict
+        assert "is_test" not in response_dict
+        assert "test_session_id" not in response_dict
 
         # Verify required fields still present
         assert "buyer_ref" in response_dict

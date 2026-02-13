@@ -298,9 +298,7 @@ def create_app(config=None):
                     parts = cookie.split(";")
                     cookie_name = parts[0].split("=")[0] if parts else "unknown"
                     attrs = "; ".join(p.strip() for p in parts[1:] if p.strip())
-                    logger.warning(
-                        f"[SESSION_DEBUG] Set-Cookie on {request.path}: " f"name={cookie_name}, attrs=[{attrs}]"
-                    )
+                    logger.warning(f"[SESSION_DEBUG] Set-Cookie on {request.path}: name={cookie_name}, attrs=[{attrs}]")
             else:
                 # Only log if session was modified
                 from flask import session

@@ -256,7 +256,7 @@ class AIServiceFactory:
             "model": model,
             "has_api_key": has_api_key,
             "has_logfire": has_logfire,
-            "settings": config.settings.model_dump(),
+            "settings": config.settings,
             "source": "tenant" if config.provider else "platform",
         }
 

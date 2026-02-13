@@ -109,7 +109,7 @@ class ProtocolWebhookService:
         logger.info(f"push_notification_config (sanitized): {safe_config}")
 
         # Serialize payload to dict for signing and sending
-        # Task/TaskStatusUpdateEvent need serialization; McpWebhookPayload is already AdCPBaseModel
+        # Task/TaskStatusUpdateEvent need serialization; McpWebhookPayload is already SalesAgentBaseModel
         payload_dict: dict[str, Any]
         if isinstance(payload, (Task, TaskStatusUpdateEvent)):
             payload_dict = payload.model_dump(mode="json", exclude_none=True)

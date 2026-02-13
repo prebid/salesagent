@@ -11,6 +11,7 @@ from src.core.testing_hooks import (
     AdCPTestContext,
     CampaignEvent,
     NextEventCalculator,
+    TestingHooksResult,
     apply_testing_hooks,
     get_session_manager,
 )
@@ -69,13 +70,13 @@ class TestMockServerResponseHeaders:
 
         campaign_info = {"start_date": datetime(2025, 1, 1), "end_date": datetime(2025, 1, 31), "total_budget": 15000.0}
 
-        response_data = {"total_spend": 7500.0, "active_count": 1}
+        result = apply_testing_hooks(testing_ctx, "test_op", campaign_info, spend_amount=7500.0)
 
-        result = apply_testing_hooks(response_data, testing_ctx, "test_op", campaign_info)
+        # Result is now a TestingHooksResult dataclass
+        assert isinstance(result, TestingHooksResult)
+        assert result.is_test is True
 
-        # Check that response headers were added
-        assert "response_headers" in result
-        headers = result["response_headers"]
+        headers = result.response_headers
 
         # Should have next event header
         assert "X-Next-Event" in headers
@@ -100,84 +101,34 @@ class TestMockServerResponseHeaders:
         testing_ctx = AdCPTestContext(dry_run=True, test_session_id=session_id, simulated_spend=True)
 
         # First request with spending
-        response_data1 = {"total_spend": 2500.0}
-        result1 = apply_testing_hooks(response_data1, testing_ctx, "request_1")
+        result1 = apply_testing_hooks(testing_ctx, "request_1", spend_amount=2500.0)
 
         # Second request with more spending
-        response_data2 = {"total_spend": 5000.0}
-        result2 = apply_testing_hooks(response_data2, testing_ctx, "request_2")
+        result2 = apply_testing_hooks(testing_ctx, "request_2", spend_amount=5000.0)
 
         # Check that spend is tracked
         current_spend = session_manager.get_session_spend(session_id)
         assert current_spend == 5000.0
 
         # Check response headers include spend
-        if "response_headers" in result2:
-            headers = result2["response_headers"]
-            assert headers.get("X-Simulated-Spend") == "5000.00"
+        assert result2.response_headers.get("X-Simulated-Spend") == "5000.00"
 
         # Cleanup
         session_manager.cleanup_session(session_id)
         assert session_manager.get_session_spend(session_id) == 0.0
 
-    def test_response_headers_without_campaign_info(self):
-        """Test response headers when no campaign info is available."""
-        from src.core.schemas import Product
-        from tests.helpers.adcp_factories import (
-            create_test_format_id,
-            create_test_publisher_properties_by_tag,
-        )
-
+    def test_result_without_campaign_info(self):
+        """Test result when no campaign info is available."""
         testing_ctx = AdCPTestContext(dry_run=True, test_session_id="test_no_campaign")
 
-        # Use real Product object instead of mock dictionary
-        test_product = Product(
-            product_id="test",
-            name="Test Product",
-            description="Real product object for testing",
-            format_ids=[create_test_format_id("display_300x250")],
-            delivery_type="non_guaranteed",
-            delivery_measurement={"provider": "test_provider", "notes": "Test measurement"},
-            publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
-            pricing_options=[
-                {
-                    "pricing_option_id": "cpm_usd_auction",
-                    "pricing_model": "cpm",
-                    "currency": "USD",
-                    "is_fixed": False,  # Required in adcp 2.4.0+
-                    "price_guidance": {"floor": 1.0, "p50": 5.0},
-                }
-            ],
-        )
+        result = apply_testing_hooks(testing_ctx, "get_products")
 
-        response_data = {"products": [test_product.model_dump()]}
+        # Should be marked as test
+        assert result.is_test is True
 
-        result = apply_testing_hooks(response_data, testing_ctx, "get_products")
-
-        # Should still have test markers
-        assert result["is_test"] is True
-        assert result["test_session_id"] == "test_no_campaign"
-
-        # Response headers might be empty or minimal without campaign info
-        headers = result.get("response_headers", {})
         # Should not have event-related headers without campaign info
-        assert "X-Next-Event" not in headers
-        assert "X-Next-Event-Time" not in headers
-
-        # CRITICAL: Test roundtrip conversion - this would catch the "formats field required" bug
-        modified_products = [Product(**p) for p in result["products"]]
-
-        # Verify the roundtrip worked correctly
-        assert len(modified_products) == 1
-        reconstructed_product = modified_products[0]
-        assert reconstructed_product.product_id == "test"
-        assert reconstructed_product.name == "Test Product"
-        # format_ids are now FormatId objects per AdCP spec
-        assert len(reconstructed_product.format_ids) == 1
-        assert reconstructed_product.format_ids[0].id == "display_300x250"
-        assert (
-            str(reconstructed_product.format_ids[0].agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
-        )  # AnyUrl adds trailing slash
+        assert "X-Next-Event" not in result.response_headers
+        assert "X-Next-Event-Time" not in result.response_headers
 
     def test_response_headers_in_debug_mode(self):
         """Test that debug mode includes response header information."""
@@ -185,18 +136,13 @@ class TestMockServerResponseHeaders:
 
         campaign_info = {"start_date": datetime(2025, 1, 1), "end_date": datetime(2025, 1, 31), "total_budget": 10000.0}
 
-        response_data = {"total_spend": 5000.0}
-
-        result = apply_testing_hooks(response_data, testing_ctx, "debug_test", campaign_info)
+        result = apply_testing_hooks(testing_ctx, "debug_test", campaign_info, spend_amount=5000.0)
 
         # Debug info should be present
-        assert "debug_info" in result
-        debug_info = result["debug_info"]
-
-        # Should include response headers in debug info
-        assert "response_headers" in debug_info
-        assert "campaign_info" in debug_info
-        assert debug_info["operation"] == "debug_test"
+        assert result.debug_info is not None
+        assert "response_headers" in result.debug_info
+        assert "campaign_info" in result.debug_info
+        assert result.debug_info["operation"] == "debug_test"
 
     def test_error_event_next_event_calculation(self):
         """Test next event calculation for error scenarios."""
@@ -222,24 +168,41 @@ class TestMockServerResponseHeaders:
 
         campaign_info = {"start_date": datetime(2025, 1, 1), "end_date": datetime(2025, 1, 31), "total_budget": 20000.0}
 
-        response_data = {"total_spend": 10000.0, "total_impressions": 1000000, "active_count": 1}
+        result = apply_testing_hooks(testing_ctx, "multi_test", campaign_info, spend_amount=10000.0)
 
-        result = apply_testing_hooks(response_data, testing_ctx, "multi_test", campaign_info)
-
-        # Should have all test markers
-        assert result["is_test"] is True
-        assert result["dry_run"] is True
-        assert result["test_session_id"] == "multi_header_test"
+        # Should be marked as test
+        assert result.is_test is True
 
         # Should have response headers
-        headers = result.get("response_headers", {})
+        headers = result.response_headers
         assert "X-Next-Event" in headers
         assert "X-Next-Event-Time" in headers
         assert "X-Simulated-Spend" in headers
 
         # Should have debug info
-        assert "debug_info" in result
+        assert result.debug_info is not None
 
         # Verify the headers make sense
         assert headers["X-Next-Event"] == "campaign-75-percent"  # Next after midpoint
         assert float(headers["X-Simulated-Spend"]) == 10000.0
+
+    def test_media_buy_id_override_in_dry_run(self):
+        """Test that dry-run adds test_ prefix to media_buy_id."""
+        testing_ctx = AdCPTestContext(dry_run=True)
+
+        result = apply_testing_hooks(testing_ctx, "create_media_buy", media_buy_id="mb_123")
+        assert result.media_buy_id_override == "test_mb_123"
+
+    def test_no_media_buy_id_override_without_dry_run(self):
+        """Test that non-dry-run doesn't add test_ prefix."""
+        testing_ctx = AdCPTestContext(test_session_id="test")
+
+        result = apply_testing_hooks(testing_ctx, "create_media_buy", media_buy_id="mb_123")
+        assert result.media_buy_id_override is None
+
+    def test_no_double_test_prefix(self):
+        """Test that already-prefixed media_buy_id isn't double-prefixed."""
+        testing_ctx = AdCPTestContext(dry_run=True)
+
+        result = apply_testing_hooks(testing_ctx, "create_media_buy", media_buy_id="test_mb_123")
+        assert result.media_buy_id_override is None

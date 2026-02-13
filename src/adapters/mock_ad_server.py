@@ -580,8 +580,8 @@ class MockAdServer(AdServerAdapter):
 
         # Create workflow step for async tracking
         request_data = {
-            "request": request.model_dump(),
-            "packages": [p.model_dump() for p in packages],
+            "request": request,
+            "packages": packages,
             "start_time": start_time.isoformat(),
             "end_time": end_time.isoformat(),
             "operation": "create_media_buy",
@@ -809,7 +809,7 @@ class MockAdServer(AdServerAdapter):
                 "name": order_name,
                 "po_number": request.po_number,
                 "buyer_ref": request.buyer_ref,
-                "packages": [p.model_dump() for p in packages],
+                "packages": packages,
                 "total_budget": total_budget,
                 "start_time": start_time,
                 "end_time": end_time,
@@ -1249,22 +1249,11 @@ class MockAdServer(AdServerAdapter):
             if packages:
                 # Calculate per-package metrics by dividing total spend/impressions proportionally
                 # Use package budget as weight for distribution
-                total_package_budget = sum(
-                    float(
-                        pkg.get("budget", {}).get("total", 0)
-                        if isinstance(pkg.get("budget"), dict)
-                        else pkg.get("budget", 0)
-                    )
-                    for pkg in packages
-                )
+                total_package_budget = sum(float(pkg.budget or 0) for pkg in packages)
 
                 for pkg in packages:
-                    package_id = pkg.get("package_id", "unknown")
-                    package_budget = float(
-                        pkg.get("budget", {}).get("total", 0)
-                        if isinstance(pkg.get("budget"), dict)
-                        else pkg.get("budget", 0)
-                    )
+                    package_id = pkg.package_id or "unknown"
+                    package_budget = float(pkg.budget or 0)
 
                     if total_package_budget > 0:
                         # Distribute spend/impressions proportionally based on package budget

@@ -134,26 +134,35 @@ exclude = [
 
 [tool.ruff.lint]
 select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "C4", # flake8-comprehensions
-    "UP", # pyupgrade
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "C90", # mccabe complexity
+    "PLR", # pylint refactor
 ]
 ignore = [
-    "E501",  # line too long (handled by formatter)
-    "E402",  # module import not at top of file
-    "E722",  # bare except
-    "F821",  # undefined name
-    "F403",  # star imports (TODO: fix by replacing with specific imports)
-    "F405",  # undefined from star imports (related to F403)
-    "E741",  # ambiguous variable names (l, I, O)
-    "B904",  # raise without from (TODO: fix exception handling)
-    "B027",  # empty method in abstract class (TODO: add @abstractmethod)
-    "F841",  # unused variables (mostly fixed, remaining are complex)
-    "UP038", # Use (int, float) instead of int | float in isinstance for compatibility
+    # Justified suppressions — each must explain WHY it's ignored, not just WHAT it is.
+    # Do not add new entries without a justification comment.
+    "E501",    # Handled by ruff formatter; manual enforcement would conflict
+    "E402",    # Flask app (admin_ui.py) requires imports after app config; 3 occurrences
+    "E722",    # 12 bare excepts in error-recovery paths (adapters, auth); TODO: add specific exceptions
+    "F821",    # 4 false positives from conditional imports and TYPE_CHECKING blocks
+    "F403",    # 8 star imports in __init__.py re-exports; TODO: replace with explicit imports
+    "F405",    # Consequence of F403 — will resolve when F403 is fixed
+    "E741",    # 3 uses of `l` variable in loops; renaming would hurt readability in math-heavy code
+    "B904",    # 47 raise-without-from in adapter error handling; TODO: add `from e` systematically
+    "B027",    # 6 empty methods in BaseAdapter — intentional optional interface, not abstract
+    "F841",    # 5 remaining unused vars in complex destructuring; each reviewed, kept for clarity
+    "C901",    # 216 complex functions — structural; fix incrementally per-module
+    "PLR2004", # 158 magic values — too noisy for signal; numeric constants in config/tests are readable
+    "PLR0911", # 68 too-many-return-statements — structural; fix incrementally
+    "PLR0912", # 148 too-many-branches — structural; fix incrementally
+    "PLR0913", # 94 too-many-arguments — structural; fix incrementally
+    "PLR0915", # 134 too-many-statements — structural; fix incrementally
 ]
 
 [tool.ruff.lint.per-file-ignores]

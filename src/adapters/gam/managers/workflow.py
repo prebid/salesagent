@@ -200,7 +200,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
                     "impressions": pkg.impressions,
                     "cpm": pkg.cpm,
                     "total_budget": (pkg.impressions / 1000) * pkg.cpm,
-                    "targeting": pkg.targeting_overlay.model_dump() if pkg.targeting_overlay else {},
+                    "targeting": pkg.targeting_overlay if pkg.targeting_overlay else {},
                 }
                 for pkg in packages
             ],

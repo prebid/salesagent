@@ -67,10 +67,36 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
         ref = field_spec["$ref"]
         if "budget" in ref.lower():
             return {"total": 5000.0, "currency": "USD"}
+        elif "package-update" in ref.lower():
+            return {"package_id": "pkg_1"}
         elif "package" in ref.lower():
             return [{"product_ids": ["prod_1"], "budget": {"total": 5000.0, "currency": "USD"}}]
         elif "creative" in ref.lower():
             return []  # Empty array is valid for creative lists
+        elif "brand-manifest" in ref.lower():
+            return {"name": "Test Brand"}
+        elif "property-list" in ref.lower():
+            return {"agent_url": "https://example.com", "list_id": "list_1"}
+        elif "promoted-products" in ref.lower():
+            return {"manifest_skus": ["SKU-001"]}
+        elif "pagination-request" in ref.lower():
+            return {"max_results": 50}
+        elif "product-filters" in ref.lower():
+            return {"delivery_type": "guaranteed"}
+        elif "reporting-webhook" in ref.lower():
+            return {
+                "url": "https://example.com/webhook",
+                "reporting_frequency": "daily",
+                "authentication": {"credentials": "test-token", "schemes": ["Bearer"]},
+            }
+        elif "start-timing" in ref.lower():
+            return "2025-02-01T00:00:00Z"
+        elif "push-notification" in ref.lower():
+            return {"url": "https://example.com/notify"}
+        elif "context" in ref.lower():
+            return {"session_id": "test-session"}
+        elif "ext" in ref.lower():
+            return {"custom_field": "test"}
         # For unknown refs, return a minimal object
         return {}
 

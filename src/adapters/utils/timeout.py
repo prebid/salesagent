@@ -59,8 +59,7 @@ def timeout(seconds: int = 300):
                 except concurrent.futures.TimeoutError:
                     # Log timeout for debugging
                     logger.error(
-                        f"Operation {func.__name__} timed out after {seconds}s. "
-                        "This usually means the API is hanging."
+                        f"Operation {func.__name__} timed out after {seconds}s. This usually means the API is hanging."
                     )
                     raise TimeoutError(f"{func.__name__} timed out after {seconds} seconds")
 

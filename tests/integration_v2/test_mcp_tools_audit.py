@@ -164,17 +164,14 @@ class TestMCPToolsAudit:
         # Step 1: Convert to dict (what the tool does)
         delivery_dict = delivery_data.model_dump()  # This is what the tool uses
 
-        # Step 2: Apply testing hooks
+        # Step 2: Apply testing hooks (returns metadata, does not modify data)
         testing_ctx = TestingContext(dry_run=True, test_session_id="audit_delivery_test")
-        response_data = {"deliveries": [delivery_dict]}
-        modified_response = apply_testing_hooks(response_data, testing_ctx, "get_media_buy_delivery")
+        hooks_result = apply_testing_hooks(testing_ctx, "get_media_buy_delivery")
+        assert hooks_result.is_test is True
 
-        # Step 3: Reconstruct objects (critical point)
-        modified_delivery_dicts = modified_response["deliveries"]
-
-        # This is the exact line from the tool that could fail
+        # Step 3: Reconstruct objects from unchanged data
         try:
-            reconstructed_deliveries = [MediaBuyDeliveryData(**d) for d in modified_delivery_dicts]
+            reconstructed_deliveries = [MediaBuyDeliveryData(**delivery_dict)]
 
             # If we get here, the roundtrip worked
             assert len(reconstructed_deliveries) == 1
@@ -231,9 +228,9 @@ class TestMCPToolsAudit:
                 if field_name in internal_dict:
                     internal_value = internal_dict[field_name]
                     # Values should be compatible (allowing for type conversions)
-                    assert type(external_value) is type(
-                        internal_value
-                    ), f"Field '{field_name}' type mismatch: {type(external_value)} vs {type(internal_value)}"
+                    assert type(external_value) is type(internal_value), (
+                        f"Field '{field_name}' type mismatch: {type(external_value)} vs {type(internal_value)}"
+                    )
         else:
             # MediaBuyDeliveryData doesn't have model_dump_internal, so model_dump() is used
             # This means we need to ensure model_dump() produces reconstruction-compatible output
@@ -444,12 +441,12 @@ class TestMCPToolsAudit:
         for test_case in test_cases:
             testing_ctx = TestingContext(dry_run=True, test_session_id=f"preservation_test_{test_case['name']}")
 
-            # Apply testing hooks
-            response_data = {"test_data": test_case["data"]}
-            modified_response = apply_testing_hooks(response_data, testing_ctx, "test_operation")
+            # Apply testing hooks (returns metadata, does not modify data)
+            hooks_result = apply_testing_hooks(testing_ctx, "test_operation")
+            assert hooks_result.is_test is True
 
-            # Verify data preservation
-            modified_data = modified_response["test_data"]
+            # Data is never modified by hooks — verify directly
+            modified_data = test_case["data"]
 
             if test_case["expected_preservation"]:
                 # Essential data should be preserved
@@ -471,8 +468,8 @@ class TestMCPToolsAudit:
                         else:
                             assert modified_value == original_value, f"Date value changed for '{key}'"
                     else:
-                        assert (
-                            modified_value == original_value
-                        ), f"Value changed for '{key}': {original_value} → {modified_value}"
+                        assert modified_value == original_value, (
+                            f"Value changed for '{key}': {original_value} → {modified_value}"
+                        )
 
         print("✅ Testing hooks preserve essential data correctly")

@@ -207,9 +207,9 @@ class TestAuthenticationFlow:
         handler = AdCPRequestHandler()
 
         # Method should exist
-        assert hasattr(
-            handler, "_create_tool_context_from_a2a"
-        ), "Handler should have _create_tool_context_from_a2a method"
+        assert hasattr(handler, "_create_tool_context_from_a2a"), (
+            "Handler should have _create_tool_context_from_a2a method"
+        )
         assert callable(handler._create_tool_context_from_a2a), "_create_tool_context_from_a2a should be callable"
 
 
@@ -242,9 +242,9 @@ class TestHTTPBehaviorRegression:
 
                 if response.status_code == 200:
                     # Should be 200, not a redirect (301, 302, etc.)
-                    assert (
-                        200 <= response.status_code < 300
-                    ), f"Endpoint {endpoint} returned redirect: {response.status_code}"
+                    assert 200 <= response.status_code < 300, (
+                        f"Endpoint {endpoint} returned redirect: {response.status_code}"
+                    )
 
                     # Should return JSON
                     assert response.headers.get("content-type", "").startswith("application/json")

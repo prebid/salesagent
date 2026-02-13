@@ -79,10 +79,8 @@ def _list_authorized_properties_impl(
     from src.core.tool_context import ToolContext
 
     if isinstance(context, ToolContext):
-        # ToolContext has testing_context field directly
-        testing_context = AdCPTestContext(**context.testing_context) if context.testing_context else AdCPTestContext()
+        testing_context = context.testing_context or AdCPTestContext()
     else:
-        # FastMCP Context - use get_testing_context
         testing_context = get_testing_context(context) if context else AdCPTestContext()
 
     # Note: apply_testing_hooks signature is (data, testing_ctx, operation, campaign_info)
@@ -110,7 +108,7 @@ def _list_authorized_properties_impl(
             if not publisher_domains:
                 empty_response_data: dict[str, Any] = {"publisher_domains": []}
                 empty_response_data["portfolio_description"] = (
-                    "No publisher partnerships are currently configured. " "Publishers can be added via the Admin UI."
+                    "No publisher partnerships are currently configured. Publishers can be added via the Admin UI."
                 )
                 response = ListAuthorizedPropertiesResponse(**empty_response_data)
 
@@ -296,10 +294,7 @@ def list_authorized_properties(
 
     response = _list_authorized_properties_impl(cast(ListAuthorizedPropertiesRequest | None, req), tool_context)
 
-    # Return ToolResult with human-readable text and structured data
-    # The __str__() method provides the human-readable message
-    # The model_dump() provides the structured JSON data
-    return ToolResult(content=str(response), structured_content=response.model_dump())
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def list_authorized_properties_raw(

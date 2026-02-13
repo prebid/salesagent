@@ -65,9 +65,8 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
 
                     logger.debug("Token not found in tenant '%s'", tenant_id)
                     return None
-                else:
-                    if _VERBOSE_AUTH_LOG:
-                        logger.info("Found principal '%s' in tenant '%s'", principal.principal_id, tenant_id)
+                elif _VERBOSE_AUTH_LOG:
+                    logger.info("Found principal '%s' in tenant '%s'", principal.principal_id, tenant_id)
             else:
                 # No tenant specified - search globally by token
                 logger.debug("No tenant specified - searching globally by token")

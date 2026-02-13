@@ -140,11 +140,12 @@ def _get_product_format_override(
 
         # Apply override to base format
         override_config = format_overrides[format_id]
-        format_dict = base_format.model_dump()
 
         # Merge platform_config override
         if "platform_config" in override_config:
-            base_platform_config = format_dict.get("platform_config") or {}
+            # Access platform_config directly from the model, not via model_dump(),
+            # because platform_config has exclude=True and model_dump() drops it.
+            base_platform_config = base_format.platform_config or {}
             override_platform_config = override_config["platform_config"]
 
             # Deep merge platform configs (override takes precedence)
@@ -159,9 +160,9 @@ def _get_product_format_override(
                 else:
                     merged_platform_config[platform] = config
 
-            format_dict["platform_config"] = merged_platform_config
+            return base_format.model_copy(update={"platform_config": merged_platform_config})
 
-        return Format(**format_dict)
+        return base_format
 
 
 def list_available_formats(

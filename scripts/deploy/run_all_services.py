@@ -74,9 +74,9 @@ def check_database_health():
     if db_url:
         try:
             config = DatabaseConfig.get_db_config()
-            print(f'Parsed host: {config.get("host", "NOT SET")}')
-            print(f'Parsed port: {config.get("port", "NOT SET")}')
-            print(f'Parsed database: {config.get("database", "NOT SET")}')
+            print(f"Parsed host: {config.get('host', 'NOT SET')}")
+            print(f"Parsed port: {config.get('port', 'NOT SET')}")
+            print(f"Parsed database: {config.get('database', 'NOT SET')}")
         except Exception as e:
             print(f"⚠️ Could not parse database config: {e}")
 

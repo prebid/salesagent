@@ -28,24 +28,18 @@ class TestGAMOrderLifecycleIntegration:
         """Create test principals with different admin configurations."""
         return {
             "regular": Principal(
-                tenant_id="test_tenant",
                 principal_id="advertiser",
                 name="Regular Advertiser",
-                access_token="token",
                 platform_mappings={"google_ad_manager": {"advertiser_id": "123456"}},
             ),
             "gam_admin": Principal(
-                tenant_id="test_tenant",
                 principal_id="gam_admin",
                 name="GAM Admin",
-                access_token="admin_token",
                 platform_mappings={"google_ad_manager": {"advertiser_id": "123456", "gam_admin": True}},
             ),
             "is_admin": Principal(
-                tenant_id="test_tenant",
                 principal_id="is_admin",
                 name="Is Admin",
-                access_token="admin_token2",
                 platform_mappings={"google_ad_manager": {"advertiser_id": "123456", "is_admin": True}},
             ),
         }

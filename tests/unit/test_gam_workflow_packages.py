@@ -124,9 +124,9 @@ class TestGAMManualApprovalPath:
                 # Assert - Package IDs must match input packages
                 returned_ids = {pkg.package_id for pkg in response.packages}
                 expected_ids = {pkg.package_id for pkg in sample_packages}
-                assert (
-                    returned_ids == expected_ids
-                ), f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
+                assert returned_ids == expected_ids, (
+                    f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
+                )
 
                 # Assert - Other required fields
                 assert response.buyer_ref == sample_request.buyer_ref, "buyer_ref must be preserved"
