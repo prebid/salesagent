@@ -55,6 +55,8 @@ from adcp.types.generated_poc.core.context import ContextObject
 # V3: Two Pagination types - batch-based for delivery, page-based for list responses
 from adcp.types.generated_poc.media_buy.list_creatives_response import Pagination as LibraryResponsePagination
 
+from src.core.config import get_pydantic_extra_mode
+
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
 # Simple types that match library exactly
@@ -171,51 +173,10 @@ class AdCPBaseModel(BaseModel):
     This allows clients to use newer schema versions in production without breaking,
     while maintaining strict validation during development and testing.
 
-    The validation mode is determined at runtime based on the ENVIRONMENT variable.
+    The validation mode is set at class definition time based on the ENVIRONMENT variable.
     """
 
-    # Default to ignoring extra fields (will be overridden in __init__ based on environment)
-    model_config = ConfigDict(extra="ignore")
-
-    def __init__(self, **data):
-        """Initialize model with environment-aware validation."""
-        from src.core.config import is_production
-
-        # Check if child class overrides extra handling
-        child_model_config = getattr(self.__class__, "model_config", {})
-        child_extra_setting = child_model_config.get("extra", "ignore")
-
-        # In non-production, validate strictly (forbid extra fields)
-        # UNLESS child class explicitly allows extras
-        if not is_production() and child_extra_setting != "allow":
-            # Get all valid field names AND aliases for this model
-            valid_fields = set(self.__class__.model_fields.keys())
-            # Also add field aliases
-            for _field_name, field_info in self.__class__.model_fields.items():
-                if field_info.alias:
-                    valid_fields.add(field_info.alias)
-
-            provided_fields = set(data.keys())
-            extra_fields = provided_fields - valid_fields
-
-            if extra_fields:
-                from pydantic import ValidationError
-
-                raise ValidationError.from_exception_data(
-                    self.__class__.__name__,
-                    [
-                        {
-                            "type": "extra_forbidden",
-                            "loc": (field,),
-                            "msg": "Extra inputs are not permitted",
-                            "input": data[field],
-                        }
-                        for field in extra_fields
-                    ],
-                )
-
-        # Call parent __init__ which will ignore extra fields in production
-        super().__init__(**data)
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     def model_dump(self, **kwargs):
         """Dump model with AdCP-compliant defaults.
@@ -869,6 +830,8 @@ class Targeting(BaseModel):
     Note: Some targeting dimensions are managed-only and cannot be set via overlay.
     These are typically used for AXE signal integration.
     """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Geographic targeting - aligned with OpenRTB (overlay access)
     geo_country_any_of: list[str] | None = None  # ISO country codes: ["US", "CA", "GB"]
@@ -1530,6 +1493,8 @@ class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
     ensuring we stay in sync with spec updates.
     """
 
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
     @model_validator(mode="before")
     @classmethod
     def upgrade_legacy_format_ids(cls, values: dict) -> dict:
@@ -1656,8 +1621,7 @@ class Creative(LibraryCreative):
     - Backward compatible with existing test suite and database schemas
     """
 
-    # Allow extra fields (for backward compat with created_at/updated_at aliases)
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Override assets to accept simple dicts (instead of strict typed asset unions)
     assets: dict[str, Any] | None = Field(default=None, description="Assets for this creative, keyed by asset_role")
@@ -1693,7 +1657,8 @@ class Creative(LibraryCreative):
             try:
                 upgraded = upgrade_legacy_format_id(format_val)
                 values["format_id"] = upgraded
-                # Don't set 'format' - it's an alias in library, not a real field
+                # Remove 'format' alias to avoid extra field rejection
+                values.pop("format", None)
             except ValueError as e:
                 raise ValueError(f"Invalid format_id: {e}")
         return values
@@ -1729,27 +1694,6 @@ class Creative(LibraryCreative):
     def updated_at(self) -> datetime:
         """Alias for updated_date (backward compatibility)."""
         return self.updated_date
-
-    def model_dump(self, **kwargs):
-        """Override to exclude internal fields and extra fields for AdCP compliance.
-
-        Excludes:
-        - principal_id: Internal field (marked with exclude=True)
-        - created_at, updated_at, format: Extra fields used for backward compat (not in spec)
-
-        Includes:
-        - created_date, updated_date, status: These ARE in the AdCP spec
-        """
-        # Get default serialization (principal_id auto-excluded via exclude=True)
-        data = super().model_dump(**kwargs)
-
-        # Remove extra fields that leaked in due to extra="allow"
-        # These are backward compat aliases, not part of the spec
-        data.pop("created_at", None)
-        data.pop("updated_at", None)
-        data.pop("format", None)  # format_id is the spec field
-
-        return data
 
     def model_dump_internal(self, **kwargs):
         """Dump including internal fields for database storage.
@@ -2105,7 +2049,7 @@ class ListCreativesRequest(LibraryListCreativesRequest):
     - sort: Sort (structured sort object)
     """
 
-    pass
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
 class QuerySummary(BaseModel):
@@ -2421,6 +2365,11 @@ class PackageRequest(LibraryPackageRequest):
     - budget, buyer_ref, pricing_option_id, product_id
     """
 
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Override targeting_overlay to use our Targeting model instead of library's TargetingOverlay
+    targeting_overlay: "Targeting | None" = None  # type: ignore[assignment]
+
     # Internal fields (not in AdCP spec) - excluded from API responses
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
     media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID", exclude=True)
@@ -2565,8 +2514,10 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     - reporting_webhook: dict (webhook configuration)
     """
 
-    # Note: packages field uses LibraryPackageRequest from parent class.
-    # Internal fields (pricing_model, impressions) are accessed via getattr() for backward compatibility.
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Override packages to use our PackageRequest (with extra='forbid' and internal fields)
+    packages: list[PackageRequest] | None = None  # type: ignore[assignment]
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):
@@ -2679,7 +2630,13 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
     Use ext field for extensions until spec is updated.
     """
 
-    pass  # All fields inherited from library
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Field in AdCP spec but not yet in library (spec leads library)
+    account_id: str | None = Field(
+        None,
+        description="Filter delivery data to a specific account",
+    )
 
 
 # AdCP-compliant delivery models

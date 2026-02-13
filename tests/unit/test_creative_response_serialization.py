@@ -29,8 +29,8 @@ def test_create_creative_response_excludes_internal_fields():
         assets={"banner": {"asset_type": "image", "url": "https://example.com/banner.jpg"}},
         # Internal fields - should be excluded
         principal_id="principal_456",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
+        created_date=datetime.now(UTC),
+        updated_date=datetime.now(UTC),
         status="approved",
     )
 
@@ -47,8 +47,6 @@ def test_create_creative_response_excludes_internal_fields():
     # Verify internal fields excluded from nested creative
     creative_data = result["creative"]
     assert "principal_id" not in creative_data, "Internal field 'principal_id' should be excluded"
-    assert "created_at" not in creative_data, "Legacy alias 'created_at' should be excluded"
-    assert "updated_at" not in creative_data, "Legacy alias 'updated_at' should be excluded"
 
     # Verify spec fields present (library Creative includes these)
     assert creative_data["creative_id"] == "test_123"
@@ -71,8 +69,8 @@ def test_get_creatives_response_excludes_internal_fields():
             assets={"banner": {"asset_type": "image", "url": f"https://example.com/banner{i}.jpg"}},
             # Internal fields
             principal_id=f"principal_{i}",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
             status="approved" if i % 2 == 0 else "pending_review",
         )
         for i in range(3)
@@ -87,8 +85,6 @@ def test_get_creatives_response_excludes_internal_fields():
     # Verify internal fields excluded from all creatives
     for i, creative_data in enumerate(result["creatives"]):
         assert "principal_id" not in creative_data, f"Creative {i}: principal_id should be excluded"
-        assert "created_at" not in creative_data, f"Creative {i}: legacy alias created_at should be excluded"
-        assert "updated_at" not in creative_data, f"Creative {i}: legacy alias updated_at should be excluded"
 
         # Verify spec fields present (library Creative includes these)
         assert creative_data["creative_id"] == f"creative_{i}"

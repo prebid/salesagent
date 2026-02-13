@@ -123,10 +123,14 @@ class TestSchemaMatchesLibrary:
         local_fields = set(GetProductsRequest.model_fields.keys())
         assert lib_fields == local_fields, f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
 
-        # GetMediaBuyDeliveryRequest - should match exactly
+        # GetMediaBuyDeliveryRequest - local extends library with spec fields not yet in library
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
-        assert lib_fields == local_fields, f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
+        # account_id is in the AdCP spec but not yet in the library
+        local_extensions = {"account_id"}
+        assert lib_fields == local_fields - local_extensions, (
+            f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
         # Document known drift for other schemas (to be fixed)
         # These assertions document the current state and will fail when fixed
@@ -849,8 +853,8 @@ class TestAdCPContract:
             tags=["display", "banner"],
             # Internal fields (optional, added by sales agent)
             principal_id="test_principal",
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_date=datetime.now(),
+            updated_date=datetime.now(),
             status="approved",
         )
 
@@ -872,11 +876,8 @@ class TestAdCPContract:
         # This is correct AdCP behavior - optional fields should be omitted if not set
 
         # Verify internal fields are EXCLUDED from AdCP response
-        # Note: After refactoring to use library Creative:
-        # - principal_id: Still internal (excluded)
-        # - created_at/updated_at: Legacy aliases (excluded, use created_date/updated_date instead)
-        # - status: Now a SPEC field (included), not internal
-        internal_fields = ["principal_id", "created_at", "updated_at"]
+        # - principal_id: Internal (excluded via Field(exclude=True))
+        internal_fields = ["principal_id"]
         for field in internal_fields:
             assert field not in adcp_response, f"Internal field '{field}' exposed in AdCP response"
 
@@ -900,11 +901,9 @@ class TestAdCPContract:
         for field in internal_fields:
             assert field in internal_response, f"Internal field '{field}' missing from internal response"
 
-        # Verify internal response has more fields than external
+        # Verify internal response has more fields than external (principal_id)
         internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 2, (
-            f"Expected at least 2 internal-only fields, got {len(internal_only_fields)}"
-        )
+        assert "principal_id" in internal_only_fields, "principal_id should be internal-only"
 
     def test_signal_adcp_compliance(self):
         """Test that Signal model complies with AdCP get-signals-response schema."""
@@ -1391,8 +1390,8 @@ class TestAdCPContract:
             tags=["sports", "premium"],
             # Internal fields (added by sales agent during processing)
             principal_id="principal_456",
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_date=datetime.now(),
+            updated_date=datetime.now(),
         )
 
         # Test with spec-compliant fields only (AdCP 2.5)
@@ -1605,8 +1604,8 @@ class TestAdCPContract:
             # Internal fields
             principal_id="principal_1",
             status="approved",
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_date=datetime.now(),
+            updated_date=datetime.now(),
         )
 
         creative2 = Creative(
@@ -1625,8 +1624,8 @@ class TestAdCPContract:
             # Internal fields
             principal_id="principal_1",
             status="pending_review",
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_date=datetime.now(),
+            updated_date=datetime.now(),
         )
 
         # Response Pagination uses page-based fields (limit, offset, total_pages, current_page, has_more)
@@ -1682,8 +1681,7 @@ class TestAdCPContract:
                 assert creative[field] is not None, f"Creative required field '{field}' is None"
 
             # Verify internal-only fields are excluded (should NOT be in client responses)
-            # Note: status is now a SPEC field (included), created_at/updated_at are legacy aliases (excluded)
-            internal_fields = ["principal_id", "created_at", "updated_at"]
+            internal_fields = ["principal_id"]
             for field in internal_fields:
                 assert field not in creative, f"Internal field '{field}' should be excluded from client response"
 

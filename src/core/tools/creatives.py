@@ -187,8 +187,8 @@ def _sync_creatives_impl(
                         "assets": creative.get("assets", {}),  # Required by AdCP v1 spec
                         # Internal fields (added by sales agent)
                         "principal_id": principal_id,
-                        "created_at": datetime.now(UTC),
-                        "updated_at": datetime.now(UTC),
+                        "created_date": datetime.now(UTC),
+                        "updated_date": datetime.now(UTC),
                         "status": CreativeStatusEnum.pending_review.value,
                     }
 

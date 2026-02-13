@@ -41,8 +41,8 @@ def test_creative_upgrades_string_format():
             }
         },
         principal_id="p1",
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+        created_date=datetime.now(),
+        updated_date=datetime.now(),
     )
     # Should be automatically upgraded to FormatId object
     assert isinstance(creative.format, FormatId)
@@ -69,8 +69,8 @@ def test_creative_accepts_format_id_object():
             }
         },
         principal_id="p1",
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+        created_date=datetime.now(),
+        updated_date=datetime.now(),
     )
     assert isinstance(creative.format, FormatId)
     assert isinstance(creative.format_id, FormatId), "format_id is now a FormatId object (library pattern)"
@@ -95,8 +95,8 @@ def test_creative_from_dict_with_format_id_object():
             }
         },
         "principal_id": "p1",
-        "created_at": datetime.now(),
-        "updated_at": datetime.now(),
+        "created_date": datetime.now(),
+        "updated_date": datetime.now(),
     }
     creative = Creative(**data)
     assert creative.format_id.id == "display_300x250", "Access string ID via format_id.id"
@@ -120,8 +120,8 @@ def test_creative_upgrades_dict_without_agent_url():
             }
         },
         principal_id="p1",
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+        created_date=datetime.now(),
+        updated_date=datetime.now(),
     )
     # Should be automatically upgraded with default agent_url
     assert isinstance(creative.format, FormatId)

@@ -169,8 +169,8 @@ class TestResponseStrMethods:
                 }
             },
             principal_id="prin_123",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_date=datetime.now(UTC),
+            updated_date=datetime.now(UTC),
         )
         resp = ListCreativesResponse(
             query_summary=QuerySummary(total_matching=1, returned=1, has_more=False),

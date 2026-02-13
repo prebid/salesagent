@@ -5,6 +5,7 @@ management using environment variables.
 """
 
 import os
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -168,13 +169,10 @@ def is_production() -> bool:
     return os.getenv("ENVIRONMENT", "development").lower() == "production"
 
 
-def get_pydantic_extra_mode() -> str:
+def get_pydantic_extra_mode() -> Literal["ignore", "forbid"]:
     """Get Pydantic extra field handling mode based on environment.
 
     Production: "ignore" - Accept extra fields for forward compatibility
     Non-production: "forbid" - Reject extra fields to catch bugs early
-
-    Returns:
-        str: "ignore" or "forbid"
     """
     return "ignore" if is_production() else "forbid"
