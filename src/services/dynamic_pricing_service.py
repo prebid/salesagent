@@ -267,7 +267,7 @@ class DynamicPricingService:
                 else None
             )
 
-            new_option = PricingOption(  # type: ignore[call-arg]
+            new_option = PricingOption(
                 pricing_option_id=f"{product.product_id}_dynamic_cpm",
                 pricing_model=PricingModel.CPM,
                 floor_price=floor_cpm,  # V3: floor moved to top-level

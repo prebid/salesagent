@@ -1886,14 +1886,14 @@ def _list_creatives_impl(
         "performance_score": "performance_score",
     }
     mapped_field = field_mapping.get(sort_by, "created_date")
-    structured_sort = LibrarySort(field=mapped_field, direction=valid_sort_order)  # type: ignore[arg-type]
+    structured_sort = LibrarySort(field=mapped_field, direction=valid_sort_order)
 
     try:
         req = ListCreativesRequest(
             filters=structured_filters,
             pagination=structured_pagination,
             sort=structured_sort,
-            fields=fields,  # type: ignore[arg-type]
+            fields=fields,
             include_performance=include_performance,
             include_assignments=include_assignments,
             include_sub_assets=include_sub_assets,

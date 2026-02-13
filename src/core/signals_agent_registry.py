@@ -189,7 +189,7 @@ class SignalsAgentRegistry:
             deliver_to = DeliverTo(
                 countries=[],  # Empty = all countries
                 deployments=[
-                    PlatformDestination(  # type: ignore[list-item]
+                    PlatformDestination(
                         type="platform",  # Generic platform destination
                         platform="all",  # All platforms
                     )

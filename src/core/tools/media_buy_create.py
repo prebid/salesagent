@@ -107,7 +107,7 @@ from src.services.activity_feed import activity_feed
 # See: adcp 2.12.0 changelog
 
 
-def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package) -> list[str] | None:
+def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | MediaPackage) -> list[str] | None:
     """Safely get creative_ids from a package (backward compatibility).
 
     The creative_ids field is a local extension added to PackageRequest for
@@ -328,7 +328,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
         return None
 
 
-def _validate_creatives_before_adapter_call(packages: list[Package], tenant_id: str) -> None:
+def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant_id: str) -> None:
     """Validate all creatives have required fields BEFORE calling adapter.
 
     This prevents GAM order creation when creatives are invalid, enabling
@@ -423,7 +423,7 @@ def _validate_creatives_before_adapter_call(packages: list[Package], tenant_id: 
 
 def _execute_adapter_media_buy_creation(
     request: CreateMediaBuyRequest,
-    packages: list[Package],
+    packages: list[MediaPackage],
     start_time: datetime,
     end_time: datetime,
     package_pricing_info: dict[str, dict[str, Any]],
@@ -456,10 +456,7 @@ def _execute_adapter_media_buy_creation(
 
     # Call adapter with detailed error logging
     try:
-        # Type ignore needed because adapter expects MediaPackage but we pass Package (compatible types)
-        response = adapter.create_media_buy(
-            request, cast(list[MediaPackage], packages), start_time, end_time, package_pricing_info
-        )
+        response = adapter.create_media_buy(request, packages, start_time, end_time, package_pricing_info)
 
         # Log based on response type
         if isinstance(response, CreateMediaBuyError):
@@ -829,13 +826,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
-        _validate_creatives_before_adapter_call(cast(list[Package], packages), tenant_id)
+        _validate_creatives_before_adapter_call(packages, tenant_id)
 
         # Execute adapter creation (outside session to avoid conflicts)
-        # Type ignore needed because we're passing MediaPackage list as Package list (adapter compatibility)
         response = _execute_adapter_media_buy_creation(
             request,
-            cast(list[Package], packages),
+            packages,
             start_time,
             end_time,
             package_pricing_info,
@@ -2196,7 +2192,7 @@ async def _create_media_buy_impl(
                     # Create MediaPackage with dual-write: dedicated columns + JSON
                     db_package = DBMediaPackage(
                         media_buy_id=media_buy_id,
-                        package_id=pkg_data["package_id"],
+                        package_id=pkg_obj.package_id,
                         package_config=package_config,
                         # Dual-write: populate dedicated columns
                         budget=Decimal(str(budget_total)) if budget_total is not None else None,
@@ -2525,7 +2521,7 @@ async def _create_media_buy_impl(
         # Convert products to MediaPackages
         # CRITICAL: Iterate over req.packages, not products_in_buy, to handle multiple packages with same product_id
         # Example: 2 packages with same product_id but different targeting (US vs CA) must create 2 MediaPackages
-        packages = []
+        packages: list[MediaPackage] = []
         assert req.packages is not None, "packages required - validated earlier"
         for idx, pkg in enumerate(req.packages, 1):  # Iterate over request packages
             # Find the product for this package (from schema catalog, not database model)
@@ -2796,11 +2792,11 @@ async def _create_media_buy_impl(
         # Note: packages loop used enumerate(products_in_buy, 1) but pricing used enumerate(req.packages) starting at 0
         remapped_package_pricing_info: dict[str, dict[str, Any]] = {}
         # Map pricing info from index to package_id
-        for pkg_idx, pkg in enumerate(packages):
+        for pkg_idx, media_pkg in enumerate(packages):
             if pkg_idx in package_pricing_info_by_index:
                 # Only add to dict if package_id is not None
-                if pkg.package_id is not None:
-                    remapped_package_pricing_info[pkg.package_id] = package_pricing_info_by_index[pkg_idx]
+                if media_pkg.package_id is not None:
+                    remapped_package_pricing_info[media_pkg.package_id] = package_pricing_info_by_index[pkg_idx]
             else:
                 logger.warning(f"No pricing info found for package index {pkg_idx}")
         logger.debug(f"[PRICING] Mapped {len(remapped_package_pricing_info)} package pricing info")

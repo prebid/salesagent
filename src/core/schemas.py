@@ -828,9 +828,8 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
             formats.append(format_obj)
         else:
             # For unknown format IDs, create a minimal Format object with FormatId
-            # mypy doesn't recognize Pydantic model kwargs pattern for library types
             formats.append(
-                Format(  # type: ignore[call-arg]
+                Format(
                     format_id=FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id=format_id),
                     name=format_id.replace("_", " ").title(),
                     type=FormatTypeEnum.display,  # Default to display type

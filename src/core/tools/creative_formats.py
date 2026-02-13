@@ -320,7 +320,7 @@ def _list_creative_formats_impl(
     # Create response (no message/specification_version - not in adapter schema)
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(
-        formats=formats,  # type: ignore[arg-type]
+        formats=formats,
         creative_agents=None,
         errors=None,
         context=req.context,
@@ -373,16 +373,16 @@ def list_creative_formats(
         context_dict = context.model_dump(mode="json") if context else None
 
         req = ListCreativeFormatsRequest(
-            type=type_str,  # type: ignore[arg-type]
+            type=type_str,
             format_ids=format_ids,
             is_responsive=is_responsive,
             name_search=name_search,
-            asset_types=asset_types_strs,  # type: ignore[arg-type]
+            asset_types=asset_types_strs,
             min_width=min_width,
             max_width=max_width,
             min_height=min_height,
             max_height=max_height,
-            context=context_dict,  # type: ignore[arg-type]
+            context=context_dict,
         )
     except ValidationError as e:
         raise ToolError(format_validation_error(e, context="list_creative_formats request")) from e

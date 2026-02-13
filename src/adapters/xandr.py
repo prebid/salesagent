@@ -354,7 +354,7 @@ class XandrAdapter(AdServerAdapter):
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
-                        CpmPricingOption(  # type: ignore[list-item]
+                        CpmPricingOption(
                             pricing_option_id="xandr_display_cpm",
                             pricing_model="cpm",
                             currency="USD",
@@ -362,7 +362,7 @@ class XandrAdapter(AdServerAdapter):
                             price_guidance=AdCPPriceGuidance(p75=10.0),
                         )
                     ],
-                    publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
+                    publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],
                     measurement=None,
                     creative_policy=None,
                     brief_relevance=None,
@@ -383,7 +383,7 @@ class XandrAdapter(AdServerAdapter):
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
-                        CpmPricingOption(  # type: ignore[list-item]
+                        CpmPricingOption(
                             pricing_option_id="xandr_video_cpm",
                             pricing_model="cpm",
                             currency="USD",
@@ -391,7 +391,7 @@ class XandrAdapter(AdServerAdapter):
                             price_guidance=AdCPPriceGuidance(p75=30.0),
                         )
                     ],
-                    publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
+                    publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],
                     measurement=None,
                     creative_policy=None,
                     brief_relevance=None,
@@ -412,7 +412,7 @@ class XandrAdapter(AdServerAdapter):
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
-                        CpmPricingOption(  # type: ignore[list-item]
+                        CpmPricingOption(
                             pricing_option_id="xandr_native_cpm",
                             pricing_model="cpm",
                             currency="USD",
@@ -420,7 +420,7 @@ class XandrAdapter(AdServerAdapter):
                             price_guidance=AdCPPriceGuidance(p75=15.0),
                         )
                     ],
-                    publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
+                    publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],
                     measurement=None,
                     creative_policy=None,
                     brief_relevance=None,
@@ -442,7 +442,7 @@ class XandrAdapter(AdServerAdapter):
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
-                        CpmPricingOption(  # type: ignore[list-item]
+                        CpmPricingOption(
                             pricing_option_id="xandr_deals_cpm",
                             pricing_model="cpm",
                             currency="USD",
@@ -450,7 +450,7 @@ class XandrAdapter(AdServerAdapter):
                             price_guidance=AdCPPriceGuidance(p75=25.0),
                         )
                     ],
-                    publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],  # type: ignore[list-item]
+                    publisher_properties=[PublisherPropertySelector1(selection_type="all", publisher_domain="*")],
                     measurement=None,
                     creative_policy=None,
                     brief_relevance=None,
