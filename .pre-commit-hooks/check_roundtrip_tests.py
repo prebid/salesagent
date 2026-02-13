@@ -21,9 +21,10 @@ def find_testing_hooks_usages(file_path: Path) -> list[str]:
 
     content = file_path.read_text()
 
-    # Pattern: apply_testing_hooks(data, ctx, "operation_name", ...)
-    pattern = r'apply_testing_hooks\([^,]+,\s*[^,]+,\s*["\']([^"\']+)["\']'
-    matches = re.findall(pattern, content)
+    # Pattern: apply_testing_hooks(testing_ctx, "operation_name", ...)
+    # Supports both single-line and multiline calls
+    pattern = r'apply_testing_hooks\(\s*\w+\s*,\s*["\']([^"\']+)["\']'
+    matches = re.findall(pattern, content, re.DOTALL)
 
     return list(set(matches))
 
@@ -43,8 +44,8 @@ def find_roundtrip_tests(test_dir: Path) -> set[str]:
         content = test_file.read_text()
 
         # Look for apply_testing_hooks calls in tests
-        pattern = r'apply_testing_hooks\([^,]+,\s*[^,]+,\s*["\']([^"\']+)["\']'
-        matches = re.findall(pattern, content)
+        pattern = r'apply_testing_hooks\(\s*\w+\s*,\s*["\']([^"\']+)["\']'
+        matches = re.findall(pattern, content, re.DOTALL)
         tested_operations.update(matches)
 
     return tested_operations
@@ -96,8 +97,8 @@ def main():
         print("  def test_{operation}_with_testing_hooks_roundtrip():")
         print("      response = {operation}(...)")
         print("      response_data = response.model_dump_internal()")
-        print("      response_data = apply_testing_hooks(response_data, ctx, '{operation}', ...)")
-        print("      reconstructed = {ResponseType}(**filtered_data)")
+        print("      hooks_result = apply_testing_hooks(ctx, '{operation}', ...)")
+        print("      reconstructed = {ResponseType}(**response_data)")
         print("      assert reconstructed.field == expected_value")
         print()
         print("See tests/integration/test_create_media_buy_roundtrip.py for example.")

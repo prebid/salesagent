@@ -520,6 +520,8 @@ def is_production_isolated(testing_ctx: TestContext) -> bool:
 class TestingHooksResult:
     """Metadata from testing hooks, separate from the response model."""
 
+    __test__ = False  # Tell pytest not to collect this as a test class
+
     response_headers: dict[str, str] = field(default_factory=dict)
     debug_info: dict[str, Any] | None = None
     is_test: bool = False

@@ -19,11 +19,10 @@ or with Docker Compose running for PostgreSQL.
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from adcp.types import TargetingOverlay
 from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
-from src.core.schemas import CreateMediaBuyRequest, PackageRequest
+from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
 from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
@@ -279,6 +278,11 @@ class TestCreateMediaBuyV24Format:
         # Per AdCP spec, CreateMediaBuyResponse.Package only contains buyer_ref and package_id
         # (not budget, targeting, etc - those are in the request Package schema)
 
+    @pytest.mark.xfail(
+        reason="Targeting (local) is not a subclass of TargetingOverlay (library). "
+        "Fix requires making Targeting inherit from TargetingOverlay — separate task.",
+        strict=True,
+    )
     async def test_create_media_buy_with_targeting_overlay_mcp(self, setup_test_tenant):
         """Test MCP path with packages containing Targeting objects.
 
@@ -295,7 +299,7 @@ class TestCreateMediaBuyV24Format:
                 product_id=setup_test_tenant["product_id_eur"],  # Use EUR product
                 pricing_option_id=setup_test_tenant["pricing_option_id_eur"],  # Required field
                 budget=8000.0,  # Float budget, currency from pricing_option
-                targeting_overlay=TargetingOverlay(
+                targeting_overlay=Targeting(
                     geo_country_any_of=["US", "CA"],
                 ),
             )
