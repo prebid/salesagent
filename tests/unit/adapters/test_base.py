@@ -92,4 +92,4 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
     assert internal_buy is not None
     assert internal_buy["total_budget"] == 5000
     assert len(internal_buy["packages"]) == 1
-    assert internal_buy["packages"][0]["package_id"] == "pkg_1"
+    assert internal_buy["packages"][0].package_id == "pkg_1"

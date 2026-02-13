@@ -21,6 +21,7 @@ from src.core.schemas import (
     Principal,
     Product,
     ReportingPeriod,
+    Targeting,
     UpdateMediaBuyResponse,
     url,
 )
@@ -595,12 +596,7 @@ class XandrAdapter(AdServerAdapter):
 
                 # Apply targeting (from package-level targeting_overlay per AdCP spec)
                 if package.targeting_overlay:
-                    targeting_dict = (
-                        package.targeting_overlay.model_dump()
-                        if hasattr(package.targeting_overlay, "model_dump")
-                        else dict(package.targeting_overlay)
-                    )
-                    li_data["line-item"]["profile_id"] = self._create_targeting_profile(targeting_dict)
+                    li_data["line-item"]["profile_id"] = self._create_targeting_profile(package.targeting_overlay)
 
                 li_response = self._make_request("POST", "/line-item", li_data)
                 li_id = li_response["response"]["line-item"]["id"]
@@ -638,32 +634,30 @@ class XandrAdapter(AdServerAdapter):
         }
         return mapping.get(product_id, "display")
 
-    def _create_targeting_profile(self, targeting: dict[str, Any]) -> int:
-        """Create targeting profile in Xandr."""
-        profile_data = {
+    def _create_targeting_profile(self, targeting: Targeting) -> int:
+        """Create targeting profile in Xandr.
+
+        Maps from AdCP Targeting model's flat field structure to Xandr's profile API format.
+        """
+        profile_data: dict[str, Any] = {
             "profile": {
                 "description": "AdCP targeting profile",
-                "country_targets": [],
-                "region_targets": [],
-                "city_targets": [],
-                "device_type_targets": [],
             }
         }
+        profile = profile_data["profile"]
 
-        # Map targeting to Xandr format
-        if "geo" in targeting:
-            geo = targeting["geo"]
-            if "countries" in geo:
-                profile_data["profile"]["country_targets"] = geo["countries"]
-            if "regions" in geo:
-                profile_data["profile"]["region_targets"] = geo["regions"]
-            if "cities" in geo:
-                profile_data["profile"]["city_targets"] = geo["cities"]
+        # Map geo targeting from Targeting model's flat fields
+        if targeting.geo_country_any_of:
+            profile["country_targets"] = targeting.geo_country_any_of
+        if targeting.geo_region_any_of:
+            profile["region_targets"] = targeting.geo_region_any_of
+        if targeting.geo_city_any_of:
+            profile["city_targets"] = targeting.geo_city_any_of
 
-        if "device_types" in targeting:
-            # Map to Xandr device types - convert to strings for API
+        # Map device types to Xandr numeric codes
+        if targeting.device_type_any_of:
             device_map = {"desktop": "1", "mobile": "2", "tablet": "3", "ctv": "4"}
-            profile_data["profile"]["device_type_targets"] = [device_map.get(d, "1") for d in targeting["device_types"]]
+            profile["device_type_targets"] = [device_map.get(d, "1") for d in targeting.device_type_any_of]
 
         response = self._make_request("POST", "/profile", profile_data)
         return response["response"]["profile"]["id"]

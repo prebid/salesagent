@@ -118,7 +118,7 @@ class BroadstreetWorkflowManager(BaseWorkflowManager):
                     "impressions": pkg.impressions,
                     "cpm": pkg.cpm,
                     "total_budget": (pkg.impressions / 1000) * pkg.cpm if pkg.impressions and pkg.cpm else 0,
-                    "targeting": pkg.targeting_overlay.model_dump() if pkg.targeting_overlay else {},
+                    "targeting": pkg.targeting_overlay if pkg.targeting_overlay else {},
                 }
                 for pkg in packages
             ],
