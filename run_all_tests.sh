@@ -77,28 +77,21 @@ echo -e "${GREEN}✓ Using dynamic ports: PostgreSQL=$POSTGRES_PORT, MCP=$MCP_PO
 echo ""
 
 # Docker compose setup function - starts entire stack once
+# Uses docker-compose.e2e.yml which starts ALL services (MCP + A2A + Admin)
+# via the Dockerfile ENTRYPOINT (run_all_services.py), with direct port exposure.
+# docker-compose.yml is the dev stack (split services, no A2A) and should NOT be
+# used for testing — it only exposes the nginx proxy.
 setup_docker_stack() {
-    echo -e "${BLUE}🐳 Starting complete Docker stack (PostgreSQL + servers)...${NC}"
+    echo -e "${BLUE}🐳 Starting complete Docker stack (PostgreSQL + MCP + A2A + Admin)...${NC}"
 
     # Use unique project name to isolate from local dev environment
     # This ensures test containers don't interfere with your running local containers
     local TEST_PROJECT_NAME="adcp-test-$$"  # $$ = process ID, ensures uniqueness
     export COMPOSE_PROJECT_NAME="$TEST_PROJECT_NAME"
 
-    # Create temporary override file to expose postgres port for tests
-    # (docker-compose.yml doesn't expose it by default for security)
-    TEST_COMPOSE_OVERRIDE="/tmp/docker-compose.test-override-$$.yml"
-    cat > "$TEST_COMPOSE_OVERRIDE" << 'OVERRIDE_EOF'
-services:
-  postgres:
-    ports:
-      - "${POSTGRES_PORT:-5435}:5432"
-OVERRIDE_EOF
-    export TEST_COMPOSE_OVERRIDE
-
     # Clean up ONLY this test project's containers/volumes (not your local dev!)
     echo "Cleaning up any existing TEST containers (project: $TEST_PROJECT_NAME)..."
-    docker-compose -f docker-compose.yml -f "$TEST_COMPOSE_OVERRIDE" -p "$TEST_PROJECT_NAME" down -v 2>/dev/null || true
+    docker-compose -f docker-compose.e2e.yml -p "$TEST_PROJECT_NAME" down -v 2>/dev/null || true
     # DO NOT run docker volume prune - that affects ALL Docker volumes!
 
     # If ports are still in use, find new ones
@@ -131,7 +124,7 @@ print(' '.join(map(str, ports)))
         echo "Using new ports: PostgreSQL=${POSTGRES_PORT}, MCP=${MCP_PORT}, A2A=${A2A_PORT}, Admin=${ADMIN_PORT}"
     fi
 
-    # Export environment for docker-compose
+    # Export environment for docker-compose.e2e.yml port mappings
     export POSTGRES_PORT
     export ADCP_SALES_PORT=$MCP_PORT
     export A2A_PORT
@@ -144,17 +137,19 @@ print(' '.join(map(str, ports)))
     export DELIVERY_WEBHOOK_INTERVAL=5
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
 
-    # Build and start services
+    # Build and start services using docker-compose.e2e.yml
+    # This uses the Dockerfile ENTRYPOINT (run_all_services.py) which starts
+    # MCP server (port 8080), A2A server (port 8091), and Admin UI — all in one container
     echo "Building Docker images (this may take 2-3 minutes on first run)..."
-    if ! docker-compose -f docker-compose.yml -f "$TEST_COMPOSE_OVERRIDE" -p "$TEST_PROJECT_NAME" build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -20; then
+    if ! docker-compose -f docker-compose.e2e.yml -p "$TEST_PROJECT_NAME" build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -20; then
         echo -e "${RED}❌ Docker build failed${NC}"
         exit 1
     fi
 
     echo "Starting Docker services..."
-    if ! docker-compose -f docker-compose.yml -f "$TEST_COMPOSE_OVERRIDE" -p "$TEST_PROJECT_NAME" up -d; then
+    if ! docker-compose -f docker-compose.e2e.yml -p "$TEST_PROJECT_NAME" up -d; then
         echo -e "${RED}❌ Docker services failed to start${NC}"
-        docker-compose -f docker-compose.yml -f "$TEST_COMPOSE_OVERRIDE" -p "$TEST_PROJECT_NAME" logs
+        docker-compose -f docker-compose.e2e.yml -p "$TEST_PROJECT_NAME" logs
         exit 1
     fi
 
@@ -162,49 +157,71 @@ print(' '.join(map(str, ports)))
     echo "Waiting for services to be ready..."
     local max_wait=120
     local start_time=$(date +%s)
+    local pg_ready=false
+    local mcp_ready=false
+    local a2a_ready=false
 
     while true; do
         local elapsed=$(($(date +%s) - start_time))
 
         if [ $elapsed -gt $max_wait ]; then
             echo -e "${RED}❌ Services failed to start within ${max_wait}s${NC}"
-            docker-compose -f docker-compose.yml -f "$TEST_COMPOSE_OVERRIDE" -p "$TEST_PROJECT_NAME" logs
+            docker-compose -f docker-compose.e2e.yml -p "$TEST_PROJECT_NAME" logs
             exit 1
         fi
 
         # Check PostgreSQL
-        if docker-compose -f docker-compose.yml -f "$TEST_COMPOSE_OVERRIDE" -p "$TEST_PROJECT_NAME" exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1; then
-            echo -e "${GREEN}✓ PostgreSQL is ready (${elapsed}s)${NC}"
+        if [ "$pg_ready" = false ]; then
+            if docker-compose -f docker-compose.e2e.yml -p "$TEST_PROJECT_NAME" exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1; then
+                echo -e "${GREEN}✓ PostgreSQL is ready (${elapsed}s)${NC}"
+                pg_ready=true
+            fi
+        fi
+
+        # Check MCP server
+        if [ "$mcp_ready" = false ]; then
+            if curl -sf "http://localhost:${MCP_PORT}/health" >/dev/null 2>&1; then
+                echo -e "${GREEN}✓ MCP server is ready (${elapsed}s)${NC}"
+                mcp_ready=true
+            fi
+        fi
+
+        # Check A2A server
+        if [ "$a2a_ready" = false ]; then
+            if curl -sf "http://localhost:${A2A_PORT}/" >/dev/null 2>&1 || curl -sf "http://localhost:${A2A_PORT}/.well-known/agent.json" >/dev/null 2>&1; then
+                echo -e "${GREEN}✓ A2A server is ready (${elapsed}s)${NC}"
+                a2a_ready=true
+            fi
+        fi
+
+        # All services ready
+        if [ "$pg_ready" = true ] && [ "$mcp_ready" = true ] && [ "$a2a_ready" = true ]; then
             break
         fi
 
         sleep 2
     done
 
-    # Run migrations
-    echo "Running database migrations..."
-    # Use docker-compose exec to run migrations inside the container
-    if ! docker-compose -f docker-compose.yml -f "$TEST_COMPOSE_OVERRIDE" -p "$TEST_PROJECT_NAME" exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" 2>/dev/null; then
+    # Create the adcp_test database for integration tests
+    echo "Creating test database..."
+    if ! docker-compose -f docker-compose.e2e.yml -p "$TEST_PROJECT_NAME" exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" 2>/dev/null; then
         echo "Database adcp_test already exists, continuing..."
     fi
 
-    # Export for tests - MUST match docker-compose.yml POSTGRES_PASSWORD
+    # Export for tests - MUST match docker-compose.e2e.yml POSTGRES_PASSWORD
     export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp_test"
 
     echo -e "${GREEN}✓ Docker stack is ready${NC}"
     echo "  PostgreSQL: localhost:${POSTGRES_PORT}"
     echo "  MCP Server: localhost:${MCP_PORT}"
     echo "  A2A Server: localhost:${A2A_PORT}"
-    echo "  Admin UI: localhost:${ADMIN_PORT}"
+    echo "  Admin UI:   localhost:${ADMIN_PORT}"
 }
 
 # Docker teardown function
 teardown_docker_stack() {
     echo -e "${BLUE}🐳 Stopping TEST Docker stack (project: $COMPOSE_PROJECT_NAME)...${NC}"
-    docker-compose -f docker-compose.yml -f "$TEST_COMPOSE_OVERRIDE" -p "$COMPOSE_PROJECT_NAME" down -v 2>/dev/null || true
-
-    # Clean up temporary override file
-    rm -f "$TEST_COMPOSE_OVERRIDE" 2>/dev/null || true
+    docker-compose -f docker-compose.e2e.yml -p "$COMPOSE_PROJECT_NAME" down -v 2>/dev/null || true
 
     # Prune dangling volumes created by tests (only removes unused volumes)
     echo "Cleaning up dangling Docker volumes..."
