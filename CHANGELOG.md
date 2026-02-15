@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0](https://github.com/prebid/salesagent/compare/v1.3.1...v1.4.0) (2026-02-15)
+
+
+### Features
+
+* Add Broadstreet Ads adapter with template support ([#1013](https://github.com/prebid/salesagent/issues/1013)) ([d7db92e](https://github.com/prebid/salesagent/commit/d7db92e75fd9b62f49647daf8f71728063a817a9))
+* Support AdCP v3 structured geo targeting ([#1006](https://github.com/prebid/salesagent/issues/1006)) ([#1024](https://github.com/prebid/salesagent/issues/1024)) ([ec3939a](https://github.com/prebid/salesagent/commit/ec3939af437687903fdb5272202b66961f7e5389))
+
 ## [1.3.1](https://github.com/prebid/salesagent/compare/v1.3.0...v1.3.1) (2026-02-06)
 
 
