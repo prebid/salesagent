@@ -646,13 +646,11 @@ class XandrAdapter(AdServerAdapter):
         }
         profile = profile_data["profile"]
 
-        # Map geo targeting from Targeting model's flat fields
-        if targeting.geo_country_any_of:
-            profile["country_targets"] = targeting.geo_country_any_of
-        if targeting.geo_region_any_of:
-            profile["region_targets"] = targeting.geo_region_any_of
-        if targeting.geo_city_any_of:
-            profile["city_targets"] = targeting.geo_city_any_of
+        # Map v3 targeting fields to Xandr format (extract raw strings from RootModel types)
+        if targeting.geo_countries:
+            profile["country_targets"] = [c.root for c in targeting.geo_countries]
+        if targeting.geo_regions:
+            profile["region_targets"] = [r.root for r in targeting.geo_regions]
 
         # Map device types to Xandr numeric codes
         if targeting.device_type_any_of:

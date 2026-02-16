@@ -292,7 +292,7 @@ class TestCreateMediaBuyV24Format:
 
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Create PackageRequest with nested TargetingOverlay object
+        # Create PackageRequest with nested Targeting object
         packages = [
             PackageRequest(
                 buyer_ref="pkg_targeting_test",
@@ -300,7 +300,7 @@ class TestCreateMediaBuyV24Format:
                 pricing_option_id=setup_test_tenant["pricing_option_id_eur"],  # Required field
                 budget=8000.0,  # Float budget, currency from pricing_option
                 targeting_overlay=Targeting(
-                    geo_country_any_of=["US", "CA"],
+                    geo_countries=["US", "CA"],
                 ),
             )
         ]

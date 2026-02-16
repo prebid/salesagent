@@ -433,9 +433,8 @@ class TestTargetingSchemaContract:
     def test_targeting_adcp_contract_compliance(self, validator):
         """Test Targeting schema AdCP spec compliance."""
         test_data = {
-            "geo_country_any_of": ["US", "CA", "GB"],
-            "geo_region_any_of": ["NY", "CA", "TX"],
-            "geo_city_any_of": ["New York", "Los Angeles", "London"],
+            "geo_countries": ["US", "CA", "GB"],
+            "geo_regions": ["US-NY", "US-CA", "US-TX"],
             "device_type_any_of": ["desktop", "mobile", "tablet"],
             "os_any_of": ["iOS", "Android", "Windows"],
             "browser_any_of": ["Chrome", "Safari", "Firefox"],
@@ -451,10 +450,10 @@ class TestTargetingSchemaContract:
     def test_minimal_targeting_contract(self, validator):
         """Test minimal targeting configuration contract."""
         test_data = {
-            "geo_country_any_of": ["US"],
+            "geo_countries": ["US"],
         }
 
-        adcp_spec_fields = {"geo_country_any_of"}
+        adcp_spec_fields = {"geo_countries"}
 
         validator.validate_schema_contract(Targeting, test_data, adcp_spec_fields)
 

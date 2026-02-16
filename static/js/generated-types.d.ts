@@ -537,16 +537,14 @@ export interface PricingModel {
 }
 
 export interface Targeting {
-  geo_country_any_of?: string[] | null;
-  geo_country_none_of?: string[] | null;
-  geo_region_any_of?: string[] | null;
-  geo_region_none_of?: string[] | null;
-  geo_metro_any_of?: string[] | null;
-  geo_metro_none_of?: string[] | null;
-  geo_city_any_of?: string[] | null;
-  geo_city_none_of?: string[] | null;
-  geo_zip_any_of?: string[] | null;
-  geo_zip_none_of?: string[] | null;
+  geo_countries?: string[] | null;
+  geo_countries_exclude?: string[] | null;
+  geo_regions?: string[] | null;
+  geo_regions_exclude?: string[] | null;
+  geo_metros?: Array<{system: string; values: string[]}> | null;
+  geo_metros_exclude?: Array<{system: string; values: string[]}> | null;
+  geo_postal_areas?: Array<{system: string; values: string[]}> | null;
+  geo_postal_areas_exclude?: Array<{system: string; values: string[]}> | null;
   device_type_any_of?: string[] | null;
   device_type_none_of?: string[] | null;
   os_any_of?: string[] | null;

@@ -200,7 +200,7 @@ class TestAdCPSchemaCompliance:
             "total_budget": 1000.0,
             "flight_start_date": "2025-02-01",
             "flight_end_date": "2025-02-28",
-            "targeting": {"geo_country_any_of": ["US"], "device_type_any_of": ["mobile", "desktop"]},
+            "targeting": {"geo_countries": ["US"], "device_type_any_of": ["mobile", "desktop"]},
         }
 
         try:
@@ -219,7 +219,7 @@ class TestAdCPSchemaCompliance:
 
         # Test various targeting combinations
         targeting_examples = [
-            {"geo_country_any_of": ["US", "CA"]},
+            {"geo_countries": ["US", "CA"]},
             {"device_type_any_of": ["mobile"], "os_any_of": ["iOS"]},
             {"content_cat_any_of": ["IAB1"], "keywords_any_of": ["sports"]},
             {"signals": ["auto_intenders_q1_2025"]},

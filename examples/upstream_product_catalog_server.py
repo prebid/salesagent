@@ -38,7 +38,7 @@ PRODUCT_DATABASE = [
         ],
         "targeting_template": {
             "content_cat_any_of": ["sports", "basketball", "football"],
-            "geo_country_any_of": ["US", "CA"],
+            "geo_countries": ["US", "CA"],
         },
         "delivery_type": "guaranteed",
         "is_fixed_price": False,
@@ -59,7 +59,7 @@ PRODUCT_DATABASE = [
         ],
         "targeting_template": {
             "content_cat_any_of": ["finance", "business", "investing"],
-            "geo_country_any_of": ["US"],
+            "geo_countries": ["US"],
         },
         "delivery_type": "guaranteed",
         "is_fixed_price": True,
@@ -80,7 +80,7 @@ PRODUCT_DATABASE = [
         ],
         "targeting_template": {
             "content_cat_any_of": ["news", "politics", "world_news"],
-            "geo_country_any_of": ["US", "UK", "CA", "AU"],
+            "geo_countries": ["US", "UK", "CA", "AU"],
         },
         "delivery_type": "non_guaranteed",
         "is_fixed_price": False,
@@ -98,7 +98,7 @@ PRODUCT_DATABASE = [
                 "specs": {"title_length": 50, "description_length": 100},
             }
         ],
-        "targeting_template": {"geo_country_any_of": ["US", "CA", "UK"]},
+        "targeting_template": {"geo_countries": ["US", "CA", "UK"]},
         "delivery_type": "non_guaranteed",
         "is_fixed_price": True,
         "cpm": 8.0,

@@ -170,13 +170,12 @@ class TargetingBuilder:
     ):
         """Add geographic targeting."""
         if countries:
-            self.targeting["geo_country_any_of"] = countries
+            self.targeting["geo_countries"] = countries
         if regions:
-            self.targeting["geo_region_any_of"] = regions
-        if cities:
-            self.targeting["geo_city_any_of"] = cities
+            self.targeting["geo_regions"] = regions
+        # cities parameter ignored: city targeting removed in v3
         if zip_codes:
-            self.targeting["geo_zip_any_of"] = zip_codes
+            self.targeting["geo_postal_areas"] = [{"system": "us_zip", "values": zip_codes}]
         return self
 
     def with_demographics(
@@ -227,13 +226,13 @@ class TargetingBuilder:
 
     def build_minimal(self) -> dict:
         """Build minimal targeting for testing."""
-        return {"geo_country_any_of": ["US"], "device_type_any_of": ["desktop", "mobile"]}
+        return {"geo_countries": ["US"], "device_type_any_of": ["desktop", "mobile"]}
 
     def build_comprehensive(self) -> dict:
         """Build comprehensive targeting for testing."""
         return {
-            "geo_country_any_of": ["US", "CA"],
-            "geo_region_any_of": ["CA", "NY", "TX"],
+            "geo_countries": ["US", "CA"],
+            "geo_regions": ["US-CA", "US-NY", "US-TX"],
             "demo_age_range_any_of": ["25-34", "35-44"],
             "demo_gender_any_of": ["all"],
             "device_type_any_of": ["desktop", "mobile", "tablet"],

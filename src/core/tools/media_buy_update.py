@@ -1152,7 +1152,7 @@ def _update_media_buy_impl(
                         else pkg_update.targeting_overlay
                     )
 
-                    media_package.package_config["targeting"] = targeting_dict
+                    media_package.package_config["targeting_overlay"] = targeting_dict
                     # Flag the JSON field as modified so SQLAlchemy persists it
                     attributes.flag_modified(media_package, "package_config")
                     session.commit()

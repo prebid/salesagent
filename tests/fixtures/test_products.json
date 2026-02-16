@@ -10,7 +10,7 @@
     "min_spend": 10000,
     "countries": ["US", "CA"],
     "targeting_template": {
-      "geo_country_any_of": ["US", "CA"],
+      "geo_countries": ["US", "CA"],
       "device_type_any_of": ["desktop", "tablet"],
       "daypart_presets": ["prime_time"]
     },

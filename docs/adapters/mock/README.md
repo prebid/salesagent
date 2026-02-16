@@ -300,8 +300,8 @@ async def test_targeting_capabilities():
         flight_start_date="2025-10-10",
         flight_end_date="2025-10-11",
         targeting_overlay={
-            "geo_country_any_of": ["US", "CA"],
-            "geo_region_any_of": ["CA", "NY"],
+            "geo_countries": ["US", "CA"],
+            "geo_regions": ["US-CA", "US-NY"],
             "device_type_any_of": ["mobile", "tablet"],
             "os_any_of": ["ios", "android"],
             "browser_any_of": ["chrome", "safari"],

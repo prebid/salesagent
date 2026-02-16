@@ -1120,12 +1120,14 @@ class TestAdCPContract:
 
     def test_targeting_adcp_compliance(self):
         """Test that Targeting model complies with AdCP targeting schema."""
-        # Create targeting with both public and managed/internal fields
+        from adcp.types import TargetingOverlay
+
+        # Create targeting with v3 structured geo fields and internal fields
         targeting = Targeting(
-            geo_country_any_of=["US", "CA"],
-            geo_region_any_of=["CA", "NY"],
-            geo_metro_any_of=["803", "501"],
-            geo_zip_any_of=["10001", "90210"],
+            geo_countries=["US", "CA"],
+            geo_regions=["US-CA", "US-NY"],
+            geo_metros=[{"system": "nielsen_dma", "values": ["803", "501"]}],
+            geo_postal_areas=[{"system": "us_zip", "values": ["10001", "90210"]}],
             audiences_any_of=["segment_1", "segment_2"],
             signals=["auto_intenders_q1_2025", "sports_enthusiasts"],
             device_type_any_of=["desktop", "mobile", "tablet"],
@@ -1138,15 +1140,18 @@ class TestAdCPContract:
             metadata={"campaign_type": "awareness"},  # Internal
         )
 
+        # Verify isinstance — Targeting IS a TargetingOverlay
+        assert isinstance(targeting, TargetingOverlay)
+
         # Test AdCP-compliant model_dump (external response)
         adcp_response = targeting.model_dump()
 
-        # Verify AdCP fields are present (all targeting fields are optional in AdCP)
+        # Verify v3 structured geo fields are present
         adcp_optional_fields = [
-            "geo_country_any_of",
-            "geo_region_any_of",
-            "geo_metro_any_of",
-            "geo_zip_any_of",
+            "geo_countries",
+            "geo_regions",
+            "geo_metros",
+            "geo_postal_areas",
             "audiences_any_of",
             "signals",
             "device_type_any_of",
@@ -1154,7 +1159,6 @@ class TestAdCPContract:
             "browser_any_of",
         ]
         for field in adcp_optional_fields:
-            # Field should be in response even if null (AdCP spec pattern)
             if getattr(targeting, field) is not None:
                 assert field in adcp_response, f"AdCP optional field '{field}' missing from response"
 
@@ -1169,10 +1173,11 @@ class TestAdCPContract:
         for field in managed_internal_fields:
             assert field not in adcp_response, f"Managed/internal field '{field}' exposed in AdCP response"
 
-        # Verify AdCP-specific requirements
-        if adcp_response.get("geo_country_any_of"):
-            for country in adcp_response["geo_country_any_of"]:
-                assert len(country) == 2, "Country codes must be 2-letter ISO codes"
+        # Verify v3 geo structure
+        if adcp_response.get("geo_countries"):
+            for country in adcp_response["geo_countries"]:
+                # GeoCountry serializes as a plain string (RootModel)
+                assert isinstance(country, str) and len(country) == 2, "Country codes must be 2-letter ISO codes"
 
         if adcp_response.get("device_type_any_of"):
             valid_devices = ["desktop", "mobile", "tablet", "connected_tv", "smart_speaker"]
@@ -2260,7 +2265,6 @@ class TestAdCPContract:
         """Test that ListAuthorizedPropertiesRequest complies with AdCP list-authorized-properties-request schema."""
         # Create request with optional fields per spec
         # Per AdCP spec: context, ext, publisher_domains, property_tags are all optional
-        # Note: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0, we define it locally
         request = ListAuthorizedPropertiesRequest(publisher_domains=["example.com", "news.example.com"])
 
         # Test AdCP-compliant response - use exclude_none=False to see all fields

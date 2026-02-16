@@ -259,7 +259,7 @@ def init_db(exit_on_error=False):
                             "min_cpm": 5.0,
                             "max_frequency": 3,
                             "allow_adult_content": False,
-                            "targeting": {"geo_country_any_of": ["US", "CA"]},
+                            "targeting": {"geo_countries": ["US", "CA"]},
                         },
                         "property_tags": ["all_inventory"],  # Required per AdCP spec
                         "pricing_option": {
@@ -280,7 +280,7 @@ def init_db(exit_on_error=False):
                             }
                         ],
                         "targeting_template": {
-                            "targeting": {"geo_country_any_of": ["US", "CA"]},
+                            "targeting": {"geo_countries": ["US", "CA"]},
                         },
                         "property_tags": ["all_inventory"],  # Required per AdCP spec
                         "pricing_option": {

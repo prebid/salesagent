@@ -552,7 +552,7 @@ def sample_media_buy_request():
         "total_budget": 10000.0,
         "flight_start_date": "2025-02-01",
         "flight_end_date": "2025-02-28",
-        "targeting_overlay": {"geo_country_any_of": ["US"], "device_type_any_of": ["desktop", "mobile"]},
+        "targeting_overlay": {"geo_countries": ["US"], "device_type_any_of": ["desktop", "mobile"]},
     }
 
 

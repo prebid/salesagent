@@ -168,7 +168,7 @@ def init_db(exit_on_error=False):
                             "id": "display_300x250",
                         }
                     ],
-                    targeting_template={"geo_country_any_of": ["US"]},
+                    targeting_template={"geo_countries": ["US"]},
                     delivery_type="guaranteed",
                     is_fixed_price=False,
                     price_guidance={"floor": 10.0, "p50": 15.0, "p75": 20.0},
@@ -270,7 +270,7 @@ def init_db(exit_on_error=False):
                         ],
                         "targeting_template": {
                             "content_cat_any_of": ["news", "politics"],
-                            "geo_country_any_of": ["US"],
+                            "geo_countries": ["US"],
                         },
                         "delivery_type": "guaranteed",
                         "is_fixed_price": False,
@@ -280,7 +280,7 @@ def init_db(exit_on_error=False):
                             "placement_ids": ["news_300x250_atf", "news_300x250_btf"],
                             "ad_unit_path": "/1234/news/display",
                             "key_values": {"section": "news", "tier": "premium"},
-                            "targeting": {"content_cat_any_of": ["news", "politics"], "geo_country_any_of": ["US"]},
+                            "targeting": {"content_cat_any_of": ["news", "politics"], "geo_countries": ["US"]},
                         },
                     },
                     {
@@ -293,7 +293,7 @@ def init_db(exit_on_error=False):
                                 "id": "display_728x90",
                             }
                         ],
-                        "targeting_template": {"geo_country_any_of": ["US", "CA"]},
+                        "targeting_template": {"geo_countries": ["US", "CA"]},
                         "delivery_type": "non_guaranteed",
                         "is_fixed_price": True,
                         "cpm": 2.5,
@@ -302,7 +302,7 @@ def init_db(exit_on_error=False):
                             "placement_ids": ["ros_728x90_all"],
                             "ad_unit_path": "/1234/run_of_site/leaderboard",
                             "key_values": {"tier": "standard"},
-                            "targeting": {"geo_country_any_of": ["US", "CA"]},
+                            "targeting": {"geo_countries": ["US", "CA"]},
                         },
                     },
                 ]
