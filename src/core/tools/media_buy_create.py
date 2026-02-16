@@ -1842,7 +1842,7 @@ async def _create_media_buy_impl(
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:
             for pkg in req.packages:
-                if hasattr(pkg, "targeting_overlay") and pkg.targeting_overlay:
+                if pkg.targeting_overlay is not None:
                     from src.services.targeting_capabilities import (
                         validate_geo_overlap,
                         validate_overlay_targeting,
@@ -1852,16 +1852,11 @@ async def _create_media_buy_impl(
                     # Reject unknown targeting fields (typos, bogus names) via model_extra
                     unknown_violations = validate_unknown_targeting_fields(pkg.targeting_overlay)
 
-                    # Convert to dict for dimension-access validation
-                    targeting_data: dict[str, Any] = (
-                        pkg.targeting_overlay.model_dump(exclude_none=True)
-                        if hasattr(pkg.targeting_overlay, "model_dump")
-                        else dict(pkg.targeting_overlay)  # Fallback for dict-like objects
-                    )
-                    access_violations = validate_overlay_targeting(targeting_data)
+                    # Validate access control (managed-only, removed dimensions)
+                    access_violations = validate_overlay_targeting(pkg.targeting_overlay)
 
                     # Reject same-value geo inclusion/exclusion overlap (AdCP SHOULD requirement)
-                    geo_overlap_violations = validate_geo_overlap(targeting_data)
+                    geo_overlap_violations = validate_geo_overlap(pkg.targeting_overlay)
 
                     violations = unknown_violations + access_violations + geo_overlap_violations
                     if violations:

@@ -14,7 +14,7 @@ for upstream inclusion in AdCP.
 
 from typing import Any
 
-from src.core.schemas import TargetingCapability
+from src.core.schemas import Targeting, TargetingCapability
 
 # Define targeting capabilities for the platform
 TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
@@ -170,28 +170,26 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
     return [f"{key} is not a recognized targeting field" for key in model_extra]
 
 
-def validate_overlay_targeting(targeting: dict[str, Any]) -> list[str]:
+def validate_overlay_targeting(targeting: Targeting) -> list[str]:
     """Validate that targeting only uses allowed overlay dimensions.
 
-    Uses an explicit field-to-dimension mapping (FIELD_TO_DIMENSION) instead of
-    suffix-stripping heuristics.  Both inclusion and exclusion field variants
-    are mapped so that exclusion fields are validated alongside their inclusion
-    counterparts.
+    Checks the Targeting model's fields directly instead of iterating a
+    serialized dict.  This makes the validation actually effective — the
+    previous dict-based approach missed managed-only fields (excluded by
+    model_dump) and removed fields (consumed by the normalizer).
 
-    Returns list of violations (managed-only dimensions used).
+    Returns list of violations (managed-only or removed dimensions used).
     """
     violations = []
-    managed_only = set(get_managed_only_dimensions())
-    removed = set(get_removed_dimensions())
 
-    for key in targeting:
-        dimension = FIELD_TO_DIMENSION.get(key)
-        if not dimension:
-            continue
-        if dimension in managed_only:
-            violations.append(f"{key} is managed-only and cannot be set via overlay")
-        elif dimension in removed:
-            violations.append(f"{key} is not supported (targeting dimension '{dimension}' has been removed)")
+    # Managed-only: key_value_pairs is a seller extension, not settable via overlay
+    if targeting.key_value_pairs is not None:
+        violations.append("key_value_pairs is managed-only and cannot be set via overlay")
+
+    # Removed: city targeting was removed in v3. The normalizer consumes
+    # geo_city_any_of/geo_city_none_of and sets had_city_targeting=True.
+    if targeting.had_city_targeting:
+        violations.append("City targeting is not supported (targeting dimension 'geo_city' has been removed)")
 
     return violations
 
@@ -210,8 +208,8 @@ _GEO_STRUCTURED_PAIRS: list[tuple[str, str]] = [
 
 
 def _extract_simple_values(items: list) -> set[str]:
-    """Extract string values from a list of plain strings (post-model_dump geo_countries/geo_regions)."""
-    return {str(item) for item in items}
+    """Extract string values from a list of GeoCountry/GeoRegion (RootModel[str]) or plain strings."""
+    return {getattr(item, "root", item) for item in items}
 
 
 def _extract_system_values(items: list) -> dict[str, set[str]]:
@@ -234,7 +232,7 @@ def _extract_system_values(items: list) -> dict[str, set[str]]:
     return by_system
 
 
-def validate_geo_overlap(targeting: dict[str, Any]) -> list[str]:
+def validate_geo_overlap(targeting: Targeting) -> list[str]:
     """Reject same-value overlap between geo inclusion and exclusion fields.
 
     Per AdCP spec (adcp PR #1010): sellers SHOULD reject requests where the
@@ -247,8 +245,8 @@ def validate_geo_overlap(targeting: dict[str, Any]) -> list[str]:
 
     # Simple fields: countries, regions (RootModel[str] or plain strings)
     for include_field, exclude_field in _GEO_SIMPLE_PAIRS:
-        include_vals = targeting.get(include_field)
-        exclude_vals = targeting.get(exclude_field)
+        include_vals = getattr(targeting, include_field, None)
+        exclude_vals = getattr(targeting, exclude_field, None)
         if not include_vals or not exclude_vals:
             continue
         inc_set = _extract_simple_values(include_vals)
@@ -262,8 +260,8 @@ def validate_geo_overlap(targeting: dict[str, Any]) -> list[str]:
 
     # Structured fields: metros, postal_areas (system + values)
     for include_field, exclude_field in _GEO_STRUCTURED_PAIRS:
-        include_vals = targeting.get(include_field)
-        exclude_vals = targeting.get(exclude_field)
+        include_vals = getattr(targeting, include_field, None)
+        exclude_vals = getattr(targeting, exclude_field, None)
         if not include_vals or not exclude_vals:
             continue
         inc_by_system = _extract_system_values(include_vals)
