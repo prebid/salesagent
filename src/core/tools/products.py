@@ -181,7 +181,6 @@ async def _get_products_impl(
 
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id) if principal_id else None
-    principal_data = principal.model_dump() if principal else None
 
     # Handle RootModel wrappers for brand_manifest (e.g., BrandManifestReference wraps BrandManifest)
     # adcp library uses RootModel for union types, so we need to unwrap
