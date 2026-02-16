@@ -1057,20 +1057,13 @@ def _update_media_buy_impl(
                         )
                         return response_data
 
-                    # Update targeting in package_config JSON
-                    # Convert Targeting Pydantic model to dict
-                    targeting_dict = (
-                        pkg_update.targeting_overlay.model_dump(exclude_none=True)
-                        if hasattr(pkg_update.targeting_overlay, "model_dump")
-                        else pkg_update.targeting_overlay
-                    )
-
-                    media_package.package_config["targeting_overlay"] = targeting_dict
+                    # Store Targeting model directly — engine's pydantic_core.to_json serializer handles it
+                    media_package.package_config["targeting_overlay"] = pkg_update.targeting_overlay
                     # Flag the JSON field as modified so SQLAlchemy persists it
                     attributes.flag_modified(media_package, "package_config")
                     session.commit()
                     logger.info(
-                        f"[update_media_buy] Updated package {pkg_update.package_id} targeting: {targeting_dict}"
+                        f"[update_media_buy] Updated package {pkg_update.package_id} targeting: {pkg_update.targeting_overlay}"
                     )
 
                     # Track targeting update in affected_packages
@@ -1079,7 +1072,7 @@ def _update_media_buy_impl(
                             buyer_ref=pkg_update.package_id,
                             package_id=pkg_update.package_id,
                             paused=False,  # Package not paused (active)
-                            changes_applied={"targeting": targeting_dict},
+                            changes_applied={"targeting": pkg_update.targeting_overlay},
                             buyer_package_ref=pkg_update.package_id,  # Legacy compatibility
                         )
                     )
