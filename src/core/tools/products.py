@@ -104,10 +104,9 @@ def get_recommended_cpm(product: Product) -> float | None:
         Recommended CPM value (p75) from price_guidance, or None if not available
     """
     for option in product.pricing_options:
-        # adcp 2.14.0+ uses RootModel wrapper - access via .root
-        inner = getattr(option, "root", option)
+        inner = option.root
         price_guidance = getattr(inner, "price_guidance", None)
-        if inner.pricing_model.upper() == "CPM" and price_guidance:  # type: ignore[union-attr]
+        if inner.pricing_model.upper() == "CPM" and price_guidance:
             p75 = price_guidance.p75
             if p75 is not None:
                 return float(p75)
@@ -726,10 +725,9 @@ async def _get_products_impl(
                 if product.pricing_options:
                     # Annotate each pricing option with "supported" flag
                     for option in product.pricing_options:
-                        # adcp 2.14.0+ uses RootModel wrapper - access via .root
-                        inner = getattr(option, "root", option)
+                        inner = option.root
                         # Get pricing model as string (handle both enum and literal)
-                        pricing_model = getattr(inner.pricing_model, "value", inner.pricing_model)  # type: ignore[union-attr]
+                        pricing_model = getattr(inner.pricing_model, "value", inner.pricing_model)
                         # Add supported annotation (will be included in response)
                         # Dynamic attributes on discriminated union types
                         is_supported = pricing_model in supported_models

@@ -117,7 +117,6 @@ class MediaBuyStatusScheduler:
             else:
                 start_time = raw_start
         elif media_buy.start_date:
-            # datetime.min.time() returns time object, mypy doesn't recognize this
             start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(  # type: ignore[arg-type]
                 tzinfo=UTC
             )
@@ -133,7 +132,6 @@ class MediaBuyStatusScheduler:
             else:
                 end_time = raw_end
         elif media_buy.end_date:
-            # datetime.max.time() returns time object, mypy doesn't recognize this
             end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(  # type: ignore[arg-type]
                 tzinfo=UTC
             )

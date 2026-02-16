@@ -1989,8 +1989,7 @@ class AdCPRequestHandler(RequestHandler):
 
             # Call core function directly
             # Context can be None for unauthenticated calls - tenant will be detected from headers
-            # MinimalContext is not compatible with ToolContext type, but works at runtime
-            response = core_list_authorized_properties_tool(req=request, ctx=tool_context)  # type: ignore[arg-type]
+            response = core_list_authorized_properties_tool(req=request, ctx=cast(Any, tool_context))
 
             # Return spec-compliant response (no extra fields)
             # Per AdCP v2.4 spec: only publisher_domains, primary_channels, primary_countries,
