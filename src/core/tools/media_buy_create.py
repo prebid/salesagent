@@ -2951,21 +2951,6 @@ async def _create_media_buy_impl(
                 logger.info(f"[DEBUG] Saving {len(packages_to_save)} packages to media_packages table")
 
                 for i, resp_package in enumerate(packages_to_save):
-                    # resp_package is always a Package object (adapters no longer return dicts)
-                    def serialize_for_json(value):
-                        """Serialize Pydantic models to dicts for JSON storage."""
-                        from pydantic import BaseModel
-
-                        if value is None:
-                            return None
-                        if isinstance(value, BaseModel):
-                            return value.model_dump(exclude_none=True)
-                        if isinstance(value, list):
-                            return [serialize_for_json(item) for item in value]
-                        if isinstance(value, dict):
-                            return {k: serialize_for_json(v) for k, v in value.items()}
-                        return value
-
                     # Extract package_id from response - MUST be present, no fallback allowed
                     resp_package_id: str | None = resp_package.package_id
 
@@ -2991,10 +2976,10 @@ async def _create_media_buy_impl(
                         "package_id": resp_package_id,
                         "name": getattr(resp_package, "name", None),  # Include package name from adapter response
                         "product_id": getattr(resp_package, "product_id", None),
-                        "budget": serialize_for_json(getattr(resp_package, "budget", None)),
-                        "targeting_overlay": serialize_for_json(getattr(resp_package, "targeting_overlay", None)),
+                        "budget": getattr(resp_package, "budget", None),
+                        "targeting_overlay": getattr(resp_package, "targeting_overlay", None),
                         "creative_ids": getattr(resp_package, "creative_ids", None),
-                        "creative_assignments": serialize_for_json(getattr(resp_package, "creative_assignments", None)),
+                        "creative_assignments": getattr(resp_package, "creative_assignments", None),
                         "format_ids_to_provide": getattr(resp_package, "format_ids_to_provide", None),
                         "paused": paused,  # Store paused state (adcp 2.12.0)
                         "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
