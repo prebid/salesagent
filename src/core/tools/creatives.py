@@ -201,6 +201,42 @@ def _extract_url_from_assets(creative: dict[str, Any]) -> str | None:
     return None
 
 
+def _build_creative_data(
+    creative: dict[str, Any], url: str | None, context: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Build the data dict for a creative from raw creative dict.
+
+    Extracts standard fields (url, click_url, width, height, duration),
+    optional fields (assets, snippet, snippet_type, template_variables),
+    and context if provided.
+
+    Args:
+        creative: Raw creative dict from the sync payload.
+        url: Extracted URL (from _extract_url_from_assets).
+        context: Optional application-level context per AdCP spec.
+
+    Returns:
+        Data dict for storing in the creative's data field.
+    """
+    data: dict[str, Any] = {
+        "url": url,
+        "click_url": creative.get("click_url"),
+        "width": creative.get("width"),
+        "height": creative.get("height"),
+        "duration": creative.get("duration"),
+    }
+    if creative.get("assets"):
+        data["assets"] = creative["assets"]
+    if creative.get("snippet"):
+        data["snippet"] = creative["snippet"]
+        data["snippet_type"] = creative.get("snippet_type")
+    if creative.get("template_variables"):
+        data["template_variables"] = creative["template_variables"]
+    if context is not None:
+        data["context"] = context
+    return data
+
+
 def _sync_creatives_impl(
     creatives: list[dict[str, Any] | Any],
     assignments: dict | None = None,
@@ -456,20 +492,7 @@ def _sync_creatives_impl(
                         # Store creative properties in data field
                         # AdCP 2.5: Full upsert semantics (replace all data, not merge)
                         url = _extract_url_from_assets(creative)
-
-                        data = {
-                            "url": url,
-                            "click_url": creative.get("click_url"),
-                            "width": creative.get("width"),
-                            "height": creative.get("height"),
-                            "duration": creative.get("duration"),
-                        }
-                        if creative.get("assets"):
-                            data["assets"] = creative.get("assets")
-                        if creative.get("template_variables"):
-                            data["template_variables"] = creative.get("template_variables")
-                        if context is not None:
-                            data["context"] = context
+                        data = _build_creative_data(creative, url, context)
 
                         # ALWAYS validate updates with creative agent
                         if creative_format:
@@ -840,27 +863,10 @@ def _sync_creatives_impl(
 
                         # Prepare data field with all creative properties
                         url = _extract_url_from_assets(creative)
-
-                        data = {
-                            "url": url,
-                            "click_url": creative.get("click_url"),
-                            "width": creative.get("width"),
-                            "height": creative.get("height"),
-                            "duration": creative.get("duration"),
-                        }
+                        data = _build_creative_data(creative, url, context)
 
                         # Store user-provided assets for preservation check
                         user_provided_assets = creative.get("assets")
-                        if user_provided_assets:
-                            data["assets"] = user_provided_assets
-
-                        # Add AdCP v1.3+ fields to data
-                        if creative.get("snippet"):
-                            data["snippet"] = creative.get("snippet")
-                            data["snippet_type"] = creative.get("snippet_type")
-
-                        if creative.get("template_variables"):
-                            data["template_variables"] = creative.get("template_variables")
 
                         # ALWAYS validate creatives with the creative agent (validation + preview generation)
                         creative_format = creative.get("format_id") or creative.get("format")
