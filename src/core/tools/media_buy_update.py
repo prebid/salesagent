@@ -243,7 +243,7 @@ def _update_media_buy_impl(
                         package_id=pkg_update.package_id or "",
                         paused=pkg_update.paused if pkg_update.paused is not None else False,
                         buyer_package_ref=pkg_update.package_id,
-                        changes_applied={"dry_run": True, "would_update": pkg_update.model_dump(exclude_none=True)},
+                        changes_applied={"dry_run": True, "would_update": pkg_update},
                     )
                 )
 
