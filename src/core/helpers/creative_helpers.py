@@ -189,10 +189,10 @@ def _validate_creative_assets(assets: Any) -> dict[str, dict[str, Any]] | None:
         if not asset_id.strip():
             raise ValueError("Asset key (asset_id) cannot be empty or whitespace-only")
 
-        # Asset data must be a dict
-        if not isinstance(asset_data, dict):
+        # Asset data must be a dict or Pydantic model (typed Asset from CreativeAsset)
+        if not isinstance(asset_data, dict) and not hasattr(asset_data, "model_dump"):
             raise ValueError(
-                f"Asset '{asset_id}' data must be a dict, got {type(asset_data).__name__}. "
+                f"Asset '{asset_id}' data must be a dict or model, got {type(asset_data).__name__}. "
                 f"Expected format: {{'asset_type': '...', 'url': '...', ...}}"
             )
 

@@ -66,18 +66,18 @@ def _get_field(obj: Any, field: str, default: Any = None) -> Any:
 
 
 def _validate_creative_input(
-    creative: dict[str, Any] | BaseModel,
+    creative: CreativeAsset,
     registry: Any,
     principal_id: str,
 ) -> Creative:
-    """Validate a creative dict and return a validated Creative model.
+    """Validate a CreativeAsset and return a validated Creative model.
 
-    Builds schema_data from the raw creative dict, validates via Creative(**schema_data),
+    Builds schema_data from the creative model, validates via Creative(**schema_data),
     checks business logic (empty name, missing format), and validates the format_id
     against the creative agent registry.
 
     Args:
-        creative: Raw creative dict from the sync payload.
+        creative: CreativeAsset model from the sync payload.
         registry: CreativeAgentRegistry instance for format validation.
         principal_id: Authenticated principal ID for ownership.
 
@@ -89,17 +89,13 @@ def _validate_creative_input(
         ValueError: If business logic checks fail (empty name, missing format,
             unknown format, unreachable agent).
     """
-    # Transitional: accept both models and dicts (removed in Phase 1b)
-    if not isinstance(creative, dict):
-        creative = creative.model_dump(mode="json")
-
     # Create temporary schema object for validation (AdCP v1 spec compliant)
     # Only include AdCP spec fields + internal fields
     schema_data: dict[str, Any] = {
-        "creative_id": creative.get("creative_id") or str(uuid.uuid4()),
-        "name": creative.get("name", ""),  # Ensure name is never None
-        "format_id": creative.get("format_id") or creative.get("format"),  # Support both field names
-        "assets": creative.get("assets", {}),  # Required by AdCP v1 spec
+        "creative_id": creative.creative_id or str(uuid.uuid4()),
+        "name": creative.name or "",  # Ensure name is never None
+        "format_id": creative.format_id,
+        "assets": creative.assets or {},  # Required by AdCP v1 spec
         # Internal fields (added by sales agent)
         "principal_id": principal_id,
         "created_date": datetime.now(UTC),
@@ -108,12 +104,13 @@ def _validate_creative_input(
     }
 
     # Add optional AdCP v1 fields if provided
-    if creative.get("inputs"):
-        schema_data["inputs"] = creative.get("inputs")
-    if creative.get("tags"):
-        schema_data["tags"] = creative.get("tags")
-    if creative.get("approved") is not None:
-        schema_data["approved"] = creative.get("approved")
+    if creative.inputs:
+        schema_data["inputs"] = creative.inputs
+    if creative.tags:
+        schema_data["tags"] = creative.tags
+    approved = getattr(creative, "approved", None)
+    if approved is not None:
+        schema_data["approved"] = approved
 
     # Validate by creating a Creative schema object
     # This will fail if required fields are missing or invalid (like empty name)
@@ -121,10 +118,10 @@ def _validate_creative_input(
     validated_creative = Creative(**schema_data)
 
     # Additional business logic validation
-    if not creative.get("name") or str(creative.get("name")).strip() == "":
+    if not creative.name or str(creative.name).strip() == "":
         raise ValueError("Creative name cannot be empty")
 
-    if not creative.get("format_id") and not creative.get("format"):
+    if not creative.format_id:
         raise ValueError("Creative format is required")
 
     # Use validated format (auto-upgraded from string if needed)
@@ -181,89 +178,86 @@ def _validate_creative_input(
     return validated_creative
 
 
-def _extract_url_from_assets(creative: dict[str, Any] | BaseModel) -> str | None:
-    """Extract the best URL from a creative dict's assets.
+def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
+    """Extract the best URL from a creative's assets.
 
-    Checks creative["url"] first, then iterates asset keys with priority order
+    Checks creative.url first, then iterates asset keys with priority order
     (main, image, video, creative, content), falls back to first available URL.
 
     Args:
-        creative: Raw creative dict from the sync payload.
+        creative: CreativeAsset model from the sync payload.
 
     Returns:
         The extracted URL string, or None if no URL found.
     """
-    # Transitional: accept both models and dicts (removed in Phase 1b)
-    if not isinstance(creative, dict):
-        creative = creative.model_dump(mode="json")
-
-    url = creative.get("url")
-    if url or not creative.get("assets"):
+    url = getattr(creative, "url", None)
+    if url or not creative.assets:
         return url
 
-    assets = creative["assets"]
+    assets = creative.assets
 
     # Priority 1: Try common asset_ids
     for priority_key in ["main", "image", "video", "creative", "content"]:
-        if priority_key in assets and isinstance(assets[priority_key], dict):
-            url = assets[priority_key].get("url")
+        if priority_key in assets:
+            asset = assets[priority_key]
+            url = asset.get("url") if isinstance(asset, dict) else getattr(asset, "url", None)
             if url:
                 logger.debug(f"[sync_creatives] Extracted URL from assets.{priority_key}.url")
-                return url
+                return str(url)
 
     # Priority 2: First available asset URL
     for asset_id, asset_data in assets.items():
-        if isinstance(asset_data, dict) and asset_data.get("url"):
+        asset_url = asset_data.get("url") if isinstance(asset_data, dict) else getattr(asset_data, "url", None)
+        if asset_url:
             logger.debug(f"[sync_creatives] Extracted URL from assets.{asset_id}.url (fallback)")
-            return asset_data["url"]
+            return str(asset_url)
 
     return None
 
 
 def _build_creative_data(
-    creative: dict[str, Any] | BaseModel, url: str | None, context: dict[str, Any] | BaseModel | None = None
+    creative: CreativeAsset, url: str | None, context: dict[str, Any] | BaseModel | None = None
 ) -> dict[str, Any]:
-    """Build the data dict for a creative from raw creative dict.
+    """Build the data dict for a creative from a CreativeAsset model.
 
     Extracts standard fields (url, click_url, width, height, duration),
     optional fields (assets, snippet, snippet_type, template_variables),
     and context if provided.
 
     Args:
-        creative: Raw creative dict from the sync payload.
+        creative: CreativeAsset model from the sync payload.
         url: Extracted URL (from _extract_url_from_assets).
         context: Optional application-level context per AdCP spec.
 
     Returns:
         Data dict for storing in the creative's data field.
     """
-    # Transitional: accept both models and dicts (removed in Phase 1b)
-    if not isinstance(creative, dict):
-        creative = creative.model_dump(mode="json")
     if context is not None and not isinstance(context, dict):
         context = context.model_dump()
 
     data: dict[str, Any] = {
         "url": url,
-        "click_url": creative.get("click_url"),
-        "width": creative.get("width"),
-        "height": creative.get("height"),
-        "duration": creative.get("duration"),
+        "click_url": getattr(creative, "click_url", None),
+        "width": getattr(creative, "width", None),
+        "height": getattr(creative, "height", None),
+        "duration": getattr(creative, "duration", None),
     }
-    if creative.get("assets"):
-        data["assets"] = creative["assets"]
-    if creative.get("snippet"):
-        data["snippet"] = creative["snippet"]
-        data["snippet_type"] = creative.get("snippet_type")
-    if creative.get("template_variables"):
-        data["template_variables"] = creative["template_variables"]
+    if creative.assets:
+        data["assets"] = creative.assets
+    snippet = getattr(creative, "snippet", None)
+    if snippet:
+        data["snippet"] = snippet
+        data["snippet_type"] = getattr(creative, "snippet_type", None)
+    template_variables = getattr(creative, "template_variables", None)
+    if template_variables:
+        data["template_variables"] = template_variables
     if context is not None:
         data["context"] = context
     return data
 
 
 def _update_existing_creative(
-    creative: dict[str, Any] | BaseModel,
+    creative: CreativeAsset,
     existing_creative: Any,
     session: Any,
     format_value: Any,
@@ -282,7 +276,7 @@ def _update_existing_creative(
     and data persistence.
 
     Args:
-        creative: Raw creative dict from the sync payload.
+        creative: CreativeAsset model from the sync payload.
         existing_creative: Existing DBCreative model to update (mutated in-place).
         session: SQLAlchemy session for flush and flag_modified.
         format_value: Validated FormatId from Creative schema.
@@ -297,9 +291,6 @@ def _update_existing_creative(
     Returns:
         Tuple of (SyncCreativeResult, needs_approval).
     """
-    # Transitional: accept both models and dicts (removed in Phase 1b)
-    if not isinstance(creative, dict):
-        creative = creative.model_dump(mode="json")
 
     from typing import Literal
 
@@ -311,8 +302,8 @@ def _update_existing_creative(
     changes: list[str] = []
 
     # Upsert mode: update provided fields
-    if creative.get("name") != existing_creative.name:
-        name_value = creative.get("name")
+    if creative.name != existing_creative.name:
+        name_value = creative.name
         if name_value is not None:
             existing_creative.name = str(name_value)
         changes.append("name")
@@ -333,7 +324,7 @@ def _update_existing_creative(
         changes.append("format")
 
     # Determine creative status based on approval mode
-    creative_format = creative.get("format_id") or creative.get("format")
+    creative_format = creative.format_id
     needs_approval = False
     if creative_format:  # Only update approval status if format is provided
         if approval_mode == "auto-approve":
@@ -427,24 +418,30 @@ def _update_existing_creative(
 
                     # Extract message/brief from assets or inputs
                     message = None
-                    if creative.get("assets"):
-                        assets = creative.get("assets", {})
-                        for role, asset in assets.items():
-                            if role in ["message", "brief", "prompt"] and isinstance(asset, dict):
-                                message = asset.get("content") or asset.get("text")
-                                break
+                    if creative.assets:
+                        for role, asset in creative.assets.items():
+                            if role in ["message", "brief", "prompt"]:
+                                if isinstance(asset, dict):
+                                    message = asset.get("content") or asset.get("text")
+                                else:
+                                    message = getattr(asset, "content", None) or getattr(asset, "text", None)
+                                if message:
+                                    break
 
-                    if not message and creative.get("inputs"):
-                        inputs = creative.get("inputs", [])
-                        if inputs and isinstance(inputs[0], dict):
-                            message = inputs[0].get("context_description")
+                    if not message and creative.inputs:
+                        inputs = creative.inputs or []
+                        if inputs:
+                            first_input = inputs[0]
+                            if isinstance(first_input, dict):
+                                message = first_input.get("context_description")
+                            else:
+                                message = getattr(first_input, "context_description", None)
 
                     # Extract promoted_offerings from assets if available
                     promoted_offerings = None
-                    if creative.get("assets"):
-                        assets = creative.get("assets", {})
-                        for role, asset in assets.items():
-                            if role == "promoted_offerings" and isinstance(asset, dict):
+                    if creative.assets:
+                        for role, asset in creative.assets.items():
+                            if role == "promoted_offerings":
                                 promoted_offerings = asset
                                 break
 
@@ -454,7 +451,7 @@ def _update_existing_creative(
                         existing_context_id = existing_creative.data.get("generative_context_id")
 
                     # Use provided context_id or existing one
-                    context_id = creative.get("context_id") or existing_context_id
+                    context_id = getattr(creative, "context_id", None) or existing_context_id
 
                     # Only call build_creative if we have a message (refinement)
                     if message:
@@ -474,7 +471,7 @@ def _update_existing_creative(
                                 gemini_api_key=gemini_api_key,
                                 promoted_offerings=promoted_offerings,
                                 context_id=context_id,
-                                finalize=creative.get("approved", False),
+                                finalize=getattr(creative, "approved", False),
                             )
                         )
 
@@ -490,7 +487,7 @@ def _update_existing_creative(
                                 creative_output = build_result["creative_output"]
 
                                 # Only use generative assets if user didn't provide their own
-                                user_provided_assets = creative.get("assets")
+                                user_provided_assets = creative.assets
                                 if creative_output.get("assets") and not user_provided_assets:
                                     data["assets"] = creative_output["assets"]
                                     changes.append("assets")
@@ -536,16 +533,16 @@ def _update_existing_creative(
                     # Build creative manifest from available data
                     # Extract string ID from FormatId object if needed
                     format_id_str = creative_format.id if hasattr(creative_format, "id") else str(creative_format)
-                    creative_manifest = {
+                    creative_manifest: dict[str, Any] = {
                         "creative_id": existing_creative.creative_id,
-                        "name": creative.get("name") or existing_creative.name,
+                        "name": creative.name or existing_creative.name,
                         "format_id": format_id_str,
                     }
 
                     # Add any provided asset data for validation
                     # Validate assets are in dict format (AdCP v2.4+)
-                    if creative.get("assets"):
-                        validated_assets = _validate_creative_assets(creative.get("assets"))
+                    if creative.assets:
+                        validated_assets = _validate_creative_assets(creative.assets)
                         if validated_assets:
                             creative_manifest["assets"] = validated_assets
                     if data.get("url"):
@@ -557,7 +554,7 @@ def _update_existing_creative(
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation (update): "
                         f"{existing_creative.creative_id} format {format_id_str} "
-                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.get('assets'))}, "
+                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.assets)}, "
                         f"has_url={bool(data.get('url'))}"
                     )
 
@@ -617,7 +614,7 @@ def _update_existing_creative(
             else:
                 # Preview generation returned no previews
                 # Only acceptable if creative has a media_url (direct URL to creative asset)
-                has_media_url = bool(creative.get("url") or data.get("url"))
+                has_media_url = bool(getattr(creative, "url", None) or data.get("url"))
 
                 if has_media_url:
                     # Static creatives with media_url don't need previews
@@ -696,7 +693,7 @@ def _update_existing_creative(
 
 
 def _create_new_creative(
-    creative: dict[str, Any] | BaseModel,
+    creative: CreativeAsset,
     session: Any,
     format_value: Any,
     approval_mode: str,
@@ -713,29 +710,25 @@ def _create_new_creative(
     creative agent validation (generative build or static preview),
     DB insertion, approval mode logic, and AI review submission.
 
-    Mutates ``creative["creative_id"]`` in-place when the ID is server-generated.
+    Mutates ``creative.creative_id`` in-place when the ID is server-generated.
 
     Returns:
         Tuple of (SyncCreativeResult, needs_approval).
     """
-    # Transitional: accept both models and dicts (removed in Phase 1b)
-    if not isinstance(creative, dict):
-        creative = creative.model_dump(mode="json")
-
     from src.core.database.models import Creative as DBCreative
 
     # Extract creative_id for error reporting (must be defined before any validation)
-    creative_id = creative.get("creative_id", "unknown")
+    creative_id = creative.creative_id or "unknown"
 
     # Prepare data field with all creative properties
     url = _extract_url_from_assets(creative)
     data = _build_creative_data(creative, url, context)
 
     # Store user-provided assets for preservation check
-    user_provided_assets = creative.get("assets")
+    user_provided_assets = creative.assets
 
     # ALWAYS validate creatives with the creative agent (validation + preview generation)
-    creative_format = creative.get("format_id") or creative.get("format")
+    creative_format = creative.format_id
     if creative_format:
         try:
             # Use pre-fetched formats (fetched outside transaction at function start)
@@ -771,30 +764,36 @@ def _create_new_creative(
 
                     # Extract message/brief from assets or inputs
                     message = None
-                    if creative.get("assets"):
-                        assets = creative.get("assets", {})
-                        for role, asset in assets.items():
-                            if role in ["message", "brief", "prompt"] and isinstance(asset, dict):
-                                message = asset.get("content") or asset.get("text")
-                                break
+                    if creative.assets:
+                        for role, asset in creative.assets.items():
+                            if role in ["message", "brief", "prompt"]:
+                                if isinstance(asset, dict):
+                                    message = asset.get("content") or asset.get("text")
+                                else:
+                                    message = getattr(asset, "content", None) or getattr(asset, "text", None)
+                                if message:
+                                    break
 
-                    if not message and creative.get("inputs"):
-                        inputs = creative.get("inputs", [])
-                        if inputs and isinstance(inputs[0], dict):
-                            message = inputs[0].get("context_description")
+                    if not message and creative.inputs:
+                        inputs = creative.inputs or []
+                        if inputs:
+                            first_input = inputs[0]
+                            if isinstance(first_input, dict):
+                                message = first_input.get("context_description")
+                            else:
+                                message = getattr(first_input, "context_description", None)
 
                     if not message:
-                        message = f"Create a creative for: {creative.get('name')}"
+                        message = f"Create a creative for: {creative.name}"
                         logger.warning(
                             "[sync_creatives] No message found in assets/inputs, using creative name as fallback"
                         )
 
                     # Extract promoted_offerings from assets if available
                     promoted_offerings = None
-                    if creative.get("assets"):
-                        assets = creative.get("assets", {})
-                        for role, asset in assets.items():
-                            if role == "promoted_offerings" and isinstance(asset, dict):
+                    if creative.assets:
+                        for role, asset in creative.assets.items():
+                            if role == "promoted_offerings":
                                 promoted_offerings = asset
                                 break
 
@@ -814,8 +813,8 @@ def _create_new_creative(
                             message=message,
                             gemini_api_key=gemini_api_key,
                             promoted_offerings=promoted_offerings,
-                            context_id=creative.get("context_id"),
-                            finalize=creative.get("approved", False),
+                            context_id=getattr(creative, "context_id", None),
+                            finalize=getattr(creative, "approved", False),
                         )
                     )
 
@@ -867,16 +866,16 @@ def _create_new_creative(
                     # Build creative manifest from available data
                     # Extract string ID from FormatId object if needed
                     format_id_str = creative_format.id if hasattr(creative_format, "id") else str(creative_format)
-                    creative_manifest = {
-                        "creative_id": creative.get("creative_id") or str(uuid.uuid4()),
-                        "name": creative.get("name"),
+                    creative_manifest: dict[str, Any] = {
+                        "creative_id": creative.creative_id or str(uuid.uuid4()),
+                        "name": creative.name,
                         "format_id": format_id_str,
                     }
 
                     # Add any provided asset data for validation
                     # Validate assets are in dict format (AdCP v2.4+)
-                    if creative.get("assets"):
-                        validated_assets = _validate_creative_assets(creative.get("assets"))
+                    if creative.assets:
+                        validated_assets = _validate_creative_assets(creative.assets)
                         if validated_assets:
                             creative_manifest["assets"] = validated_assets
                     if data.get("url"):
@@ -887,7 +886,7 @@ def _create_new_creative(
                     format_id_str = creative_format.id if hasattr(creative_format, "id") else str(creative_format)
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation: {format_id_str} "
-                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.get('assets'))}, "
+                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.assets)}, "
                         f"has_url={bool(data.get('url'))}"
                     )
 
@@ -940,7 +939,7 @@ def _create_new_creative(
                 else:
                     # Preview generation returned no previews
                     # Only acceptable if creative has a media_url (direct URL to creative asset)
-                    has_media_url = bool(creative.get("url") or data.get("url"))
+                    has_media_url = bool(getattr(creative, "url", None) or data.get("url"))
 
                     if has_media_url:
                         # Static creatives with media_url don't need previews
@@ -1002,8 +1001,8 @@ def _create_new_creative(
 
     db_creative = DBCreative(
         tenant_id=tenant["tenant_id"],
-        creative_id=creative.get("creative_id") or str(uuid.uuid4()),
-        name=creative.get("name"),
+        creative_id=creative.creative_id or str(uuid.uuid4()),
+        name=creative.name,
         agent_url=format_info["agent_url"],
         format=format_info["format_id"],
         # Cast TypedDict to dict for SQLAlchemy column type
@@ -1017,9 +1016,9 @@ def _create_new_creative(
     session.add(db_creative)
     session.flush()  # Get the ID
 
-    # Update creative_id if it was generated
-    if not creative.get("creative_id"):
-        creative["creative_id"] = db_creative.creative_id
+    # Update creative_id if it was generated (i6k: model attribute assignment)
+    if not creative.creative_id:
+        creative.creative_id = db_creative.creative_id
 
     # Now apply approval mode logic
     if approval_mode == "auto-approve":
@@ -1669,8 +1668,19 @@ def _sync_creatives_impl(
 
     with get_db_session() as session:
         # Process each creative with proper transaction isolation
-        for creative in creatives:
+        for raw_creative in creatives:
             try:
+                # Normalize to CreativeAsset model (handles dicts from A2A raw, BaseModel subclasses)
+                if isinstance(raw_creative, CreativeAsset):
+                    creative = raw_creative
+                elif isinstance(raw_creative, dict):
+                    # Default required fields for raw dicts missing them
+                    creative_data = raw_creative.copy()
+                    creative_data.setdefault("assets", {})
+                    creative = CreativeAsset(**creative_data)
+                else:
+                    creative = CreativeAsset(**raw_creative.model_dump())
+
                 # Validate the creative against schema and business rules
                 try:
                     validated_creative = _validate_creative_input(creative, registry, principal_id)
@@ -1678,7 +1688,7 @@ def _sync_creatives_impl(
 
                 except (ValidationError, ValueError) as validation_error:
                     # Creative failed validation - add to failed list
-                    creative_id = _get_field(creative, "creative_id", "unknown")
+                    creative_id = creative.creative_id or "unknown"
                     # Format ValidationError nicely for clients, pass through ValueError as-is
                     if isinstance(validation_error, ValidationError):
                         error_msg = format_validation_error(validation_error, context=f"creative {creative_id}")
@@ -1705,14 +1715,14 @@ def _sync_creatives_impl(
                     # Check if creative already exists (always check for upsert/patch behavior)
                     # SECURITY: Must filter by principal_id to prevent cross-principal modification
                     existing_creative = None
-                    if _get_field(creative, "creative_id"):
+                    if creative.creative_id:
                         from src.core.database.models import Creative as DBCreative
 
                         # Query for existing creative with security filter
                         stmt = select(DBCreative).filter_by(
                             tenant_id=tenant["tenant_id"],
                             principal_id=principal_id,  # SECURITY: Prevent cross-principal modification
-                            creative_id=_get_field(creative, "creative_id"),
+                            creative_id=creative.creative_id,
                         )
                         existing_creative = session.scalars(stmt).first()
 
@@ -1733,12 +1743,12 @@ def _sync_creatives_impl(
 
                         # Handle failed updates
                         if update_result.action == "failed":
-                            creative_format = _get_field(creative, "format_id") or _get_field(creative, "format")
+                            creative_format = creative.format_id
                             failed_creatives.append(
                                 {
                                     "creative_id": existing_creative.creative_id,
                                     "error": update_result.errors[0] if update_result.errors else "Unknown error",
-                                    "format": creative_format,
+                                    "format": str(creative_format),
                                 }
                             )
                             failed_count += 1
@@ -1753,11 +1763,11 @@ def _sync_creatives_impl(
 
                         # Track creatives needing approval for workflow creation
                         if needs_approval:
-                            creative_format = _get_field(creative, "format_id") or _get_field(creative, "format")
+                            creative_format = creative.format_id
                             creative_info = {
                                 "creative_id": existing_creative.creative_id,
                                 "format": creative_format,
-                                "name": _get_field(creative, "name"),
+                                "name": creative.name,
                                 "status": existing_creative.status,
                             }
                             # Include AI review reason if available
@@ -1788,13 +1798,13 @@ def _sync_creatives_impl(
 
                         # Handle failed creates
                         if create_result.action == "failed":
-                            creative_format = _get_field(creative, "format_id") or _get_field(creative, "format")
-                            creative_id = _get_field(creative, "creative_id", "unknown")
+                            creative_format = creative.format_id
+                            creative_id = creative.creative_id or "unknown"
                             failed_creatives.append(
                                 {
                                     "creative_id": creative_id,
                                     "error": create_result.errors[0] if create_result.errors else "Unknown error",
-                                    "format": creative_format,
+                                    "format": str(creative_format),
                                 }
                             )
                             failed_count += 1
@@ -1806,11 +1816,11 @@ def _sync_creatives_impl(
 
                         # Track creatives needing approval for workflow creation
                         if needs_approval:
-                            creative_format = _get_field(creative, "format_id") or _get_field(creative, "format")
+                            creative_format = creative.format_id
                             creative_info = {
                                 "creative_id": create_result.creative_id,
                                 "format": creative_format,
-                                "name": _get_field(creative, "name"),
+                                "name": creative.name,
                                 "status": create_result.status,
                             }
                             # AI review reason will be added asynchronously when review completes
@@ -1824,10 +1834,10 @@ def _sync_creatives_impl(
 
             except Exception as e:
                 # Savepoint automatically rolls back this creative only
-                creative_id = _get_field(creative, "creative_id", "unknown")
+                creative_id = _get_field(raw_creative, "creative_id", "unknown")
                 error_msg = str(e)
                 failed_creatives.append(
-                    {"creative_id": creative_id, "name": _get_field(creative, "name"), "error": error_msg}
+                    {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
                 results.append(

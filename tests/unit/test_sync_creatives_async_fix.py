@@ -11,6 +11,7 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types.generated_poc.core.format_id import FormatId
 
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
@@ -157,10 +158,12 @@ class TestSyncCreativesErrorHandling:
                         mock_reg_instance = MagicMock()
                         mock_registry.return_value = mock_reg_instance
 
+                        _fmt_id = FormatId(agent_url="https://example.com", id="display_300x250")
+
                         # Mock get_format to return a valid format spec
                         async def mock_get_format(*args, **kwargs):
                             mock_format = MagicMock()
-                            mock_format.format_id = {"agent_url": "https://example.com", "id": "display_300x250"}
+                            mock_format.format_id = _fmt_id
                             mock_format.agent_url = "https://example.com"
                             mock_format.output_format_ids = None  # Not generative
                             return mock_format
@@ -170,7 +173,7 @@ class TestSyncCreativesErrorHandling:
                         # Mock list_all_formats to return a matching format
                         async def mock_list_formats(*args, **kwargs):
                             mock_format = MagicMock()
-                            mock_format.format_id = {"agent_url": "https://example.com", "id": "display_300x250"}
+                            mock_format.format_id = _fmt_id
                             mock_format.agent_url = "https://example.com"
                             mock_format.output_format_ids = None  # Not generative
                             return [mock_format]
@@ -242,12 +245,14 @@ class TestSyncCreativesAsyncScenario:
                         mock_reg_instance = MagicMock()
                         mock_registry.return_value = mock_reg_instance
 
+                        _fmt_id2 = FormatId(agent_url="https://example.com", id="display_300x250")
+
                         # Mock async methods
                         async def mock_get_format(*args, **kwargs):
                             # Simulate work
                             await asyncio.sleep(0.001)
                             mock_format = MagicMock()
-                            mock_format.format_id = {"agent_url": "https://example.com", "id": "display_300x250"}
+                            mock_format.format_id = _fmt_id2
                             mock_format.agent_url = "https://example.com"
                             mock_format.output_format_ids = None
                             return mock_format
@@ -256,7 +261,7 @@ class TestSyncCreativesAsyncScenario:
                             # Simulate work
                             await asyncio.sleep(0.001)
                             mock_format = MagicMock()
-                            mock_format.format_id = {"agent_url": "https://example.com", "id": "display_300x250"}
+                            mock_format.format_id = _fmt_id2
                             mock_format.agent_url = "https://example.com"
                             mock_format.output_format_ids = None
                             return [mock_format]
