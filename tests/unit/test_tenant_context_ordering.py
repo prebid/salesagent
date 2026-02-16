@@ -64,6 +64,7 @@ def test_update_media_buy_calls_auth_before_tenant():
     """Regression test: update_media_buy must call auth before get_current_tenant()."""
     from datetime import UTC, datetime
 
+    from src.core.schemas import UpdateMediaBuyRequest
     from src.core.tool_context import ToolContext
     from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -87,8 +88,9 @@ def test_update_media_buy_calls_auth_before_tenant():
         mock_tenant.return_value = {"tenant_id": "test_tenant"}
 
         # Try to call (will fail on DB access, but we're testing call order)
+        req = UpdateMediaBuyRequest(media_buy_id="mb_123")
         try:
-            _update_media_buy_impl(media_buy_id="mb_123", ctx=ctx)
+            _update_media_buy_impl(req=req, ctx=ctx)
         except Exception:
             pass  # Expected to fail, we're just checking call order
 

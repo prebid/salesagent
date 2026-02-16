@@ -101,6 +101,7 @@ class TestUpdateMediaBuyDryRunNoPersistence:
 
     def test_dry_run_returns_simulated_response(self, mock_context):
         """Dry run should return a simulated response without database writes."""
+        from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         with (
@@ -141,14 +142,14 @@ class TestUpdateMediaBuyDryRunNoPersistence:
             mock_media_buy.media_buy_id = "mb_existing_123"
             mock_session.scalars.return_value.first.return_value = mock_media_buy
 
-            # Execute
-            response = _update_media_buy_impl(
+            # Execute — impl now accepts a typed request object
+            req = UpdateMediaBuyRequest(
                 media_buy_id="mb_existing_123",
                 buyer_ref="test-buyer",
                 paused=True,
                 packages=[{"package_id": "pkg_1", "paused": True}],
-                ctx=mock_context,
             )
+            response = _update_media_buy_impl(req=req, ctx=mock_context)
 
             # Verify response
             assert response.media_buy_id == "mb_existing_123"

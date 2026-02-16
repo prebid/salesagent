@@ -55,6 +55,10 @@ from adcp.types.generated_poc.core.context import ContextObject
 
 # V3: Two Pagination types - batch-based for delivery, page-based for list responses
 from adcp.types.generated_poc.media_buy.list_creatives_response import Pagination as LibraryResponsePagination
+from adcp.types.generated_poc.media_buy.package_update import PackageUpdate1 as LibraryPackageUpdate1
+from adcp.types.generated_poc.media_buy.update_media_buy_request import (
+    UpdateMediaBuyRequest1 as LibraryUpdateMediaBuyRequest1,
+)
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -79,8 +83,6 @@ from adcp.types import (
 )
 
 # AdCP creative types for schema definitions
-from adcp.types import CreativeAsset as LibraryCreativeAsset
-from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
 
 # V3: Structured geo targeting types
@@ -90,7 +92,6 @@ from adcp.types import Product as LibraryProduct
 from adcp.types import PromotedProducts as LibraryPromotedProducts
 from adcp.types import Property as LibraryProperty
 from adcp.types import PropertyListReference as LibraryPropertyListReference  # V3: new field in GetProductsRequest
-from adcp.types import ReportingWebhook as LibraryReportingWebhook
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
 
 # Type alias for the union of all AdCP pricing option types (V3 consolidated)
@@ -2902,87 +2903,77 @@ class UpdatePackageRequest(SalesAgentBaseModel):
 
 
 # AdCP-compliant supporting models for update-media-buy-request
-class AdCPPackageUpdate(SalesAgentBaseModel):
-    """Package-specific update per AdCP update-media-buy-request schema.
+class AdCPPackageUpdate(LibraryPackageUpdate1):
+    """Package-specific update extending library type.
 
-    Supports three creative management modes (adcp#208):
-    - creative_ids: Simple list of existing creative IDs to assign
-    - creative_assignments: Update weight/placement for existing creatives
-    - creatives: Upload new creatives with optional weight/placement config
+    Inherits all fields from library (budget, paused, targeting_overlay,
+    creative_assignments, creatives, bid_price, ext, impressions, pacing).
+
+    Adds creative_ids — spec-mandated field missing from library codegen.
+    TODO(adcp-library): Remove creative_ids once upstream codegen adds it.
     """
 
-    package_id: str | None = None
-    buyer_ref: str | None = None
-    budget: float | None = Field(None, ge=0)  # Budget allocation in the currency specified by the pricing option
-    paused: bool | None = None  # adcp 2.12.0+: replaced 'active' with 'paused'
-    targeting_overlay: Targeting | None = None
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+    # Override package_id to be optional (library variant1 has it required for oneOf)
+    package_id: str | None = None  # type: ignore[assignment]
+    # Spec field missing from library codegen (adcp#208)
     creative_ids: list[str] | None = None
-    # adcp#208: creative_assignments for weight/placement updates on existing creatives
-    creative_assignments: list[LibraryCreativeAssignment] | None = None
-    # adcp#208: creatives for inline upload with optional weight/placement config
-    creatives: list[LibraryCreativeAsset] | None = None
-
-    # NOTE: No Python validator needed - AdCP schema has oneOf constraint for package_id/buyer_ref
-    # Schema validation at /schemas/v1/media-buy/update-media-buy-request.json enforces this
 
 
-class UpdateMediaBuyRequest(SalesAgentBaseModel):
-    """AdCP-compliant update media buy request per update-media-buy-request schema.
+class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
+    """Update media buy request extending library type.
 
-    Fully compliant with AdCP specification:
-    - OneOf constraint: either media_buy_id OR buyer_ref (not both)
-    - Uses start_time/end_time (datetime) per AdCP spec
-    - Budget object contains currency and pacing
-    - Packages array for package-specific updates
-    - All fields optional except the oneOf identifier
+    Inherits all AdCP fields from library (paused, start_time, end_time,
+    packages, push_notification_config, context, reporting_webhook, ext).
+
+    Overrides:
+    - media_buy_id: optional (library variant1 requires it; oneOf handled at app level)
+    - start_time/end_time: accept raw datetime/str (backward compat with A2A path)
+    - packages: use our AdCPPackageUpdate (adds creative_ids)
+    - budget: campaign-level budget (not in library — convenience field)
+    - today: internal testing field
     """
 
-    # AdCP oneOf constraint: either media_buy_id OR buyer_ref
-    media_buy_id: str | None = None
-    buyer_ref: str | None = None
-
-    # Campaign-level updates (all optional per AdCP spec)
-    paused: bool | None = None  # adcp 2.12.0+: replaced 'active' with 'paused'
-    start_time: datetime | Literal["asap"] | None = None  # AdCP uses datetime or 'asap', not date
-    end_time: datetime | None = None  # AdCP uses datetime, not date
-    budget: Budget | None = None  # Budget object contains currency/pacing
-    packages: list[AdCPPackageUpdate] | None = None
-    push_notification_config: dict[str, Any] | None = Field(
-        None,
-        description="Application-level webhook config (NOTE: Protocol-level push notifications via A2A/MCP transport take precedence)",
-    )
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context provided by the client (echoed in responses)"
-    )
-    reporting_webhook: LibraryReportingWebhook | None = Field(
-        None,
-        description="Optional webhook configuration for automated reporting delivery",
-    )
-    ext: dict[str, Any] | None = Field(None, description="Extension fields for future protocol additions")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+    # Override media_buy_id to be optional (library variant1 has it required for oneOf)
+    media_buy_id: str | None = None  # type: ignore[assignment]
+    # Override datetime fields to accept raw strings (A2A path sends ISO strings)
+    start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
+    end_time: datetime | None = None
+    # Override packages to use our extended type with creative_ids
+    packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
+    # Campaign-level budget (not in library spec — convenience field)
+    budget: Budget | None = None
+    # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
-
-    # NOTE: No Python validator needed for oneOf constraint - AdCP schema enforces media_buy_id/buyer_ref oneOf
-    # Schema validation at /schemas/v1/media-buy/update-media-buy-request.json enforces this
 
     @model_validator(mode="before")
     @classmethod
-    def parse_datetime_strings(cls, values):
-        """Parse ISO 8601 datetime strings to datetime objects."""
+    def unwrap_and_parse(cls, values):
+        """Unwrap RootModel packages and parse datetime strings."""
         if not isinstance(values, dict):
             return values
 
-        # Handle start_time: convert ISO string to datetime if needed
+        # Unwrap RootModel packages (FastMCP produces library PackageUpdate RootModel)
+        if "packages" in values and values["packages"]:
+            unwrapped = []
+            for pkg in values["packages"]:
+                if hasattr(pkg, "root"):
+                    # RootModel — unwrap inner variant to dict for re-validation as our type
+                    unwrapped.append(pkg.root.model_dump())
+                else:
+                    unwrapped.append(pkg)
+            values["packages"] = unwrapped
+
+        # Parse ISO 8601 datetime strings (A2A path sends raw strings)
         if "start_time" in values:
             start_time = values["start_time"]
             if isinstance(start_time, str) and start_time != "asap":
-                # Parse ISO 8601 string to datetime
                 values["start_time"] = datetime.fromisoformat(start_time)
 
-        # Handle end_time: convert ISO string to datetime if needed
         if "end_time" in values:
             end_time = values["end_time"]
             if isinstance(end_time, str):
-                # Parse ISO 8601 string to datetime
                 values["end_time"] = datetime.fromisoformat(end_time)
 
         return values

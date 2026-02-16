@@ -175,6 +175,7 @@ class TestSchemaLibraryInheritance:
             # Core types
             "CreateMediaBuyRequest",
             "GetProductsRequest",
+            # UpdateMediaBuyRequest extends UpdateMediaBuyRequest1 (variant, not RootModel)
             "UpdateMediaBuyRequest",
             "ListCreativesRequest",
             "ListCreativesResponse",  # Nested type incompatibilities
