@@ -10,6 +10,7 @@ Handles creative operations including:
 import logging
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -25,7 +26,7 @@ from adcp.types.generated_poc.media_buy.list_creatives_request import (
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from rich.console import Console
 from sqlalchemy import select
 
@@ -54,8 +55,18 @@ from src.core.schemas import (
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 
 
+def _get_field(obj: Any, field: str, default: Any = None) -> Any:
+    """Get a field from a model or dict (transitional helper for Phase 1a).
+
+    Removed in Phase 1b when all callers pass typed models.
+    """
+    if isinstance(obj, dict):
+        return obj.get(field, default)
+    return getattr(obj, field, default)
+
+
 def _validate_creative_input(
-    creative: dict[str, Any],
+    creative: dict[str, Any] | BaseModel,
     registry: Any,
     principal_id: str,
 ) -> Creative:
@@ -78,6 +89,10 @@ def _validate_creative_input(
         ValueError: If business logic checks fail (empty name, missing format,
             unknown format, unreachable agent).
     """
+    # Transitional: accept both models and dicts (removed in Phase 1b)
+    if not isinstance(creative, dict):
+        creative = creative.model_dump(mode="json")
+
     # Create temporary schema object for validation (AdCP v1 spec compliant)
     # Only include AdCP spec fields + internal fields
     schema_data: dict[str, Any] = {
@@ -166,7 +181,7 @@ def _validate_creative_input(
     return validated_creative
 
 
-def _extract_url_from_assets(creative: dict[str, Any]) -> str | None:
+def _extract_url_from_assets(creative: dict[str, Any] | BaseModel) -> str | None:
     """Extract the best URL from a creative dict's assets.
 
     Checks creative["url"] first, then iterates asset keys with priority order
@@ -178,6 +193,10 @@ def _extract_url_from_assets(creative: dict[str, Any]) -> str | None:
     Returns:
         The extracted URL string, or None if no URL found.
     """
+    # Transitional: accept both models and dicts (removed in Phase 1b)
+    if not isinstance(creative, dict):
+        creative = creative.model_dump(mode="json")
+
     url = creative.get("url")
     if url or not creative.get("assets"):
         return url
@@ -202,7 +221,7 @@ def _extract_url_from_assets(creative: dict[str, Any]) -> str | None:
 
 
 def _build_creative_data(
-    creative: dict[str, Any], url: str | None, context: dict[str, Any] | None = None
+    creative: dict[str, Any] | BaseModel, url: str | None, context: dict[str, Any] | BaseModel | None = None
 ) -> dict[str, Any]:
     """Build the data dict for a creative from raw creative dict.
 
@@ -218,6 +237,12 @@ def _build_creative_data(
     Returns:
         Data dict for storing in the creative's data field.
     """
+    # Transitional: accept both models and dicts (removed in Phase 1b)
+    if not isinstance(creative, dict):
+        creative = creative.model_dump(mode="json")
+    if context is not None and not isinstance(context, dict):
+        context = context.model_dump()
+
     data: dict[str, Any] = {
         "url": url,
         "click_url": creative.get("click_url"),
@@ -238,14 +263,14 @@ def _build_creative_data(
 
 
 def _update_existing_creative(
-    creative: dict[str, Any],
+    creative: dict[str, Any] | BaseModel,
     existing_creative: Any,
     session: Any,
     format_value: Any,
     approval_mode: str,
     tenant: dict[str, Any],
     webhook_url: str | None,
-    context: dict[str, Any] | None,
+    context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
@@ -272,6 +297,10 @@ def _update_existing_creative(
     Returns:
         Tuple of (SyncCreativeResult, needs_approval).
     """
+    # Transitional: accept both models and dicts (removed in Phase 1b)
+    if not isinstance(creative, dict):
+        creative = creative.model_dump(mode="json")
+
     from typing import Literal
 
     # Update updated_at timestamp
@@ -667,13 +696,13 @@ def _update_existing_creative(
 
 
 def _create_new_creative(
-    creative: dict[str, Any],
+    creative: dict[str, Any] | BaseModel,
     session: Any,
     format_value: Any,
     approval_mode: str,
     tenant: dict[str, Any],
     webhook_url: str | None,
-    context: dict[str, Any] | None,
+    context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
@@ -689,6 +718,10 @@ def _create_new_creative(
     Returns:
         Tuple of (SyncCreativeResult, needs_approval).
     """
+    # Transitional: accept both models and dicts (removed in Phase 1b)
+    if not isinstance(creative, dict):
+        creative = creative.model_dump(mode="json")
+
     from src.core.database.models import Creative as DBCreative
 
     # Extract creative_id for error reporting (must be defined before any validation)
@@ -1278,8 +1311,8 @@ def _create_sync_workflow_steps(
     principal_id: str,
     tenant: dict[str, Any],
     approval_mode: str,
-    push_notification_config: dict | None,
-    context: dict | None,
+    push_notification_config: PushNotificationConfig | dict | None,
+    context: ContextObject | dict | None,
     ctx: Any,
 ) -> None:
     """Create workflow steps for creatives requiring approval.
@@ -1330,12 +1363,19 @@ def _create_sync_workflow_steps(
                 "approval_mode": approval_mode,
             }
             # Store push_notification_config if provided for async notification
+            # Serialize models for DB storage (transitional: may receive model or dict)
             if push_notification_config:
-                request_data_for_workflow["push_notification_config"] = push_notification_config
+                request_data_for_workflow["push_notification_config"] = (
+                    push_notification_config.model_dump(mode="json")
+                    if isinstance(push_notification_config, BaseModel)
+                    else push_notification_config
+                )
 
             # Store context if provided (for echoing back in webhook)
             if context:
-                request_data_for_workflow["context"] = context
+                request_data_for_workflow["context"] = (
+                    context.model_dump() if isinstance(context, BaseModel) else context
+                )
 
             # Store protocol type for webhook payload creation
             # ToolContext = A2A, Context (FastMCP) = MCP
@@ -1510,14 +1550,14 @@ def _audit_log_sync(
 
 
 def _sync_creatives_impl(
-    creatives: list[dict[str, Any] | Any],
+    creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]],
     assignments: dict | None = None,
     creative_ids: list[str] | None = None,
     delete_missing: bool = False,
     dry_run: bool = False,
     validation_mode: str = "strict",
-    push_notification_config: dict | None = None,
-    context: dict | None = None,  # Application level context per adcp spec
+    push_notification_config: PushNotificationConfig | dict | None = None,
+    context: ContextObject | dict | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
@@ -1547,19 +1587,15 @@ def _sync_creatives_impl(
     """
     from pydantic import ValidationError
 
-    # Process raw creative dictionaries without schema validation initially
-    # Schema objects will be created later with populated internal fields
-    # Use mode='json' to serialize Pydantic types (AnyUrl, etc.) to JSON-compatible primitives
-    raw_creatives = [
-        creative if isinstance(creative, dict) else creative.model_dump(mode="json") for creative in creatives
-    ]
+    # Phase 1a: Models flow through to helpers (which convert via isinstance guard).
+    # No model_dump at orchestrator level — helpers handle dict conversion transitionally.
 
     # AdCP 2.5: Filter creatives by creative_ids if provided
     # This allows scoped updates to specific creatives without affecting others
     if creative_ids:
         creative_ids_set = set(creative_ids)
-        raw_creatives = [c for c in raw_creatives if c.get("creative_id") in creative_ids_set]
-        logger.info(f"[sync_creatives] Filtered to {len(raw_creatives)} creatives by creative_ids filter")
+        creatives = [c for c in creatives if _get_field(c, "creative_id") in creative_ids_set]
+        logger.info(f"[sync_creatives] Filtered to {len(creatives)} creatives by creative_ids filter")
 
     start_time = time.time()
 
@@ -1610,7 +1646,11 @@ def _sync_creatives_impl(
     # Extract webhook URL from push_notification_config for AI review callbacks
     webhook_url = None
     if push_notification_config:
-        webhook_url = push_notification_config.get("url")
+        # Transitional: accept both PushNotificationConfig model and dict
+        if isinstance(push_notification_config, dict):
+            webhook_url = push_notification_config.get("url")
+        else:
+            webhook_url = str(push_notification_config.url) if push_notification_config.url else None
         logger.info(f"[sync_creatives] Push notification webhook URL: {webhook_url}")
 
     # Get tenant creative approval settings
@@ -1629,7 +1669,7 @@ def _sync_creatives_impl(
 
     with get_db_session() as session:
         # Process each creative with proper transaction isolation
-        for creative in raw_creatives:
+        for creative in creatives:
             try:
                 # Validate the creative against schema and business rules
                 try:
@@ -1638,7 +1678,7 @@ def _sync_creatives_impl(
 
                 except (ValidationError, ValueError) as validation_error:
                     # Creative failed validation - add to failed list
-                    creative_id = creative.get("creative_id", "unknown")
+                    creative_id = _get_field(creative, "creative_id", "unknown")
                     # Format ValidationError nicely for clients, pass through ValueError as-is
                     if isinstance(validation_error, ValidationError):
                         error_msg = format_validation_error(validation_error, context=f"creative {creative_id}")
@@ -1665,14 +1705,14 @@ def _sync_creatives_impl(
                     # Check if creative already exists (always check for upsert/patch behavior)
                     # SECURITY: Must filter by principal_id to prevent cross-principal modification
                     existing_creative = None
-                    if creative.get("creative_id"):
+                    if _get_field(creative, "creative_id"):
                         from src.core.database.models import Creative as DBCreative
 
                         # Query for existing creative with security filter
                         stmt = select(DBCreative).filter_by(
                             tenant_id=tenant["tenant_id"],
                             principal_id=principal_id,  # SECURITY: Prevent cross-principal modification
-                            creative_id=creative.get("creative_id"),
+                            creative_id=_get_field(creative, "creative_id"),
                         )
                         existing_creative = session.scalars(stmt).first()
 
@@ -1693,7 +1733,7 @@ def _sync_creatives_impl(
 
                         # Handle failed updates
                         if update_result.action == "failed":
-                            creative_format = creative.get("format_id") or creative.get("format")
+                            creative_format = _get_field(creative, "format_id") or _get_field(creative, "format")
                             failed_creatives.append(
                                 {
                                     "creative_id": existing_creative.creative_id,
@@ -1713,11 +1753,11 @@ def _sync_creatives_impl(
 
                         # Track creatives needing approval for workflow creation
                         if needs_approval:
-                            creative_format = creative.get("format_id") or creative.get("format")
+                            creative_format = _get_field(creative, "format_id") or _get_field(creative, "format")
                             creative_info = {
                                 "creative_id": existing_creative.creative_id,
                                 "format": creative_format,
-                                "name": creative.get("name"),
+                                "name": _get_field(creative, "name"),
                                 "status": existing_creative.status,
                             }
                             # Include AI review reason if available
@@ -1748,8 +1788,8 @@ def _sync_creatives_impl(
 
                         # Handle failed creates
                         if create_result.action == "failed":
-                            creative_format = creative.get("format_id") or creative.get("format")
-                            creative_id = creative.get("creative_id", "unknown")
+                            creative_format = _get_field(creative, "format_id") or _get_field(creative, "format")
+                            creative_id = _get_field(creative, "creative_id", "unknown")
                             failed_creatives.append(
                                 {
                                     "creative_id": creative_id,
@@ -1766,11 +1806,11 @@ def _sync_creatives_impl(
 
                         # Track creatives needing approval for workflow creation
                         if needs_approval:
-                            creative_format = creative.get("format_id") or creative.get("format")
+                            creative_format = _get_field(creative, "format_id") or _get_field(creative, "format")
                             creative_info = {
                                 "creative_id": create_result.creative_id,
                                 "format": creative_format,
-                                "name": creative.get("name"),
+                                "name": _get_field(creative, "name"),
                                 "status": create_result.status,
                             }
                             # AI review reason will be added asynchronously when review completes
@@ -1784,9 +1824,11 @@ def _sync_creatives_impl(
 
             except Exception as e:
                 # Savepoint automatically rolls back this creative only
-                creative_id = creative.get("creative_id", "unknown")
+                creative_id = _get_field(creative, "creative_id", "unknown")
                 error_msg = str(e)
-                failed_creatives.append({"creative_id": creative_id, "name": creative.get("name"), "error": error_msg})
+                failed_creatives.append(
+                    {"creative_id": creative_id, "name": _get_field(creative, "name"), "error": error_msg}
+                )
                 failed_count += 1
                 results.append(
                     SyncCreativeResult(
@@ -1869,10 +1911,12 @@ def _sync_creatives_impl(
         message += f", {len(creatives_needing_approval)} require approval"
 
     # Build AdCP-compliant response (per official spec)
+    # SyncCreativesResponse.context is dict[str, Any] | None — serialize model if needed
+    context_dict = context.model_dump() if isinstance(context, BaseModel) else context
     return SyncCreativesResponse(
         creatives=results,
         dry_run=dry_run,
-        context=context,
+        context=context_dict,
     )
 
 
@@ -1906,22 +1950,18 @@ async def sync_creatives(
     Returns:
         ToolResult with SyncCreativesResponse data
     """
-    # Convert typed Pydantic models to dicts for the impl
-    # FastMCP already coerced JSON inputs to these types
-    creatives_dicts = [c.model_dump(mode="json") for c in creatives]
-    push_config_dict = push_notification_config.model_dump(mode="json") if push_notification_config else None
-    context_dict = context.model_dump(mode="json") if context else None
+    # Phase 1a: Pass typed models directly to impl (no more model_dump conversion)
     validation_mode_str = validation_mode.value if validation_mode else "strict"
 
     response = _sync_creatives_impl(
-        creatives=creatives_dicts,
+        creatives=creatives,
         assignments=assignments,
         creative_ids=creative_ids,
         delete_missing=delete_missing,
         dry_run=dry_run,
         validation_mode=validation_mode_str,
-        push_notification_config=push_config_dict,
-        context=context_dict,
+        push_notification_config=push_notification_config,
+        context=context,
         ctx=ctx,
     )
     return ToolResult(content=str(response), structured_content=response)

@@ -543,30 +543,11 @@ def process_and_upload_package_creatives(
         product_id = pkg.product_id or f"package_{pkg_idx}"
         logger.info(f"Processing {len(pkg.creatives)} creatives for package with product_id {product_id}")
 
-        # Convert creatives to dicts with better error handling
-        creative_dicts: list[dict[Any, Any]] = []
-        for creative_idx, creative in enumerate(pkg.creatives):
-            try:
-                if isinstance(creative, dict):
-                    creative_dicts.append(creative)
-                elif hasattr(creative, "model_dump"):
-                    # Use mode='json' to serialize Pydantic types (AnyUrl, etc.) to JSON-compatible primitives
-                    creative_dicts.append(creative.model_dump(exclude_none=True, mode="json"))
-                else:
-                    # Fail fast instead of risky conversion
-                    raise TypeError(
-                        f"Invalid creative type at index {creative_idx}: {type(creative).__name__}. "
-                        f"Expected Creative model or dict."
-                    )
-            except Exception as e:
-                raise ValueError(
-                    f"Failed to serialize creative at index {creative_idx} for package {product_id}: {e}"
-                ) from e
-
         try:
             # Step 1: Upload creatives to database via sync_creatives
+            # Phase 1a: Pass models directly (impl handles both models and dicts)
             sync_response = _sync_creatives_impl(
-                creatives=creative_dicts,
+                creatives=pkg.creatives,
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
                 assignments=None,  # Assign separately after creation
                 dry_run=testing_ctx.dry_run if testing_ctx else False,
