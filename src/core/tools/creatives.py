@@ -166,6 +166,41 @@ def _validate_creative_input(
     return validated_creative
 
 
+def _extract_url_from_assets(creative: dict[str, Any]) -> str | None:
+    """Extract the best URL from a creative dict's assets.
+
+    Checks creative["url"] first, then iterates asset keys with priority order
+    (main, image, video, creative, content), falls back to first available URL.
+
+    Args:
+        creative: Raw creative dict from the sync payload.
+
+    Returns:
+        The extracted URL string, or None if no URL found.
+    """
+    url = creative.get("url")
+    if url or not creative.get("assets"):
+        return url
+
+    assets = creative["assets"]
+
+    # Priority 1: Try common asset_ids
+    for priority_key in ["main", "image", "video", "creative", "content"]:
+        if priority_key in assets and isinstance(assets[priority_key], dict):
+            url = assets[priority_key].get("url")
+            if url:
+                logger.debug(f"[sync_creatives] Extracted URL from assets.{priority_key}.url")
+                return url
+
+    # Priority 2: First available asset URL
+    for asset_id, asset_data in assets.items():
+        if isinstance(asset_data, dict) and asset_data.get("url"):
+            logger.debug(f"[sync_creatives] Extracted URL from assets.{asset_id}.url (fallback)")
+            return asset_data["url"]
+
+    return None
+
+
 def _sync_creatives_impl(
     creatives: list[dict[str, Any] | Any],
     assignments: dict | None = None,
@@ -420,31 +455,7 @@ def _sync_creatives_impl(
 
                         # Store creative properties in data field
                         # AdCP 2.5: Full upsert semantics (replace all data, not merge)
-                        # Extract URL from assets if not provided at top level
-                        # Use same priority logic as schema_data above
-                        url = creative.get("url")
-                        if not url and creative.get("assets"):
-                            assets = creative["assets"]
-
-                            # Priority 1: Try common asset_ids
-                            for priority_key in ["main", "image", "video", "creative", "content"]:
-                                if priority_key in assets and isinstance(assets[priority_key], dict):
-                                    url = assets[priority_key].get("url")
-                                    if url:
-                                        logger.debug(
-                                            f"[sync_creatives] Extracted URL from assets.{priority_key}.url for data storage"
-                                        )
-                                        break
-
-                            # Priority 2: First available asset URL
-                            if not url:
-                                for asset_id, asset_data in assets.items():
-                                    if isinstance(asset_data, dict) and asset_data.get("url"):
-                                        url = asset_data["url"]
-                                        logger.debug(
-                                            f"[sync_creatives] Extracted URL from assets.{asset_id}.url for data storage (fallback)"
-                                        )
-                                        break
+                        url = _extract_url_from_assets(creative)
 
                         data = {
                             "url": url,
@@ -828,30 +839,7 @@ def _sync_creatives_impl(
                         creative_id = creative.get("creative_id", "unknown")
 
                         # Prepare data field with all creative properties
-                        # Extract URL from assets if not provided at top level
-                        url = creative.get("url")
-                        if not url and creative.get("assets"):
-                            assets = creative["assets"]
-
-                            # Priority 1: Try common asset_ids
-                            for priority_key in ["main", "image", "video", "creative", "content"]:
-                                if priority_key in assets and isinstance(assets[priority_key], dict):
-                                    url = assets[priority_key].get("url")
-                                    if url:
-                                        logger.debug(
-                                            f"[sync_creatives] Extracted URL from assets.{priority_key}.url for create"
-                                        )
-                                        break
-
-                            # Priority 2: First available asset URL
-                            if not url:
-                                for asset_id, asset_data in assets.items():
-                                    if isinstance(asset_data, dict) and asset_data.get("url"):
-                                        url = asset_data["url"]
-                                        logger.debug(
-                                            f"[sync_creatives] Extracted URL from assets.{asset_id}.url for create (fallback)"
-                                        )
-                                        break
+                        url = _extract_url_from_assets(creative)
 
                         data = {
                             "url": url,
