@@ -40,6 +40,7 @@ from a2a.types import (
     MessageSendParams,
     MethodNotFoundError,
     Part,
+    PushNotificationConfig,
     Task,
     TaskIdParams,
     TaskQueryParams,
@@ -60,6 +61,8 @@ from datetime import UTC, datetime
 
 from adcp import create_a2a_webhook_payload
 from adcp.types import GeneratedTaskStatus
+from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
@@ -376,23 +379,23 @@ class AdCPRequestHandler(RequestHandler):
             if not task.metadata or "push_notification_config" not in task.metadata:
                 return
 
-            webhook_config = task.metadata["push_notification_config"]
+            webhook_config: PushNotificationConfig = task.metadata["push_notification_config"]
             push_notification_service = get_protocol_webhook_service()
 
             from uuid import uuid4
 
-            url = webhook_config.get("url")
+            url = webhook_config.url
             if not url:
                 logger.info("[red]No push notification URL present; skipping webhook[/red]")
                 return
 
-            authentication = webhook_config.get("authentication") or {}
-            schemes = authentication.get("schemes") or []
+            auth = webhook_config.authentication
+            schemes = auth.schemes if auth else []
             auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
-            auth_token = authentication.get("credentials")
+            auth_token = auth.credentials if auth else None
 
             push_notification_config = DBPushNotificationConfig(
-                id=webhook_config.get("id") or f"pnc_{uuid4().hex[:16]}",
+                id=webhook_config.id or f"pnc_{uuid4().hex[:16]}",
                 tenant_id="",
                 principal_id="",
                 url=url,
@@ -576,27 +579,9 @@ class AdCPRequestHandler(RequestHandler):
         if skill_invocations:
             task_metadata["skills_requested"] = [inv["skill"] for inv in skill_invocations]
 
-        # Store push notification config in metadata if provided
+        # Store push notification config model directly in metadata (no destructuring)
         if push_notification_config:
-            task_metadata["push_notification_config"] = {
-                "url": push_notification_config.url,
-                "authentication": (
-                    {
-                        "schemes": (
-                            push_notification_config.authentication.schemes
-                            if push_notification_config.authentication
-                            else []
-                        ),
-                        "credentials": (
-                            push_notification_config.authentication.credentials
-                            if push_notification_config.authentication
-                            else None
-                        ),
-                    }
-                    if push_notification_config.authentication
-                    else None
-                ),
-            }
+            task_metadata["push_notification_config"] = push_notification_config
 
         task = Task(
             id=task_id,
@@ -1385,7 +1370,7 @@ class AdCPRequestHandler(RequestHandler):
         skill_name: str,
         parameters: dict,
         auth_token: str | None,
-        push_notification_config: dict | None = None,
+        push_notification_config: PushNotificationConfig | None = None,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1652,9 +1637,14 @@ class AdCPRequestHandler(RequestHandler):
                     "received_parameters": list(parameters.keys()),
                 }
 
+            # Construct typed models at the A2A boundary (Pydantic validation at entry)
+            creatives = [CreativeAsset(**c) if isinstance(c, dict) else c for c in parameters["creatives"]]
+            ctx_param = parameters.get("context")
+            context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
+
             # Call core function with spec-compliant parameters (AdCP v2.5)
             response = core_sync_creatives_tool(
-                creatives=parameters["creatives"],
+                creatives=creatives,
                 # AdCP 2.5: Full upsert semantics (patch parameter removed)
                 creative_ids=parameters.get("creative_ids"),
                 assignments=parameters.get("assignments"),
@@ -1662,7 +1652,7 @@ class AdCPRequestHandler(RequestHandler):
                 dry_run=parameters.get("dry_run", False),
                 validation_mode=parameters.get("validation_mode", "strict"),
                 push_notification_config=parameters.get("push_notification_config"),
-                context=parameters.get("context"),
+                context=context,
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 

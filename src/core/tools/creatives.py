@@ -2480,14 +2480,14 @@ async def list_creatives(
 
 
 def sync_creatives_raw(
-    creatives: list[dict],
+    creatives: list[CreativeAsset],
     assignments: dict = None,
     creative_ids: list[str] = None,
     delete_missing: bool = False,
     dry_run: bool = False,
     validation_mode: str = "strict",
-    push_notification_config: dict = None,
-    context: dict | None = None,  # Application level context per adcp spec
+    push_notification_config: PushNotificationConfig | None = None,
+    context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Sync creative assets to the centralized creative library (raw function for A2A server use).
@@ -2495,7 +2495,7 @@ def sync_creatives_raw(
     Delegates to the shared implementation.
 
     Args:
-        creatives: List of creative asset objects
+        creatives: List of CreativeAsset models
         assignments: Bulk assignment map of creative_id to package_ids (spec-compliant)
         creative_ids: Filter to limit sync scope to specific creatives (AdCP 2.5)
         delete_missing: Delete creatives not in sync payload (use with caution)

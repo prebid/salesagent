@@ -28,7 +28,7 @@ from adcp.utils.format_assets import get_individual_assets, has_assets
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from rich.console import Console
 
 
@@ -1298,19 +1298,24 @@ from src.services.slack_notifier import get_slack_notifier
 
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    push_notification_config: dict[str, Any] | None = None,
+    push_notification_config: dict[str, Any] | BaseModel | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> tuple[CreateMediaBuySuccess | CreateMediaBuyError, AdcpTaskStatus]:
     """Create a media buy with the specified parameters.
 
     Args:
         req: Validated CreateMediaBuyRequest with all protocol fields
-        push_notification_config: Push notification config for status updates (A2A only)
+        push_notification_config: Push notification config for status updates (model or dict)
         ctx: FastMCP context (automatically provided)
 
     Returns:
         CreateMediaBuyResponse with media buy details
     """
+    # Normalize push_notification_config to dict for downstream dict-based operations
+    # (A2A server passes a2a.types.PushNotificationConfig model)
+    if push_notification_config is not None and isinstance(push_notification_config, BaseModel):
+        push_notification_config = push_notification_config.model_dump(mode="json")
+
     request_start_time = time.time()
 
     # Warn if unsupported reporting_webhook frequency is requested

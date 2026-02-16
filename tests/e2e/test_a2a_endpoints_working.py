@@ -374,9 +374,7 @@ class TestA2AServerIntegration:
             assert response.status_code != 404, "Endpoint should exist"
 
             # Missing auth should also not be 404
-            response = requests.post(
-                f"{_a2a_base_url()}/a2a", json={"method": "message/send", "params": {}}, timeout=2
-            )
+            response = requests.post(f"{_a2a_base_url()}/a2a", json={"method": "message/send", "params": {}}, timeout=2)
             assert response.status_code != 404, "Endpoint should exist even without auth"
 
         except (requests.ConnectionError, requests.Timeout):
