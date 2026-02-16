@@ -55,9 +55,9 @@ class TestSyncCreativesCreativeIdsFilter:
         # ValidationError will mention 'extra' fields are forbidden or 'patch' specifically
         assert "patch" in str(exc_info.value).lower() or "extra" in str(exc_info.value).lower()
 
-    @patch("src.core.tools.creatives.get_principal_id_from_context")
-    @patch("src.core.tools.creatives.get_current_tenant")
-    @patch("src.core.tools.creatives.get_db_session")
+    @patch("src.core.tools.creatives._sync.get_principal_id_from_context")
+    @patch("src.core.tools.creatives._sync.get_current_tenant")
+    @patch("src.core.tools.creatives._sync.get_db_session")
     def test_sync_creatives_filters_by_creative_ids(self, mock_db_session, mock_tenant, mock_principal):
         """Test _sync_creatives_impl filters creatives by creative_ids."""
         from src.core.tools.creatives import _sync_creatives_impl

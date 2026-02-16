@@ -52,12 +52,12 @@ class TestSyncCreativesFormatValidation:
     def test_format_validation_success(self, mock_context, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation succeeds when format exists."""
         with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant),
-            patch("src.core.tools.creatives.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
+            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives.get_audit_logger"),
-            patch("src.core.tools.creatives.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
             # Setup mock registry
             # Note: list_all_formats and get_format are async methods
@@ -90,12 +90,12 @@ class TestSyncCreativesFormatValidation:
     def test_format_validation_unknown_format(self, mock_context, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when format doesn't exist."""
         with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant),
-            patch("src.core.tools.creatives.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
+            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives.get_audit_logger"),
-            patch("src.core.tools.creatives.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
             # Setup mock registry - format not found
             async def mock_list_all_formats(tenant_id=None):
@@ -130,12 +130,12 @@ class TestSyncCreativesFormatValidation:
     def test_format_validation_agent_unreachable(self, mock_context, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when agent is unreachable."""
         with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant),
-            patch("src.core.tools.creatives.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
+            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives.get_audit_logger"),
-            patch("src.core.tools.creatives.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
             # Setup mock registry - agent unreachable
             async def mock_list_all_formats(tenant_id=None):
@@ -177,12 +177,12 @@ class TestSyncCreativesFormatValidation:
         }
 
         with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant),
-            patch("src.core.tools.creatives.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
+            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives.get_audit_logger"),
-            patch("src.core.tools.creatives.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
             # Setup mock registry
             # Note: list_all_formats and get_format are async methods
@@ -236,12 +236,12 @@ class TestSyncCreativesFormatValidation:
         ]
 
         with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant),
-            patch("src.core.tools.creatives.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
+            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives.get_audit_logger"),
-            patch("src.core.tools.creatives.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
             # Setup mock registry
             async def mock_list_all_formats(tenant_id=None):
@@ -292,12 +292,12 @@ class TestSyncCreativesFormatValidation:
         creative2["creative_id"] = "creative_2"
 
         with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant),
-            patch("src.core.tools.creatives.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
+            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives.get_audit_logger"),
-            patch("src.core.tools.creatives.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
             # Setup mock registry
             # Note: list_all_formats and get_format are async methods
@@ -339,12 +339,12 @@ class TestSyncCreativesFormatValidation:
         }
 
         with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant),
-            patch("src.core.tools.creatives.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
+            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives.get_audit_logger"),
-            patch("src.core.tools.creatives.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
             # Setup mock registry (needed for list_all_formats call)
             async def mock_list_all_formats(tenant_id=None):
@@ -386,12 +386,12 @@ class TestSyncCreativesFormatValidation:
         }
 
         with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant),
-            patch("src.core.tools.creatives.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
+            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives.get_audit_logger"),
-            patch("src.core.tools.creatives.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
             # Setup mock registry
             async def mock_list_all_formats(tenant_id=None):

@@ -84,11 +84,11 @@ class TestSyncCreativesErrorHandling:
             # Missing required fields like name, format_id
         }
 
-        with patch("src.core.tools.creatives.get_db_session") as mock_get_db:
+        with patch("src.core.tools.creatives._sync.get_db_session") as mock_get_db:
             mock_get_db.return_value.__enter__.return_value = mock_session
             mock_get_db.return_value.__exit__.return_value = None
 
-            with patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant):
+            with patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant):
                 with patch(
                     "src.core.helpers.context_helpers.get_principal_from_context",
                     return_value=("test_principal", mock_tenant),
@@ -144,11 +144,11 @@ class TestSyncCreativesErrorHandling:
             # NO assets, NO url - preview is required
         }
 
-        with patch("src.core.tools.creatives.get_db_session") as mock_get_db:
+        with patch("src.core.tools.creatives._sync.get_db_session") as mock_get_db:
             mock_get_db.return_value.__enter__.return_value = mock_session
             mock_get_db.return_value.__exit__.return_value = None
 
-            with patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant):
+            with patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant):
                 with patch(
                     "src.core.helpers.context_helpers.get_principal_from_context",
                     return_value=("test_principal", mock_tenant),
@@ -232,11 +232,11 @@ class TestSyncCreativesAsyncScenario:
             "assets": {"banner_image": {"url": "https://example.com/image.png"}},
         }
 
-        with patch("src.core.tools.creatives.get_db_session") as mock_get_db:
+        with patch("src.core.tools.creatives._sync.get_db_session") as mock_get_db:
             mock_get_db.return_value.__enter__.return_value = mock_session
             mock_get_db.return_value.__exit__.return_value = None
 
-            with patch("src.core.tools.creatives.get_current_tenant", return_value=mock_tenant):
+            with patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant):
                 with patch(
                     "src.core.helpers.context_helpers.get_principal_from_context",
                     return_value=("test_principal", mock_tenant),
