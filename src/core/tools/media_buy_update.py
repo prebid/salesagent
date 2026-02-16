@@ -10,7 +10,7 @@ Handles media buy updates including:
 
 import logging
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 from adcp import PushNotificationConfig
 from adcp.types import Error
@@ -797,19 +797,9 @@ def _update_media_buy_impl(
                 from src.core.tools.creatives import _sync_creatives_impl
 
                 # Sync creatives (upload/update)
-                creative_dicts: list[dict[str, Any]] = []
-                for c in pkg_update.creatives:
-                    if hasattr(c, "model_dump"):
-                        creative_dicts.append(c.model_dump(mode="json"))
-                    else:
-                        creative_dicts.append(cast(dict[str, Any], c))
                 sync_response = _sync_creatives_impl(
-                    creatives=creative_dicts,
-                    assignments={
-                        (c.get("creative_id") if isinstance(c, dict) else c.creative_id): [pkg_update.package_id]
-                        for c in pkg_update.creatives
-                        if (c.get("creative_id") if isinstance(c, dict) else getattr(c, "creative_id", None))
-                    },
+                    creatives=pkg_update.creatives,
+                    assignments={c.creative_id: [pkg_update.package_id] for c in pkg_update.creatives if c.creative_id},
                     ctx=ctx,
                 )
 

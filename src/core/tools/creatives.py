@@ -55,7 +55,7 @@ from src.core.validation_helpers import format_validation_error, run_async_in_sy
 
 
 def _sync_creatives_impl(
-    creatives: list[dict],
+    creatives: list[dict[str, Any] | Any],
     assignments: dict | None = None,
     creative_ids: list[str] | None = None,
     delete_missing: bool = False,
