@@ -701,7 +701,7 @@ class ContextManager(DatabaseManager):
                                 try:
                                     t.result()
                                     console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
-                                except Exception as e:  # noqa: BLE001
+                                except Exception as e:
                                     console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
 
                             task.add_done_callback(_log_task_result)

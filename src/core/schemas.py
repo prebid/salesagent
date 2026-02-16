@@ -2411,9 +2411,6 @@ class PackageRequest(LibraryPackageRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Override targeting_overlay to use our Targeting model instead of library's TargetingOverlay
-    targeting_overlay: "Targeting | None" = None  # type: ignore[assignment]
-
     # Internal fields (not in AdCP spec) - excluded from API responses
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
     media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID", exclude=True)

@@ -1473,7 +1473,7 @@ async def _create_media_buy_impl(
             raise ValueError(error_msg)
 
         # 2. DateTime validation
-        now = datetime.now(UTC)  # noqa: F823
+        now = datetime.now(UTC)
 
         # Validate start_time
         if req.start_time is None:

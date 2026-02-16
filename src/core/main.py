@@ -213,7 +213,7 @@ context_mgr = ContextManager()
 
 # --- Adapter Configuration ---
 # Get adapter from config, fallback to mock
-SELECTED_ADAPTER = ((config.get("ad_server", {}).get("adapter") or "mock") if config else "mock").lower()  # noqa: F841 - used below for adapter selection
+SELECTED_ADAPTER = ((config.get("ad_server", {}).get("adapter") or "mock") if config else "mock").lower()
 AVAILABLE_ADAPTERS = ["mock", "gam", "kevel", "triton", "triton_digital"]
 
 # --- In-Memory State (already initialized above, just adding context_map) ---
@@ -1000,16 +1000,16 @@ if unified_mode:
 # Import MCP tools from separate modules at the end to avoid circular imports
 # Tools are imported and then registered with MCP manually (no decorators in tool modules)
 # Import error logging wrapper for centralized error visibility
-from src.core.tool_error_logging import with_error_logging  # noqa: E402
-from src.core.tools.capabilities import get_adcp_capabilities  # noqa: E402, F401
-from src.core.tools.creative_formats import list_creative_formats  # noqa: E402, F401
-from src.core.tools.creatives import list_creatives, sync_creatives  # noqa: E402, F401
-from src.core.tools.media_buy_create import create_media_buy  # noqa: E402, F401
-from src.core.tools.media_buy_delivery import get_media_buy_delivery  # noqa: E402, F401
-from src.core.tools.media_buy_update import update_media_buy  # noqa: E402, F401
-from src.core.tools.performance import update_performance_index  # noqa: E402, F401
-from src.core.tools.products import get_products  # noqa: E402, F401
-from src.core.tools.properties import list_authorized_properties  # noqa: E402, F401
+from src.core.tool_error_logging import with_error_logging
+from src.core.tools.capabilities import get_adcp_capabilities
+from src.core.tools.creative_formats import list_creative_formats
+from src.core.tools.creatives import list_creatives, sync_creatives
+from src.core.tools.media_buy_create import create_media_buy
+from src.core.tools.media_buy_delivery import get_media_buy_delivery
+from src.core.tools.media_buy_update import update_media_buy
+from src.core.tools.performance import update_performance_index
+from src.core.tools.products import get_products
+from src.core.tools.properties import list_authorized_properties
 
 # Signals tools removed - should come from dedicated signals agents, not sales agent
 
