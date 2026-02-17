@@ -91,6 +91,7 @@ from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
 # V3: Structured geo targeting types
 from adcp.types import FrequencyCap as LibraryFrequencyCap
 from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
+from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import Placement as LibraryPlacement
 from adcp.types import Product as LibraryProduct
@@ -3284,20 +3285,16 @@ class GetSignalsRequest(LibraryGetSignalsRequest):
         return self.max_results
 
 
-class GetSignalsResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
-    """Response containing available signals (AdCP v2.4 spec compliant).
+class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):
+    """Extends library GetSignalsResponse with local Signal type.
 
-    NOTE: Does not extend library type yet because local Signal type differs
-    from library type. Migration tracked in issue #824.
-
-    Per AdCP PR #113, this response contains ONLY domain data.
-    Protocol fields (status, task_id, message, context_id) are added by the
-    protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+    Library provides: signals, errors, context, ext — all inherited from AdCP spec.
+    Local override: signals uses local Signal type (with exclude=True internal fields).
     """
 
-    signals: list[Signal] = Field(..., description="Array of available signals")
-    errors: list[Error] | None = Field(None, description="Optional error reporting")
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    signals: list[Signal] = Field(..., description="Array of available signals")  # type: ignore[assignment]
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

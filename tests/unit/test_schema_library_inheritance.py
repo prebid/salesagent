@@ -184,7 +184,7 @@ class TestSchemaLibraryInheritance:
             "ActivateSignalRequest",
             "ActivateSignalResponse",
             # GetSignalsRequest — migrated (uses library DeliverTo)
-            "GetSignalsResponse",
+            # GetSignalsResponse — migrated (uses local Signal with exclude=True)
             # Property types - nested PublisherDomain type incompatibility
             "ListAuthorizedPropertiesRequest",
             "ListAuthorizedPropertiesResponse",
