@@ -178,7 +178,7 @@ class TestSchemaLibraryInheritance:
             # UpdateMediaBuyRequest extends UpdateMediaBuyRequest1 (variant, not RootModel)
             "UpdateMediaBuyRequest",
             "ListCreativesRequest",
-            "ListCreativesResponse",  # Nested type incompatibilities
+            # ListCreativesResponse — migrated (nested types now extend library)
             "SyncCreativesResponse",
             # Signal types - nested DeliverTo type incompatibility
             "ActivateSignalRequest",

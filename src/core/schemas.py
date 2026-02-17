@@ -35,6 +35,7 @@ from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest
 from adcp.types import ListCreativeFormatsResponse as LibraryListCreativeFormatsResponse
 from adcp.types import ListCreativesRequest as LibraryListCreativesRequest
+from adcp.types import ListCreativesResponse as LibraryListCreativesResponse
 from adcp.types import PackageRequest as LibraryPackageRequest
 from adcp.types import (
     ProductFilters as LibraryFilters,  # For GetProductsRequest (was Filters pre-2.11.0)
@@ -2073,26 +2074,23 @@ class Pagination(LibraryResponsePagination):
     pass  # Inherits all fields from library: limit, offset, total_pages, current_page, has_more
 
 
-class ListCreativesResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
-    """Response from listing creative assets (AdCP v2.4 spec compliant).
+class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResponse):
+    """Extends library ListCreativesResponse with local subtypes.
 
-    NOTE: Does not extend library type yet because local Pagination, QuerySummary,
-    and Creative types differ from library types. Migration tracked in issue #824.
+    Library provides: context, creatives, ext, format_summary, pagination,
+    query_summary, status_summary — all inherited from AdCP spec.
 
-    Per AdCP PR #113, this response contains ONLY domain data.
-    Protocol fields (status, task_id, message, context_id) are added by the
-    protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+    Local overrides nested types to ensure correct dict-to-model parsing
+    (Pydantic needs the local type annotations for local subtypes).
+    Other fields (format_summary, status_summary, context, ext) inherited.
     """
 
-    # Required AdCP domain fields
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Override with local subtypes (each extends its library counterpart)
     query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")
     pagination: Pagination = Field(..., description="Pagination information for navigating results")
-    creatives: list[Creative] = Field(..., description="Array of creative assets")
-
-    # Optional AdCP domain fields
-    format_summary: dict[str, int] | None = Field(None, description="Breakdown by format type")
-    status_summary: dict[str, int] | None = Field(None, description="Breakdown by creative status")
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
+    creatives: list[Creative] = Field(..., description="Array of creative assets")  # type: ignore[assignment]
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
