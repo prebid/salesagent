@@ -30,6 +30,7 @@ from adcp.types import (
 # Import types from stable API (per adcp 2.7.0+)
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
+from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from adcp.types import GetProductsRequest as LibraryGetProductsRequest
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest
@@ -2755,22 +2756,24 @@ class AggregatedTotals(LibraryAggregatedTotals):
     pass  # All fields inherited from library
 
 
-class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
-    """AdCP v2.4-compliant response for get_media_buy_delivery task.
+class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuyDeliveryResponse):
+    """Extends library GetMediaBuyDeliveryResponse with local overrides.
 
-    Per AdCP PR #113, this response contains ONLY domain data.
-    Protocol fields (status, task_id, message, context_id) are added by the
-    protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+    Library provides: reporting_period, currency, errors, context, ext,
+    notification_type, partial_data, sequence_number, unavailable_count,
+    next_expected_at — all inherited from AdCP spec.
+
+    Local overrides:
+    - aggregated_totals: Required (library makes it optional)
+    - media_buy_deliveries: Uses local MediaBuyDeliveryData type
     """
 
-    reporting_period: ReportingPeriod = Field(..., description="Date range for the report")
-    currency: str = Field(..., description="ISO 4217 currency code", pattern=r"^[A-Z]{3}$")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
     aggregated_totals: AggregatedTotals = Field(..., description="Combined metrics across all returned media buys")
-    media_buy_deliveries: list[MediaBuyDeliveryData] = Field(
+    media_buy_deliveries: list[MediaBuyDeliveryData] = Field(  # type: ignore[assignment]
         ..., description="Array of delivery data for each media buy"
     )
-    errors: list[dict] | None = Field(None, description="Task-specific errors and warnings")
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

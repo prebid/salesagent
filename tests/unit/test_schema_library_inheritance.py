@@ -188,8 +188,7 @@ class TestSchemaLibraryInheritance:
             # Property types - nested PublisherDomain type incompatibility
             "ListAuthorizedPropertiesRequest",
             "ListAuthorizedPropertiesResponse",
-            # Response types (may need custom serialization)
-            "GetMediaBuyDeliveryResponse",
+            # GetMediaBuyDeliveryResponse — migrated (local MediaBuyDeliveryData override)
         }
 
         # Get all Request/Response classes from our schemas
