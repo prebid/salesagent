@@ -30,6 +30,7 @@ from adcp.types import (
 # Import types from stable API (per adcp 2.7.0+)
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
+from adcp.types import GetProductsRequest as LibraryGetProductsRequest
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest
 from adcp.types import ListCreativeFormatsResponse as LibraryListCreativeFormatsResponse
@@ -89,12 +90,12 @@ from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
 # V3: Structured geo targeting types
 from adcp.types import FrequencyCap as LibraryFrequencyCap
 from adcp.types import Measurement as LibraryMeasurement
+from adcp.types import Placement as LibraryPlacement
 from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import PromotedProducts as LibraryPromotedProducts
 from adcp.types import Property as LibraryProperty
-from adcp.types import PropertyListReference as LibraryPropertyListReference  # V3: new field in GetProductsRequest
 from adcp.types import QuerySummary as LibraryQuerySummary
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types import SignalFilters as LibrarySignalFilters
@@ -1100,16 +1101,17 @@ class ProductCardDetailed(LibraryProductCardDetailed):
     pass  # All fields inherited from library
 
 
-class Placement(SalesAgentBaseModel):
-    """Specific placement within a product per AdCP spec.
+class Placement(LibraryPlacement):
+    """Extends library Placement with stricter field requirements.
 
-    When provided, buyers can target specific placements when assigning creatives.
+    Library makes description and format_ids optional, but our implementation
+    requires them for all placements.
     """
 
-    placement_id: str = Field(..., description="Unique identifier for the placement")
-    name: str = Field(..., description="Human-readable placement name")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
     description: str = Field(..., description="Detailed description of the placement")
-    format_ids: list["FormatId"] = Field(
+    format_ids: list["FormatId"] = Field(  # type: ignore[assignment]
         ...,
         description="Supported creative formats for this placement",
         min_length=1,
@@ -1419,54 +1421,33 @@ class ProductFilters(LibraryFilters):
         return values
 
 
-class GetProductsRequest(SalesAgentBaseModel):
-    """Request for getting available products.
+class GetProductsRequest(LibraryGetProductsRequest):
+    """Extends library GetProductsRequest with internal-only fields.
 
-    All fields are optional per AdCP spec. brand_manifest and brief provide
-    context for better product recommendations but are not required.
+    Library provides: account_id, brand_manifest, brief, context, ext, filters,
+    property_list, proposal_id — all inherited from AdCP spec.
 
-    V3 Migration: Added property_list and proposal_id fields.
+    Local adds: product_selectors, pagination — internal fields for
+    implementation (excluded from external serialization).
     """
 
-    brand_manifest: LibraryBrandManifest | str | None = Field(
-        None,
-        description="Brand information manifest (inline object or URL string). Optional - provides brand context for better recommendations.",
-    )
-    brief: str | None = Field(
-        None,
-        description="Natural language description of campaign requirements.",
-    )
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context provided by the client (echoed in responses)"
-    )
-    ext: dict[str, Any] | None = Field(
-        None,
-        description="Extension object for custom fields.",
-    )
-    filters: ProductFilters | None = Field(
-        None,
-        description="Structured filters for product discovery",
-    )
-    # V3 new fields
-    property_list: LibraryPropertyListReference | None = Field(
-        None,
-        description="Reference to a property list for filtering products by publisher properties",
-    )
-    proposal_id: str | None = Field(
-        None,
-        description="Proposal ID for referencing a previously generated proposal",
-    )
-    account_id: str | None = Field(
-        None,
-        description="Account ID for filtering products (adcp 3.2.0+)",
-    )
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # brand_manifest is inherited from library as BrandManifestReference | None.
+    # BrandManifestReference is a RootModel[BrandManifest | AnyUrl] that auto-coerces
+    # BrandManifest, dict, and URL string inputs. Consumers access the inner value
+    # via .root (e.g., brand_manifest.root.name).
+
+    # Internal-only fields (not in AdCP spec)
     product_selectors: LibraryPromotedProducts | None = Field(
         None,
         description="Selectors to filter the brand manifest product catalog for product discovery",
+        exclude=True,
     )
     pagination: dict[str, Any] | None = Field(
         None,
         description="Cursor-based pagination parameters (max_results, cursor)",
+        exclude=True,
     )
 
 
@@ -1755,7 +1736,13 @@ class CreativeApprovalStatus(SalesAgentBaseModel):
 
 
 class CreativeAssignment(SalesAgentBaseModel):
-    """Maps creatives to packages with distribution control."""
+    """Maps creatives to packages with distribution control.
+
+    NOTE: Does not extend adcp.types.CreativeAssignment intentionally.
+    Library type has 3 fields (creative_id, placement_ids, weight) for AdCP spec.
+    This local type is an internal tracking entity with 12 fields (assignment_id,
+    media_buy_id, package_id, overrides, targeting, etc.) — different semantics.
+    """
 
     assignment_id: str
     media_buy_id: str
@@ -3365,7 +3352,13 @@ class GetSignalsResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
 
 # --- Signal Activation ---
 class ActivateSignalRequest(SalesAgentBaseModel):
-    """Request to activate a signal for use in campaigns."""
+    """Request to activate a signal for use in campaigns.
+
+    NOTE: Does not extend adcp.types.ActivateSignalRequest intentionally.
+    Library type uses signal_agent_segment_id + required deployments field.
+    This local type uses signal_id + campaign_id/media_buy_id — incompatible
+    field names and different activation semantics.
+    """
 
     signal_id: str = Field(..., description="Signal ID to activate")
     campaign_id: str | None = Field(None, description="Optional campaign ID to activate signal for")
