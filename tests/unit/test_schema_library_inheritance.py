@@ -179,7 +179,6 @@ class TestSchemaLibraryInheritance:
             "UpdateMediaBuyRequest",
             "ListCreativesRequest",
             "ListCreativesResponse",  # Nested type incompatibilities
-            "SyncCreativesRequest",
             "SyncCreativesResponse",
             # Signal types - nested DeliverTo type incompatibility
             "ActivateSignalRequest",

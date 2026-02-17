@@ -100,6 +100,7 @@ from adcp.types import QuerySummary as LibraryQuerySummary
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types import SignalFilters as LibrarySignalFilters
 from adcp.types import SyncCreativeResult as LibrarySyncCreativeResult
+from adcp.types import SyncCreativesRequest as LibrarySyncCreativesRequest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from pydantic import (
     AnyUrl,
@@ -1817,47 +1818,27 @@ SubmitCreativesRequest = AddCreativeAssetsRequest
 SubmitCreativesResponse = AddCreativeAssetsResponse
 
 
-class SyncCreativesRequest(SalesAgentBaseModel):
-    """Request to sync creative assets to centralized library (AdCP v2.5 spec compliant).
+class SyncCreativesRequest(LibrarySyncCreativesRequest):
+    """Extends library SyncCreativesRequest with local Creative type.
 
-    NOTE: Uses Creative instead of library's CreativeAsset due to implementation differences.
-    Library uses CreativeAsset which has different structure than our Creative type.
+    Library provides: account_id, assignments, context, creative_ids, creatives,
+    delete_missing, dry_run, ext, push_notification_config, validation_mode — all
+    inherited from AdCP spec.
 
-    Supports bulk operations, scoped updates via creative_ids, and assignment management.
-    Creatives are synced to a central library and can be used across multiple media buys.
+    Local overrides:
+    - creatives: list[Creative] instead of list[CreativeAsset] (our Creative extends
+      LibraryCreative, which has a richer schema than CreativeAsset)
+    - push_notification_config: kept as dict[str, Any] | None because the library's
+      PushNotificationConfig requires 'authentication' and 'url' fields that aren't
+      enforced in our current implementation
     """
 
-    creatives: list[Creative] = Field(..., description="Array of creative assets to sync (create or update)")
-    assignments: dict[str, list[str]] | None = Field(
-        None, description="Optional bulk assignment of creatives to packages. Maps creative_id to array of package IDs."
-    )
-    context: dict[str, Any] | None = Field(
-        None, description="Application-level context provided by the client (echoed in responses)"
-    )
-    creative_ids: list[str] | None = Field(
-        None,
-        description="Filter to limit sync scope to specific creatives (AdCP 2.5). When provided, only these creatives are synced.",
-    )
-    delete_missing: bool = Field(
-        False,
-        description="When true, creatives not included in this sync will be archived. Use with caution for full library replacement.",
-    )
-    dry_run: bool = Field(
-        False,
-        description="When true, preview changes without applying them. Returns what would be created/updated/deleted.",
-    )
-    ext: dict[str, Any] | None = Field(None, description="Extension object for custom fields")
-    push_notification_config: dict[str, Any] | None = Field(
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    creatives: list[Creative] = Field(..., description="Array of creative assets to sync (create or update)")  # type: ignore[assignment]
+    push_notification_config: dict[str, Any] | None = Field(  # type: ignore[assignment]
         None,
         description="Application-level webhook config (NOTE: Protocol-level push notifications via A2A/MCP transport take precedence)",
-    )
-    validation_mode: Literal["strict", "lenient"] = Field(
-        "strict",
-        description="Validation strictness. 'strict' fails entire sync on any validation error. 'lenient' processes valid creatives and reports errors.",
-    )
-    account_id: str | None = Field(
-        None,
-        description="Account ID for scoping creatives (adcp 3.2.0+)",
     )
 
 
