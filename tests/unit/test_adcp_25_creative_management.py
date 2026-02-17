@@ -532,8 +532,9 @@ class TestSyncCreativesResponseFormat:
         """SyncCreativesResponse must have 'creatives' field per spec."""
         from src.core.schemas import SyncCreativesResponse
 
-        fields = SyncCreativesResponse.model_fields
-        assert "creatives" in fields, "Response must have 'creatives' field"
+        # SyncCreativesResponse is a RootModel proxy — verify via construction + model_dump
+        response = SyncCreativesResponse(creatives=[])
+        assert "creatives" in response.model_dump(), "Response must have 'creatives' field"
 
     def test_response_accepts_dry_run_echo(self):
         """Response should echo dry_run parameter per spec."""

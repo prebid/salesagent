@@ -106,7 +106,14 @@ from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
 from adcp.types import SyncCreativeResult as LibrarySyncCreativeResult
 from adcp.types import SyncCreativesRequest as LibrarySyncCreativesRequest
+from adcp.types import SyncCreativesResponse as LibrarySyncCreativesResponse
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types.generated_poc.media_buy.sync_creatives_response import (
+    SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
+)
+from adcp.types.generated_poc.media_buy.sync_creatives_response import (
+    SyncCreativesResponse2 as LibrarySyncCreativesError,
+)
 from pydantic import (
     AnyUrl,
     BaseModel,
@@ -1954,63 +1961,55 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(SalesAgentBaseModel):
-    """Response from syncing creative assets (AdCP v2.4 spec compliant).
+class SyncCreativesResponse(LibrarySyncCreativesResponse):
+    """Extends library SyncCreativesResponse RootModel with flat attribute access.
 
-    NOTE: Does not extend library type due to incompatible discriminated union pattern.
-    The library uses RootModel with discriminated union (success vs error variants),
-    which conflicts with our protocol envelope wrapping pattern. Our implementation
-    provides equivalent functionality with proper internal field exclusion.
+    Library uses RootModel[SuccessVariant | ErrorVariant] discriminated union.
+    This proxy subclass provides @property accessors for backward-compatible
+    flat attribute access (self.creatives, self.dry_run, self.errors, self.context)
+    while preserving isinstance compatibility with the library type.
 
-    Per AdCP PR #113, this response contains ONLY domain data.
-    Protocol fields (status, task_id, message, context_id) are added by the
-    protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
-
-    Official spec: /schemas/v1/media-buy/sync-creatives-response.json
+    Construction auto-wraps: SyncCreativesResponse(creatives=[...]) works without
+    explicitly creating the variant. Field(exclude=True) on nested SyncCreativeResult
+    is handled natively by Pydantic serialization.
     """
 
-    # Required fields (per official spec)
-    creatives: list[SyncCreativeResult] = Field(..., description="Results for each creative processed")
+    @property
+    def creatives(self) -> list:
+        """Access creatives from success variant (empty list for error variant)."""
+        if isinstance(self.root, LibrarySyncCreativesSuccess):
+            return self.root.creatives
+        return []
 
-    # Optional fields (per official spec)
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
-    dry_run: bool | None = Field(None, description="Whether this was a dry run (no actual changes made)")
+    @property
+    def dry_run(self) -> bool | None:
+        """Access dry_run from success variant."""
+        if isinstance(self.root, LibrarySyncCreativesSuccess):
+            return self.root.dry_run
+        return None
 
-    @model_serializer(mode="wrap")
-    def _serialize_nested_models(self, serializer, info):
-        """Ensure nested Pydantic models use their custom model_dump().
+    @property
+    def errors(self) -> list | None:
+        """Access errors from error variant (None for success variant)."""
+        if isinstance(self.root, LibrarySyncCreativesError):
+            return self.root.errors
+        return None
 
-        Pydantic's default serialization doesn't automatically call custom model_dump() methods
-        on nested models. This serializer introspects all fields and explicitly calls model_dump()
-        on any nested BaseModel instances, ensuring internal fields are properly excluded.
+    @property
+    def context(self):
+        """Access context from whichever variant is active."""
+        return self.root.context
 
-        This approach is resilient to schema changes - no hardcoded field names.
-        """
-        # Get default serialization
-        data = serializer(self)
-
-        # Introspect all fields and re-serialize nested Pydantic models
-        for field_name, _ in self.__class__.model_fields.items():
-            if field_name not in data:
-                continue
-
-            field_value = getattr(self, field_name, None)
-            if field_value is None:
-                continue
-
-            # Handle list of Pydantic models
-            if isinstance(field_value, list) and field_value:
-                if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
-
-            # Handle single Pydantic model
-            elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump(mode=info.mode)
-
-        return data
+    def model_dump(self, **kwargs) -> dict[str, Any]:
+        """Override to default exclude_none=True per AdCP convention."""
+        kwargs.setdefault("exclude_none", True)
+        return super().model_dump(**kwargs)
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
+        if isinstance(self.root, LibrarySyncCreativesError):
+            return f"Creative sync failed with {len(self.root.errors)} error(s)."
+
         # Count actions from creatives list
         created = sum(1 for c in self.creatives if c.action == CreativeAction.created)
         updated = sum(1 for c in self.creatives if c.action == CreativeAction.updated)
@@ -3341,11 +3340,11 @@ class ActivateSignalRequest(LibraryActivateSignalRequest):
 class ActivateSignalResponse(SalesAgentBaseModel):
     """Response from signal activation.
 
-    NOT migrated to library base: library ActivateSignalResponse is a
-    RootModel[SuccessVariant | ErrorVariant] discriminated union, which is
-    fundamentally incompatible with this flat model pattern. The local flat
-    model (signal_id + optional errors/activation_details) works for our
-    use case. See salesagent-c0m for details.
+    NOT migrated to library base (evaluated in salesagent-xeb):
+    1. Library uses RootModel[SuccessVariant | ErrorVariant] — cannot add fields
+    2. Library has no signal_id field (no request correlation in response)
+    3. Library uses structured list[Deployment] vs our generic activation_details dict
+    4. Library enforces atomic success/error; we allow both simultaneously
     """
 
     signal_id: str = Field(..., description="Activated signal ID")

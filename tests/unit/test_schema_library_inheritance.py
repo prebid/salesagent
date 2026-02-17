@@ -179,10 +179,10 @@ class TestSchemaLibraryInheritance:
             "UpdateMediaBuyRequest",
             "ListCreativesRequest",
             # ListCreativesResponse — migrated (nested types now extend library)
-            "SyncCreativesResponse",
+            # SyncCreativesResponse — migrated (RootModel proxy subclass)
             # Signal types
             # ActivateSignalRequest — migrated (signal_id → signal_agent_segment_id)
-            "ActivateSignalResponse",  # RootModel union — cannot subclass
+            "ActivateSignalResponse",  # RootModel union + semantic incompatibility (no signal_id in library)
             # GetSignalsRequest — migrated (uses library DeliverTo)
             # GetSignalsResponse — migrated (uses local Signal with exclude=True)
             # Property types - nested PublisherDomain type incompatibility
