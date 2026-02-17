@@ -15,7 +15,7 @@ This module provides:
 import json
 import os
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -793,7 +793,7 @@ class GAMInventoryDiscovery:
                 f"Custom targeting: Keys + values (limit: {max_custom_targeting_values_per_key} values per key)"
             )
 
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
 
         # Clear existing data
         self.ad_units.clear()
@@ -812,7 +812,7 @@ class GAMInventoryDiscovery:
         )
         audience_segments = self.discover_audience_segments()
 
-        self.last_sync = datetime.now()
+        self.last_sync = datetime.now(UTC)
 
         summary = {
             "tenant_id": self.tenant_id,
@@ -867,10 +867,10 @@ class GAMInventoryDiscovery:
         """
         logger.info(f"Starting selective inventory sync for tenant {self.tenant_id}: {sync_types}")
 
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         summary: dict[str, Any] = {
             "tenant_id": self.tenant_id,
-            "sync_time": datetime.now().isoformat(),
+            "sync_time": datetime.now(UTC).isoformat(),
             "sync_types": sync_types,
         }
 
@@ -925,7 +925,7 @@ class GAMInventoryDiscovery:
             if audience_segment_limit:
                 summary["audience_segments"]["limit_applied"] = audience_segment_limit
 
-        self.last_sync = datetime.now()
+        self.last_sync = datetime.now(UTC)
         summary["duration_seconds"] = (self.last_sync - start_time).total_seconds()
 
         logger.info(f"Selective inventory sync completed: {summary}")
@@ -972,7 +972,7 @@ class GAMInventoryDiscovery:
             # Check cache age
             if cache_data.get("last_sync"):
                 last_sync = datetime.fromisoformat(cache_data["last_sync"])
-                if datetime.now() - last_sync > timedelta(hours=24):
+                if datetime.now(UTC) - last_sync > timedelta(hours=24):
                     logger.info("Cache is older than 24 hours, skipping")
                     return False
 

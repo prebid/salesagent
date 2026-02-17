@@ -12,7 +12,7 @@ import logging
 import time
 import traceback
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from functools import wraps
 from typing import Any, TypeVar
@@ -53,7 +53,7 @@ class GAMError(Exception):
         self.error_type = error_type
         self.details = details or {}
         self.recoverable = recoverable
-        self.timestamp = datetime.now()
+        self.timestamp = datetime.now(UTC)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert error to dictionary for logging/monitoring."""
@@ -300,7 +300,7 @@ class GAMOperationTracker:
     def __init__(self, operation_id: str):
         self.operation_id = operation_id
         self.steps: list[dict[str, Any]] = []
-        self.start_time = datetime.now()
+        self.start_time = datetime.now(UTC)
 
     def add_step(
         self,
@@ -318,7 +318,7 @@ class GAMOperationTracker:
                 "resource_id": resource_id,
                 "rollback_action": rollback_action,
                 "metadata": metadata or {},
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(UTC),
             }
         )
 
@@ -350,7 +350,7 @@ class GAMOperationTracker:
         return {
             "operation_id": self.operation_id,
             "start_time": self.start_time.isoformat(),
-            "duration": (datetime.now() - self.start_time).total_seconds(),
+            "duration": (datetime.now(UTC) - self.start_time).total_seconds(),
             "steps": [
                 {
                     "name": step["step_name"],

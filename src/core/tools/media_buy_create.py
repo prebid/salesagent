@@ -3348,7 +3348,7 @@ async def _create_media_buy_impl(
                         creative_id=creative.creative_id, status="rejected", detail=f"Conversion error: {str(e)}"
                     )
                     continue
-            statuses = adapter.add_creative_assets(response.media_buy_id, assets, datetime.now())
+            statuses = adapter.add_creative_assets(response.media_buy_id, assets, datetime.now(UTC))
 
             # Check if manual approval is required for creatives
             require_creative_approval = manual_approval_required and "add_creative_assets" in manual_approval_operations

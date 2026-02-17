@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     name VARCHAR(255) NOT NULL,
     subdomain VARCHAR(100) UNIQUE NOT NULL,
     config JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     is_active BOOLEAN DEFAULT TRUE,
     billing_plan VARCHAR(50) DEFAULT 'standard',
     billing_contact VARCHAR(255)
@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS creative_formats (
     modifications JSONB,  -- JSON with modifications to base format
     source_url TEXT,  -- URL where format was discovered
     platform_config JSONB,  -- Platform-specific config (e.g., GAM creative template IDs)
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
     FOREIGN KEY (extends) REFERENCES creative_formats(format_id) ON DELETE RESTRICT
 );
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS products (
     cpm DECIMAL(10,2),
     price_guidance JSONB,
     is_custom BOOLEAN DEFAULT FALSE,
-    expires_at TIMESTAMP,
+    expires_at TIMESTAMPTZ,
     countries JSONB,
     implementation_config JSONB,
     PRIMARY KEY (tenant_id, product_id),
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS principals (
     name VARCHAR(255) NOT NULL,
     platform_mappings JSONB NOT NULL,
     access_token VARCHAR(255) UNIQUE NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (tenant_id, principal_id),
     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
 );
@@ -81,8 +81,8 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(255) NOT NULL,
     role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'manager', 'viewer')),
     google_id VARCHAR(255),
-    created_at TIMESTAMP DEFAULT NOW(),
-    last_login TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_login TIMESTAMPTZ,
     is_active BOOLEAN DEFAULT TRUE,
     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
 );
@@ -99,9 +99,9 @@ CREATE TABLE IF NOT EXISTS media_buys (
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'draft',
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
-    approved_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    approved_at TIMESTAMPTZ,
     approved_by VARCHAR(255),
     raw_request JSONB NOT NULL,
     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
@@ -117,11 +117,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT,
     status VARCHAR(50) NOT NULL DEFAULT 'pending',
     assigned_to VARCHAR(255),
-    due_date TIMESTAMP,
-    completed_at TIMESTAMP,
+    due_date TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
     completed_by VARCHAR(255),
     metadata JSONB,
-    created_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
     FOREIGN KEY (media_buy_id) REFERENCES media_buys(media_buy_id) ON DELETE CASCADE
 );
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS audit_logs (
     log_id SERIAL PRIMARY KEY,
     tenant_id VARCHAR(50) NOT NULL,
-    timestamp TIMESTAMP DEFAULT NOW(),
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
     operation VARCHAR(100) NOT NULL,
     principal_name VARCHAR(255),
     principal_id VARCHAR(100),
@@ -159,7 +159,7 @@ CREATE TABLE IF NOT EXISTS superadmin_config (
     config_key VARCHAR(100) PRIMARY KEY,
     config_value TEXT,
     description TEXT,
-    updated_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
     updated_by VARCHAR(255)
 );
 """

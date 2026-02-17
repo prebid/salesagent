@@ -263,7 +263,7 @@ def _run_sync_thread(
 
         # Initialize discovery
         discovery = GAMInventoryDiscovery(client=client, tenant_id=tenant_id)
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
 
         # Helper function to update progress
         def update_progress(phase: str, phase_num: int, count: int = 0):
@@ -294,7 +294,7 @@ def _run_sync_thread(
         # Initialize inventory service for streaming writes
         with get_db_session() as db:
             inventory_service = GAMInventoryService(db)
-            sync_time = datetime.now()
+            sync_time = datetime.now(UTC)
 
             # Phase 1: Ad Units (fetch → write → clear memory)
             update_progress("Discovering Ad Units", 1 + phase_offset)
@@ -369,7 +369,7 @@ def _run_sync_thread(
                 logger.info(f"[{sync_id}] Skipping stale marking for incremental sync")
 
         # Build result summary
-        end_time = datetime.now()
+        end_time = datetime.now(UTC)
 
         # For incremental sync, also report total counts from database (not just newly synced items)
         if sync_mode == "incremental":

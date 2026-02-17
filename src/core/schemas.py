@@ -1631,7 +1631,7 @@ class Creative(LibraryCreative):
 
     **Our Customizations:**
     - assets: Simplified to dict[str, Any] (instead of strict typed asset unions)
-    - created_date/updated_date: Made optional with datetime.now() defaults
+    - created_date/updated_date: Made optional with datetime.now(UTC) defaults
     - status: Made optional with "pending_review" default
     - principal_id: Internal field for workflow tracking (excluded from responses)
 

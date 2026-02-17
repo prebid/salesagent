@@ -7,7 +7,7 @@ for Google Ad Manager orders.
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from googleads import ad_manager
@@ -111,7 +111,7 @@ class GAMOrdersManager:
             logger.info(f"  Total Budget: ${total_budget:,.2f}")
             logger.info(f"  Flight Dates: {start_time.date()} to {end_time.date()}")
             # Return a mock order ID for dry run
-            return f"dry_run_order_{int(datetime.now().timestamp())}"
+            return f"dry_run_order_{int(datetime.now(UTC).timestamp())}"
         else:
             order_service = self.client_manager.get_service("OrderService")
             created_orders = order_service.createOrders([order])

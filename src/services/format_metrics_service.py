@@ -9,7 +9,7 @@ Used by DynamicPricingService to calculate price_guidance (floor, recommended) a
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -47,7 +47,7 @@ class FormatMetricsAggregationService:
         reporting_service = GAMReportingService(gam_client)
 
         # Calculate date range
-        end_date = datetime.now()
+        end_date = datetime.now(UTC)
         start_date = end_date - timedelta(days=period_days)
 
         # Query GAM with COUNTRY_CODE + CREATIVE_SIZE dimensions
@@ -210,7 +210,7 @@ class FormatMetricsAggregationService:
                 existing.p75_cpm = Decimal(str(p75_cpm)) if p75_cpm is not None else None
                 existing.p90_cpm = Decimal(str(p90_cpm)) if p90_cpm is not None else None
                 existing.line_item_count = len(line_item_cpms)
-                existing.last_updated = datetime.now()
+                existing.last_updated = datetime.now(UTC)
                 rows_updated += 1
             else:
                 # Create new record

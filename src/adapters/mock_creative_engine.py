@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from src.adapters.creative_engine import CreativeEngineAdapter
@@ -37,7 +37,7 @@ class MockCreativeEngine(CreativeEngineAdapter):
                 # Requires human review
                 status = "pending_review"
                 detail = f"Awaiting manual review - format '{creative.format_id}' requires human approval."
-                est_approval = datetime.now().astimezone() + timedelta(days=2)
+                est_approval = datetime.now(UTC).astimezone() + timedelta(days=2)
 
             # Generate adaptation suggestions for video formats
             suggested_adaptations = []

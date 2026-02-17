@@ -9,7 +9,7 @@ Extends BaseWorkflowManager with GAM-specific workflow logic.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.adapters.base_workflow import BaseWorkflowManager
@@ -398,7 +398,10 @@ class GAMWorkflowManager(BaseWorkflowManager):
                     status="working",  # Indicates background processing in progress
                     owner="system",  # System owns background tasks
                     assigned_to="background_approval_service",
-                    transaction_details={"gam_order_id": media_buy_id, "polling_started": datetime.now().isoformat()},
+                    transaction_details={
+                        "gam_order_id": media_buy_id,
+                        "polling_started": datetime.now(UTC).isoformat(),
+                    },
                 )
 
                 db_session.add(workflow_step)

@@ -9,7 +9,7 @@ This service:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import String, and_, create_engine, delete, func, or_, select, text
@@ -72,7 +72,7 @@ class GAMInventoryService:
         Writes to database incrementally in batches rather than loading everything into memory.
         This prevents OOM errors with large inventories (10k+ items).
         """
-        sync_time = datetime.now()
+        sync_time = datetime.now(UTC)
         BATCH_SIZE = 500  # Write every 500 items to keep memory usage low
 
         # Load ALL existing inventory IDs once (1 query instead of N)
@@ -369,8 +369,8 @@ class GAMInventoryService:
         """
         from datetime import datetime
 
-        start_time = datetime.now()
-        sync_time = datetime.now()
+        start_time = datetime.now(UTC)
+        sync_time = datetime.now(UTC)
 
         logger.info(f"Starting streaming inventory sync for tenant {tenant_id}")
 
@@ -445,7 +445,7 @@ class GAMInventoryService:
         # Mark old items as stale
         self._mark_stale_inventory(tenant_id, sync_time)
 
-        end_time = datetime.now()
+        end_time = datetime.now(UTC)
         duration = (end_time - start_time).total_seconds()
 
         summary = {
@@ -996,7 +996,7 @@ class GAMInventoryService:
 
         try:
             last_sync = datetime.fromisoformat(last_sync_str)
-            return datetime.now() - last_sync > timedelta(hours=24)
+            return datetime.now(UTC) - last_sync > timedelta(hours=24)
         except:
             return True
 
@@ -1763,7 +1763,7 @@ def create_inventory_endpoints(app):
 
             # Save to database
             service = GAMInventoryService(db_session)
-            sync_time = datetime.now()
+            sync_time = datetime.now(UTC)
 
             for value in values:
                 service._upsert_inventory_item(

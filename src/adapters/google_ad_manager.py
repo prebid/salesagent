@@ -14,7 +14,7 @@ __all__ = [
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from adcp.types.aliases import Package as ResponsePackage
@@ -635,7 +635,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Add unique identifier to prevent duplicate order names
         # Use media_buy_id if available (from buyer_ref), otherwise timestamp
-        unique_suffix = request.buyer_ref or f"mb_{int(datetime.now().timestamp())}"
+        unique_suffix = request.buyer_ref or f"mb_{int(datetime.now(UTC).timestamp())}"
         full_order_name = f"{base_order_name} [{unique_suffix}]"
 
         # Truncate to GAM's 255-character limit while preserving the unique suffix

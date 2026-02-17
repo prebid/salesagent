@@ -379,7 +379,7 @@ class BroadstreetAdapter(AdServerAdapter):
         self.log(f"Automation mode: {automation_mode}")
 
         # Generate media buy ID
-        media_buy_id = f"bs_{request.po_number or int(datetime.now().timestamp())}"
+        media_buy_id = f"bs_{request.po_number or int(datetime.now(UTC).timestamp())}"
 
         # Handle manual mode - create workflow step instead of campaign
         if automation_mode == "manual":

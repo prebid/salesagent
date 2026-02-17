@@ -101,7 +101,7 @@ class GAMSyncManager:
                 # Simulate inventory sync in dry-run mode
                 summary = {
                     "tenant_id": self.tenant_id,
-                    "sync_time": datetime.now().isoformat(),
+                    "sync_time": datetime.now(UTC).isoformat(),
                     "dry_run": True,
                     "duration_seconds": 0,
                     "ad_units": {"total": 0, "active": 0},
@@ -187,7 +187,7 @@ class GAMSyncManager:
                 # Simulate orders sync in dry-run mode
                 summary = {
                     "tenant_id": self.tenant_id,
-                    "sync_time": datetime.now().isoformat(),
+                    "sync_time": datetime.now(UTC).isoformat(),
                     "dry_run": True,
                     "duration_seconds": 0,
                     "orders": {"total": 0, "active": 0},
@@ -199,7 +199,7 @@ class GAMSyncManager:
                 # This would be implemented when orders sync is needed
                 summary = {
                     "tenant_id": self.tenant_id,
-                    "sync_time": datetime.now().isoformat(),
+                    "sync_time": datetime.now(UTC).isoformat(),
                     "duration_seconds": 0,
                     "orders": {"total": 0, "active": 0},
                     "line_items": {"total": 0, "active": 0},
@@ -253,7 +253,7 @@ class GAMSyncManager:
             sync_job.status = "running"
             db_session.commit()
 
-            start_time = datetime.now()
+            start_time = datetime.now(UTC)
             combined_summary = {
                 "tenant_id": self.tenant_id,
                 "sync_time": start_time.isoformat(),
@@ -271,7 +271,7 @@ class GAMSyncManager:
             combined_summary["orders"] = orders_result.get("summary", {})
 
             # Calculate total duration
-            end_time = datetime.now()
+            end_time = datetime.now(UTC)
             combined_summary["duration_seconds"] = (end_time - start_time).total_seconds()
 
             # Update sync job with results
@@ -328,7 +328,7 @@ class GAMSyncManager:
             sync_job.status = "running"
             db_session.commit()
 
-            start_time = datetime.now()
+            start_time = datetime.now(UTC)
 
             if self.dry_run:
                 # Simulate selective sync in dry-run mode
@@ -563,7 +563,7 @@ class GAMSyncManager:
         Returns:
             Created sync job instance
         """
-        sync_id = f"sync_{self.tenant_id}_{sync_type}_{int(datetime.now().timestamp())}"
+        sync_id = f"sync_{self.tenant_id}_{sync_type}_{int(datetime.now(UTC).timestamp())}"
 
         sync_job = SyncJob(
             sync_id=sync_id,

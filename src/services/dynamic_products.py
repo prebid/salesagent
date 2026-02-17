@@ -13,7 +13,7 @@ Architecture:
 
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import attributes
@@ -167,10 +167,10 @@ def generate_variants_from_signals(
 
             if existing:
                 # Update existing variant
-                existing.last_synced_at = datetime.now()
+                existing.last_synced_at = datetime.now(UTC)
                 # Extend expiration if still active
                 ttl_days = template.variant_ttl_days or 30
-                new_expiration = datetime.now() + timedelta(days=ttl_days)
+                new_expiration = datetime.now(UTC) + timedelta(days=ttl_days)
                 if not existing.expires_at or existing.expires_at < new_expiration:
                     existing.expires_at = new_expiration
                 variants.append(existing)
@@ -320,9 +320,9 @@ def create_variant_from_template(
             "data_provider": signal.get("data_provider"),
             "coverage_percentage": signal.get("coverage_percentage"),
         },
-        "last_synced_at": datetime.now(),
+        "last_synced_at": datetime.now(UTC),
         # Expiration
-        "expires_at": datetime.now() + timedelta(days=template.variant_ttl_days or 30),
+        "expires_at": datetime.now(UTC) + timedelta(days=template.variant_ttl_days or 30),
     }
 
     return Product(**variant_data)
@@ -486,7 +486,7 @@ def archive_expired_variants(tenant_id: str | None = None) -> int:
     with get_db_session() as session:
         # Find expired variants
         stmt = select(Product).filter(
-            Product.is_dynamic_variant, Product.archived_at.is_(None), Product.expires_at < datetime.now()
+            Product.is_dynamic_variant, Product.archived_at.is_(None), Product.expires_at < datetime.now(UTC)
         )
 
         if tenant_id:
@@ -495,7 +495,7 @@ def archive_expired_variants(tenant_id: str | None = None) -> int:
         expired_variants = session.scalars(stmt).all()
 
         for variant in expired_variants:
-            variant.archived_at = datetime.now()
+            variant.archived_at = datetime.now(UTC)
             attributes.flag_modified(variant, "archived_at")
             archived_count += 1
             logger.info(f"Archived expired variant {variant.product_id}")

@@ -6,7 +6,7 @@ created for new tenants to make onboarding easier.
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -216,8 +216,8 @@ def create_default_products_for_tenant(conn, tenant_id: str, industry: str = Non
                     json.dumps(product_template["countries"]) if product_template["countries"] else None,
                     json.dumps(product_template["targeting_template"]),
                     json.dumps(product_template["implementation_config"]),
-                    datetime.now().isoformat(),
-                    datetime.now().isoformat(),
+                    datetime.now(UTC).isoformat(),
+                    datetime.now(UTC).isoformat(),
                 ),
             )
 

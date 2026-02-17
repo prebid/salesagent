@@ -127,7 +127,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
                     )
 
         # Create sync job
-        sync_id = f"sync_{tenant_id}_{int(datetime.now().timestamp())}"
+        sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
         sync_job = SyncJob(
             sync_id=sync_id,
             tenant_id=tenant_id,
@@ -503,7 +503,7 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
             )
 
         # Create sync job
-        sync_id = f"orders_sync_{tenant_id}_{int(datetime.now().timestamp())}"
+        sync_id = f"orders_sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
         sync_job = SyncJob(
             sync_id=sync_id,
             tenant_id=tenant_id,

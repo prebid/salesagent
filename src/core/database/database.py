@@ -1,7 +1,7 @@
 import json
 import os
 import secrets
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 
@@ -53,8 +53,8 @@ def init_db(exit_on_error=False):
                     tenant_id="default",
                     name="Demo Sales Agent",
                     subdomain="default",
-                    created_at=datetime.now(),
-                    updated_at=datetime.now(),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
                     is_active=True,
                     billing_plan="standard",
                     ad_server="mock",
@@ -76,8 +76,8 @@ def init_db(exit_on_error=False):
                     tenant_id="default",
                     name="My Sales Agent",
                     subdomain="default",
-                    created_at=datetime.now(),
-                    updated_at=datetime.now(),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
                     is_active=True,
                     billing_plan="standard",
                     ad_server=None,  # No adapter - user must configure

@@ -6,7 +6,7 @@ Zones are Broadstreet's primary ad placement concept.
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.adapters.base_inventory import BaseInventoryManager, InventoryItem
@@ -121,7 +121,7 @@ class BroadstreetInventoryManager(BaseInventoryManager):
             ]
             for zone in simulated_zones:
                 self._zone_cache[zone.zone_id] = zone
-            self._last_sync = datetime.now()
+            self._last_sync = datetime.now(UTC)
             self.log(f"  Simulated {len(simulated_zones)} zones")
             return simulated_zones
 
@@ -140,7 +140,7 @@ class BroadstreetInventoryManager(BaseInventoryManager):
                     )
                     zones.append(zone)
                     self._zone_cache[zone.zone_id] = zone
-                self._last_sync = datetime.now()
+                self._last_sync = datetime.now(UTC)
                 self.log(f"  Fetched {len(zones)} zones from Broadstreet")
                 return zones
             except Exception as e:

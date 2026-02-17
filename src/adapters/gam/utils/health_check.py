@@ -10,7 +10,7 @@ This module provides:
 
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -44,7 +44,7 @@ class HealthCheckResult:
 
     def __post_init__(self):
         if self.timestamp is None:
-            self.timestamp = datetime.now()
+            self.timestamp = datetime.now(UTC)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging/API responses."""
@@ -448,7 +448,7 @@ class GAMHealthChecker:
             overall_status = HealthStatus.UNKNOWN
 
         # Cache results
-        self.last_check_time = datetime.now()
+        self.last_check_time = datetime.now(UTC)
         self.last_results = results
 
         logger.info(
@@ -523,7 +523,7 @@ def create_health_check_endpoint(app, get_config_func):
 
             return {
                 "status": overall_status.value,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "checks": [r.to_dict() for r in results],
             }
 

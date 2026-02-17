@@ -1,6 +1,6 @@
 """Tests for BaseInventoryManager interface."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -24,7 +24,7 @@ class ConcreteInventoryManager(BaseInventoryManager):
                 "item_1": InventoryItem("item_1", "Item One"),
                 "item_2": InventoryItem("item_2", "Item Two"),
             }
-            self._last_sync = datetime.now()
+            self._last_sync = datetime.now(UTC)
         return list(self._items.values())
 
     def validate_inventory_ids(self, inventory_ids: list[str]) -> tuple[list[str], list[str]]:
@@ -134,7 +134,7 @@ class TestBaseInventoryManager:
         """Test cache validity when expired."""
         manager.discover_inventory()
         # Simulate cache expiration
-        manager._last_sync = datetime.now() - timedelta(hours=25)
+        manager._last_sync = datetime.now(UTC) - timedelta(hours=25)
         assert manager.is_cache_valid() is False
 
     def test_get_inventory_summary(self, manager):
@@ -184,7 +184,7 @@ class TestBaseInventoryManager:
         assert manager.is_cache_valid() is True
 
         # Simulate time passing
-        manager._last_sync = datetime.now() - timedelta(minutes=6)
+        manager._last_sync = datetime.now(UTC) - timedelta(minutes=6)
         assert manager.is_cache_valid() is False
 
 

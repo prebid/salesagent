@@ -132,7 +132,7 @@ class TestInlineCreativesInAdapters:
             tenant_id="tenant_123",
         )
 
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         end_time = start_time + timedelta(days=30)
 
         response = adapter.create_media_buy(

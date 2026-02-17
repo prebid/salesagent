@@ -11,7 +11,7 @@ Adapters extend this base class to add platform-specific workflow logic.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.core.config_loader import get_tenant_config
@@ -209,7 +209,7 @@ class BaseWorkflowManager:
                             },
                         ],
                         "footer": "AdCP Sales Agent",
-                        "ts": int(datetime.now().timestamp()),
+                        "ts": int(datetime.now(UTC).timestamp()),
                     }
                 ]
             }

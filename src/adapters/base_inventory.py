@@ -8,7 +8,7 @@ across different ad server adapters.
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -111,7 +111,7 @@ class BaseInventoryManager(ABC):
         """
         if not self._last_sync:
             return False
-        return datetime.now() - self._last_sync < self._cache_timeout
+        return datetime.now(UTC) - self._last_sync < self._cache_timeout
 
     def get_inventory_summary(self) -> dict[str, Any]:
         """Get summary of current inventory state.

@@ -9,7 +9,7 @@ This module provides:
 """
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -622,7 +622,7 @@ class GAMOrdersDiscovery:
         """
         logger.info(f"Starting full orders sync for tenant {self.tenant_id}")
 
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
 
         # Clear existing data
         self.orders.clear()
@@ -632,7 +632,7 @@ class GAMOrdersDiscovery:
         orders = self.discover_orders()
         line_items = self.discover_line_items()
 
-        self.last_sync = datetime.now()
+        self.last_sync = datetime.now(UTC)
 
         # Group line items by order
         line_items_by_order: dict[str, list[LineItem]] = {}

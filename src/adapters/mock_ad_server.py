@@ -380,8 +380,7 @@ class MockAdServer(AdServerAdapter):
         if start_time >= end_time:
             errors.append("NotNullError.NULL @ lineItem[0].endDateTime")
 
-        # Ensure consistent timezone handling for date comparison
-        current_time = datetime.now(UTC) if end_time.tzinfo else datetime.now()
+        current_time = datetime.now(UTC)
         if end_time <= current_time:
             errors.append("InvalidArgumentError @ lineItem[0].endDateTime")
 

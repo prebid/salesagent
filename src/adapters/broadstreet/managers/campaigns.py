@@ -6,7 +6,7 @@ updates, and status management.
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.adapters.broadstreet.client import BroadstreetClient
@@ -75,7 +75,7 @@ class BroadstreetCampaignManager:
             self.log(f"  Delivery Rate: {config.delivery_rate}")
 
             # Return mock campaign data
-            mock_id = f"dry_run_{int(datetime.now().timestamp())}"
+            mock_id = f"dry_run_{int(datetime.now(UTC).timestamp())}"
             return {
                 "id": mock_id,
                 "name": campaign_name,
@@ -212,5 +212,5 @@ class BroadstreetCampaignManager:
         name = name.replace("{po_number}", po_number or "unknown")
         name = name.replace("{product_name}", product_name or "product")
         name = name.replace("{advertiser_name}", advertiser_name or "advertiser")
-        name = name.replace("{timestamp}", datetime.now().strftime("%Y%m%d_%H%M%S"))
+        name = name.replace("{timestamp}", datetime.now(UTC).strftime("%Y%m%d_%H%M%S"))
         return name

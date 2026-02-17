@@ -16,7 +16,7 @@ a clean, focused interface for inventory operations within the modular GAM archi
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.adapters.gam.client import GAMClientManager
@@ -160,7 +160,7 @@ class GAMInventoryManager:
             logger.info("[DRY RUN] Would perform full inventory sync from GAM")
             return {
                 "tenant_id": self.tenant_id,
-                "sync_time": datetime.now().isoformat(),
+                "sync_time": datetime.now(UTC).isoformat(),
                 "dry_run": True,
                 "ad_units": {"total": 0},
                 "placements": {"total": 0},
@@ -185,7 +185,7 @@ class GAMInventoryManager:
             return {
                 "root_units": [],
                 "total_units": 0,
-                "last_sync": datetime.now().isoformat(),
+                "last_sync": datetime.now(UTC).isoformat(),
                 "dry_run": True,
             }
 
@@ -373,7 +373,7 @@ class MockGAMInventoryDiscovery:
         logger.info("[MOCK] Performing full sync")
         return {
             "tenant_id": self.tenant_id,
-            "sync_time": datetime.now().isoformat(),
+            "sync_time": datetime.now(UTC).isoformat(),
             "dry_run": True,
             "ad_units": {"total": 0},
             "placements": {"total": 0},
@@ -391,7 +391,7 @@ class MockGAMInventoryDiscovery:
         logger.info(f"[MOCK] Performing selective sync: {sync_types}")
         return {
             "tenant_id": self.tenant_id,
-            "sync_time": datetime.now().isoformat(),
+            "sync_time": datetime.now(UTC).isoformat(),
             "dry_run": True,
             "sync_types": sync_types,
             "duration_seconds": 0,
@@ -401,7 +401,7 @@ class MockGAMInventoryDiscovery:
         return {
             "root_units": [],
             "total_units": 0,
-            "last_sync": datetime.now().isoformat(),
+            "last_sync": datetime.now(UTC).isoformat(),
             "dry_run": True,
         }
 

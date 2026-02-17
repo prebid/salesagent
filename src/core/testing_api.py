@@ -5,7 +5,7 @@ Provides endpoints for managing test sessions, inspecting testing state,
 and controlling the testing environment.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastmcp.server.context import Context
 from pydantic import BaseModel
@@ -90,7 +90,7 @@ def handle_testing_control(req: TestingControlRequest, context: Context) -> Test
 
     try:
         if req.action == "create_session":
-            session_id = req.session_id or f"test_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            session_id = req.session_id or f"test_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
             session = session_manager.get_session(session_id)
             return TestingControlResponse(
                 success=True,

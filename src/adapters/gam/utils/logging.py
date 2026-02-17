@@ -13,7 +13,7 @@ import time
 import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from functools import wraps
 from typing import Any
@@ -77,7 +77,7 @@ class GAMLogContext:
                 "request_summary": self._summarize_request(request_data),
                 "response_summary": self._summarize_response(response_data) if response_data else None,
                 "duration_ms": duration_ms,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
         )
 
@@ -151,7 +151,7 @@ class GAMLogContext:
             "api_call_count": len(self.api_calls),
             "metadata": self.metadata,
             "error": str(self.error) if self.error else None,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
 

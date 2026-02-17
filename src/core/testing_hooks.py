@@ -14,7 +14,7 @@ This module handles all testing headers and provides isolated test execution:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -221,7 +221,7 @@ class NextEventCalculator:
     ) -> datetime:
         """Calculate when the next event should occur."""
         if current_time is None:
-            current_time = datetime.now()
+            current_time = datetime.now(UTC)
 
         # Use existing event timing logic
         next_event_time = TimeSimulator.jump_to_event_time(next_event, start_date, end_date)
@@ -267,7 +267,7 @@ class TestSessionManager:
         """Get or create a test session."""
         if session_id not in self._sessions:
             self._sessions[session_id] = {
-                "created_at": datetime.now(),
+                "created_at": datetime.now(UTC),
                 "media_buys": {},
                 "creatives": {},
                 "spend": 0.0,
@@ -312,7 +312,7 @@ class TimeSimulator:
     ) -> float:
         """Calculate campaign progress as percentage (0.0 to 1.0)."""
         if current_time is None:
-            current_time = datetime.now()
+            current_time = datetime.now(UTC)
 
         if current_time <= start_date:
             return 0.0
@@ -563,7 +563,7 @@ def apply_testing_hooks(
     if campaign_info and any([testing_ctx.auto_advance, testing_ctx.mock_time, testing_ctx.jump_to_event]):
         start_date = campaign_info.get("start_date")
         end_date = campaign_info.get("end_date")
-        current_time = testing_ctx.mock_time or datetime.now()
+        current_time = testing_ctx.mock_time or datetime.now(UTC)
 
         if start_date and end_date:
             progress = TimeSimulator.calculate_campaign_progress(start_date, end_date, current_time)
@@ -601,7 +601,7 @@ def apply_testing_hooks(
         result.debug_info = {
             "operation": operation,
             "testing_context": testing_ctx.model_dump(),
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "response_headers": response_headers,
             "campaign_info": campaign_info,
         }

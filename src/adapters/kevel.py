@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import requests
@@ -230,7 +230,9 @@ class Kevel(AdServerAdapter):
             )
 
         # Generate a media buy ID
-        media_buy_id = f"kevel_{request.po_number}" if request.po_number else f"kevel_{int(datetime.now().timestamp())}"
+        media_buy_id = (
+            f"kevel_{request.po_number}" if request.po_number else f"kevel_{int(datetime.now(UTC).timestamp())}"
+        )
 
         # Calculate total budget using pricing_info if available
         total_budget = 0

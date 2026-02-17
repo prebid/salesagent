@@ -8,7 +8,7 @@ Uses historical GAM reporting data aggregated by country + creative format.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
@@ -56,7 +56,7 @@ class DynamicPricingService:
         )
 
         # Get recent metrics (last 30 days)
-        cutoff_date = datetime.now().date() - timedelta(days=30)
+        cutoff_date = datetime.now(UTC).date() - timedelta(days=30)
 
         for product in products:
             try:

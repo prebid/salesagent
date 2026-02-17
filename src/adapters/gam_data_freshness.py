@@ -178,7 +178,7 @@ def validate_and_log_freshness(
         logger.warning(f"Data not fresh for media buy {media_buy_id}: {reason}")
 
         # Check if we should retry
-        should_retry, retry_at = validator.should_retry_later(reporting_data, target_date or datetime.now())
+        should_retry, retry_at = validator.should_retry_later(reporting_data, target_date or datetime.now(UTC))
         if should_retry and retry_at:
             logger.info(f"Will retry media buy {media_buy_id} at {retry_at}")
 
