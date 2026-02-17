@@ -18,6 +18,7 @@ from adcp.types import Creative as LibraryCreative
 from adcp.types import (
     CreativeStatus,
     PriceGuidance,  # Replaces local PriceGuidance class
+    PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
 )
 
 # Import main request/response types from stable API
@@ -89,9 +90,12 @@ from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
 from adcp.types import FrequencyCap as LibraryFrequencyCap
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import Product as LibraryProduct
+from adcp.types import ProductCard as LibraryProductCard
+from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import PromotedProducts as LibraryPromotedProducts
 from adcp.types import Property as LibraryProperty
 from adcp.types import PropertyListReference as LibraryPropertyListReference  # V3: new field in GetProductsRequest
+from adcp.types import SignalFilters as LibrarySignalFilters
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
 
 # Type alias for the union of all AdCP pricing option types (V3 consolidated)
@@ -424,18 +428,8 @@ class TaskStatus(str, Enum):
 # --- Core Models ---
 
 
-# --- Pricing Models (AdCP PR #88) ---
-class PricingModel(str, Enum):
-    """Supported pricing models per AdCP spec."""
-
-    CPM = "cpm"  # Cost per 1,000 impressions
-    VCPM = "vcpm"  # Cost per 1,000 viewable impressions
-    CPC = "cpc"  # Cost per click
-    CPCV = "cpcv"  # Cost per completed view (100% completion)
-    CPV = "cpv"  # Cost per view at threshold
-    CPP = "cpp"  # Cost per point (GRP-based)
-    FLAT_RATE = "flat_rate"  # Fixed cost regardless of delivery
-
+# PricingModel is now imported from adcp.types (adcp library)
+# Library uses lowercase member names: .cpm, .vcpm, .cpc, .cpcv, .cpv, .cpp, .flat_rate
 
 # PriceGuidance is now imported from adcp.types.stable (adcp 2.7.0+)
 # The library version has the same fields and behavior as our previous local class
@@ -1091,37 +1085,25 @@ class DeliveryMeasurement(LibraryDeliveryMeasurement):
     pass  # All fields inherited from library
 
 
-class ProductCard(SalesAgentBaseModel):
+class ProductCard(LibraryProductCard):
     """Visual card for displaying products in user interfaces per AdCP spec.
 
+    Extends library type - all fields inherited.
     Can be rendered via preview_creative or pre-generated.
     Standard card is 300x400px for marketplace display.
     """
 
-    format_id: "FormatId" = Field(
-        ...,
-        description="Creative format defining the card layout (typically product_card_standard)",
-    )
-    manifest: dict[str, Any] = Field(
-        ...,
-        description="Asset manifest for rendering the card, structure defined by the format",
-    )
+    pass  # All fields inherited from library
 
 
-class ProductCardDetailed(SalesAgentBaseModel):
+class ProductCardDetailed(LibraryProductCardDetailed):
     """Detailed card with carousel and full specifications per AdCP spec.
 
+    Extends library type - all fields inherited.
     Provides rich product presentation similar to media kit pages.
     """
 
-    format_id: "FormatId" = Field(
-        ...,
-        description="Creative format defining the detailed card layout (typically product_card_detailed)",
-    )
-    manifest: dict[str, Any] = Field(
-        ...,
-        description="Asset manifest for rendering the detailed card, structure defined by the format",
-    )
+    pass  # All fields inherited from library
 
 
 class Placement(SalesAgentBaseModel):
@@ -3311,20 +3293,20 @@ class SignalDeliverTo(SalesAgentBaseModel):
         return self
 
 
-class SignalFilters(SalesAgentBaseModel):
-    """Signal filters per AdCP get-signals-request schema."""
+class SignalFilters(LibrarySignalFilters):
+    """Signal filters per AdCP get-signals-request schema.
 
-    catalog_types: list[Literal["marketplace", "custom", "owned"]] | None = None
-    data_providers: list[str] | None = None
-    max_cpm: float | None = Field(None, ge=0, description="Maximum CPM price filter")
-    min_coverage_percentage: float | None = Field(None, ge=0, le=100, description="Minimum coverage requirement")
+    Extends library type - all fields inherited.
+    """
+
+    pass  # All fields inherited from library
 
 
 class GetSignalsRequest(SalesAgentBaseModel):
     """AdCP-compliant request to discover available signals per get-signals-request schema.
 
-    NOTE: Does not extend library type yet because local SignalDeliverTo and SignalFilters
-    types differ from library types. Migration tracked in issue #824.
+    NOTE: Does not extend library type yet because local SignalDeliverTo
+    type differs from library type. Migration tracked in issue #824.
 
     Per AdCP specification:
     - Required: signal_spec (natural language description)

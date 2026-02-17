@@ -321,7 +321,7 @@ def _get_media_buy_delivery_impl(
                         package_spend = spend / len(packages)
                         package_impressions = impressions / len(packages)
 
-                    if pricing_option and pricing_option.pricing_model == PricingModel.CPC and pricing_option.rate:
+                    if pricing_option and pricing_option.pricing_model == PricingModel.cpc and pricing_option.rate:
                         package_clicks = floor(spend / (float(pricing_option.rate)))
                     else:
                         package_clicks = None

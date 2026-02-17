@@ -268,7 +268,7 @@ class DynamicPricingService:
 
             new_option = PricingOption(
                 pricing_option_id=f"{product.product_id}_dynamic_cpm",
-                pricing_model=PricingModel.CPM,
+                pricing_model=PricingModel.cpm,
                 floor_price=floor_cpm,  # V3: floor moved to top-level
                 currency=pricing.get("currency", "USD"),
                 price_guidance=price_guidance_obj,

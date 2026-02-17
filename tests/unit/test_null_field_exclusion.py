@@ -20,7 +20,7 @@ class TestPricingOptionNullExclusion:
         """
         auction_option = PricingOption(
             pricing_option_id="cpm_usd_auction",
-            pricing_model=PricingModel.CPM,
+            pricing_model=PricingModel.cpm,
             floor_price=5.0,  # V3: was price_guidance.floor
             currency="USD",
             price_guidance=PriceGuidance(p25=None, p50=7.0, p75=None, p90=10.0),  # V3: no floor
@@ -49,7 +49,7 @@ class TestPricingOptionNullExclusion:
         """
         fixed_option = PricingOption(
             pricing_option_id="cpm_usd_fixed",
-            pricing_model=PricingModel.CPM,
+            pricing_model=PricingModel.cpm,
             fixed_price=12.50,  # V3: was rate
             currency="USD",
             price_guidance=None,
@@ -74,7 +74,7 @@ class TestPricingOptionNullExclusion:
         """Optional pricing fields should be excluded when null."""
         option = PricingOption(
             pricing_option_id="cpm_usd_fixed",
-            pricing_model=PricingModel.CPM,
+            pricing_model=PricingModel.cpm,
             fixed_price=10.0,  # V3: was rate
             currency="USD",
             price_guidance=None,
@@ -90,7 +90,7 @@ class TestPricingOptionNullExclusion:
         """Optional pricing fields should be included when present (not null)."""
         option = PricingOption(
             pricing_option_id="cpm_usd_fixed",
-            pricing_model=PricingModel.CPM,
+            pricing_model=PricingModel.cpm,
             fixed_price=10.0,  # V3: was rate
             currency="USD",
             price_guidance=None,
@@ -162,7 +162,7 @@ class TestNestedModelNullExclusion:
         """
         auction_option = PricingOption(
             pricing_option_id="cpm_usd_auction",
-            pricing_model=PricingModel.CPM,
+            pricing_model=PricingModel.cpm,
             floor_price=5.0,  # V3: was price_guidance.floor
             currency="USD",
             price_guidance=PriceGuidance(p25=None, p50=7.0, p75=None, p90=10.0),  # V3: no floor
@@ -206,7 +206,7 @@ class TestAdCPComplianceViaExamples:
         """
         auction_option = PricingOption(
             pricing_option_id="cpm_usd_auction",
-            pricing_model=PricingModel.CPM,
+            pricing_model=PricingModel.cpm,
             floor_price=5.0,  # V3: was price_guidance.floor
             currency="USD",
             price_guidance=None,  # Optional - can omit percentiles
@@ -241,7 +241,7 @@ class TestAdCPComplianceViaExamples:
         """
         fixed_option = PricingOption(
             pricing_option_id="cpm_usd_fixed",
-            pricing_model=PricingModel.CPM,
+            pricing_model=PricingModel.cpm,
             fixed_price=12.50,  # V3: was rate
             currency="USD",
             price_guidance=None,

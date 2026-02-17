@@ -46,7 +46,7 @@ class TestPricingValidation:
         package = Mock()
         package.package_id = "pkg_1"
         package.product_id = "legacy_product"
-        package.pricing_model = PricingModel.CPCV
+        package.pricing_model = PricingModel.cpcv
         package.budget = 5000.0
         package.pricing_option_id = None
         package.bid_price = None
@@ -77,7 +77,7 @@ class TestPricingValidation:
         package.product_id = "video_product"
         package.budget = 10000.0
         package.pricing_option_id = None
-        package.pricing_model = PricingModel.CPCV
+        package.pricing_model = PricingModel.cpcv
         package.bid_price = None
 
         result = _validate_pricing_model_selection(package, product, "USD")
@@ -103,7 +103,7 @@ class TestPricingValidation:
         package.product_id = "display_product"
         package.budget = 5000.0
         package.pricing_option_id = None
-        package.pricing_model = PricingModel.CPP
+        package.pricing_model = PricingModel.cpp
         package.bid_price = None
 
         with pytest.raises(ToolError) as exc_info:
@@ -128,7 +128,7 @@ class TestPricingValidation:
         package.product_id = "product_1"
         package.budget = 5000.0
         package.pricing_option_id = None
-        package.pricing_model = PricingModel.CPM
+        package.pricing_model = PricingModel.cpm
         package.bid_price = None
 
         with pytest.raises(ToolError) as exc_info:
@@ -154,7 +154,7 @@ class TestPricingValidation:
         package.product_id = "product_1"
         package.budget = 5000.0
         package.pricing_option_id = None
-        package.pricing_model = PricingModel.CPM
+        package.pricing_model = PricingModel.cpm
         package.bid_price = None
 
         with pytest.raises(ToolError) as exc_info:
@@ -181,7 +181,7 @@ class TestPricingValidation:
         package.product_id = "product_1"
         package.budget = 5000.0
         package.pricing_option_id = None
-        package.pricing_model = PricingModel.CPM
+        package.pricing_model = PricingModel.cpm
         package.bid_price = 10.0
 
         with pytest.raises(ToolError) as exc_info:
@@ -206,7 +206,7 @@ class TestPricingValidation:
         package.product_id = "product_1"
         package.budget = 5000.0
         package.pricing_option_id = None
-        package.pricing_model = PricingModel.CPM
+        package.pricing_model = PricingModel.cpm
         package.bid_price = None
 
         with pytest.raises(ToolError) as exc_info:
@@ -232,7 +232,7 @@ class TestPricingValidation:
         package.product_id = "product_1"
         package.budget = 5000.0
         package.pricing_option_id = None
-        package.pricing_model = PricingModel.CPCV
+        package.pricing_model = PricingModel.cpcv
         package.bid_price = None
 
         with pytest.raises(ToolError) as exc_info:
@@ -261,7 +261,7 @@ class TestPricingValidation:
         package.product_id = "product_1"
         package.budget = 5000.0
         package.pricing_option_id = None
-        package.pricing_model = PricingModel.CPM
+        package.pricing_model = PricingModel.cpm
         package.bid_price = 18.0
 
         result = _validate_pricing_model_selection(package, product, "USD")
