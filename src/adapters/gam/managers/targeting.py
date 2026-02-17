@@ -10,8 +10,6 @@ import logging
 import os
 from typing import Any
 
-from pydantic import RootModel
-
 logger = logging.getLogger(__name__)
 
 
@@ -682,19 +680,19 @@ class GAMTargetingManager:
         ):
             geo_targeting["targetedLocations"] = []
 
-            # Map countries (GeoCountry.root → plain string)
+            # Map countries (GeoCountry → plain string via .root)
             if targeting_overlay.geo_countries:
                 for country in targeting_overlay.geo_countries:
-                    code = country.root if isinstance(country, RootModel) else str(country)
+                    code = country.root
                     if code in self.geo_country_map:
                         geo_targeting["targetedLocations"].append({"id": self.geo_country_map[code]})
                     else:
                         logger.warning(f"Country code '{code}' not in GAM mapping")
 
-            # Map regions (GeoRegion.root → ISO 3166-2 string)
+            # Map regions (GeoRegion → ISO 3166-2 string via .root)
             if targeting_overlay.geo_regions:
                 for region in targeting_overlay.geo_regions:
-                    code = region.root if isinstance(region, RootModel) else str(region)
+                    code = region.root
                     region_id = self._lookup_region_id(code)
                     if region_id:
                         geo_targeting["targetedLocations"].append({"id": region_id})
@@ -727,14 +725,14 @@ class GAMTargetingManager:
             # Map excluded countries
             if targeting_overlay.geo_countries_exclude:
                 for country in targeting_overlay.geo_countries_exclude:
-                    code = country.root if isinstance(country, RootModel) else str(country)
+                    code = country.root
                     if code in self.geo_country_map:
                         geo_targeting["excludedLocations"].append({"id": self.geo_country_map[code]})
 
             # Map excluded regions
             if targeting_overlay.geo_regions_exclude:
                 for region in targeting_overlay.geo_regions_exclude:
-                    code = region.root if isinstance(region, RootModel) else str(region)
+                    code = region.root
                     region_id = self._lookup_region_id(code)
                     if region_id:
                         geo_targeting["excludedLocations"].append({"id": region_id})

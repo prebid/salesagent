@@ -101,7 +101,16 @@ from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types import SignalFilters as LibrarySignalFilters
 from adcp.types import SyncCreativeResult as LibrarySyncCreativeResult
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
-from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
+from pydantic import (
+    AnyUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    field_serializer,
+    model_serializer,
+    model_validator,
+)
 
 # Type alias for the union of all AdCP pricing option types (V3 consolidated)
 AdCPPricingOption = (
@@ -2551,11 +2560,10 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     @property
     def flight_start_date(self) -> date | None:
         """Extract date from start_time for display purposes."""
-        if isinstance(self.start_time, datetime):
-            return self.start_time.date()
-        # Handle library StartTiming wrapper type
-        if hasattr(self.start_time, "root") and isinstance(self.start_time.root, datetime):
-            return self.start_time.root.date()
+        # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
+        inner = self.start_time.root if self.start_time else None
+        if isinstance(inner, datetime):
+            return inner.date()
         return None
 
     @property
@@ -2922,12 +2930,12 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
         if not isinstance(values, dict):
             return values
 
-        # Unwrap RootModel packages (FastMCP produces library PackageUpdate RootModel)
+        # Unwrap RootModel packages (FastMCP produces library PackageUpdate RootModel,
+        # but JSON/dict input arrives as plain dicts — guard needed in pre-validator)
         if "packages" in values and values["packages"]:
             unwrapped = []
             for pkg in values["packages"]:
-                if hasattr(pkg, "root"):
-                    # RootModel — unwrap inner variant to dict for re-validation as our type
+                if isinstance(pkg, RootModel):
                     unwrapped.append(pkg.root.model_dump())
                 else:
                     unwrapped.append(pkg)

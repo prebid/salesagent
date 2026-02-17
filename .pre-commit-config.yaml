@@ -49,6 +49,14 @@ repos:
         files: '^src/.*\.py$'
         pass_filenames: true
 
+      # Flag defensive RootModel unwrapping (use direct .root or model_dump)
+      - id: check-rootmodel-access
+        name: Flag defensive hasattr(x, 'root') patterns
+        entry: uv run python .pre-commit-hooks/check_rootmodel_access.py
+        language: system
+        files: '^(src|tests)/.*\.py$'
+        pass_filenames: true
+
       # Check for Flask route conflicts
       - id: check-route-conflicts
         name: Detect Flask route conflicts

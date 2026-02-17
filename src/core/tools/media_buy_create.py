@@ -1481,8 +1481,8 @@ async def _create_media_buy_impl(
             raise ValueError(error_msg)
 
         # Handle 'asap' start_time (AdCP v1.7.0)
-        # Library may wrap start_time in StartTiming - unwrap if needed
-        raw_start_time = req.start_time.root if hasattr(req.start_time, "root") else req.start_time
+        # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
+        raw_start_time = req.start_time.root
         if raw_start_time == "asap":
             computed_start_time: datetime = now
         else:

@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from adcp.types.aliases import Package as ResponsePackage
+from adcp.types.generated_poc.core.brand_manifest import BrandManifest
 from pydantic import Field
 
 from src.adapters.base import (
@@ -457,15 +458,13 @@ class MockAdServer(AdServerAdapter):
         scenario = None
         test_message = None
         if request.brand_manifest:
-            if isinstance(request.brand_manifest, str):
-                test_message = request.brand_manifest
-            elif hasattr(request.brand_manifest, "name"):
-                test_message = request.brand_manifest.name
-            elif hasattr(request.brand_manifest, "root") and hasattr(request.brand_manifest.root, "name"):
-                # Handle library BrandManifestReference wrapper
-                test_message = request.brand_manifest.root.name
-            elif isinstance(request.brand_manifest, dict):
-                test_message = request.brand_manifest.get("name")
+            # BrandManifestReference.root is BrandManifest | AnyUrl
+            inner = request.brand_manifest.root
+            if isinstance(inner, BrandManifest):
+                test_message = inner.name
+            else:
+                # AnyUrl — use the URL string as test message
+                test_message = str(inner)
 
         if test_message and isinstance(test_message, str) and has_test_keywords(test_message):
             scenario = parse_test_scenario(test_message, "create_media_buy")

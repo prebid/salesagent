@@ -181,32 +181,23 @@ async def _get_products_impl(
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id) if principal_id else None
 
-    # Handle RootModel wrappers for brand_manifest (e.g., BrandManifestReference wraps BrandManifest)
-    # adcp library uses RootModel for union types, so we need to unwrap
-    # This unwrapped value is used for both offering extraction and policy checks
+    # Unwrap BrandManifestReference (RootModel[BrandManifest | AnyUrl]) to inner value.
+    # After unwrapping, brand_manifest_unwrapped is BrandManifest, AnyUrl, or None.
     brand_manifest_unwrapped: Any = None
     if req.brand_manifest:
-        brand_manifest_unwrapped = req.brand_manifest
-        if hasattr(brand_manifest_unwrapped, "root"):
-            brand_manifest_unwrapped = brand_manifest_unwrapped.root
+        brand_manifest_unwrapped = req.brand_manifest.root
 
-    # Extract offering text from brand_manifest
+    # Extract offering text from brand_manifest (BrandManifest | AnyUrl)
     offering = None
     if brand_manifest_unwrapped:
-        if isinstance(brand_manifest_unwrapped, str):
-            # brand_manifest is a URL string - use it as-is for now
+        if isinstance(brand_manifest_unwrapped, BrandManifest):
+            if brand_manifest_unwrapped.name:
+                offering = brand_manifest_unwrapped.name
+            elif brand_manifest_unwrapped.url:
+                offering = f"Brand at {brand_manifest_unwrapped.url}"
+        else:
+            # AnyUrl — use the URL string
             offering = f"Brand at {brand_manifest_unwrapped}"
-        elif hasattr(brand_manifest_unwrapped, "__str__") and str(brand_manifest_unwrapped).startswith("http"):
-            # brand_manifest is AnyUrl object from Pydantic
-            offering = f"Brand at {brand_manifest_unwrapped}"
-        # brand_manifest is a BrandManifest object or dict
-        # Per AdCP spec: either name OR url is required
-        elif hasattr(brand_manifest_unwrapped, "name") and brand_manifest_unwrapped.name:
-            offering = brand_manifest_unwrapped.name
-        elif hasattr(brand_manifest_unwrapped, "url") and brand_manifest_unwrapped.url:
-            offering = f"Brand at {brand_manifest_unwrapped.url}"
-        elif isinstance(brand_manifest_unwrapped, dict):
-            offering = brand_manifest_unwrapped.get("name") or brand_manifest_unwrapped.get("url", "")
 
     # Check brand_manifest_policy from tenant settings
     brand_manifest_policy = tenant.get("brand_manifest_policy", "require_auth")
@@ -562,14 +553,10 @@ async def _get_products_impl(
                     # Product has no country restrictions, matches any country filter
                     pass
                 else:
-                    # Extract country codes from filter (Country is a RootModel[str])
+                    # Extract country codes from filter (Country is RootModel[str])
                     request_countries: set[str] = set()
                     for country in req.filters.countries:
-                        if isinstance(country, str):
-                            request_countries.add(country.upper())
-                        elif hasattr(country, "root"):
-                            # RootModel - access .root for the string value
-                            request_countries.add(country.root.upper())
+                        request_countries.add(country.root.upper())
 
                     # Check if any requested country is in the product's countries
                     if not product_countries.intersection(request_countries):

@@ -109,9 +109,9 @@ class Kevel(AdServerAdapter):
         # Geographic targeting (v3 structured fields)
         geo = {}
         if targeting_overlay.geo_countries:
-            geo["countries"] = [c.root if hasattr(c, "root") else str(c) for c in targeting_overlay.geo_countries]
+            geo["countries"] = [c.root for c in targeting_overlay.geo_countries]
         if targeting_overlay.geo_regions:
-            geo["regions"] = [r.root if hasattr(r, "root") else str(r) for r in targeting_overlay.geo_regions]
+            geo["regions"] = [r.root for r in targeting_overlay.geo_regions]
         if targeting_overlay.geo_metros:
             # Extract metro values from structured objects and convert to integers
             metro_values = []

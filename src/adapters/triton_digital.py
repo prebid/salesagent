@@ -94,11 +94,9 @@ class TritonDigital(AdServerAdapter):
         # Geographic targeting (v3 structured fields, audio market focused)
         targeting_obj = {}
         if targeting_overlay.geo_countries:
-            targeting_obj["countries"] = [
-                c.root if hasattr(c, "root") else str(c) for c in targeting_overlay.geo_countries
-            ]
+            targeting_obj["countries"] = [c.root for c in targeting_overlay.geo_countries]
         if targeting_overlay.geo_regions:
-            targeting_obj["states"] = [r.root if hasattr(r, "root") else str(r) for r in targeting_overlay.geo_regions]
+            targeting_obj["states"] = [r.root for r in targeting_overlay.geo_regions]
         if targeting_overlay.geo_metros:
             # Map to audio market names if possible
             targeting_obj["markets"] = []  # Would need metro-to-market mapping
