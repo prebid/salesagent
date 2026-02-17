@@ -95,6 +95,7 @@ from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import PromotedProducts as LibraryPromotedProducts
 from adcp.types import Property as LibraryProperty
 from adcp.types import PropertyListReference as LibraryPropertyListReference  # V3: new field in GetProductsRequest
+from adcp.types import QuerySummary as LibraryQuerySummary
 from adcp.types import SignalFilters as LibrarySignalFilters
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
 
@@ -1032,16 +1033,6 @@ class Measurement(LibraryMeasurement):
     """
 
     pass  # All fields inherited from library
-
-
-class CreativePolicy(SalesAgentBaseModel):
-    """Creative requirements and restrictions for a product per AdCP spec."""
-
-    co_branding: Literal["required", "optional", "none"] = Field(..., description="Co-branding requirement")
-    landing_page: Literal["any", "retailer_site_only", "must_include_retailer"] = Field(
-        ..., description="Landing page requirements"
-    )
-    templates_available: bool = Field(..., description="Whether creative templates are provided")
 
 
 class AIReviewPolicy(SalesAgentBaseModel):
@@ -2078,13 +2069,16 @@ class ListCreativesRequest(LibraryListCreativesRequest):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
-class QuerySummary(SalesAgentBaseModel):
-    """Summary of the query that was executed."""
+class QuerySummary(LibraryQuerySummary):
+    """Extends library QuerySummary with non-None defaults.
 
-    total_matching: int = Field(..., ge=0, description="Total creatives matching filters")
-    returned: int = Field(..., ge=0, description="Number of creatives in this response")
+    Library defaults filters_applied to None; we keep list default for backward compat.
+    sort_applied inherits SortApplied | None from library (Pydantic handles dict coercion).
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+    # Override to keep non-None default (construction sites rely on this)
     filters_applied: list[str] = Field(default_factory=list)
-    sort_applied: dict[str, str] | None = None
 
 
 class Pagination(LibraryResponsePagination):

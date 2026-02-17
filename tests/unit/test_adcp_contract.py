@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from adcp.types import CreativePolicy
 
 from src.core.database.models import (
     Principal as PrincipalModel,
@@ -24,7 +25,6 @@ from src.core.schemas import (
     Creative,
     CreativeApprovalStatus,
     CreativeAssignment,
-    CreativePolicy,
     Format,
     FormatId,
     GetMediaBuyDeliveryRequest,
@@ -1269,8 +1269,8 @@ class TestAdCPContract:
         """Test that CreativePolicy model complies with AdCP creative-policy schema."""
         policy = CreativePolicy(co_branding="required", landing_page="retailer_site_only", templates_available=True)
 
-        # Test model_dump (CreativePolicy doesn't have internal fields)
-        adcp_response = policy.model_dump()
+        # Test model_dump with mode="json" (library enums serialize to strings)
+        adcp_response = policy.model_dump(mode="json")
 
         # Verify required AdCP fields are present
         adcp_required_fields = ["co_branding", "landing_page", "templates_available"]
@@ -2355,7 +2355,7 @@ class TestAdCPContract:
             max_results=50,
         )
 
-        adcp_response = adcp_request.model_dump()
+        adcp_response = adcp_request.model_dump(mode="json")
 
         # ✅ VERIFY ADCP COMPLIANCE: Required fields present
         required_fields = ["signal_spec", "deliver_to"]

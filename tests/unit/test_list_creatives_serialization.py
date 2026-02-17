@@ -175,10 +175,10 @@ def test_query_summary_sort_applied_serializes_enum_values():
         sort_applied=correct_sort_applied,
     )
 
-    result = query_summary.model_dump()
+    result = query_summary.model_dump(mode="json")
 
     # Verify sort_applied contains valid string values, not enum repr
     assert result["sort_applied"]["field"] == "created_date"
     assert result["sort_applied"]["direction"] == "desc"
-    assert "SortDirection" not in result["sort_applied"]["direction"]
-    assert "CreativeSortField" not in result["sort_applied"]["field"]
+    assert "SortDirection" not in str(result["sort_applied"]["direction"])
+    assert "CreativeSortField" not in str(result["sort_applied"]["field"])
