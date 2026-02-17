@@ -1053,8 +1053,6 @@ class GoogleAdManager(AdServerAdapter):
         Returns:
             AdapterGetMediaBuyDeliveryResponse with real metrics from GAM
         """
-        from datetime import datetime as dt
-
         from sqlalchemy import select
 
         from src.adapters.gam_reporting_service import GAMReportingService
@@ -1138,9 +1136,9 @@ class GoogleAdManager(AdServerAdapter):
 
         reporting_service = GAMReportingService(self.client)
 
-        # Parse date range
-        start_dt = dt.fromisoformat(date_range.start.replace("Z", "+00:00"))
-        end_dt = dt.fromisoformat(date_range.end.replace("Z", "+00:00"))
+        # date_range.start/.end are AwareDatetime objects
+        start_dt = date_range.start
+        end_dt = date_range.end
 
         # Determine date range type for reporting
         days_diff = (end_dt - start_dt).days
@@ -1162,7 +1160,7 @@ class GoogleAdManager(AdServerAdapter):
         # Validate data freshness
         # The adapter decides whether to return data or raise error if data is stale
         # Target date is the end of the reporting period
-        target_date = dt.fromisoformat(date_range.end.replace("Z", "+00:00"))
+        target_date = date_range.end
 
         is_fresh = validate_and_log_freshness(reporting_data, media_buy_id, target_date=target_date)
 

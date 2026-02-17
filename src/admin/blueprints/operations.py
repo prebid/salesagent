@@ -243,7 +243,7 @@ def media_buy_detail(tenant_id, media_buy_id):
 
                         start_date = max(mb_start if mb_start else seven_days_ago, seven_days_ago)
 
-                        reporting_period = ReportingPeriod(start=start_date.isoformat(), end=end_date.isoformat())
+                        reporting_period = ReportingPeriod(start=start_date, end=end_date)
 
                         # Fetch delivery metrics from adapter
                         delivery_response = adapter.get_media_buy_delivery(

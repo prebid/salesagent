@@ -547,22 +547,14 @@ class Kevel(AdServerAdapter):
         if self.dry_run:
             self.log(f"Would call: POST {self.base_url}/report/queue")
             self.log("  Report Request: {")
-            self.log(f"    'StartDate': '{date_range.start}',")
-            self.log(f"    'EndDate': '{date_range.end}',")
+            self.log(f"    'StartDate': '{date_range.start.isoformat()}',")
+            self.log(f"    'EndDate': '{date_range.end.isoformat()}',")
             self.log("    'GroupBy': ['day', 'campaign', 'flight'],")
             self.log(f"    'Filter': {{'CampaignId': '{media_buy_id}'}}")
             self.log("  }")
 
             # Simulate response based on campaign progress
-            # date_range.start and date_range.end are ISO 8601 strings, convert to date
-            from datetime import datetime as dt
-
-            start_date = (
-                dt.fromisoformat(date_range.start.replace("Z", "+00:00")).date()
-                if isinstance(date_range.start, str)
-                else date_range.start
-            )
-            days_elapsed = (today.date() - start_date).days
+            days_elapsed = (today.date() - date_range.start.date()).days
             progress_factor = min(days_elapsed / 14, 1.0)  # Assume 14-day campaigns
 
             # Calculate simulated delivery
@@ -583,8 +575,8 @@ class Kevel(AdServerAdapter):
         else:
             # Queue a report in Kevel
             report_request = {
-                "StartDate": date_range.start,  # Already ISO 8601 string
-                "EndDate": date_range.end,  # Already ISO 8601 string
+                "StartDate": date_range.start.isoformat(),
+                "EndDate": date_range.end.isoformat(),
                 "GroupBy": ["day", "campaign", "flight"],
                 "Filter": {"CampaignId": media_buy_id},
             }

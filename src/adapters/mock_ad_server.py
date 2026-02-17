@@ -1117,9 +1117,8 @@ class MockAdServer(AdServerAdapter):
             self.log("  API Request: {")
             self.log(f"    'advertiser_id': '{self.adapter_principal_id}',")
             self.log(f"    'campaign_id': '{media_buy_id}',")
-            # date_range is ReportingPeriod which has start/end as datetime
-            start_str = date_range.start.date() if hasattr(date_range.start, "date") else str(date_range.start)
-            end_str = date_range.end.date() if hasattr(date_range.end, "date") else str(date_range.end)
+            start_str = date_range.start.date()
+            end_str = date_range.end.date()
             self.log(f"    'start_date': '{start_str}',")
             self.log(f"    'end_date': '{end_str}'")
             self.log("  }")

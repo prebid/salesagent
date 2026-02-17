@@ -96,6 +96,7 @@ from adcp.types import PromotedProducts as LibraryPromotedProducts
 from adcp.types import Property as LibraryProperty
 from adcp.types import PropertyListReference as LibraryPropertyListReference  # V3: new field in GetProductsRequest
 from adcp.types import QuerySummary as LibraryQuerySummary
+from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types import SignalFilters as LibrarySignalFilters
 from adcp.types import SyncCreativeResult as LibrarySyncCreativeResult
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
@@ -2758,11 +2759,14 @@ class MediaBuyDeliveryData(SalesAgentBaseModel):
     daily_breakdown: list[DailyBreakdown] | None = Field(None, description="Day-by-day delivery")
 
 
-class ReportingPeriod(SalesAgentBaseModel):
-    """Date range for the report."""
+class ReportingPeriod(LibraryReportingPeriod):
+    """Extends library ReportingPeriod.
 
-    start: str = Field(description="ISO 8601 start timestamp")
-    end: str = Field(description="ISO 8601 end timestamp")
+    Library provides: start (AwareDatetime), end (AwareDatetime).
+    Accepts datetime objects or ISO 8601 strings with timezone info.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
 class AggregatedTotals(LibraryAggregatedTotals):

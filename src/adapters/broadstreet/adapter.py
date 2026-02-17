@@ -645,14 +645,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
         if self.dry_run:
             # Simulate delivery data
-            from datetime import datetime as dt
-
-            start_date = (
-                dt.fromisoformat(date_range.start.replace("Z", "+00:00")).date()
-                if isinstance(date_range.start, str)
-                else date_range.start
-            )
-            days_elapsed = (today.date() - start_date).days
+            days_elapsed = (today.date() - date_range.start.date()).days
             progress_factor = min(days_elapsed / 14, 1.0)
 
             impressions = int(100000 * progress_factor * 0.95)

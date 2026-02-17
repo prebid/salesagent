@@ -210,8 +210,8 @@ class TestA2ASpecCompliance:
         ctx = {"user_id": "1234567890"}
         response = GetMediaBuyDeliveryResponse(
             reporting_period=ReportingPeriod(
-                start=datetime.now(UTC).isoformat(),
-                end=datetime.now(UTC).isoformat(),
+                start=datetime.now(UTC),
+                end=datetime.now(UTC),
             ),
             currency="USD",
             media_buy_deliveries=[],

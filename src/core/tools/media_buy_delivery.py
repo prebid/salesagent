@@ -10,7 +10,7 @@ Handles delivery metrics reporting including:
 
 import logging
 from collections.abc import Sequence
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from math import floor
 from typing import Any, cast
 
@@ -82,7 +82,7 @@ def _get_media_buy_delivery_impl(
         # Convert ContextObject to dict if needed
         context_dict = _context_to_dict(req.context)
         return GetMediaBuyDeliveryResponse(
-            reporting_period=ReportingPeriod(start=datetime.now().isoformat(), end=datetime.now().isoformat()),
+            reporting_period=ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC)),
             currency="USD",
             aggregated_totals=AggregatedTotals(
                 impressions=0.0,
@@ -103,7 +103,7 @@ def _get_media_buy_delivery_impl(
         # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??
         context_dict = _context_to_dict(req.context)
         return GetMediaBuyDeliveryResponse(
-            reporting_period=ReportingPeriod(start=datetime.now().isoformat(), end=datetime.now().isoformat()),
+            reporting_period=ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC)),
             currency="USD",
             aggregated_totals=AggregatedTotals(
                 impressions=0.0,
@@ -123,14 +123,14 @@ def _get_media_buy_delivery_impl(
 
     # Determine reporting period
     if req.start_date and req.end_date:
-        # Use provided date range
-        start_dt = datetime.strptime(req.start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(req.end_date, "%Y-%m-%d")
+        # Use provided date range (make timezone-aware for AwareDatetime)
+        start_dt = datetime.strptime(req.start_date, "%Y-%m-%d").replace(tzinfo=UTC)
+        end_dt = datetime.strptime(req.end_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
         if start_dt >= end_dt:
             context_dict = _context_to_dict(req.context)
             return GetMediaBuyDeliveryResponse(
-                reporting_period=ReportingPeriod(start=datetime.now().isoformat(), end=datetime.now().isoformat()),
+                reporting_period=ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC)),
                 currency="USD",
                 aggregated_totals=AggregatedTotals(
                     impressions=0.0,
@@ -145,10 +145,10 @@ def _get_media_buy_delivery_impl(
             )
     else:
         # Default to last 30 days
-        end_dt = datetime.now()
+        end_dt = datetime.now(UTC)
         start_dt = end_dt - timedelta(days=30)
 
-    reporting_period = ReportingPeriod(start=start_dt.isoformat(), end=end_dt.isoformat())
+    reporting_period = ReportingPeriod(start=start_dt, end=end_dt)
 
     # Determine reference date for status calculations use end_date, it either will be today or the user provided end_date.
     reference_date = end_dt.date()

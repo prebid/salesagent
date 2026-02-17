@@ -456,8 +456,8 @@ class TestBroadstreetAdapterDelivery:
         from src.core.schemas import ReportingPeriod
 
         date_range = ReportingPeriod(
-            start=(datetime.now(UTC) - timedelta(days=7)).isoformat(),
-            end=datetime.now(UTC).isoformat(),
+            start=datetime.now(UTC) - timedelta(days=7),
+            end=datetime.now(UTC),
         )
 
         result = adapter.get_media_buy_delivery(

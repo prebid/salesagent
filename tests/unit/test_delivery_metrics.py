@@ -1,6 +1,6 @@
 """Tests for get_media_buy_delivery with real GAM metrics."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -44,8 +44,8 @@ def test_get_media_buy_delivery_dry_run_mode(gam_adapter):
     # Setup
     media_buy_id = "mb_test_123"
     date_range = ReportingPeriod(
-        start=datetime.now().isoformat(),
-        end=(datetime.now() + timedelta(days=7)).isoformat(),
+        start=datetime.now(UTC),
+        end=datetime.now(UTC) + timedelta(days=7),
     )
 
     # Mock database query - patch where it's used in the function
@@ -78,8 +78,8 @@ def test_get_media_buy_delivery_media_buy_not_found(gam_adapter):
     # Setup
     media_buy_id = "mb_nonexistent"
     date_range = ReportingPeriod(
-        start=datetime.now().isoformat(),
-        end=(datetime.now() + timedelta(days=7)).isoformat(),
+        start=datetime.now(UTC),
+        end=datetime.now(UTC) + timedelta(days=7),
     )
 
     # Mock database query to return None
@@ -183,10 +183,10 @@ def test_get_media_buy_delivery_with_real_gam_data(mock_reporting_service_class,
 
         # Execute
         date_range = ReportingPeriod(
-            start=datetime.now().isoformat(),
-            end=(datetime.now() + timedelta(days=7)).isoformat(),
+            start=datetime.now(UTC),
+            end=datetime.now(UTC) + timedelta(days=7),
         )
-        result = adapter.get_media_buy_delivery("mb_test_123", date_range, datetime.now())
+        result = adapter.get_media_buy_delivery("mb_test_123", date_range, datetime.now(UTC))
 
         # Assert
         assert result is not None

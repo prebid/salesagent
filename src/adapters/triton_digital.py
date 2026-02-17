@@ -452,18 +452,15 @@ class TritonDigital(AdServerAdapter):
             self.log(f"Would call: POST {self.base_url}/reports")
             self.log("  Report Request: {")
             self.log("    'reportType': 'FLIGHT',")
-            # date_range.start and .end are ISO 8601 strings, use them directly
-            self.log(f"    'startDate': '{date_range.start}',")
-            self.log(f"    'endDate': '{date_range.end}',")
+            self.log(f"    'startDate': '{date_range.start.isoformat()}',")
+            self.log(f"    'endDate': '{date_range.end.isoformat()}',")
             self.log(f"    'filters': {{'campaigns': ['{media_buy_id}']}},")
             self.log("    'columns': ['flightName', 'impressions', 'totalRevenue']")
             self.log("  }")
             self.log("Would poll for report completion and download results")
 
             # Simulate response based on campaign progress
-            # Parse ISO string to datetime, then extract date
-            start_dt = datetime.fromisoformat(date_range.start.replace("Z", "+00:00"))
-            days_elapsed = (today.date() - start_dt.date()).days
+            days_elapsed = (today.date() - date_range.start.date()).days
             progress_factor = min(days_elapsed / 14, 1.0)  # Assume 14-day campaigns
 
             # Calculate simulated delivery for audio campaigns
@@ -482,11 +479,10 @@ class TritonDigital(AdServerAdapter):
                 currency="USD",
             )
         else:
-            # date_range.start and .end are already ISO 8601 strings
             report_payload = {
                 "reportType": "FLIGHT",
-                "startDate": date_range.start,
-                "endDate": date_range.end,
+                "startDate": date_range.start.isoformat(),
+                "endDate": date_range.end.isoformat(),
                 "filters": {"campaigns": [media_buy_id]},
                 "columns": ["flightName", "impressions", "totalRevenue"],
             }
