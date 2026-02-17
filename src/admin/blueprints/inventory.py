@@ -627,10 +627,8 @@ def analyze_ad_server_inventory(tenant_id):
             elif not mappings:
                 mappings = {}
             principal = PrincipalSchema(
-                tenant_id=tenant_id,
                 principal_id=principal_obj.principal_id,
                 name=principal_obj.name,
-                access_token=principal_obj.access_token,
                 platform_mappings=mappings,
             )
 
