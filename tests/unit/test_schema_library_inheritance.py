@@ -180,9 +180,9 @@ class TestSchemaLibraryInheritance:
             "ListCreativesRequest",
             # ListCreativesResponse — migrated (nested types now extend library)
             "SyncCreativesResponse",
-            # Signal types - nested type incompatibility
-            "ActivateSignalRequest",
-            "ActivateSignalResponse",
+            # Signal types
+            # ActivateSignalRequest — migrated (signal_id → signal_agent_segment_id)
+            "ActivateSignalResponse",  # RootModel union — cannot subclass
             # GetSignalsRequest — migrated (uses library DeliverTo)
             # GetSignalsResponse — migrated (uses local Signal with exclude=True)
             # Property types - nested PublisherDomain type incompatibility

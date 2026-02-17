@@ -272,7 +272,7 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
 
 
 async def _activate_signal_impl(
-    signal_id: str,
+    signal_agent_segment_id: str,
     campaign_id: str = None,
     media_buy_id: str = None,
     context: dict | None = None,  # payload-level context
@@ -281,7 +281,7 @@ async def _activate_signal_impl(
     """Shared implementation for activate_signal (used by both MCP and A2A).
 
     Args:
-        signal_id: Signal ID to activate
+        signal_agent_segment_id: Universal signal identifier to activate
         campaign_id: Optional campaign ID to activate signal for
         media_buy_id: Optional media buy ID to activate signal for
         context: Application level context per adcp spec
@@ -309,7 +309,7 @@ async def _activate_signal_impl(
     if not ctx:
         raise ToolError("Context required for signal activation")
     testing_ctx = get_testing_context(ctx)
-    campaign_info = {"endpoint": "activate_signal", "signal_id": signal_id}
+    campaign_info = {"endpoint": "activate_signal", "signal_id": signal_agent_segment_id}
     # Note: apply_testing_hooks modifies response data dict, not called here as no response yet
 
     try:
@@ -321,7 +321,7 @@ async def _activate_signal_impl(
 
         # Mock implementation for demonstration
         activation_success = True
-        requires_approval = signal_id.startswith("premium_")  # Mock rule: premium signals need approval
+        requires_approval = signal_agent_segment_id.startswith("premium_")
 
         from src.core.schemas import Error
 
@@ -330,20 +330,20 @@ async def _activate_signal_impl(
             errors = [
                 Error(
                     code="APPROVAL_REQUIRED",
-                    message=f"Signal {signal_id} requires manual approval before activation",
+                    message=f"Signal {signal_agent_segment_id} requires manual approval before activation",
                 )
             ]
             return ActivateSignalResponse(
-                signal_id=signal_id,
+                signal_id=signal_agent_segment_id,
                 activation_details=None,
                 errors=errors,
                 context=context,
             )
         elif activation_success:
             # Success - return activation details
-            decisioning_platform_segment_id = f"seg_{signal_id}_{uuid.uuid4().hex[:8]}"
+            decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
             return ActivateSignalResponse(
-                signal_id=signal_id,
+                signal_id=signal_agent_segment_id,
                 activation_details={
                     "decisioning_platform_segment_id": decisioning_platform_segment_id,
                     "estimated_activation_duration_minutes": 15.0,
@@ -356,18 +356,18 @@ async def _activate_signal_impl(
             # Failure
             errors = [Error(code="ACTIVATION_FAILED", message="Signal provider unavailable")]
             return ActivateSignalResponse(
-                signal_id=signal_id,
+                signal_id=signal_agent_segment_id,
                 activation_details=None,
                 errors=errors,
                 context=context,
             )
 
     except Exception as e:
-        logger.error(f"Error activating signal {signal_id}: {e}")
+        logger.error(f"Error activating signal {signal_agent_segment_id}: {e}")
         from src.core.schemas import Error
 
         return ActivateSignalResponse(
-            signal_id=signal_id,
+            signal_id=signal_agent_segment_id,
             activation_details=None,
             errors=[Error(code="ACTIVATION_ERROR", message=str(e))],
             context=context,
@@ -375,7 +375,7 @@ async def _activate_signal_impl(
 
 
 async def activate_signal(
-    signal_id: str,
+    signal_agent_segment_id: str,
     campaign_id: str = None,
     media_buy_id: str = None,
     context: dict | None = None,  # payload-level context
@@ -386,7 +386,7 @@ async def activate_signal(
     MCP tool wrapper that delegates to the shared implementation.
 
     Args:
-        signal_id: Signal ID to activate
+        signal_agent_segment_id: Universal signal identifier to activate
         campaign_id: Optional campaign ID to activate signal for
         media_buy_id: Optional media buy ID to activate signal for
         context: Application level context per adcp spec
@@ -395,7 +395,7 @@ async def activate_signal(
     Returns:
         ToolResult with ActivateSignalResponse data
     """
-    response = await _activate_signal_impl(signal_id, campaign_id, media_buy_id, context, ctx)
+    response = await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, ctx)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -415,7 +415,7 @@ async def get_signals_raw(req: GetSignalsRequest, ctx: Context | ToolContext | N
 
 
 async def activate_signal_raw(
-    signal_id: str,
+    signal_agent_segment_id: str,
     campaign_id: str = None,
     media_buy_id: str = None,
     context: dict | None = None,  # payload-level context
@@ -426,7 +426,7 @@ async def activate_signal_raw(
     Delegates to the shared implementation.
 
     Args:
-        signal_id: Signal ID to activate
+        signal_agent_segment_id: Universal signal identifier to activate
         campaign_id: Optional campaign ID to activate signal for
         media_buy_id: Optional media buy ID to activate signal for
         context: Application level context per adcp spec
@@ -435,4 +435,4 @@ async def activate_signal_raw(
     Returns:
         ActivateSignalResponse with activation status
     """
-    return await _activate_signal_impl(signal_id, campaign_id, media_buy_id, context, ctx)
+    return await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, ctx)

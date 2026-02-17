@@ -69,6 +69,8 @@ from src.core.config import get_pydantic_extra_mode
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
 # Simple types that match library exactly
+# V3: Structured geo targeting types
+from adcp.types import ActivateSignalRequest as LibraryActivateSignalRequest
 from adcp.types import AggregatedTotals as LibraryAggregatedTotals
 from adcp.types import BrandManifest as LibraryBrandManifest
 from adcp.types import (
@@ -88,8 +90,6 @@ from adcp.types import (
 
 # AdCP creative types for schema definitions
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
-
-# V3: Structured geo targeting types
 from adcp.types import FrequencyCap as LibraryFrequencyCap
 from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
@@ -3310,27 +3310,42 @@ class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):
 
 
 # --- Signal Activation ---
-class ActivateSignalRequest(SalesAgentBaseModel):
-    """Request to activate a signal for use in campaigns.
+class ActivateSignalRequest(LibraryActivateSignalRequest):
+    """Extends library ActivateSignalRequest with local extension fields.
 
-    NOTE: Does not extend adcp.types.ActivateSignalRequest intentionally.
-    Library type uses signal_agent_segment_id + required deployments field.
-    This local type uses signal_id + campaign_id/media_buy_id — incompatible
-    field names and different activation semantics.
+    Library provides: signal_agent_segment_id, deployments, context, ext.
+    Local extensions: campaign_id, media_buy_id (unused in impl, kept for API compat).
+
+    NOTE: ActivateSignalResponse is NOT migrated — library uses RootModel
+    discriminated union (success|error) which is fundamentally incompatible
+    with the local flat model pattern.
     """
 
-    signal_id: str = Field(..., description="Signal ID to activate")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Extension fields (not in library spec)
     campaign_id: str | None = Field(None, description="Optional campaign ID to activate signal for")
     media_buy_id: str | None = Field(None, description="Optional media buy ID to activate signal for")
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
+
+    @property
+    def signal_id(self) -> str:
+        """DEPRECATED: Use signal_agent_segment_id instead."""
+        warnings.warn(
+            "signal_id is deprecated. Use signal_agent_segment_id instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.signal_agent_segment_id
 
 
 class ActivateSignalResponse(SalesAgentBaseModel):
-    """Response from signal activation (AdCP v2.4 spec compliant).
+    """Response from signal activation.
 
-    Per AdCP PR #113, this response contains ONLY domain data.
-    Protocol fields (status, task_id, message, context_id) are added by the
-    protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+    NOT migrated to library base: library ActivateSignalResponse is a
+    RootModel[SuccessVariant | ErrorVariant] discriminated union, which is
+    fundamentally incompatible with this flat model pattern. The local flat
+    model (signal_id + optional errors/activation_details) works for our
+    use case. See salesagent-c0m for details.
     """
 
     signal_id: str = Field(..., description="Activated signal ID")

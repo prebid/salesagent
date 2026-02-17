@@ -76,10 +76,13 @@ class TestMCPContractValidation:
         assert request.context is None
 
     def test_activate_signal_minimal(self):
-        """Test activate_signal with just signal_id."""
-        request = ActivateSignalRequest(signal_id="test_signal_123")
+        """Test activate_signal with required fields."""
+        request = ActivateSignalRequest(
+            signal_agent_segment_id="test_signal_123",
+            deployments=[PlatformDestination(platform="google_ad_manager", type="platform")],
+        )
 
-        assert request.signal_id == "test_signal_123"
+        assert request.signal_agent_segment_id == "test_signal_123"
         assert request.campaign_id is None
         assert request.media_buy_id is None
 
@@ -267,7 +270,7 @@ class TestSchemaDefaultValues:
         # This test documents which fields are required and why
         # Note: GetProductsRequest.brand_manifest is OPTIONAL per AdCP spec
         required_field_justifications = {
-            "ActivateSignalRequest.signal_id": "Must specify which signal to activate",
+            "ActivateSignalRequest.signal_agent_segment_id": "Must specify which signal to activate",
             "CreateMediaBuyRequest.buyer_ref": "Required per AdCP spec for tracking purchases",
         }
 

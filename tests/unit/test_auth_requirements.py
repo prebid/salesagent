@@ -212,9 +212,9 @@ class TestAuthenticationRequirements:
 
         from src.core.tools.signals import _activate_signal_impl
 
-        # Call without context (no auth) - function signature: signal_id, campaign_id, media_buy_id, ctx
+        # Call without context (no auth) - function signature: signal_agent_segment_id, campaign_id, media_buy_id, ctx
         with pytest.raises(ToolError) as exc_info:
-            asyncio.run(_activate_signal_impl(signal_id="test_signal", media_buy_id="test_buy", ctx=None))
+            asyncio.run(_activate_signal_impl(signal_agent_segment_id="test_signal", media_buy_id="test_buy", ctx=None))
 
         error_msg = str(exc_info.value)
         assert "authentication required" in error_msg.lower() or "principal" in error_msg.lower()
