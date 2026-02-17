@@ -180,10 +180,10 @@ class TestSchemaLibraryInheritance:
             "ListCreativesRequest",
             # ListCreativesResponse — migrated (nested types now extend library)
             "SyncCreativesResponse",
-            # Signal types - nested DeliverTo type incompatibility
+            # Signal types - nested type incompatibility
             "ActivateSignalRequest",
             "ActivateSignalResponse",
-            "GetSignalsRequest",
+            # GetSignalsRequest — migrated (uses library DeliverTo)
             "GetSignalsResponse",
             # Property types - nested PublisherDomain type incompatibility
             "ListAuthorizedPropertiesRequest",

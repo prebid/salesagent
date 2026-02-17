@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from adcp import GetProductsRequest
+from adcp.types import DeliverTo, PlatformDestination
 
 from src.core.schemas import (
     ActivateSignalRequest,
@@ -16,7 +17,6 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     GetSignalsRequest,
     ListAuthorizedPropertiesRequest,  # Removed from adcp 3.2.0, defined locally
-    SignalDeliverTo,
     UpdateMediaBuyRequest,
 )
 from tests.helpers.adcp_factories import create_test_package_request
@@ -133,25 +133,34 @@ class TestMCPContractValidation:
 
     def test_get_signals_minimal_now_works(self):
         """Test get_signals with minimal parameters - now fixed!"""
-        # This now works with sensible defaults
+        # Library DeliverTo requires explicit deployments and countries
         request = GetSignalsRequest(
             signal_spec="audience_automotive",
-            deliver_to=SignalDeliverTo(),  # Uses defaults: platforms="all", countries=["US"]
+            deliver_to=DeliverTo(
+                deployments=[PlatformDestination(platform="google_ad_manager", type="platform")],
+                countries=["US"],
+            ),
         )
 
         assert request.signal_spec == "audience_automotive"
-        assert request.deliver_to.platforms == "all"
-        assert request.deliver_to.countries == ["US"]
+        assert len(request.deliver_to.deployments) == 1
+        assert request.deliver_to.countries[0].root == "US"
 
     def test_get_signals_with_custom_delivery(self):
         """Test get_signals with custom delivery requirements."""
         request = GetSignalsRequest(
             signal_spec="audience_luxury_automotive",
-            deliver_to=SignalDeliverTo(platforms=["gam", "facebook"], countries=["US", "CA", "UK"]),
+            deliver_to=DeliverTo(
+                deployments=[
+                    PlatformDestination(platform="gam", type="platform"),
+                    PlatformDestination(platform="facebook", type="platform"),
+                ],
+                countries=["US", "CA", "UK"],
+            ),
         )
 
-        assert request.deliver_to.platforms == ["gam", "facebook"]
-        assert request.deliver_to.countries == ["US", "CA", "UK"]
+        assert len(request.deliver_to.deployments) == 2
+        assert len(request.deliver_to.countries) == 3
 
     def test_update_media_buy_minimal(self):
         """Test update_media_buy identifiers (oneOf enforced at protocol boundary)."""
@@ -287,17 +296,26 @@ class TestMCPToolMinimalCalls:
         except Exception as e:
             pytest.fail(f"GetProductsRequest creation failed: {e}")
 
-        # 2. Test that SignalDeliverTo can be created with defaults
+        # 2. Test that library DeliverTo works with explicit values
         try:
-            deliver_to = SignalDeliverTo()
-            assert deliver_to.platforms == "all"
-            assert deliver_to.countries == ["US"]
+            deliver_to = DeliverTo(
+                deployments=[PlatformDestination(platform="google_ad_manager", type="platform")],
+                countries=["US"],
+            )
+            assert len(deliver_to.deployments) == 1
+            assert deliver_to.countries[0].root == "US"
         except Exception as e:
-            pytest.fail(f"SignalDeliverTo creation failed: {e}")
+            pytest.fail(f"DeliverTo creation failed: {e}")
 
         # 3. Test that GetSignalsRequest works with minimal params
         try:
-            signals_request = GetSignalsRequest(signal_spec="audience_automotive", deliver_to=SignalDeliverTo())
+            signals_request = GetSignalsRequest(
+                signal_spec="audience_automotive",
+                deliver_to=DeliverTo(
+                    deployments=[PlatformDestination(platform="google_ad_manager", type="platform")],
+                    countries=["US"],
+                ),
+            )
             assert signals_request.signal_spec == "audience_automotive"
         except Exception as e:
             pytest.fail(f"GetSignalsRequest creation failed: {e}")

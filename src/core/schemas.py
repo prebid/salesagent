@@ -90,6 +90,7 @@ from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
 
 # V3: Structured geo targeting types
 from adcp.types import FrequencyCap as LibraryFrequencyCap
+from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import Placement as LibraryPlacement
 from adcp.types import Product as LibraryProduct
@@ -3254,29 +3255,6 @@ class Signal(LibrarySignal):
         return data
 
 
-# AdCP-compliant supporting models for get-signals-request
-class SignalDeliverTo(SalesAgentBaseModel):
-    """Delivery requirements per AdCP get-signals-request schema."""
-
-    platforms: str | list[str] = Field(
-        "all", description="Target platforms: 'all' or array of platform names (defaults to 'all')"
-    )
-    accounts: list[dict[str, str]] | None = Field(None, description="Specific platform-account combinations")
-    countries: list[str] = Field(
-        default_factory=lambda: ["US"],
-        description="Countries where signals will be used (ISO codes, defaults to ['US'])",
-    )
-
-    @model_validator(mode="after")
-    def validate_accounts_structure(self):
-        """Validate accounts array structure if provided."""
-        if self.accounts:
-            for account in self.accounts:
-                if not isinstance(account, dict) or "platform" not in account or "account" not in account:
-                    raise ValueError("Each account must have 'platform' and 'account' fields")
-        return self
-
-
 class SignalFilters(LibrarySignalFilters):
     """Signal filters per AdCP get-signals-request schema.
 
@@ -3286,24 +3264,10 @@ class SignalFilters(LibrarySignalFilters):
     pass  # All fields inherited from library
 
 
-class GetSignalsRequest(SalesAgentBaseModel):
-    """AdCP-compliant request to discover available signals per get-signals-request schema.
+class GetSignalsRequest(LibraryGetSignalsRequest):
+    """Extends library GetSignalsRequest with environment-aware validation."""
 
-    NOTE: Does not extend library type yet because local SignalDeliverTo
-    type differs from library type. Migration tracked in issue #824.
-
-    Per AdCP specification:
-    - Required: signal_spec (natural language description)
-    - Required: deliver_to (delivery requirements)
-    - Optional: context, ext, filters, max_results
-    """
-
-    signal_spec: str = Field(..., description="Natural language description of the desired signals")
-    deliver_to: SignalDeliverTo = Field(..., description="Where the signals need to be delivered")
-    context: dict[str, Any] | None = Field(None, description="Application-level context provided by the client")
-    ext: dict[str, Any] | None = Field(None, description="Extension object for custom fields")
-    filters: SignalFilters | None = Field(None, description="Filters to refine results")
-    max_results: int | None = Field(None, ge=1, description="Maximum number of results to return")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Backward compatibility properties (deprecated)
     @property

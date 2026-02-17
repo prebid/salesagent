@@ -2333,18 +2333,19 @@ class TestAdCPContract:
         # ✅ FIXED: Implementation now matches AdCP spec
         # AdCP spec requires: signal_spec, deliver_to, optional filters/max_results
 
-        from src.core.schemas import GetSignalsRequest, SignalDeliverTo, SignalFilters
+        from adcp.types import DeliverTo, PlatformDestination
+
+        from src.core.schemas import GetSignalsRequest, SignalFilters
 
         # Test AdCP-compliant request with all required fields
         adcp_request = GetSignalsRequest(
             signal_spec="Sports enthusiasts in automotive market",
-            deliver_to=SignalDeliverTo(
-                platforms=["google_ad_manager", "the_trade_desk"],
-                countries=["US", "CA"],
-                accounts=[
-                    {"platform": "google_ad_manager", "account": "123456"},
-                    {"platform": "the_trade_desk", "account": "ttd789"},
+            deliver_to=DeliverTo(
+                deployments=[
+                    PlatformDestination(platform="google_ad_manager", type="platform", account="123456"),
+                    PlatformDestination(platform="the_trade_desk", type="platform", account="ttd789"),
                 ],
+                countries=["US", "CA"],
             ),
             filters=SignalFilters(
                 catalog_types=["marketplace", "custom"],
@@ -2368,11 +2369,12 @@ class TestAdCPContract:
         for field in optional_fields:
             assert field in adcp_response, f"Optional AdCP field '{field}' missing from response"
 
-        # ✅ VERIFY deliver_to structure
+        # ✅ VERIFY deliver_to structure (library DeliverTo uses deployments + countries)
         deliver_to = adcp_response["deliver_to"]
-        assert "platforms" in deliver_to, "deliver_to must have platforms field"
+        assert "deployments" in deliver_to, "deliver_to must have deployments field"
         assert "countries" in deliver_to, "deliver_to must have countries field"
-        assert isinstance(deliver_to["platforms"], list), "platforms must be array when not 'all'"
+        assert isinstance(deliver_to["deployments"], list), "deployments must be array"
+        assert len(deliver_to["deployments"]) >= 1, "deployments must have at least one entry"
         assert isinstance(deliver_to["countries"], list), "countries must be array"
 
         # Verify country codes are 2-letter ISO
@@ -2399,10 +2401,14 @@ class TestAdCPContract:
 
         # Test minimal request (only required fields)
         minimal_request = GetSignalsRequest(
-            signal_spec="Automotive intenders", deliver_to=SignalDeliverTo(platforms="all", countries=["US"])
+            signal_spec="Automotive intenders",
+            deliver_to=DeliverTo(
+                deployments=[PlatformDestination(platform="google_ad_manager", type="platform")],
+                countries=["US"],
+            ),
         )
         minimal_response = minimal_request.model_dump()
-        assert minimal_response["deliver_to"]["platforms"] == "all"
+        assert "deployments" in minimal_response["deliver_to"]
 
         # ✅ VERIFY backward compatibility properties work (deprecated)
         with warnings.catch_warnings(record=True) as w:
