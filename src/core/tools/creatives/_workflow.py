@@ -6,7 +6,6 @@ from typing import Any
 from adcp import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.exceptions import ToolError
-from pydantic import BaseModel
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
@@ -74,19 +73,13 @@ def _create_sync_workflow_steps(
                 "approval_mode": approval_mode,
             }
             # Store push_notification_config if provided for async notification
-            # Serialize models for DB storage (transitional: may receive model or dict)
+            # Engine's _pydantic_json_serializer handles Pydantic models in JSONB automatically
             if push_notification_config:
-                request_data_for_workflow["push_notification_config"] = (
-                    push_notification_config.model_dump(mode="json")
-                    if isinstance(push_notification_config, BaseModel)
-                    else push_notification_config
-                )
+                request_data_for_workflow["push_notification_config"] = push_notification_config
 
             # Store context if provided (for echoing back in webhook)
             if context:
-                request_data_for_workflow["context"] = (
-                    context.model_dump() if isinstance(context, BaseModel) else context
-                )
+                request_data_for_workflow["context"] = context
 
             # Store protocol type for webhook payload creation
             # ToolContext = A2A, Context (FastMCP) = MCP

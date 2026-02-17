@@ -223,12 +223,11 @@ def _sync_creatives_impl(
 
                         # Handle failed updates
                         if update_result.action == "failed":
-                            creative_format = creative.format_id
                             failed_creatives.append(
                                 {
                                     "creative_id": existing_creative.creative_id,
                                     "error": update_result.errors[0] if update_result.errors else "Unknown error",
-                                    "format": str(creative_format),
+                                    "format": creative.format_id,
                                 }
                             )
                             failed_count += 1
@@ -243,10 +242,9 @@ def _sync_creatives_impl(
 
                         # Track creatives needing approval for workflow creation
                         if needs_approval:
-                            creative_format = creative.format_id
-                            creative_info: dict[str, str | None] = {
+                            creative_info: dict[str, Any] = {
                                 "creative_id": existing_creative.creative_id,
-                                "format": str(creative_format),
+                                "format": creative.format_id,
                                 "name": creative.name,
                                 "status": existing_creative.status,
                             }
@@ -278,13 +276,12 @@ def _sync_creatives_impl(
 
                         # Handle failed creates
                         if create_result.action == "failed":
-                            creative_format = creative.format_id
                             creative_id = creative.creative_id or "unknown"
                             failed_creatives.append(
                                 {
                                     "creative_id": creative_id,
                                     "error": create_result.errors[0] if create_result.errors else "Unknown error",
-                                    "format": str(creative_format),
+                                    "format": creative.format_id,
                                 }
                             )
                             failed_count += 1
@@ -296,10 +293,9 @@ def _sync_creatives_impl(
 
                         # Track creatives needing approval for workflow creation
                         if needs_approval:
-                            creative_format = creative.format_id
                             creative_info = {
                                 "creative_id": create_result.creative_id,
-                                "format": str(creative_format),
+                                "format": creative.format_id,
                                 "name": creative.name,
                                 "status": create_result.status,
                             }

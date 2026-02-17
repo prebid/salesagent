@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
-from src.core.schemas import UpdateMediaBuyResponse
+from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
 
@@ -124,7 +124,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
         # Call update_media_buy with creative assignment
-        response = _update_media_buy_impl(
+        req = UpdateMediaBuyRequest(
             media_buy_id="test_buy_123",
             buyer_ref="buyer_ref_123",
             packages=[
@@ -133,8 +133,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
                     "creative_ids": ["creative_1", "creative_2"],
                 }
             ],
-            ctx=mock_context,
         )
+        response = _update_media_buy_impl(req=req, ctx=mock_context)
 
     # Verify response
     assert isinstance(response, UpdateMediaBuyResponse)
@@ -301,7 +301,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
         mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
         # Call update_media_buy to replace creative_1 with creative_2 and creative_3
-        response = _update_media_buy_impl(
+        req = UpdateMediaBuyRequest(
             media_buy_id="test_buy_456",
             buyer_ref="buyer_ref_456",
             packages=[
@@ -310,8 +310,8 @@ def test_update_media_buy_replaces_creatives(integration_db):
                     "creative_ids": ["creative_2", "creative_3"],
                 }
             ],
-            ctx=mock_context,
         )
+        response = _update_media_buy_impl(req=req, ctx=mock_context)
 
     # Verify response
     assert isinstance(response, UpdateMediaBuyResponse)
@@ -428,7 +428,7 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
         mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
         # Call update_media_buy with non-existent creative IDs
-        response = _update_media_buy_impl(
+        req = UpdateMediaBuyRequest(
             media_buy_id="test_buy_789",
             buyer_ref="buyer_ref_789",
             packages=[
@@ -437,8 +437,8 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
                     "creative_ids": ["nonexistent_creative"],
                 }
             ],
-            ctx=mock_context,
         )
+        response = _update_media_buy_impl(req=req, ctx=mock_context)
 
     # Verify error response
     assert isinstance(response, UpdateMediaBuyResponse)

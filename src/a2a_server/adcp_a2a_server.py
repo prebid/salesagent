@@ -62,6 +62,7 @@ from datetime import UTC, datetime
 from adcp import create_a2a_webhook_payload
 from adcp.types import GeneratedTaskStatus
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
@@ -1636,15 +1637,22 @@ class AdCPRequestHandler(RequestHandler):
                     "received_parameters": list(parameters.keys()),
                 }
 
-            # Pass creatives as-is (dicts or models) — _sync_creatives_impl handles both.
-            # Don't convert to CreativeAsset here: library type requires FormatId model,
-            # but callers send format_id as a plain string. The impl does its own parsing.
+            # Construct typed models at the A2A boundary (Pydantic validation at entry).
+            # Pre-process format_id: upgrade legacy strings to FormatId models.
+            from src.core.format_cache import upgrade_legacy_format_id
+
+            creatives = []
+            for c in parameters["creatives"]:
+                if isinstance(c, dict) and "format_id" in c:
+                    c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
+                creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
+
             ctx_param = parameters.get("context")
             context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
 
             # Call core function with spec-compliant parameters (AdCP v2.5)
             response = core_sync_creatives_tool(
-                creatives=parameters["creatives"],
+                creatives=creatives,
                 # AdCP 2.5: Full upsert semantics (patch parameter removed)
                 creative_ids=parameters.get("creative_ids"),
                 assignments=parameters.get("assignments"),

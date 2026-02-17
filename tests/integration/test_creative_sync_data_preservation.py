@@ -55,22 +55,11 @@ class MockContext:
         self.meta = {"headers": {"x-adcp-auth": auth_token}}
 
 
-class FormatIdMatcher:
-    """Helper to match format_id comparisons in tests.
+def _make_format_id(agent_url: str, format_id: str) -> "LibraryFormatId":
+    """Create a proper FormatId model for test mocks."""
+    from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
 
-    The sync_creatives code checks: if fmt.format_id == creative_format
-    where creative_format can be a dict {"agent_url": "...", "id": "..."}
-    This class implements __eq__ to match when compared to dicts or strings.
-    """
-
-    def __init__(self, format_id_dict):
-        self.format_id_dict = format_id_dict
-        self.format_id = format_id_dict["id"] if isinstance(format_id_dict, dict) else format_id_dict
-
-    def __eq__(self, other):
-        if isinstance(other, dict) and "id" in other:
-            return other["id"] == self.format_id
-        return str(other) == self.format_id
+    return LibraryFormatId(agent_url=agent_url, id=format_id)
 
 
 class TestCreativeSyncDataPreservation:
@@ -146,8 +135,7 @@ class TestCreativeSyncDataPreservation:
         """
         # Setup mock format (static, has preview)
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250_image"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250_image")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = None  # Static format
 
@@ -222,8 +210,7 @@ class TestCreativeSyncDataPreservation:
         """
         # Setup mock format
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_728x90_image"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_728x90_image")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = None
 
@@ -310,8 +297,7 @@ class TestCreativeSyncDataPreservation:
 
         # Mock generative format
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250_generative"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250_generative")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = ["display_300x250"]  # Generative
 
@@ -334,9 +320,15 @@ class TestCreativeSyncDataPreservation:
         )
         mock_get_registry.return_value = mock_registry
 
-        # User-provided assets
+        # User-provided assets (ImageAsset adds alt_text/format defaults after parsing)
         user_assets = {
-            "banner_image": {"url": "https://user-creative.example.com/banner.png", "width": 300, "height": 250}
+            "banner_image": {
+                "url": "https://user-creative.example.com/banner.png",
+                "width": 300,
+                "height": 250,
+                "alt_text": None,
+                "format": None,
+            }
         }
 
         sync_fn = self._import_sync_creatives()
@@ -349,7 +341,7 @@ class TestCreativeSyncDataPreservation:
                     "creative_id": "preserve-assets-001",
                     "name": "User Creative with Assets",
                     "format_id": {"agent_url": "https://test-agent.example.com", "id": "display_300x250_generative"},
-                    "assets": user_assets,
+                    "assets": {"banner_image": {"url": "https://user-creative.example.com/banner.png", "width": 300, "height": 250}},
                 }
             ],
         )
@@ -358,7 +350,7 @@ class TestCreativeSyncDataPreservation:
         assert len(result.creatives) == 1
         assert result.creatives[0].action == "created"
 
-        # Verify assets in database match USER assets, not AI-generated
+        # Verify assets in database match USER assets, not replaced by AI-generated
         with get_db_session() as session:
             stmt = select(DBCreative).filter_by(creative_id="preserve-assets-001")
             creative = session.scalars(stmt).first()
@@ -393,8 +385,7 @@ class TestCreativeSyncDataPreservation:
 
         # Mock generative format
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "video_generative"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "video_generative")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = ["video_mp4"]
 
@@ -461,8 +452,7 @@ class TestCreativeSyncDataPreservation:
         """
         # Setup mock format
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250_image"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250_image")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = None
 

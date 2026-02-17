@@ -20,7 +20,7 @@ from src.core.database.models import (
 from src.core.database.models import (
     Principal as ModelPrincipal,
 )
-from src.core.schemas import UpdateMediaBuyResponse
+from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
@@ -150,11 +150,11 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
     context = MockContext(tenant_id, principal_id, token)
 
     # Test: Call update_media_buy (should not raise "Media buy not found")
-    response = _update_media_buy_impl(
+    req = UpdateMediaBuyRequest(
         media_buy_id=media_buy_id,
         buyer_ref="updated_ref",
-        ctx=context,
     )
+    response = _update_media_buy_impl(req=req, ctx=context)
 
     # Verify response
     assert isinstance(response, UpdateMediaBuyResponse)
@@ -169,10 +169,8 @@ def test_update_media_buy_requires_context():
     # Note: This will first hit Pydantic validation if buyer_ref is also provided
     # So we only provide media_buy_id to avoid the oneOf constraint
     with pytest.raises(ValueError, match="Context is required"):
-        _update_media_buy_impl(
-            media_buy_id="buy_test_123",
-            context=None,
-        )
+        req = UpdateMediaBuyRequest(media_buy_id="buy_test_123")
+        _update_media_buy_impl(req=req)
 
 
 @pytest.mark.requires_db
@@ -189,8 +187,5 @@ def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
     # we try to look it up in the database. If not found, we raise ValueError.
     # This tests the buyer_ref lookup path when the media buy doesn't exist.
     with pytest.raises(ValueError, match="Media buy with buyer_ref 'nonexistent_ref' not found"):
-        _update_media_buy_impl(
-            media_buy_id=None,
-            buyer_ref="nonexistent_ref",
-            ctx=context,
-        )
+        req = UpdateMediaBuyRequest(buyer_ref="nonexistent_ref")
+        _update_media_buy_impl(req=req, ctx=context)

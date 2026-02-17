@@ -100,7 +100,13 @@ def integration_db():
     # (in case the module import doesn't trigger class definition)
     _ = (Context, WorkflowStep, ObjectWorkflowMapping)
 
-    engine = create_engine(f"postgresql://{user}:{password}@{host}:{postgres_port}/{unique_db_name}", echo=False)
+    from src.core.database.database_session import _pydantic_json_serializer
+
+    engine = create_engine(
+        f"postgresql://{user}:{password}@{host}:{postgres_port}/{unique_db_name}",
+        echo=False,
+        json_serializer=_pydantic_json_serializer,
+    )
 
     # Ensure all model classes are imported and registered with Base.metadata
     # Import order matters - some models may not be registered if imported too early

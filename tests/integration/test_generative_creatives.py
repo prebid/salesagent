@@ -27,22 +27,11 @@ class MockContext:
         self.meta = {"headers": {"x-adcp-auth": auth_token}}
 
 
-class FormatIdMatcher:
-    """Helper class to match format_id comparisons in tests.
+def _make_format_id(agent_url: str, format_id: str) -> "LibraryFormatId":
+    """Create a proper FormatId model for test mocks."""
+    from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
 
-    The code at line 794 checks: if fmt.format_id == creative_format
-    where creative_format is a dict {"agent_url": "...", "id": "..."}
-    This class implements __eq__ to match when compared to dicts or strings.
-    """
-
-    def __init__(self, format_id_dict):
-        self.format_id_dict = format_id_dict
-        self.format_id = format_id_dict["id"] if isinstance(format_id_dict, dict) else format_id_dict
-
-    def __eq__(self, other):
-        if isinstance(other, dict) and "id" in other:
-            return other["id"] == self.format_id
-        return str(other) == self.format_id
+    return LibraryFormatId(agent_url=agent_url, id=format_id)
 
 
 class TestGenerativeCreatives:
@@ -109,8 +98,7 @@ class TestGenerativeCreatives:
 
         # Mock format with output_format_ids (generative)
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250_generative"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250_generative")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = ["display_300x250"]  # This makes it generative
 
@@ -182,8 +170,7 @@ class TestGenerativeCreatives:
         """Test that static formats (without output_format_ids) call preview_creative."""
         # Mock format without output_format_ids (static)
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = None  # No output_format_ids = static
 
@@ -245,8 +232,7 @@ class TestGenerativeCreatives:
 
         # Mock generative format
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250_generative"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250_generative")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = ["display_300x250"]
 
@@ -290,8 +276,7 @@ class TestGenerativeCreatives:
         mock_get_config.return_value = mock_config
 
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250_generative"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250_generative")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = ["display_300x250"]
 
@@ -338,8 +323,7 @@ class TestGenerativeCreatives:
         mock_get_config.return_value = mock_config
 
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250_generative"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250_generative")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = ["display_300x250"]
 
@@ -386,8 +370,7 @@ class TestGenerativeCreatives:
         mock_get_config.return_value = mock_config
 
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250_generative"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250_generative")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = ["display_300x250"]
 
@@ -464,8 +447,7 @@ class TestGenerativeCreatives:
         mock_get_config.return_value = mock_config
 
         mock_format = MagicMock()
-        format_dict = {"agent_url": "https://test-agent.example.com", "id": "display_300x250_generative"}
-        mock_format.format_id = FormatIdMatcher(format_dict)
+        mock_format.format_id = _make_format_id("https://test-agent.example.com", "display_300x250_generative")
         mock_format.agent_url = "https://test-agent.example.com"
         mock_format.output_format_ids = ["display_300x250"]
 
@@ -485,8 +467,7 @@ class TestGenerativeCreatives:
         context = MockContext()
 
         promoted_offerings_data = {
-            "name": "Eco Water Bottle",
-            "description": "Sustainable water bottle",
+            "brand_manifest": "https://example.com/brand-manifest.json",
         }
 
         sync_fn(
@@ -508,4 +489,6 @@ class TestGenerativeCreatives:
         )
 
         call_args = mock_registry.build_creative.call_args
-        assert call_args[1]["promoted_offerings"] == promoted_offerings_data
+        # promoted_offerings is passed as a PromotedOfferings model after parsing
+        po = call_args[1]["promoted_offerings"]
+        assert str(po.brand_manifest.root) == "https://example.com/brand-manifest.json"
