@@ -99,6 +99,7 @@ from adcp.types import PromotedProducts as LibraryPromotedProducts
 from adcp.types import Property as LibraryProperty
 from adcp.types import QuerySummary as LibraryQuerySummary
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
+from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
 from adcp.types import SyncCreativeResult as LibrarySyncCreativeResult
 from adcp.types import SyncCreativesRequest as LibrarySyncCreativesRequest
@@ -3180,24 +3181,32 @@ class SignalPricing(SalesAgentBaseModel):
     currency: str = Field(..., description="Currency code", pattern="^[A-Z]{3}$")
 
 
-class Signal(SalesAgentBaseModel):
-    """Represents an available signal - AdCP spec compliant."""
+class Signal(LibrarySignal):
+    """Extends library Signal with internal fields and local deployment/pricing types.
 
-    # Core AdCP fields (required)
-    signal_agent_segment_id: str = Field(..., description="Unique identifier for the signal")
-    name: str = Field(..., description="Human-readable signal name")
-    description: str = Field(..., description="Detailed signal description")
-    signal_type: Literal["marketplace", "custom", "owned"] = Field(..., description="Type of signal")
-    data_provider: str = Field(..., description="Name of the data provider")
-    coverage_percentage: float = Field(..., description="Percentage of audience coverage", gt=-1, le=100)
-    deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")
-    pricing: SignalPricing = Field(..., description="Pricing information")
+    Library provides: signal_agent_segment_id, name, description, signal_type,
+    data_provider, coverage_percentage, deployments, pricing — all inherited
+    from AdCP spec.
 
-    # Internal fields (not in AdCP spec)
-    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy")
-    created_at: datetime | None = Field(None, description="Internal: Creation timestamp")
-    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp")
-    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata")
+    Local overrides:
+    - signal_type: Literal instead of enum (string serialization in model_dump)
+    - deployments: local SignalDeployment (has scope, decisioning_platform_segment_id)
+    - pricing: local SignalPricing (same structure, different base)
+    - Internal fields with Field(exclude=True): tenant_id, created_at, updated_at, metadata
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Override types that differ from library
+    signal_type: Literal["marketplace", "custom", "owned"] = Field(..., description="Type of signal")  # type: ignore[assignment]
+    deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
+    pricing: SignalPricing = Field(..., description="Pricing information")  # type: ignore[assignment]
+
+    # Internal fields (not in AdCP spec, excluded from serialization)
+    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
+    created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)
+    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp", exclude=True)
+    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
 
     # Backward compatibility properties (deprecated)
     @property
@@ -3228,22 +3237,21 @@ class Signal(SalesAgentBaseModel):
         )
         return self.signal_type
 
-    def model_dump(self, **kwargs):
-        """Override to provide AdCP-compliant responses while preserving internal fields."""
-        # Default to excluding internal fields for AdCP compliance
-        exclude = kwargs.get("exclude", set())
-        if isinstance(exclude, set):
-            # Add internal fields to exclude by default
-            exclude.update({"tenant_id", "created_at", "updated_at", "metadata"})
-            kwargs["exclude"] = exclude
+    def model_dump_internal(self, **kwargs: Any) -> dict[str, Any]:
+        """Dump including internal fields for database storage.
 
-        return super().model_dump(**kwargs)
+        Pydantic v2's Field(exclude=True) cannot be overridden via model_dump parameters.
+        We manually include internal fields by accessing the attributes directly.
+        """
+        data = super().model_dump(exclude=set(), **kwargs)
 
-    def model_dump_internal(self, **kwargs):
-        """Dump including internal fields for database storage and internal processing."""
-        # Don't exclude internal fields
-        kwargs.pop("exclude", None)  # Remove any exclude parameter
-        return super().model_dump(**kwargs)
+        # Manually add excluded fields
+        for field_name in ("tenant_id", "created_at", "updated_at", "metadata"):
+            val = getattr(self, field_name, None)
+            if val is not None:
+                data[field_name] = val
+
+        return data
 
 
 # AdCP-compliant supporting models for get-signals-request
