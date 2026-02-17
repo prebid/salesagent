@@ -1,0 +1,345 @@
+name: task-execute
+description: >
+  Execute beads tasks through the full lifecycle: research, architect review,
+  triage, implementation, and commit. Each atom is self-contained — all research
+  findings are stored in the beads task itself (notes + design fields), making
+  every task a complete unit of context.
+
+variables:
+  TASK_IDS:
+    description: "Space-separated beads task IDs to execute (e.g., fck o0d a53)"
+    required: true
+
+labels:
+  - "mol:task-execute"
+
+iterate:
+  over: "TASK_IDS"
+  item_var: "TASK_ID"
+  all_var: "ALL_TASKS"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # ── Atom 1: Research ──────────────────────────────────────────
+    - id: "research-{TASK_ID}"
+      title: "Research {TASK_ID}"
+      description: |
+        Execute research for beads task {TASK_ID}. All findings go into the
+        bead itself — NOT the filesystem.
+
+        ## Instructions
+
+        1. **Read the task**: `bd show {TASK_ID}`
+        2. **AdCP spec check** (if task touches schemas/protocol):
+           - Read relevant JSON schemas at `/Users/konst/projects/adcp/static/schemas/source/`
+           - Check required vs optional, additionalProperties, type constraints
+           - If no AdCP surface, note "N/A" and move on
+        3. **Explore the codebase**:
+           - Search for relevant code (Grep, Glob)
+           - Read files that will need modification
+           - Check existing tests for the affected area
+           - Find 2-3 similar implementations to follow as patterns
+        4. **Check documentation** (doc-first rule):
+           - Use Ref MCP for library docs
+           - Check CLAUDE.md for project patterns
+        5. **Engineering checklist** — answer concretely:
+           - DRY: Does similar logic exist?
+           - Library idioms: How does Pydantic/SQLAlchemy/FastMCP solve this?
+           - Data flow trace: Walk one concrete example through the full chain
+           - Existing conventions: What pattern do similar implementations follow?
+           - Test infrastructure: What fixtures/helpers exist?
+        6. **Identify architecture decisions**:
+           - What CLAUDE.md patterns apply?
+           - Multiple valid approaches?
+           - Risks and edge cases?
+
+        ## Store Research in the Bead
+
+        Write findings to the bead using `bd update`:
+
+        ```bash
+        bd update {TASK_ID} --append-notes "## Findings
+        - [key findings]
+
+        ## AdCP Spec Verification
+        - [schemas checked, field alignment, divergences]
+
+        ## Relevant Code
+        - path/to/file.py:line — [description]
+
+        ## CLAUDE.md Patterns
+        - [which patterns apply]
+
+        ## Risks & Edge Cases
+        - [potential issues]"
+        ```
+
+        Write architecture decisions and implementation plan to the design field:
+
+        ```bash
+        bd update {TASK_ID} --design "## Architecture Decisions
+        - Decision 1: [rationale]
+
+        ## Implementation Plan
+        1. [first step]
+        2. [second step]"
+        ```
+
+        ## Gate: Add Label
+
+        ONLY after notes AND design are written:
+        ```bash
+        bd label add {TASK_ID} research:complete
+        ```
+
+        If research reveals blockers or unresolved questions:
+        ```bash
+        bd label add {TASK_ID} research:blocked
+        bd update {TASK_ID} --append-notes "BLOCKED: [reason]"
+        ```
+        Do NOT close this atom if blocked — leave it open.
+
+      acceptance: "Task has research:complete label. Notes contain Findings + Relevant Code sections. Design contains Implementation Plan."
+      labels: ["atom:research"]
+
+    # ── Atom 2: Architect Review ──────────────────────────────────
+    - id: "review-{TASK_ID}"
+      title: "Architect review of {TASK_ID}"
+      description: |
+        Pragmatic architect review of the research findings for {TASK_ID}.
+
+        ## Precondition
+
+        Run `bd show {TASK_ID}` and verify:
+        1. Label `research:complete` is present
+        2. Notes field is non-empty (contains ## Findings)
+        3. Design field is non-empty (contains ## Implementation Plan)
+
+        If ANY precondition fails: do NOT proceed. Update this atom's notes
+        explaining what's missing and leave it open.
+
+        ## Review Criteria
+
+        Read the task's notes and design fields. Evaluate:
+
+        1. **Approach soundness**: Is the proposed implementation plan technically correct?
+           Will it actually work? Are there fundamental flaws?
+        2. **Risk coverage**: Are the identified risks real? Are there unidentified risks?
+           Check for: circular imports, breaking changes, missing test coverage, perf issues.
+        3. **CLAUDE.md compliance**: Does the plan follow all applicable critical patterns?
+           (AdCP schema, nested serialization, shared impl, no quiet failures, etc.)
+        4. **Specificity**: Is the plan specific enough to implement without guessing?
+           Vague plans like "update the code" are HIGH findings.
+        5. **Alternatives**: Was an obviously better approach missed?
+
+        ## Rate Each Finding
+
+        - **LOW**: Minor suggestion, cosmetic, nice-to-have
+        - **MEDIUM**: Real concern but agent can resolve autonomously with the suggestion
+        - **HIGH**: Fundamental issue — user input required before proceeding
+
+        ## Write Review
+
+        ```bash
+        bd update {TASK_ID} --append-notes "## Architect Review
+        - [RATING] Finding: [description]. Suggestion: [what to do]
+        ...
+
+        Overall: [ALL_LOW | NEEDS_REFINEMENT | NEEDS_USER_INPUT]"
+        ```
+
+      acceptance: "Review written to task notes with rated findings and overall verdict."
+      depends_on: ["research-{TASK_ID}"]
+      labels: ["atom:review", "atom:gate"]
+
+    # ── Atom 3: Triage ────────────────────────────────────────────
+    - id: "triage-{TASK_ID}"
+      title: "Triage review findings for {TASK_ID}"
+      description: |
+        Read the architect review and decide next steps for {TASK_ID}.
+        This is a TRIAGE atom — it routes, not executes.
+
+        ## Instructions
+
+        1. Read `bd show {TASK_ID}` — find the "## Architect Review" section in notes
+        2. Check the overall verdict:
+
+        ### If ALL_LOW:
+        No action needed. Note "Clean review — proceeding to implement."
+        Close this atom.
+
+        ### If NEEDS_REFINEMENT (has MEDIUM findings):
+        Create a refine atom that addresses the MEDIUM findings:
+
+        ```bash
+        REFINE_ID=$(bd create --silent --type=task \
+          --parent {EPIC_ID} \
+          --title "Refine approach for {TASK_ID}" \
+          --description "## Instructions
+        Read bd show {TASK_ID} — the Architect Review section has MEDIUM findings.
+        For each MEDIUM finding, update the design field with the refined approach.
+
+        After refinement, verify the design is self-consistent and update notes:
+        bd update {TASK_ID} --append-notes '## Refinement Applied
+        - [what changed and why]'
+
+        ## Anti-Pattern
+        Do NOT re-research. Use existing findings. Only refine the approach." \
+          --acceptance "Design field updated. Refinement documented in notes.")
+        bd label add $REFINE_ID mol:task-execute atom:refine
+        bd dep add $REFINE_ID {TRIAGE_ID}
+        bd dep add implement-{TASK_ID}-bead $REFINE_ID
+        ```
+
+        (Where `implement-{TASK_ID}-bead` is the bead ID of the implement atom.
+        Look it up: `bd list --label mol:task-execute` and find the implement atom for {TASK_ID}.)
+
+        ### If NEEDS_USER_INPUT (has HIGH findings):
+        Do NOT create any atoms. Update task notes:
+        ```bash
+        bd update {TASK_ID} --append-notes "## BLOCKED: User Input Required
+        HIGH findings need human decision. See Architect Review above."
+        ```
+        Leave this atom OPEN. The user will provide direction and close it manually.
+
+        ## Key Principle
+        Triage ROUTES work. It does not DO work.
+
+      acceptance: "Verdict acted on: clean pass noted, refine atom spawned, or blocked for user input."
+      depends_on: ["review-{TASK_ID}"]
+      labels: ["atom:triage"]
+
+    # ── Atom 4: Implement ─────────────────────────────────────────
+    - id: "implement-{TASK_ID}"
+      title: "Implement {TASK_ID}"
+      description: |
+        Implement beads task {TASK_ID} following the researched and reviewed plan.
+
+        ## Prerequisites
+
+        Run `bd show {TASK_ID}`. The bead contains everything you need:
+        - **Description**: What the task is
+        - **Notes**: Research findings, architect review, any refinements
+        - **Design**: Architecture decisions and implementation plan
+
+        Read ALL of these before writing any code.
+
+        ## Workflow
+
+        Follow TDD (Red-Green-Refactor):
+
+        1. **Red**: Write failing test that describes desired behavior
+           ```bash
+           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           ```
+           Confirm it fails for the right reason.
+
+        2. **Green**: Write minimum code to make the test pass
+           - Follow CLAUDE.md critical patterns
+           - Follow existing codebase conventions found in research
+           - Don't add extras not covered by tests
+
+        3. **Refactor**: With passing tests as safety net
+           - Remove duplication, improve naming, simplify logic
+
+        4. **Quality gate**:
+           ```bash
+           make quality
+           ```
+
+        ## If Blocked
+
+        If `make quality` fails or requirements are unclear:
+        ```bash
+        bd update {TASK_ID} --append-notes "## Implementation Blocked
+        - [describe the blocker: test failure, unclear requirement, etc.]
+        - [what was tried]
+        - [what direction is needed]"
+        ```
+        Leave this atom OPEN for user direction.
+
+        ## If Successful
+
+        Close the original beads task:
+        ```bash
+        bd close {TASK_ID}
+        ```
+
+      acceptance: "make quality passes. Original task {TASK_ID} closed."
+      depends_on: ["triage-{TASK_ID}"]
+      depends_on_prev_barrier: true
+      labels: ["atom:implement"]
+
+    # ── Atom 5: Commit ────────────────────────────────────────────
+    - id: "commit-{TASK_ID}"
+      title: "Commit implementation for {TASK_ID}"
+      description: |
+        Commit the implementation for {TASK_ID}.
+
+        ## Instructions
+
+        1. Check what changed:
+           ```bash
+           git status
+           git diff --stat
+           ```
+
+        2. Stage relevant files (be specific, don't use `git add .`):
+           ```bash
+           git add <specific-files>
+           ```
+
+        3. Determine commit type from the task:
+           - Schema migration → `refactor:`
+           - New feature → `feat:`
+           - Bug fix → `fix:`
+           - Infrastructure → `chore:`
+
+        4. Commit:
+           ```bash
+           git commit -m "<type>: <description from task title>"
+           ```
+
+        5. Verify:
+           ```bash
+           git log -1 --oneline
+           ```
+
+      acceptance: "Git commit exists for {TASK_ID} implementation."
+      depends_on: ["implement-{TASK_ID}"]
+      labels: ["atom:commit"]
+
+# ── Finalize (after all tasks) ────────────────────────────────────
+finalize:
+  - id: sync-and-verify
+    title: "Sync beads and verify clean state"
+    description: |
+      Final cleanup after all {N} tasks are implemented.
+
+      ## Instructions
+
+      1. Sync beads:
+         ```bash
+         bd sync --from-main
+         ```
+
+      2. Verify all original tasks are closed:
+         ```bash
+         bd show {ALL_TASKS}
+         ```
+         All should be CLOSED.
+
+      3. Check git state:
+         ```bash
+         git status
+         git log --oneline -20
+         ```
+
+      4. Final quality check:
+         ```bash
+         make quality
+         ```
+
+    acceptance: "All {N} tasks closed. bd sync done. make quality passes. git clean."
+    depends_on_all_barriers: true
+    labels: ["atom:verify"]
