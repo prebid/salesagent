@@ -121,7 +121,7 @@ class TestSchemaMatchesLibrary:
         # GetProductsRequest - local extends library with spec fields not yet in library
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
-        # product_selectors and pagination are in AdCP spec but not yet in the library
+        # TODO(adcp-lib): Remove allowlist when adcp library adds product_selectors + pagination
         local_extensions = {"product_selectors", "pagination"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
@@ -130,7 +130,7 @@ class TestSchemaMatchesLibrary:
         # GetMediaBuyDeliveryRequest - local extends library with spec fields not yet in library
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
-        # account_id is in the AdCP spec but not yet in the library
+        # TODO(adcp-lib): Remove allowlist when adcp library adds account_id
         local_extensions = {"account_id"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"

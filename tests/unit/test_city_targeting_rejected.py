@@ -24,12 +24,12 @@ class TestCityFieldsRejected:
     def test_geo_city_any_of_violation(self):
         violations = validate_overlay_targeting(Targeting(geo_city_any_of=["New York"]))
         assert len(violations) == 1
-        assert "City targeting" in violations[0] or "geo_city" in violations[0]
+        assert "City targeting is not supported" in violations[0]
 
     def test_geo_city_none_of_violation(self):
         violations = validate_overlay_targeting(Targeting(geo_city_none_of=["Los Angeles"]))
         assert len(violations) == 1
-        assert "City targeting" in violations[0] or "geo_city" in violations[0]
+        assert "City targeting is not supported" in violations[0]
 
     def test_both_city_fields_produce_one_violation(self):
         """Both geo_city fields trigger the same had_city_targeting flag → 1 violation."""
@@ -48,12 +48,12 @@ class TestCityMixedWithValidFields:
     def test_valid_geo_plus_city_only_city_flagged(self):
         violations = validate_overlay_targeting(Targeting(geo_countries=["US"], geo_city_any_of=["NYC"]))
         assert len(violations) == 1
-        assert "City targeting" in violations[0] or "geo_city" in violations[0]
+        assert "City targeting is not supported" in violations[0]
 
     def test_device_plus_city_only_city_flagged(self):
         violations = validate_overlay_targeting(Targeting(device_type_any_of=["mobile"], geo_city_none_of=["LA"]))
         assert len(violations) == 1
-        assert "City targeting" in violations[0] or "geo_city" in violations[0]
+        assert "City targeting is not supported" in violations[0]
 
 
 class TestGeoCityDimensionRemoved:

@@ -341,7 +341,13 @@ class TestCreativeSyncDataPreservation:
                     "creative_id": "preserve-assets-001",
                     "name": "User Creative with Assets",
                     "format_id": {"agent_url": "https://test-agent.example.com", "id": "display_300x250_generative"},
-                    "assets": {"banner_image": {"url": "https://user-creative.example.com/banner.png", "width": 300, "height": 250}},
+                    "assets": {
+                        "banner_image": {
+                            "url": "https://user-creative.example.com/banner.png",
+                            "width": 300,
+                            "height": 250,
+                        }
+                    },
                 }
             ],
         )

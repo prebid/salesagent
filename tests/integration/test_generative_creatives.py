@@ -489,6 +489,7 @@ class TestGenerativeCreatives:
         )
 
         call_args = mock_registry.build_creative.call_args
-        # promoted_offerings is passed as a PromotedOfferings model after parsing
+        # promoted_offerings is passed as a typed PromotedOfferings model after parsing
         po = call_args[1]["promoted_offerings"]
+        assert type(po).__name__ == "PromotedOfferings"
         assert str(po.brand_manifest.root) == "https://example.com/brand-manifest.json"

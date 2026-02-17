@@ -117,7 +117,7 @@ def _sync_creatives_impl(
 
     # Legacy tracking (still used internally)
     synced_creatives = []
-    failed_creatives = []
+    failed_creatives: list[dict[str, Any]] = []
 
     # Track creatives requiring approval for workflow creation
     creatives_needing_approval = []

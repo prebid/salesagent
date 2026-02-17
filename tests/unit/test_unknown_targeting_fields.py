@@ -18,19 +18,22 @@ class TestForbidRejectsUnknownFields:
             Targeting(totally_bogus="hello", geo_countries=["US"])
 
     def test_known_field_accepted(self):
-        """Known model fields must be accepted."""
+        """Known model fields must be accepted, model_extra stays None (extra='forbid')."""
         t = Targeting(geo_countries=["US"], device_type_any_of=["mobile"])
         assert t.geo_countries is not None
+        assert t.model_extra is None
 
     def test_managed_field_accepted(self):
         """Managed-only fields are real model fields, accepted normally."""
         t = Targeting(axe_include_segment="foo", key_value_pairs={"k": "v"})
         assert t.axe_include_segment == "foo"
+        assert t.model_extra is None
 
     def test_v2_normalized_field_accepted(self):
         """v2 field names consumed by normalizer should not cause rejection."""
         t = Targeting(geo_country_any_of=["CA"])
         assert t.geo_countries is not None
+        assert t.model_extra is None
 
     def test_multiple_unknown_fields_rejected(self):
         with pytest.raises(Exception, match="Extra inputs are not permitted"):

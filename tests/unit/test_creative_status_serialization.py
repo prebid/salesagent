@@ -12,9 +12,8 @@ from src.core.schemas import Creative, CreativeStatus, FormatId
 def test_creative_status_serialized_as_string_at_boundary():
     """Test that Creative.model_dump(mode='json') serializes status as string.
 
-    Verifies that our custom model_dump() correctly propagates mode='json' to
-    super(), so Pydantic's built-in enum serialization produces strings at
-    serialization boundaries (A2A, MCP, DB).
+    At serialization boundaries (A2A, MCP, DB), mode='json' ensures enums
+    become strings for AdCP compliance.
     """
     creative = Creative(
         creative_id="test_creative_1",

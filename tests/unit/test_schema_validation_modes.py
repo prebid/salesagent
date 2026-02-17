@@ -171,3 +171,44 @@ class TestConfigHelperFunctions:
             assert is_production()
         with patch.dict(os.environ, {"ENVIRONMENT": "Production"}):
             assert is_production()
+
+
+class TestProductionModeBehavior:
+    """Verify production mode end-to-end: env var → config helper → model behavior.
+
+    model_config is evaluated at class definition time, so pre-imported models
+    can't change mode at runtime. We create a fresh model class inside the
+    patched environment to test the full chain.
+    """
+
+    def test_production_model_accepts_extra_fields(self):
+        """Model defined under ENVIRONMENT=production silently drops extra fields."""
+        from pydantic import BaseModel, ConfigDict
+
+        from src.core.config import get_pydantic_extra_mode
+
+        with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
+
+            class ProductionModel(BaseModel):
+                model_config = ConfigDict(extra=get_pydantic_extra_mode())
+                brief: str
+
+            obj = ProductionModel(brief="test", unknown_field="should_be_ignored")
+            assert obj.brief == "test"
+            assert not hasattr(obj, "unknown_field")
+
+    def test_dev_model_rejects_extra_fields(self):
+        """Model defined under dev mode rejects extra fields."""
+        from pydantic import BaseModel, ConfigDict
+
+        from src.core.config import get_pydantic_extra_mode
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ENVIRONMENT", None)
+
+            class DevModel(BaseModel):
+                model_config = ConfigDict(extra=get_pydantic_extra_mode())
+                brief: str
+
+            with pytest.raises(ValidationError, match="unknown_field"):
+                DevModel(brief="test", unknown_field="should_fail")
