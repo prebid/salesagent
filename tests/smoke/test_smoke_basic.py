@@ -99,10 +99,8 @@ class TestCriticalPaths:
 
         # Create a test principal
         principal = Principal(
-            tenant_id="test_tenant",
             principal_id="test",
             name="Test",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},
         )
 

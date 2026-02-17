@@ -18,7 +18,7 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import MediaBuy, Principal
-from src.core.schemas import ListCreativesResponse
+from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -182,11 +182,11 @@ class TestCrossPrincipalSecurity:
         ):
             # _verify_principal should raise PermissionError
             with pytest.raises(PermissionError, match="does not own media buy"):
-                _update_media_buy_impl(
+                req = UpdateMediaBuyRequest(
                     media_buy_id="media_buy_a",  # Owned by Principal A!
                     buyer_ref="hacked_by_b",
-                    ctx=mock_context_b,
                 )
+                _update_media_buy_impl(req=req, ctx=mock_context_b)
 
             # Verify media buy was NOT modified
             with get_db_session() as session:

@@ -244,9 +244,9 @@ def _sync_creatives_impl(
                         # Track creatives needing approval for workflow creation
                         if needs_approval:
                             creative_format = creative.format_id
-                            creative_info = {
+                            creative_info: dict[str, str | None] = {
                                 "creative_id": existing_creative.creative_id,
-                                "format": creative_format,
+                                "format": str(creative_format),
                                 "name": creative.name,
                                 "status": existing_creative.status,
                             }
@@ -299,7 +299,7 @@ def _sync_creatives_impl(
                             creative_format = creative.format_id
                             creative_info = {
                                 "creative_id": create_result.creative_id,
-                                "format": creative_format,
+                                "format": str(creative_format),
                                 "name": creative.name,
                                 "status": create_result.status,
                             }

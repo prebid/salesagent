@@ -136,15 +136,7 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
         end_time=end,
     )
 
-    response, status = await _create_media_buy_impl(
-        buyer_ref=request.buyer_ref,
-        brand_manifest=request.brand_manifest,
-        packages=request.packages,
-        start_time=request.start_time,
-        end_time=request.end_time,
-        ctx=_make_context(),
-        context=None,
-    )
+    response, status = await _create_media_buy_impl(req=request, ctx=_make_context())
 
     assert isinstance(response, CreateMediaBuyError), f"Expected error response, got {type(response).__name__}"
     error_text = response.errors[0].message
@@ -175,15 +167,7 @@ async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
         end_time=end,
     )
 
-    response, status = await _create_media_buy_impl(
-        buyer_ref=request.buyer_ref,
-        brand_manifest=request.brand_manifest,
-        packages=request.packages,
-        start_time=request.start_time,
-        end_time=request.end_time,
-        ctx=_make_context(),
-        context=None,
-    )
+    response, status = await _create_media_buy_impl(req=request, ctx=_make_context())
 
     assert isinstance(response, CreateMediaBuyError), f"Expected error response, got {type(response).__name__}"
     error_text = response.errors[0].message

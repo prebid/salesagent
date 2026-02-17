@@ -19,6 +19,7 @@ from src.core.database.models import (
     PricingOption,
     Principal,
 )
+from src.core.schemas import CreateMediaBuyRequest
 from src.core.tool_context import ToolContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
@@ -106,7 +107,7 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         start_time, end_time = _get_future_date_range()
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
-        response, task_status = await _create_media_buy_impl(
+        req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_profile",
             brand_manifest={"name": "Test Campaign"},
             packages=[
@@ -119,9 +120,8 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
             ],
             start_time=start_time,
             end_time=end_time,
-            ctx=ctx,
-            context=None,
         )
+        response, task_status = await _create_media_buy_impl(req=req, ctx=ctx)
 
         # Verify success
         assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
@@ -198,7 +198,7 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
 
         # Create media buy - should succeed or return structured error, not crash
         try:
-            response, _ = await _create_media_buy_impl(
+            req = CreateMediaBuyRequest(
                 buyer_ref="test_buyer_format",
                 brand_manifest={"name": "Test Campaign Format"},
                 packages=[
@@ -211,9 +211,8 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
                 ],
                 start_time=start_time,
                 end_time=end_time,
-                ctx=ctx,
-                context=None,
             )
+            response, _ = await _create_media_buy_impl(req=req, ctx=ctx)
             # Either succeeds or returns structured error - both are valid
             assert response is not None
         except ValueError:
@@ -288,7 +287,7 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
         # Use only the first product (AdCP spec: package has singular product_id)
-        response, _ = await _create_media_buy_impl(
+        req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_shared",
             brand_manifest={"name": "Test Campaign Shared"},
             packages=[
@@ -302,9 +301,8 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
             ],
             start_time=start_time,
             end_time=end_time,
-            ctx=ctx,
-            context=None,
         )
+        response, _ = await _create_media_buy_impl(req=req, ctx=ctx)
 
         assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
             f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
@@ -397,7 +395,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
         start_time, end_time = _get_future_date_range()
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
-        response, _ = await _create_media_buy_impl(
+        req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_updates",
             brand_manifest={"name": "Test Campaign Updates"},
             packages=[
@@ -410,9 +408,8 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             ],
             start_time=start_time,
             end_time=end_time,
-            ctx=ctx,
-            context=None,
         )
+        response, _ = await _create_media_buy_impl(req=req, ctx=ctx)
 
         assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
             f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"

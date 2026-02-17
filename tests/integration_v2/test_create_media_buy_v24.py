@@ -278,11 +278,6 @@ class TestCreateMediaBuyV24Format:
         # Per AdCP spec, CreateMediaBuyResponse.Package only contains buyer_ref and package_id
         # (not budget, targeting, etc - those are in the request Package schema)
 
-    @pytest.mark.xfail(
-        reason="Targeting (local) is not a subclass of TargetingOverlay (library). "
-        "Fix requires making Targeting inherit from TargetingOverlay — separate task.",
-        strict=True,
-    )
     async def test_create_media_buy_with_targeting_overlay_mcp(self, setup_test_tenant):
         """Test MCP path with packages containing Targeting objects.
 
