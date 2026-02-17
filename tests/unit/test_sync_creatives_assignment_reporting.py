@@ -7,6 +7,7 @@ reports which packages each creative was assigned to via the assigned_to field.
 """
 
 import pytest
+from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.schemas import SyncCreativeResult
 
@@ -25,7 +26,7 @@ class TestSyncCreativesAssignmentReporting:
         )
 
         assert result.creative_id == "test_creative_1"
-        assert result.action == "created"
+        assert result.action == CreativeAction.created
         assert result.assigned_to == ["pkg_1", "pkg_2"]
         assert result.assignment_errors is None
 
@@ -40,7 +41,7 @@ class TestSyncCreativesAssignmentReporting:
         )
 
         assert result.creative_id == "test_creative_2"
-        assert result.action == "created"
+        assert result.action == CreativeAction.created
         assert result.assigned_to == ["pkg_1"]
         assert result.assignment_errors == {"pkg_2": "Package not found: pkg_2"}
 
@@ -54,7 +55,7 @@ class TestSyncCreativesAssignmentReporting:
         )
 
         assert result.creative_id == "test_creative_3"
-        assert result.action == "updated"
+        assert result.action == CreativeAction.updated
         assert result.changes == ["name", "media_url"]
         assert result.assigned_to is None
         assert result.assignment_errors is None
@@ -74,7 +75,7 @@ class TestSyncCreativesAssignmentReporting:
         result_dict = result.model_dump()
 
         assert result_dict["creative_id"] == "test_creative_4"
-        assert result_dict["action"] == "created"
+        assert result_dict["action"] == CreativeAction.created
         assert result_dict["assigned_to"] == ["pkg_1", "pkg_2", "pkg_3"]
         # assignment_errors is None, so excluded by default (exclude_none=True)
         assert "assignment_errors" not in result_dict
@@ -91,6 +92,6 @@ class TestSyncCreativesAssignmentReporting:
         result_dict = result.model_dump(exclude_none=True)
 
         assert result_dict["creative_id"] == "test_creative_5"
-        assert result_dict["action"] == "unchanged"
+        assert result_dict["action"] == CreativeAction.unchanged
         assert "assigned_to" not in result_dict  # Excluded because None
         assert "assignment_errors" not in result_dict  # Excluded because None

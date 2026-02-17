@@ -97,6 +97,8 @@ from adcp.types import Property as LibraryProperty
 from adcp.types import PropertyListReference as LibraryPropertyListReference  # V3: new field in GetProductsRequest
 from adcp.types import QuerySummary as LibraryQuerySummary
 from adcp.types import SignalFilters as LibrarySignalFilters
+from adcp.types import SyncCreativeResult as LibrarySyncCreativeResult
+from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_serializer, model_serializer, model_validator
 
 # Type alias for the union of all AdCP pricing option types (V3 consolidated)
@@ -1873,32 +1875,34 @@ class SyncSummary(SalesAgentBaseModel):
     deleted: int = Field(0, ge=0, description="Number of creatives deleted/archived (when delete_missing=true)")
 
 
-class SyncCreativeResult(SalesAgentBaseModel):
-    """Detailed result for a single creative in sync operation."""
+class SyncCreativeResult(LibrarySyncCreativeResult):
+    """Extends library SyncCreativeResult with internal-only fields.
 
-    creative_id: str = Field(..., description="Creative ID from the request")
-    action: Literal["created", "updated", "unchanged", "failed", "deleted"] = Field(
-        ..., description="Action taken for this creative"
-    )
+    Library provides: creative_id, action (CreativeAction enum), platform_id,
+    changes, errors, warnings, assigned_to, assignment_errors, account,
+    expires_at, preview_url.
+
+    Local overrides:
+    - status, review_feedback: Internal fields excluded from responses
+    - changes, errors, warnings: Override to default=[] (library defaults to None)
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Internal-only fields (not in AdCP spec)
     status: str | None = Field(
         None, exclude=True, description="Current approval status of the creative (INTERNAL - excluded from responses)"
     )
-    platform_id: str | None = Field(None, description="Platform-specific ID assigned to the creative")
+    review_feedback: str | None = Field(
+        None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
+    )
+
+    # Override library defaults: library uses None, we use [] for backward compatibility
     changes: list[str] = Field(
         default_factory=list, description="List of field names that were modified (for 'updated' action)"
     )
     errors: list[str] = Field(default_factory=list, description="Validation or processing errors (for 'failed' action)")
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
-    review_feedback: str | None = Field(
-        None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
-    )
-    assigned_to: list[str] | None = Field(
-        None,
-        description="Package IDs this creative was successfully assigned to (only present when assignments were requested)",
-    )
-    assignment_errors: dict[str, str] | None = Field(
-        None, description="Assignment errors by package ID (only present when assignment failures occurred)"
-    )
 
     def model_dump(self, **kwargs):
         """Override to exclude non-AdCP fields for spec compliance.
@@ -2025,10 +2029,10 @@ class SyncCreativesResponse(SalesAgentBaseModel):
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
         # Count actions from creatives list
-        created = sum(1 for c in self.creatives if c.action == "created")
-        updated = sum(1 for c in self.creatives if c.action == "updated")
-        deleted = sum(1 for c in self.creatives if c.action == "deleted")
-        failed = sum(1 for c in self.creatives if c.action == "failed")
+        created = sum(1 for c in self.creatives if c.action == CreativeAction.created)
+        updated = sum(1 for c in self.creatives if c.action == CreativeAction.updated)
+        deleted = sum(1 for c in self.creatives if c.action == CreativeAction.deleted)
+        failed = sum(1 for c in self.creatives if c.action == CreativeAction.failed)
 
         parts = []
         if created:

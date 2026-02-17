@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -354,7 +355,7 @@ class TestCreativeLifecycleMCP:
             if isinstance(creative_item, dict):
                 assert creative_item.get("action") == "updated"
             else:
-                assert creative_item.action == "updated"
+                assert creative_item.action == CreativeAction.updated
 
             # Verify database update
             with get_db_session() as session:
@@ -470,9 +471,9 @@ class TestCreativeLifecycleMCP:
                     action = c.get("action")
                 else:
                     action = getattr(c, "action", None)
-                if action == "created":
+                if action in ("created", CreativeAction.created):
                     created_count += 1
-                elif action == "failed":
+                elif action in ("failed", CreativeAction.failed):
                     failed_count += 1
             assert created_count == 1, f"Expected 1 created, got {created_count}. Creatives: {response.creatives}"
             assert failed_count == 1, f"Expected 1 failed, got {failed_count}. Creatives: {response.creatives}"

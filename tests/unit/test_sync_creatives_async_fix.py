@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types.generated_poc.core.format_id import FormatId
+from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
@@ -113,7 +114,7 @@ class TestSyncCreativesErrorHandling:
                         # Verify the error was captured with the correct creative_id
                         assert len(result.creatives) == 1
                         assert result.creatives[0].creative_id == "test_creative_123"
-                        assert result.creatives[0].action == "failed"
+                        assert result.creatives[0].action == CreativeAction.failed
                         assert len(result.creatives[0].errors) > 0
 
     @pytest.mark.asyncio
@@ -199,7 +200,7 @@ class TestSyncCreativesErrorHandling:
                         # Verify error was captured with correct creative_id
                         assert len(result.creatives) == 1
                         assert result.creatives[0].creative_id == "test_creative_456"
-                        assert result.creatives[0].action == "failed"
+                        assert result.creatives[0].action == CreativeAction.failed
                         assert any("preview" in err.lower() for err in result.creatives[0].errors)
 
 

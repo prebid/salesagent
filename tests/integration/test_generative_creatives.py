@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -153,7 +154,7 @@ class TestGenerativeCreatives:
         # Verify result
         assert isinstance(result, SyncCreativesResponse)
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == "created"
+        assert result.creatives[0].action == CreativeAction.created
 
         # Verify creative was stored with generative data
         with get_db_session() as session:
@@ -219,7 +220,7 @@ class TestGenerativeCreatives:
         # Verify result
         assert isinstance(result, SyncCreativesResponse)
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == "created"
+        assert result.creatives[0].action == CreativeAction.created
 
     @patch("src.core.creative_agent_registry.get_creative_agent_registry")
     @patch("src.core.config.get_config")
@@ -263,7 +264,7 @@ class TestGenerativeCreatives:
         # Verify creative failed with appropriate error message
         assert isinstance(result, SyncCreativesResponse)
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == "failed"
+        assert result.creatives[0].action == CreativeAction.failed
         assert result.creatives[0].errors
         assert any("GEMINI_API_KEY" in str(err) for err in result.creatives[0].errors)
 

@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -178,7 +179,7 @@ class TestCreativeSyncDataPreservation:
 
         # Verify creative was created
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == "created"
+        assert result.creatives[0].action == CreativeAction.created
 
         # Verify URL in database matches USER URL, not system preview URL
         with get_db_session() as session:
@@ -255,7 +256,7 @@ class TestCreativeSyncDataPreservation:
 
         # Verify creative was created
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == "created"
+        assert result.creatives[0].action == CreativeAction.created
 
         # Verify dimensions in database match USER dimensions, not preview
         with get_db_session() as session:
@@ -354,7 +355,7 @@ class TestCreativeSyncDataPreservation:
 
         # Verify creative was created
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == "created"
+        assert result.creatives[0].action == CreativeAction.created
 
         # Verify assets in database match USER assets, not replaced by AI-generated
         with get_db_session() as session:
@@ -430,7 +431,7 @@ class TestCreativeSyncDataPreservation:
 
         # Verify creative was created
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == "created"
+        assert result.creatives[0].action == CreativeAction.created
 
         # Verify URL in database matches USER URL, not AI-generated
         with get_db_session() as session:
@@ -514,7 +515,7 @@ class TestCreativeSyncDataPreservation:
 
         # Verify creative was updated
         assert len(result.creatives) == 1
-        assert result.creatives[0].action in ["updated", "unchanged"]
+        assert result.creatives[0].action in [CreativeAction.updated, CreativeAction.unchanged]
 
         # Verify URL in database matches NEW user URL, not preview
         with get_db_session() as session:

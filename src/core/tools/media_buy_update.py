@@ -16,6 +16,7 @@ from adcp import PushNotificationConfig
 from adcp.types import Error
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.targeting import TargetingOverlay
+from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from adcp.types.generated_poc.media_buy.package_update import PackageUpdate as UpdatePackage
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
@@ -804,7 +805,7 @@ def _update_media_buy_impl(
                 )
 
                 # Check for sync errors
-                failed_creatives = [r for r in sync_response.creatives if r.action == "failed"]
+                failed_creatives = [r for r in sync_response.creatives if r.action == CreativeAction.failed]
                 if failed_creatives:
                     error_msgs = [f"{r.creative_id}: {', '.join(r.errors or [])}" for r in failed_creatives]
                     error_msg = f"Failed to sync creatives: {'; '.join(error_msgs)}"
