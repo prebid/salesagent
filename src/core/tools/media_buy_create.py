@@ -677,13 +677,11 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         logger.error(f"[APPROVAL] {error_msg}")
                         return False, error_msg
 
-                    # Extract delivery_type string value from enum (if it's an enum)
-                    if hasattr(product.delivery_type, "value"):
-                        # It's an enum - extract the string value
-                        delivery_type_str = product.delivery_type.value
-                    else:
-                        # Already a string
-                        delivery_type_str = str(product.delivery_type)
+                    delivery_type_str = (
+                        product.delivery_type.value
+                        if hasattr(product.delivery_type, "value")
+                        else str(product.delivery_type)
+                    )
 
                     # Validate delivery_type is a valid literal
                     if delivery_type_str not in ["guaranteed", "non_guaranteed"]:
@@ -1238,7 +1236,7 @@ async def _validate_and_convert_format_ids(
         if isinstance(fmt_id, dict):
             agent_url = fmt_id.get("agent_url")
             format_id = fmt_id.get("id")
-        elif hasattr(fmt_id, "agent_url") and hasattr(fmt_id, "id"):
+        elif isinstance(fmt_id, FormatId):
             agent_url = fmt_id.agent_url
             format_id = fmt_id.id
         else:
@@ -1898,7 +1896,7 @@ async def _create_media_buy_impl(
             logger.info(f"[INLINE_CREATIVE_DEBUG] req.packages count: {len(req.packages)}")
             for idx, pkg in enumerate(req.packages):
                 logger.info(
-                    f"[INLINE_CREATIVE_DEBUG] Package {idx}: product_id={pkg.product_id}, has_creatives={hasattr(pkg, 'creatives')}, creatives_count={len(pkg.creatives) if hasattr(pkg, 'creatives') and pkg.creatives else 0}"
+                    f"[INLINE_CREATIVE_DEBUG] Package {idx}: product_id={pkg.product_id}, creatives_count={len(pkg.creatives) if pkg.creatives else 0}"
                 )
             try:
                 logger.info("[INLINE_CREATIVE_DEBUG] Calling process_and_upload_package_creatives")
@@ -1926,14 +1924,10 @@ async def _create_media_buy_impl(
         # Check if manual approval is required
         # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback
         tenant_approval_required = tenant.get("human_review_required", True)
-        adapter_approval_required = (
-            adapter.manual_approval_required if hasattr(adapter, "manual_approval_required") else False
-        )
+        adapter_approval_required = adapter.manual_approval_required
         # Tenant setting takes precedence - if tenant requires approval, it's required
         manual_approval_required = tenant_approval_required or adapter_approval_required
-        manual_approval_operations = (
-            adapter.manual_approval_operations if hasattr(adapter, "manual_approval_operations") else []
-        )
+        manual_approval_operations = adapter.manual_approval_operations
 
         # DEBUG: Log manual approval settings
         logger.info(
@@ -2385,9 +2379,7 @@ async def _create_media_buy_impl(
                     )
                     # Generate defaults based on product delivery type and formats
                     delivery_type_str = (
-                        str(schema_product.delivery_type)
-                        if hasattr(schema_product, "delivery_type") and schema_product.delivery_type
-                        else "non_guaranteed"
+                        str(schema_product.delivery_type) if schema_product.delivery_type else "non_guaranteed"
                     )
                     # Extract format IDs as strings for config generation
                     formats_list: list[str] | None = None
@@ -2564,7 +2556,7 @@ async def _create_media_buy_impl(
             matching_package = pkg  # The package we're iterating over
 
             # If found and has format_ids, validate and use those
-            if matching_package and hasattr(matching_package, "format_ids") and matching_package.format_ids:
+            if matching_package and matching_package.format_ids:
                 # Validate that requested formats are supported by product
                 # Format is composite key: (agent_url, id) per AdCP spec
                 product_format_keys: set[tuple[str | None, str]] = set()
@@ -2751,9 +2743,8 @@ async def _create_media_buy_impl(
             package_buyer_ref: str | None = None
             package_budget_value: float | None = None
             if matching_package:
-                if hasattr(matching_package, "buyer_ref"):
-                    package_buyer_ref = matching_package.buyer_ref
-                if hasattr(matching_package, "budget"):
+                package_buyer_ref = matching_package.buyer_ref
+                if matching_package.budget is not None:
                     raw_budget = matching_package.budget
                     # Normalize budget: MediaPackage expects float | None (ADCP 2.5.0)
                     if raw_budget is not None:
@@ -2763,19 +2754,13 @@ async def _create_media_buy_impl(
                         elif isinstance(raw_budget, dict):
                             # Legacy dict format: extract total
                             package_budget_value = float(raw_budget.get("total", 0.0))
-                        elif hasattr(raw_budget, "total"):
+                        elif isinstance(raw_budget, BaseModel):
                             # Budget object: extract total
                             package_budget_value = float(raw_budget.total)
                         else:
                             package_budget_value = None
 
-            # Extract delivery_type string value from enum (if it's an enum)
-            if hasattr(pkg_product.delivery_type, "value"):
-                # It's an enum - extract the string value
-                delivery_type_str = pkg_product.delivery_type.value
-            else:
-                # Already a string - cast to satisfy mypy
-                delivery_type_str = str(pkg_product.delivery_type)
+            delivery_type_str = str(pkg_product.delivery_type.value)
 
             delivery_type_value: Literal["guaranteed", "non_guaranteed"] = cast(
                 Literal["guaranteed", "non_guaranteed"], delivery_type_str
@@ -2791,9 +2776,7 @@ async def _create_media_buy_impl(
                     format_ids=cast(list[Any], format_ids_to_use),
                     targeting_overlay=cast(
                         "Targeting | None",
-                        matching_package.targeting_overlay
-                        if matching_package and hasattr(matching_package, "targeting_overlay")
-                        else None,
+                        matching_package.targeting_overlay if matching_package else None,
                     ),
                     buyer_ref=package_buyer_ref,
                     product_id=pkg_product.product_id,  # Include product_id
@@ -3338,7 +3321,7 @@ async def _create_media_buy_impl(
                 try:
                     # Ensure product_ids is a list, not None
                     # Note: product_ids no longer exists on CreateMediaBuyRequest - use get_product_ids() method
-                    product_ids_list = req.get_product_ids() if hasattr(req, "get_product_ids") else []
+                    product_ids_list = req.get_product_ids()
                     asset = _convert_creative_to_adapter_asset(creative, product_ids_list)
                     assets.append(asset)
                 except Exception as e:
@@ -3385,7 +3368,7 @@ async def _create_media_buy_impl(
             if i < len(adapter_packages):
                 # adapter_packages may be Package Pydantic objects (adcp v1.2.1) or dicts
                 response_package = adapter_packages[i]
-                if hasattr(response_package, "package_id"):
+                if isinstance(response_package, BaseModel):
                     adapter_package_id = response_package.package_id
                     adapter_paused = getattr(response_package, "paused", False)
                 elif isinstance(response_package, dict):

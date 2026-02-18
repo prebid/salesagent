@@ -263,12 +263,8 @@ def _update_media_buy_impl(
     assert persistent_ctx is not None, "persistent_ctx should be created when not in dry_run mode"
 
     # Check if manual approval is required
-    manual_approval_required = (
-        adapter.manual_approval_required if hasattr(adapter, "manual_approval_required") else False
-    )
-    manual_approval_operations = (
-        adapter.manual_approval_operations if hasattr(adapter, "manual_approval_operations") else []
-    )
+    manual_approval_required = adapter.manual_approval_required
+    manual_approval_operations = adapter.manual_approval_operations
 
     if manual_approval_required and "update_media_buy" in manual_approval_operations:
         # Build response first, then persist on workflow step, then return
@@ -307,10 +303,9 @@ def _update_media_buy_impl(
                 request_currency: str
                 if req.budget:
                     # Check if it's a Budget object with currency attribute, otherwise use existing
-                    if hasattr(req.budget, "currency"):
+                    if req.budget.currency:
                         request_currency = str(req.budget.currency)
                     else:
-                        # Float budget - use existing media buy currency
                         request_currency = str(media_buy.currency) if media_buy.currency else "USD"
                 else:
                     request_currency = str(media_buy.currency) if media_buy.currency else "USD"
@@ -416,7 +411,7 @@ def _update_media_buy_impl(
         )
         # Manual approval case - convert adapter result to appropriate Success/Error
         # adcp v1.2.1 oneOf pattern: Check if result is Error variant (has errors field)
-        if hasattr(result, "errors") and result.errors:
+        if isinstance(result, UpdateMediaBuyError) and result.errors:
             return UpdateMediaBuyError(errors=result.errors)
         else:
             # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields
@@ -463,7 +458,7 @@ def _update_media_buy_impl(
                     today=datetime.combine(today, datetime.min.time(), tzinfo=UTC),
                 )
                 # adcp v1.2.1 oneOf pattern: Check if result is Error variant
-                if hasattr(result, "errors") and result.errors:
+                if isinstance(result, UpdateMediaBuyError) and result.errors:
                     error_message = (
                         result.errors[0].message if (result.errors and len(result.errors) > 0) else "Update failed"
                     )
@@ -502,7 +497,7 @@ def _update_media_buy_impl(
                 else:
                     # Budget object with .total and .currency attributes
                     budget_amount = float(pkg_update.budget.total)
-                    currency = pkg_update.budget.currency if hasattr(pkg_update.budget, "currency") else "USD"
+                    currency = str(pkg_update.budget.currency) if pkg_update.budget.currency else "USD"
 
                 result = adapter.update_media_buy(
                     media_buy_id=req.media_buy_id,
@@ -513,7 +508,7 @@ def _update_media_buy_impl(
                     today=datetime.combine(today, datetime.min.time(), tzinfo=UTC),
                 )
                 # adcp v1.2.1 oneOf pattern: Check if result is Error variant
-                if hasattr(result, "errors") and result.errors:
+                if isinstance(result, UpdateMediaBuyError) and result.errors:
                     error_message = (
                         result.errors[0].message if (result.errors and len(result.errors) > 0) else "Update failed"
                     )
@@ -779,7 +774,7 @@ def _update_media_buy_impl(
                     )
 
             # Handle creatives (inline upload) - AdCP 2.5
-            if hasattr(pkg_update, "creatives") and pkg_update.creatives:
+            if pkg_update.creatives:
                 # Validate package_id is provided
                 if not pkg_update.package_id:
                     error_msg = "package_id is required when uploading creatives"
@@ -1079,7 +1074,7 @@ def _update_media_buy_impl(
         else:
             # Budget object with .total and .currency attributes
             total_budget = float(req.budget.total)
-            budget_currency = req.budget.currency if hasattr(req.budget, "currency") else "USD"
+            budget_currency = str(req.budget.currency) if req.budget.currency else "USD"
 
         if total_budget <= 0:
             error_msg = f"Invalid budget: {total_budget}. Budget must be positive."

@@ -7,6 +7,7 @@ import uuid
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
@@ -44,11 +45,11 @@ def _format_to_dict(fmt: Format) -> dict:
     # This matches the library schema structure directly
 
     # Add convenience fields for frontend
-    data["agent_url"] = str(fmt.format_id.agent_url) if hasattr(fmt.format_id, "agent_url") else ""
+    data["agent_url"] = str(fmt.format_id.agent_url)
     data["form_value"] = fmt.get_form_value()
 
     # Add 'id' field for template compatibility (templates expect format.id not format.format_id.id)
-    data["id"] = str(fmt.format_id.id) if hasattr(fmt.format_id, "id") else ""
+    data["id"] = str(fmt.format_id.id)
 
     # Add dimensions string for display formats
     dimensions = fmt.get_primary_dimensions()
@@ -59,7 +60,7 @@ def _format_to_dict(fmt: Format) -> dict:
         # Try to parse from format_id as fallback
         import re
 
-        format_id_str = str(fmt.format_id.id) if hasattr(fmt.format_id, "id") else str(fmt.format_id)
+        format_id_str = str(fmt.format_id.id)
         match = re.search(r"_(\d+)x(\d+)_", format_id_str)
         if match:
             data["dimensions"] = f"{match.group(1)}x{match.group(2)}"
@@ -479,7 +480,7 @@ def list_products(tenant_id):
                     if isinstance(fmt, dict):
                         # Database JSONB: uses "id" per AdCP spec
                         format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
-                    elif hasattr(fmt, "format_id") or hasattr(fmt, "id"):
+                    elif isinstance(fmt, BaseModel):
                         # Pydantic object: uses "format_id" attribute (serializes to "id" in JSON)
                         format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
                     elif isinstance(fmt, str):
@@ -544,7 +545,7 @@ def list_products(tenant_id):
                         if product.implementation_config
                         else {}
                     ),
-                    "created_at": product.created_at if hasattr(product, "created_at") else None,
+                    "created_at": getattr(product, "created_at", None),
                     "inventory_details": inventory_details.get(
                         product.product_id,
                         {
@@ -722,7 +723,7 @@ def add_product(tenant_id):
                             # Build lookup of valid format IDs from live agent
                             valid_format_ids = set()
                             for fmt in available_formats:
-                                format_id_str = fmt.format_id.id if hasattr(fmt.format_id, "id") else str(fmt.format_id)
+                                format_id_str = fmt.format_id.id
                                 valid_format_ids.add(format_id_str)
 
                             invalid_formats = []
@@ -1377,7 +1378,7 @@ def edit_product(tenant_id, product_id):
                     # Build lookup of valid format IDs from live agent
                     valid_format_ids = set()
                     for fmt in available_formats:
-                        format_id_str = fmt.format_id.id if hasattr(fmt.format_id, "id") else str(fmt.format_id)
+                        format_id_str = fmt.format_id.id
                         valid_format_ids.add(format_id_str)
 
                     validated_formats = []
@@ -2080,9 +2081,9 @@ def edit_product(tenant_id, product_id):
                         agent_url = fmt.get("agent_url")
                         format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
                         logger.info(f"[DEBUG] Dict format: agent_url={agent_url}, format_id={format_id}")
-                    elif hasattr(fmt, "agent_url") and (hasattr(fmt, "format_id") or hasattr(fmt, "id")):
+                    elif isinstance(fmt, BaseModel):
                         # Pydantic object: uses "format_id" attribute (serializes to "id" in JSON)
-                        agent_url = fmt.agent_url
+                        agent_url = getattr(fmt, "agent_url", None)
                         format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
                         logger.info(f"[DEBUG] Pydantic format: agent_url={agent_url}, format_id={format_id}")
                     elif isinstance(fmt, str):

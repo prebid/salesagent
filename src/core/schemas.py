@@ -672,9 +672,7 @@ class Format(LibraryFormat):
         Returns:
             Agent URL string, or None if not available
         """
-        if hasattr(self.format_id, "agent_url"):
-            return str(self.format_id.agent_url)
-        return None
+        return str(self.format_id.agent_url) if self.format_id.agent_url else None
 
     def get_primary_dimensions(self) -> tuple[int, int] | None:
         """Extract primary dimensions from renders array or format_id parameters.
@@ -688,15 +686,14 @@ class Format(LibraryFormat):
             Tuple of (width, height) in pixels, or None if not available.
         """
         # Try format_id parameters first (AdCP 2.5 parameterized formats)
-        if hasattr(self.format_id, "get_dimensions"):
-            dims = self.format_id.get_dimensions()
-            if dims is not None:
-                return dims
+        dims = self.format_id.get_dimensions()  # type: ignore[attr-defined]  # our FormatId subclass
+        if dims is not None:
+            return dims
 
         # Try renders field (AdCP spec - renders is list of Render objects)
         if self.renders and len(self.renders) > 0:
             primary_render = self.renders[0]  # First render is typically primary
-            if hasattr(primary_render, "dimensions") and primary_render.dimensions:
+            if primary_render.dimensions:
                 render_dims = primary_render.dimensions
                 # dimensions is a Dimensions object with width/height attributes
                 if render_dims.width is not None and render_dims.height is not None:
@@ -726,16 +723,7 @@ class Format(LibraryFormat):
             >>> fmt.get_form_value()
             'https://creative.adcontextprotocol.org/|display_300x250'
         """
-        # Extract format_id string - handle both FormatId object and plain string
-        if hasattr(self.format_id, "id"):
-            format_id_str = self.format_id.id  # FormatId object
-            # Get agent_url from FormatId (per AdCP spec)
-            agent_url = str(self.format_id.agent_url) if hasattr(self.format_id, "agent_url") else ""
-        else:
-            format_id_str = str(self.format_id)  # Plain string (shouldn't happen but defensive)
-            agent_url = ""
-
-        return f"{agent_url}|{format_id_str}"
+        return f"{self.format_id.agent_url}|{self.format_id.id}"
 
 
 # FORMAT_REGISTRY removed - now using dynamic format discovery via CreativeAgentRegistry
@@ -1730,7 +1718,7 @@ class Creative(LibraryCreative):
         data = super().model_dump(exclude=set(), **kwargs)
 
         # Manually add excluded fields
-        if hasattr(self, "principal_id") and self.principal_id is not None:
+        if self.principal_id is not None:
             data["principal_id"] = self.principal_id
 
         return data

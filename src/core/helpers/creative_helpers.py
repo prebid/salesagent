@@ -2,6 +2,9 @@
 
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from adcp import FormatId as LibraryFormatId
+from pydantic import BaseModel
+
 if TYPE_CHECKING:
     from fastmcp import Context
 
@@ -68,17 +71,17 @@ def _extract_format_info(format_value: Any) -> FormatInfo:
         if params:
             parameters = params
 
-    elif hasattr(format_value, "agent_url") and hasattr(format_value, "id"):
+    elif isinstance(format_value, LibraryFormatId):
         agent_url = str(format_value.agent_url)
         format_id = format_value.id
 
         # Extract optional parameters from object
         params = {}
-        if getattr(format_value, "width", None) is not None:
+        if format_value.width is not None:
             params["width"] = int(format_value.width)
-        if getattr(format_value, "height", None) is not None:
+        if format_value.height is not None:
             params["height"] = int(format_value.height)
-        if getattr(format_value, "duration_ms", None) is not None:
+        if format_value.duration_ms is not None:
             params["duration_ms"] = float(format_value.duration_ms)
         if params:
             parameters = params
@@ -119,7 +122,7 @@ def _extract_format_namespace(format_value: Any) -> tuple[str, str]:
             raise ValueError(f"format_id must have both 'agent_url' and 'id' fields. Got: {format_value}")
         # Convert to string in case agent_url is AnyUrl from Pydantic model
         return str(agent_url), format_id
-    if hasattr(format_value, "agent_url") and hasattr(format_value, "id"):
+    if isinstance(format_value, LibraryFormatId):
         # Convert AnyUrl to string for database compatibility
         return str(format_value.agent_url), format_value.id
     if isinstance(format_value, str):
@@ -190,7 +193,7 @@ def _validate_creative_assets(assets: Any) -> dict[str, dict[str, Any]] | None:
             raise ValueError("Asset key (asset_id) cannot be empty or whitespace-only")
 
         # Asset data must be a dict or Pydantic model (typed Asset from CreativeAsset)
-        if not isinstance(asset_data, dict) and not hasattr(asset_data, "model_dump"):
+        if not isinstance(asset_data, dict) and not isinstance(asset_data, BaseModel):
             raise ValueError(
                 f"Asset '{asset_id}' data must be a dict or model, got {type(asset_data).__name__}. "
                 f"Expected format: {{'asset_type': '...', 'url': '...', ...}}"
@@ -221,11 +224,11 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
     # Extract dimensions from FormatId parameters (AdCP 2.5 format templates)
     # This is the primary source of truth for parameterized formats
     format_id_obj = creative.format_id
-    if hasattr(format_id_obj, "width") and format_id_obj.width is not None:
+    if format_id_obj.width is not None:
         asset["width"] = format_id_obj.width
-    if hasattr(format_id_obj, "height") and format_id_obj.height is not None:
+    if format_id_obj.height is not None:
         asset["height"] = format_id_obj.height
-    if hasattr(format_id_obj, "duration_ms") and format_id_obj.duration_ms is not None:
+    if format_id_obj.duration_ms is not None:
         # Convert to seconds for adapter compatibility
         asset["duration"] = format_id_obj.duration_ms / 1000.0
 
@@ -446,7 +449,7 @@ def validate_creative_format_against_product(
         if isinstance(product_format, dict):
             product_agent_url: str | None = product_format.get("agent_url")
             product_fmt_id: str | None = product_format.get("id") or product_format.get("format_id")
-        elif hasattr(product_format, "agent_url") and hasattr(product_format, "id"):
+        elif isinstance(product_format, LibraryFormatId):
             # Convert AnyUrl to string for consistent comparison
             product_agent_url = str(product_format.agent_url) if product_format.agent_url else None
             product_fmt_id = product_format.id
@@ -468,7 +471,7 @@ def validate_creative_format_against_product(
         if isinstance(fmt, dict):
             agent_url: str | None = fmt.get("agent_url")
             fmt_id: str | None = fmt.get("id") or fmt.get("format_id")
-        elif hasattr(fmt, "agent_url") and hasattr(fmt, "id"):
+        elif isinstance(fmt, LibraryFormatId):
             # Convert AnyUrl to string for consistent handling
             agent_url = str(fmt.agent_url) if fmt.agent_url else None
             fmt_id = fmt.id

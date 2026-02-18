@@ -10,6 +10,7 @@ Uses historical GAM reporting data aggregated by country + creative format.
 import logging
 from datetime import UTC, datetime, timedelta
 
+from adcp import FormatId
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
@@ -94,7 +95,7 @@ class DynamicPricingService:
             # Pydantic validation may return dict, object, or string depending on context
             if isinstance(format_id, dict):
                 format_id_str = format_id.get("id", "")
-            elif hasattr(format_id, "id"):
+            elif isinstance(format_id, FormatId):
                 format_id_str = format_id.id
             else:
                 format_id_str = str(format_id)

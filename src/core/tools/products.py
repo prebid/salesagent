@@ -10,7 +10,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from adcp import BrandManifest, ProductFilters
+from adcp import BrandManifest, FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import PushNotificationConfig
@@ -477,9 +477,11 @@ async def _get_products_impl(
                         format_obj = get_format_by_id(format_id)
                         if format_obj:
                             product_format_types.add(format_obj.type)
-                    elif hasattr(format_id, "type"):
-                        # Already a Format object
-                        product_format_types.add(format_id.type)
+                    elif isinstance(format_id, FormatId):
+                        # FormatId object — look up the format for its type
+                        format_obj = get_format_by_id(format_id.id)
+                        if format_obj:
+                            product_format_types.add(format_obj.type)
 
                 if not any(fmt_type in product_format_types for fmt_type in req.filters.format_types):
                     continue
@@ -496,8 +498,7 @@ async def _get_products_impl(
                         dict_id = format_id.get("id")
                         if dict_id is not None:
                             product_format_ids.add(dict_id)
-                    elif hasattr(format_id, "id"):
-                        # FormatId object (has .id attribute, not .format_id)
+                    elif isinstance(format_id, FormatId):
                         product_format_ids.add(format_id.id)
 
                 # req.filters.format_ids contains FormatId objects, extract .id from them
@@ -505,8 +506,7 @@ async def _get_products_impl(
                 for fmt_id in req.filters.format_ids:
                     if isinstance(fmt_id, str):
                         request_format_ids.add(fmt_id)
-                    elif hasattr(fmt_id, "id"):
-                        # FormatId object
+                    elif isinstance(fmt_id, FormatId):
                         request_format_ids.add(fmt_id.id)
                     elif isinstance(fmt_id, dict):
                         dict_id = fmt_id.get("id")
@@ -527,8 +527,7 @@ async def _get_products_impl(
                         format_id_str = format_id
                     elif isinstance(format_id, dict):
                         format_id_str = format_id.get("id")
-                    elif hasattr(format_id, "id"):
-                        # FormatId object (has .id attribute, not .format_id)
+                    elif isinstance(format_id, FormatId):
                         format_id_str = format_id.id
 
                     if format_id_str and not format_id_str.startswith(("display_", "video_", "audio_", "native_")):
@@ -545,7 +544,7 @@ async def _get_products_impl(
 
                 # Check if product has countries field (from database)
                 # Our extended Product may have a countries field
-                if hasattr(product, "countries") and product.countries:
+                if product.countries:
                     product_countries.update(product.countries)
 
                 # If no countries specified, product is considered available everywhere
@@ -566,17 +565,13 @@ async def _get_products_impl(
             if req.filters.channels:
                 # Check if product has channels field
                 product_channels: set[str] = set()
-                if hasattr(product, "channels") and product.channels:
+                if product.channels:
                     product_channels = {c.lower() for c in product.channels}
 
                 # Extract channel values from filter (enum values)
                 request_channels: set[str] = set()
                 for channel in req.filters.channels:
-                    if isinstance(channel, str):
-                        request_channels.add(channel.lower())
-                    elif hasattr(channel, "value"):
-                        # Enum - access .value
-                        request_channels.add(channel.value.lower())
+                    request_channels.add(str(channel).lower())
 
                 if product_channels:
                     # Product has explicit channels - must have at least one match

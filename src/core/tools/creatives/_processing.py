@@ -294,7 +294,7 @@ def _update_existing_creative(
                     # Static creative - use preview_creative
                     # Build creative manifest from available data
                     # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id if hasattr(creative_format, "id") else str(creative_format)
+                    format_id_str = creative_format.id
                     creative_manifest: dict[str, Any] = {
                         "creative_id": existing_creative.creative_id,
                         "name": creative.name or existing_creative.name,
@@ -312,7 +312,7 @@ def _update_existing_creative(
 
                     # Call creative agent's preview_creative for validation + preview
                     # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id if hasattr(creative_format, "id") else str(creative_format)
+                    format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation (update): "
                         f"{existing_creative.creative_id} format {format_id_str} "
@@ -561,7 +561,7 @@ def _create_new_creative(
 
                     # Call build_creative
                     # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id if hasattr(creative_format, "id") else str(creative_format)
+                    format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling build_creative for generative format: "
                         f"{format_id_str} from agent {format_obj.agent_url}, "
@@ -627,7 +627,7 @@ def _create_new_creative(
                     # Static creative - use preview_creative
                     # Build creative manifest from available data
                     # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id if hasattr(creative_format, "id") else str(creative_format)
+                    format_id_str = creative_format.id
                     creative_manifest: dict[str, Any] = {
                         "creative_id": creative.creative_id or str(uuid.uuid4()),
                         "name": creative.name,
@@ -645,7 +645,7 @@ def _create_new_creative(
 
                     # Call creative agent's preview_creative for validation + preview
                     # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id if hasattr(creative_format, "id") else str(creative_format)
+                    format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation: {format_id_str} "
                         f"from agent {format_obj.agent_url}, has_assets={bool(creative.assets)}, "
