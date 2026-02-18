@@ -11,6 +11,8 @@ V3 Migration Notes:
 - price_guidance.floor → floor_price (top-level)
 """
 
+import logging
+
 from adcp import (
     CpcPricingOption,
     CpcvPricingOption,
@@ -20,10 +22,36 @@ from adcp import (
     FlatRatePricingOption,
     VcpmPricingOption,
 )
+from packaging.version import InvalidVersion, Version
 
 # Import our extended Product (includes implementation_config)
 # Not the library Product - we need the internal fields
 from src.core.schemas import Product
+
+logger = logging.getLogger(__name__)
+
+V3_VERSION = Version("3.0.0")
+
+
+def needs_v2_compat(adcp_version: str | None) -> bool:
+    """Check if a client needs v2 backward-compat fields in responses.
+
+    V2 compat fields (is_fixed, rate, price_guidance.floor) are only needed
+    for pre-3.0 clients. V3+ clients get clean responses per AdCP v3 spec.
+
+    Args:
+        adcp_version: Client-declared AdCP version string, or None if unknown.
+
+    Returns:
+        True if v2 compat fields should be added (version is None, < 3.0, or unparseable).
+    """
+    if adcp_version is None:
+        return True
+    try:
+        return Version(adcp_version) < V3_VERSION
+    except InvalidVersion:
+        logger.warning(f"Unparseable adcp_version '{adcp_version}', defaulting to v2 compat")
+        return True
 
 
 def convert_pricing_option_to_adcp(

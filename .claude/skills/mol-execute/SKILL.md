@@ -87,6 +87,16 @@ Research goes into the bead, not the filesystem:
 
 When any atom needs to read research: `bd show <task-id>` returns everything.
 
+## Core Invariant
+
+Every task requires a **Core Invariant** — one sentence stating the architectural
+principle all changes must preserve. Research extracts it, review validates it,
+implementation checks against it on every file modification.
+
+When existing tests fail during implementation, the invariant is your first
+diagnostic: "Does this failure mean I violated the invariant?" If yes, revert
+and rethink. Never adjust tests to fit code without documented justification.
+
 ## Anti-Patterns
 
 - Don't skip atoms (even trivial ones like commits)
@@ -96,3 +106,5 @@ When any atom needs to read research: `bd show <task-id>` returns everything.
 - Don't proceed past review without `research:complete` label
 - Don't apply fixes inside the triage atom (triage routes, doesn't execute)
 - Don't re-research in the refine atom (use existing findings, only adjust approach)
+- Don't modify existing tests without first checking the Core Invariant
+- Don't execute plan steps mechanically — validate each against the invariant

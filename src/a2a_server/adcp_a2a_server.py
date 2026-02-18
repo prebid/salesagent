@@ -70,7 +70,7 @@ from src.core.auth_utils import get_principal_from_token
 from src.core.config_loader import get_current_tenant
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
-from src.core.product_conversion import add_v2_compat_to_products
+from src.core.product_conversion import add_v2_compat_to_products, needs_v2_compat
 from src.core.schemas import CreativeStatusEnum
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
@@ -1476,7 +1476,7 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in skill handler {skill_name}: {e}")
             raise ServerError(InternalError(message=f"Skill {skill_name} failed: {str(e)}"))
 
-    async def _handle_get_products_skill(self, parameters: dict, auth_token: str | None) -> dict:
+    async def _handle_get_products_skill(self, parameters: dict, auth_token: str | None) -> Any:
         """Handle explicit get_products skill invocation.
 
         Aligned with adcp v1.2.1 spec - brand_manifest must be a dict.
@@ -1527,11 +1527,21 @@ class AdCPRequestHandler(RequestHandler):
                 brand_manifest=brand_manifest,
                 filters=parameters.get("filters"),
                 min_exposures=parameters.get("min_exposures"),
-                adcp_version=parameters.get("adcp_version", "1.0.0"),
                 strategy_id=parameters.get("strategy_id"),
                 context=parameters.get("context"),
                 ctx=mcp_ctx,
             )
+
+            # Apply v2 compat for pre-3.0 clients at the boundary
+            adcp_version = parameters.get("adcp_version")
+            if needs_v2_compat(adcp_version):
+                if isinstance(response, dict):
+                    response_data = response
+                else:
+                    response_data = response.model_dump(mode="json")
+                if "products" in response_data:
+                    response_data["products"] = add_v2_compat_to_products(response_data["products"])
+                return response_data
 
             return response
 
@@ -1836,7 +1846,7 @@ class AdCPRequestHandler(RequestHandler):
             "parameters_received": parameters,
         }
 
-    async def _handle_get_adcp_capabilities_skill(self, parameters: dict, auth_token: str | None) -> dict:
+    async def _handle_get_adcp_capabilities_skill(self, parameters: dict, auth_token: str | None) -> Any:
         """Handle explicit get_adcp_capabilities skill invocation (CRITICAL AdCP discovery endpoint).
 
         NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.
@@ -1877,7 +1887,7 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in get_adcp_capabilities skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve AdCP capabilities: {str(e)}"))
 
-    async def _handle_list_creative_formats_skill(self, parameters: dict, auth_token: str | None) -> dict:
+    async def _handle_list_creative_formats_skill(self, parameters: dict, auth_token: str | None) -> Any:
         """Handle explicit list_creative_formats skill invocation (CRITICAL AdCP endpoint).
 
         NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.
@@ -1928,7 +1938,7 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in list_creative_formats skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve creative formats: {str(e)}"))
 
-    async def _handle_list_authorized_properties_skill(self, parameters: dict, auth_token: str | None) -> dict:
+    async def _handle_list_authorized_properties_skill(self, parameters: dict, auth_token: str | None) -> Any:
         """Handle explicit list_authorized_properties skill invocation (CRITICAL AdCP endpoint).
 
         NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.

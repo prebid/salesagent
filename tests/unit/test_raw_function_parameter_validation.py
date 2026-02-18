@@ -41,7 +41,6 @@ class TestRawFunctionParameterValidation:
 
         # Known valid parameters that are NOT passed to helper
         valid_non_helper_params = {
-            "adcp_version",  # Metadata, not passed to helper (this was the bug)
             "min_exposures",  # Optional, not in helper
             "strategy_id",  # Optional, not in helper
         }
@@ -87,7 +86,6 @@ class TestRawFunctionParameterValidation:
         # These are documented reasons why a parameter might not be directly passed through
         valid_unused = {
             "get_products_raw": {
-                "adcp_version",  # Metadata for protocol version
                 "min_exposures",  # Optional filtering
                 "strategy_id",  # Optional linking
             },

@@ -28,7 +28,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_from_context, get_principal_object
 from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
-from src.core.product_conversion import add_v2_compat_to_products
+from src.core.product_conversion import add_v2_compat_to_products, needs_v2_compat
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
     GetProductsResponse,
@@ -767,6 +767,7 @@ async def _get_products_impl(
 async def get_products(
     brand_manifest: BrandManifest | None = None,
     brief: str = "",
+    adcp_version: str = "1.0.0",
     filters: ProductFilters | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
@@ -779,6 +780,7 @@ async def get_products(
     Args:
         brand_manifest: Brand information following AdCP BrandManifest schema
         brief: Brief description of the advertising campaign or requirements (optional)
+        adcp_version: Client's AdCP version (default: 1.0.0). V3+ clients get clean responses.
         filters: Structured filters for product discovery (optional)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
@@ -807,9 +809,9 @@ async def get_products(
     response = await _get_products_impl(req, ctx)
 
     # Return ToolResult with human-readable text and structured data
-    # Apply v2.x backward-compat fields to pricing_options for older clients
     response_dict = response.model_dump()
-    if "products" in response_dict:
+    # Apply v2.x backward-compat fields only for pre-3.0 clients
+    if needs_v2_compat(adcp_version) and "products" in response_dict:
         response_dict["products"] = add_v2_compat_to_products(response_dict["products"])
     return ToolResult(content=str(response), structured_content=response_dict)
 
@@ -817,7 +819,6 @@ async def get_products(
 async def get_products_raw(
     brief: str,
     brand_manifest: dict[str, Any] | None = None,
-    adcp_version: str = "1.0.0",
     min_exposures: int | None = None,
     filters: dict | None = None,
     strategy_id: str | None = None,
@@ -827,13 +828,13 @@ async def get_products_raw(
     """Get available products matching the brief.
 
     Raw function without @mcp.tool decorator for A2A server use.
-    Aligned with adcp v1.2.1 spec.
+    Returns a clean GetProductsResponse model — v2 compat is applied
+    at the caller's boundary (A2A handler), not here.
 
     Args:
         brief: Brief description of the advertising campaign or requirements
         brand_manifest: Brand information as dict following AdCP BrandManifest schema.
                        Example: {"name": "Acme", "url": "https://acme.com"}
-        adcp_version: AdCP schema version for this request (default: 1.0.0)
         min_exposures: Minimum impressions needed for measurement validity (optional)
         filters: Structured filters for product discovery (optional)
         strategy_id: Optional strategy ID for linking operations (optional)

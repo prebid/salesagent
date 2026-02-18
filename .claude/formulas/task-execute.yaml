@@ -52,6 +52,14 @@ iterate:
            - What CLAUDE.md patterns apply?
            - Multiple valid approaches?
            - Risks and edge cases?
+        7. **Extract the core invariant** — State in ONE sentence the architectural
+           principle that ALL changes for this task must preserve. This becomes the
+           litmus test for every implementation decision.
+           - Good: "model_dump() only at framework boundaries, never in business logic"
+           - Good: "all pricing validation happens in the Pydantic model, not callers"
+           - Bad: "improve the code" (untestable, vague)
+           If this task is part of a multi-task plan, the invariant should come from
+           the plan's stated intent. Every task in the plan shares this invariant.
 
         ## Store Research in the Bead
 
@@ -74,10 +82,14 @@ iterate:
         - [potential issues]"
         ```
 
-        Write architecture decisions and implementation plan to the design field:
+        Write architecture decisions, invariant, and implementation plan to
+        the design field:
 
         ```bash
-        bd update {TASK_ID} --design "## Architecture Decisions
+        bd update {TASK_ID} --design "## Core Invariant
+        [One sentence: the architectural principle every change must preserve]
+
+        ## Architecture Decisions
         - Decision 1: [rationale]
 
         ## Implementation Plan
@@ -99,7 +111,7 @@ iterate:
         ```
         Do NOT close this atom if blocked — leave it open.
 
-      acceptance: "Task has research:complete label. Notes contain Findings + Relevant Code sections. Design contains Implementation Plan."
+      acceptance: "Task has research:complete label. Notes contain Findings + Relevant Code sections. Design contains Core Invariant + Implementation Plan."
       labels: ["atom:research"]
 
     # ── Atom 2: Architect Review ──────────────────────────────────
@@ -122,15 +134,18 @@ iterate:
 
         Read the task's notes and design fields. Evaluate:
 
-        1. **Approach soundness**: Is the proposed implementation plan technically correct?
+        1. **Invariant alignment**: Does EVERY step of the implementation plan
+           maintain the stated Core Invariant? Simulate each change mentally:
+           if a step would violate the invariant, that's a HIGH finding.
+        2. **Approach soundness**: Is the proposed implementation plan technically correct?
            Will it actually work? Are there fundamental flaws?
-        2. **Risk coverage**: Are the identified risks real? Are there unidentified risks?
+        3. **Risk coverage**: Are the identified risks real? Are there unidentified risks?
            Check for: circular imports, breaking changes, missing test coverage, perf issues.
-        3. **CLAUDE.md compliance**: Does the plan follow all applicable critical patterns?
+        4. **CLAUDE.md compliance**: Does the plan follow all applicable critical patterns?
            (AdCP schema, nested serialization, shared impl, no quiet failures, etc.)
-        4. **Specificity**: Is the plan specific enough to implement without guessing?
+        5. **Specificity**: Is the plan specific enough to implement without guessing?
            Vague plans like "update the code" are HIGH findings.
-        5. **Alternatives**: Was an obviously better approach missed?
+        6. **Alternatives**: Was an obviously better approach missed?
 
         ## Rate Each Finding
 
@@ -224,6 +239,16 @@ iterate:
 
         Read ALL of these before writing any code.
 
+        ## Pre-Implementation Invariant Check
+
+        Before writing ANY code, re-read the ## Core Invariant from the design field.
+        For each file you plan to modify, ask:
+
+        > "Does this change maintain the invariant?"
+
+        If the answer is "no" or "unclear" for any change, STOP. Update the task
+        notes explaining the conflict and leave this atom open for direction.
+
         ## Workflow
 
         Follow TDD (Red-Green-Refactor):
@@ -247,6 +272,23 @@ iterate:
            make quality
            ```
 
+        ## When EXISTING Tests Fail
+
+        If your changes cause pre-existing tests to fail:
+
+        1. **STOP. Do NOT modify the failing tests.**
+        2. Re-read the ## Core Invariant from the design field.
+        3. Ask: "Do the failing tests indicate my approach violates the invariant?"
+        4. If YES → your approach is wrong, not the tests. Revert and try a
+           different approach. Update task notes explaining what you tried and why
+           it violated the invariant.
+        5. If NO → the test has a genuine bug or the requirements changed.
+           Document WHY in task notes BEFORE modifying any test. Explain what the
+           test was protecting and why the new behavior is correct.
+
+        **Sacred rule**: NEVER adjust tests to match code without first validating
+        that the test's intent conflicts with the stated invariant.
+
         ## If Blocked
 
         If `make quality` fails or requirements are unclear:
@@ -265,7 +307,7 @@ iterate:
         bd close {TASK_ID}
         ```
 
-      acceptance: "make quality passes. Original task {TASK_ID} closed."
+      acceptance: "make quality passes. No existing tests were modified without documented justification. Changes maintain the Core Invariant. Original task {TASK_ID} closed."
       depends_on: ["triage-{TASK_ID}"]
       depends_on_prev_barrier: true
       labels: ["atom:implement"]
@@ -284,23 +326,40 @@ iterate:
            git diff --stat
            ```
 
-        2. Stage relevant files (be specific, don't use `git add .`):
+        2. **Test change review**: Check if any test files were modified:
+           ```bash
+           git diff --name-only -- 'tests/'
+           ```
+           If ANY test files were changed, do a focused architect review before
+           proceeding:
+           - `git diff -- tests/` to see exactly what changed
+           - Re-read the ## Core Invariant and task description from `bd show {TASK_ID}`
+           - For each test change, answer:
+             - What was this test protecting?
+             - Does the change align with the task intent and invariant?
+             - Is this a legitimate requirement change, or did the implementation
+               drift and the test got "fixed" to match?
+           - If any test change does NOT fit the task purpose: STOP. Revert the
+             test changes, fix the implementation instead, re-run `make quality`,
+             and restart this atom.
+
+        3. Stage relevant files (be specific, don't use `git add .`):
            ```bash
            git add <specific-files>
            ```
 
-        3. Determine commit type from the task:
+        4. Determine commit type from the task:
            - Schema migration → `refactor:`
            - New feature → `feat:`
            - Bug fix → `fix:`
            - Infrastructure → `chore:`
 
-        4. Commit:
+        5. Commit:
            ```bash
            git commit -m "<type>: <description from task title>"
            ```
 
-        5. Verify:
+        6. Verify:
            ```bash
            git log -1 --oneline
            ```

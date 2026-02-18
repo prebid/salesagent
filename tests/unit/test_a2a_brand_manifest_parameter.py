@@ -90,7 +90,8 @@ async def test_handle_get_products_skill_extracts_all_parameters():
         # Call handler
         result = await handler._handle_get_products_skill(parameters, "test_token")
 
-        # Verify core tool was called with all parameters
+        # Verify core tool was called with all parameters (except adcp_version,
+        # which is now used by the handler for v2 compat gating, not passed through)
         mock_core_tool.assert_called_once()
         call_kwargs = mock_core_tool.call_args.kwargs
 
@@ -98,8 +99,9 @@ async def test_handle_get_products_skill_extracts_all_parameters():
         assert call_kwargs["brief"] == "Athletic footwear"
         assert call_kwargs["filters"] == {"delivery_type": "guaranteed"}
         assert call_kwargs["min_exposures"] == 10000
-        assert call_kwargs["adcp_version"] == "2.2.0"
         assert call_kwargs["strategy_id"] == "test_strategy_123"
+        # adcp_version is NOT passed to core tool — handler uses it for v2 compat gating
+        assert "adcp_version" not in call_kwargs
 
 
 @pytest.mark.asyncio
