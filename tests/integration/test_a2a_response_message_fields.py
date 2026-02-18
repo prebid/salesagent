@@ -95,7 +95,8 @@ class TestA2AMessageFieldValidation:
             }
 
             # Call the handler method directly - this is where the bug occurred
-            result = await handler._handle_create_media_buy_skill(params, sample_principal["access_token"])
+            raw_result = await handler._handle_create_media_buy_skill(params, sample_principal["access_token"])
+            result = handler._serialize_for_a2a(raw_result)
 
             # ✅ CRITICAL: Use comprehensive validator to check all fields
             assert_valid_skill_response(result, "create_media_buy")
@@ -124,11 +125,13 @@ class TestA2AMessageFieldValidation:
 
             # Call handler directly - may fail if external creative agent is unavailable
             try:
-                result = await handler._handle_sync_creatives_skill(params, sample_principal["access_token"])
+                raw_result = await handler._handle_sync_creatives_skill(params, sample_principal["access_token"])
             except Exception as e:
                 if is_external_service_exception(e):
                     pytest.skip(f"External creative agent unavailable: {e}")
                 raise
+
+            result = handler._serialize_for_a2a(raw_result)
 
             # ✅ Use validator
             assert_valid_skill_response(result, "sync_creatives")
@@ -140,9 +143,10 @@ class TestA2AMessageFieldValidation:
         GetProductsResponse DOES have a .message field, but we should use str() consistently
         """
         with mock_auth_context(handler):
-            params = {"brand_manifest": {"name": "Test product search"}, "brief": "Looking for display ads"}
+            params = {"brand_manifest": {"name": "Test product search"}, "brief": "Looking for display ads", "adcp_version": "3.0"}
 
-            result = await handler._handle_get_products_skill(params, sample_principal["access_token"])
+            raw_result = await handler._handle_get_products_skill(params, sample_principal["access_token"])
+            result = handler._serialize_for_a2a(raw_result)
 
             # ✅ Validate message field
             assert "message" in result, "get_products response must include 'message' field"
@@ -158,7 +162,8 @@ class TestA2AMessageFieldValidation:
                 "limit": 10,
             }
 
-            result = await handler._handle_list_creatives_skill(params, sample_principal["access_token"])
+            raw_result = await handler._handle_list_creatives_skill(params, sample_principal["access_token"])
+            result = handler._serialize_for_a2a(raw_result)
 
             # ✅ Validate message field
             assert "message" in result, "list_creatives response must include 'message' field"
@@ -176,11 +181,13 @@ class TestA2AMessageFieldValidation:
 
             # Call handler directly - may fail if external creative agent is unavailable
             try:
-                result = await handler._handle_list_creative_formats_skill(params, sample_principal["access_token"])
+                raw_result = await handler._handle_list_creative_formats_skill(params, sample_principal["access_token"])
             except Exception as e:
                 if is_external_service_exception(e):
                     pytest.skip(f"External creative agent unavailable: {e}")
                 raise
+
+            result = handler._serialize_for_a2a(raw_result)
 
             # ✅ Validate message field
             assert "message" in result, "list_creative_formats response must include 'message' field"
@@ -326,7 +333,8 @@ class TestA2AErrorHandling:
             }
 
             try:
-                result = await handler._handle_create_media_buy_skill(params, sample_principal["access_token"])
+                raw_result = await handler._handle_create_media_buy_skill(params, sample_principal["access_token"])
+                result = handler._serialize_for_a2a(raw_result)
                 # If it doesn't raise, check the error response structure
                 if not result.get("success", True):
                     assert "message" in result or "error" in result, "Error response must have message or error field"

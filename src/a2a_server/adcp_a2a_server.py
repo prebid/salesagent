@@ -1392,9 +1392,11 @@ class AdCPRequestHandler(RequestHandler):
         response_data = response.model_dump(mode="json")
         response_data["message"] = str(response)
 
-        # Derive success from errors field if present (AdCP convention)
+        # Derive success from errors field if present, default True otherwise
         if "errors" in response_data:
             response_data["success"] = not bool(response_data["errors"])
+        else:
+            response_data.setdefault("success", True)
 
         return response_data
 
