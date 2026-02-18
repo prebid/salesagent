@@ -266,7 +266,7 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     assert len(cpm_product.pricing_options) == 1
     # adcp 2.14.0+ uses RootModel wrapper - access via .root
     pricing_inner = getattr(cpm_product.pricing_options[0], "root", cpm_product.pricing_options[0])
-    assert pricing_inner.pricing_model == PricingModel.cpm
+    assert pricing_inner.pricing_model == PricingModel.cpm.value
     # V3: is_fixed removed - fixed pricing has fixed_price field
     assert pricing_inner.fixed_price == 12.50
 
@@ -279,7 +279,7 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     # Verify all three pricing models exist
     # adcp 2.14.0+ uses RootModel wrapper - access via .root
     pricing_models = {getattr(opt, "root", opt).pricing_model for opt in multi_product.pricing_options}
-    assert pricing_models == {PricingModel.cpm, PricingModel.cpcv, PricingModel.cpp}
+    assert pricing_models == {PricingModel.cpm.value, PricingModel.cpcv.value, PricingModel.cpp.value}
 
 
 @pytest.mark.requires_db
