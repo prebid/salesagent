@@ -253,8 +253,8 @@ def _get_media_buy_delivery_impl(
 
                 buy_start_date_sim = type_cast(date, buy.start_date)
                 buy_end_date_sim = type_cast(date, buy.end_date)
-                start_dt = datetime.combine(buy_start_date_sim, datetime.min.time())
-                end_dt_campaign = datetime.combine(buy_end_date_sim, datetime.min.time())
+                start_dt = datetime.combine(buy_start_date_sim, datetime.min.time(), tzinfo=UTC)
+                end_dt_campaign = datetime.combine(buy_end_date_sim, datetime.min.time(), tzinfo=UTC)
                 progress = TimeSimulator.calculate_campaign_progress(start_dt, end_dt_campaign, simulation_datetime)
 
                 simulated_metrics = DeliverySimulator.calculate_simulated_metrics(
