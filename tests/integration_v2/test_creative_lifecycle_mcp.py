@@ -1221,15 +1221,17 @@ class TestCreativeLifecycleMCP:
                 ctx=mock_context,
             )
 
-            # Verify response (domain response doesn't have status field)
-            # Note: media_buy_id may be transformed by naming template (e.g., "buy_PO-TEST-123")
-            # Debug: print response to understand failures
-            print(f"DEBUG create_media_buy response: {response}")
-            if "errors" in response:
-                print(f"DEBUG errors: {response['errors']}")
-            assert "media_buy_id" in response, f"Expected media_buy_id in response, got: {response.keys()}"
-            assert response["media_buy_id"]  # Just verify it exists
-            actual_media_buy_id = response["media_buy_id"]
+            # Verify response — create_media_buy_raw returns CreateMediaBuyResult
+            # which supports tuple unpacking: (domain_response, status)
+            domain_response, status = response
+            print(f"DEBUG create_media_buy response: {domain_response}")
+            if hasattr(domain_response, "errors") and domain_response.errors:
+                print(f"DEBUG errors: {domain_response.errors}")
+            assert hasattr(domain_response, "media_buy_id"), (
+                f"Expected CreateMediaBuySuccess, got: {type(domain_response).__name__}"
+            )
+            assert domain_response.media_buy_id  # Just verify it exists
+            actual_media_buy_id = domain_response.media_buy_id
             # Protocol envelope adds status field - domain response just has media_buy_id
 
             # Verify creative assignments were created in database

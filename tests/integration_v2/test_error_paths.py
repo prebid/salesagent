@@ -32,7 +32,7 @@ from src.core.database.models import CurrencyLimit
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
-from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
+from src.core.schemas import CreateMediaBuyError, Error
 from src.core.tool_context import ToolContext
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
 from tests.helpers.adcp_factories import create_test_package_request_dict
@@ -179,17 +179,8 @@ class TestCreateMediaBuyErrorPaths:
             ctx=context,
         )
 
-        # Validate and convert dict to Pydantic model
-        # This will raise ValidationError if the dict doesn't match the schema
-        status = response_dict.pop("status")  # Extract status field (not part of the model)
-
-        # Determine which model to construct based on presence of errors
-        if "errors" in response_dict and response_dict.get("errors"):
-            # Will raise ValidationError if response_dict doesn't match CreateMediaBuyError schema
-            response = CreateMediaBuyError.model_validate(response_dict)
-        else:
-            # Will raise ValidationError if response_dict doesn't match CreateMediaBuySuccess schema
-            response = CreateMediaBuySuccess.model_validate(response_dict)
+        # CreateMediaBuyResult supports tuple unpacking: (response, status)
+        response, status = response_dict
 
         # Verify response structure - error cases return CreateMediaBuyError
         assert isinstance(response, CreateMediaBuyError)
@@ -241,13 +232,8 @@ class TestCreateMediaBuyErrorPaths:
             ctx=context,
         )
 
-        # Validate and convert dict to Pydantic model
-        status = response_dict.pop("status")
-
-        if "errors" in response_dict and response_dict.get("errors"):
-            response = CreateMediaBuyError.model_validate(response_dict)
-        else:
-            response = CreateMediaBuySuccess.model_validate(response_dict)
+        # CreateMediaBuyResult supports tuple unpacking: (response, status)
+        response, status = response_dict
 
         # Verify response structure - error cases return CreateMediaBuyError
         assert isinstance(response, CreateMediaBuyError)
@@ -293,13 +279,8 @@ class TestCreateMediaBuyErrorPaths:
             ctx=context,
         )
 
-        # Validate and convert dict to Pydantic model
-        status = response_dict.pop("status")
-
-        if "errors" in response_dict and response_dict.get("errors"):
-            response = CreateMediaBuyError.model_validate(response_dict)
-        else:
-            response = CreateMediaBuySuccess.model_validate(response_dict)
+        # CreateMediaBuyResult supports tuple unpacking: (response, status)
+        response, status = response_dict
 
         # Verify response structure - error cases return CreateMediaBuyError
         assert isinstance(response, CreateMediaBuyError)
@@ -376,13 +357,8 @@ class TestCreateMediaBuyErrorPaths:
             ctx=context,
         )
 
-        # Validate and convert dict to Pydantic model
-        status = response_dict.pop("status")
-
-        if "errors" in response_dict and response_dict.get("errors"):
-            response = CreateMediaBuyError.model_validate(response_dict)
-        else:
-            response = CreateMediaBuySuccess.model_validate(response_dict)
+        # CreateMediaBuyResult supports tuple unpacking: (response, status)
+        response, status = response_dict
 
         # Verify response structure - error cases return CreateMediaBuyError
         assert isinstance(response, CreateMediaBuyError)
