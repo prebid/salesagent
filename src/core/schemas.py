@@ -95,6 +95,8 @@ from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import Placement as LibraryPlacement
+from adcp.types import PlatformDeployment as LibraryPlatformDeployment
+from adcp.types import Pricing as LibraryPricing
 from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
@@ -3167,22 +3169,35 @@ class CheckAXERequirementsResponse(SalesAgentBaseModel):
 
 
 # --- Signal Discovery ---
-class SignalDeployment(SalesAgentBaseModel):
-    """Platform deployment information for a signal - AdCP spec compliant."""
+class SignalDeployment(LibraryPlatformDeployment):
+    """Extends library PlatformDeployment with internal signal deployment fields.
 
-    platform: str = Field(..., description="Platform name")
-    account: str | None = Field(None, description="Specific account if applicable")
-    is_live: bool = Field(..., description="Whether signal is currently active")
-    scope: Literal["platform-wide", "account-specific"] = Field(..., description="Deployment scope")
-    decisioning_platform_segment_id: str | None = Field(None, description="Platform-specific segment ID")
-    estimated_activation_duration_minutes: float | None = Field(None, description="Time to activate if not live", gt=-1)
+    Library provides: platform, account, is_live, type, activation_key,
+    deployed_at, estimated_activation_duration_minutes.
+
+    Local additions (internal-only, excluded from responses):
+    - scope: Derived from deployment type for internal routing
+    - decisioning_platform_segment_id: Platform-specific segment ID after activation
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    scope: Literal["platform-wide", "account-specific"] = Field(
+        default="platform-wide", description="Deployment scope (internal)", exclude=True
+    )
+    decisioning_platform_segment_id: str | None = Field(
+        default=None, description="Platform-specific segment ID (internal)", exclude=True
+    )
 
 
-class SignalPricing(SalesAgentBaseModel):
-    """Pricing information for a signal - AdCP spec compliant."""
+class SignalPricing(LibraryPricing):
+    """Extends library Pricing for signal-specific pricing.
 
-    cpm: float = Field(..., description="Cost per thousand impressions", gt=-1)
-    currency: str = Field(..., description="Currency code", pattern="^[A-Z]{3}$")
+    Library provides: cpm, currency. This subclass preserves the library
+    schema while allowing future internal field additions.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
 class Signal(LibrarySignal):
@@ -3204,7 +3219,7 @@ class Signal(LibrarySignal):
     # Override types that differ from library
     signal_type: Literal["marketplace", "custom", "owned"] = Field(..., description="Type of signal")  # type: ignore[assignment]
     deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
-    pricing: SignalPricing = Field(..., description="Pricing information")  # type: ignore[assignment]
+    pricing: SignalPricing = Field(..., description="Pricing information")
 
     # Internal fields (not in AdCP spec, excluded from serialization)
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)

@@ -73,7 +73,7 @@ class TestADCPSchemaCompatibility:
                 {
                     "platform": "gam",
                     "is_live": True,
-                    "scope": "platform-wide",
+                    "type": "platform",
                 }
             ],
             "pricing": {"cpm": 5.0, "currency": "USD"},
@@ -180,7 +180,7 @@ class TestADCPSchemaCompatibility:
                 {
                     "platform": "gam",
                     "is_live": True,
-                    "scope": "platform-wide",
+                    "type": "platform",
                 }
             ],
             "pricing": {"cpm": 10.0, "currency": "USD"},
@@ -189,7 +189,7 @@ class TestADCPSchemaCompatibility:
         # Create signal from data
         signal = Signal(**original_data)
 
-        # Dump to dict
+        # Dump to dict (internal fields like scope excluded)
         dumped = signal.model_dump()
 
         # Reconstruct from dumped data

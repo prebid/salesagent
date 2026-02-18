@@ -474,7 +474,9 @@ class TestSignalSchemaContract:
             "signal_type": "marketplace",
             "data_provider": "Test Data Provider",
             "coverage_percentage": 95.0,
-            "deployments": [SignalDeployment(platform="test_platform", is_live=True, scope="platform-wide")],
+            "deployments": [
+                SignalDeployment(platform="test_platform", is_live=True, type="platform", scope="platform-wide")
+            ],
             "pricing": SignalPricing(cpm=3.50, currency="USD"),
         }
 

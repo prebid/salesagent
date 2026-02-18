@@ -916,6 +916,7 @@ class TestAdCPContract:
             platform="google_ad_manager",
             account="123456789",
             is_live=True,
+            type="platform",
             scope="account-specific",
             decisioning_platform_segment_id="gam_segment_123",
             estimated_activation_duration_minutes=0,
@@ -969,10 +970,11 @@ class TestAdCPContract:
         assert isinstance(adcp_response["deployments"], list), "deployments must be array"
         assert len(adcp_response["deployments"]) > 0, "deployments array must not be empty"
         deployment_obj = adcp_response["deployments"][0]
-        required_deployment_fields = ["platform", "is_live", "scope"]
+        required_deployment_fields = ["platform", "is_live", "type"]
         for field in required_deployment_fields:
             assert field in deployment_obj, f"Required deployment field '{field}' missing"
-        assert deployment_obj["scope"] in ["platform-wide", "account-specific"], "scope must be valid enum"
+        # scope is an internal field (exclude=True), should not appear in AdCP response
+        assert "scope" not in deployment_obj, "Internal field 'scope' exposed in AdCP response"
 
         # Verify pricing structure
         assert isinstance(adcp_response["pricing"], dict), "pricing must be object"
@@ -2841,7 +2843,7 @@ class TestAdCPContract:
             "signal_type": "marketplace",
             "data_provider": "Acme Data",
             "coverage_percentage": 85.5,
-            "deployments": [{"platform": "GAM", "is_live": True, "scope": "platform-wide"}],
+            "deployments": [{"platform": "GAM", "is_live": True, "type": "platform"}],
             "pricing": {"cpm": 2.50, "currency": "USD"},
         }
         # Test with optional errors field
