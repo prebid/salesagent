@@ -1463,29 +1463,18 @@ class AdCPRequestHandler(RequestHandler):
                 # No auth token - create minimal Context-like object with headers for tenant detection
                 tool_context = MinimalContext.from_request_context()
 
-            # Map A2A parameters to GetProductsRequest (adcp v1.2.1)
-            brief = parameters.get("brief", "")
-            brand_manifest_raw = parameters.get("brand_manifest", None)
-            filters = parameters.get("filters", None)
-            min_exposures = parameters.get("min_exposures", None)
-            adcp_version = parameters.get("adcp_version", "1.0.0")
-            strategy_id = parameters.get("strategy_id", None)
-            context = parameters.get("context", None)
-
-            # Normalize brand_manifest to dict format (adcp v1.2.1 requirement)
-            brand_manifest: dict | None = None
-            if brand_manifest_raw:
-                if isinstance(brand_manifest_raw, str):
-                    # URL string → wrap in dict
-                    brand_manifest = {"url": brand_manifest_raw}
-                elif isinstance(brand_manifest_raw, dict):
-                    brand_manifest = brand_manifest_raw
-                else:
-                    raise ServerError(
-                        InvalidParamsError(
-                            message=f"brand_manifest must be a dict or URL string, got {type(brand_manifest_raw)}"
-                        )
+            # Normalize brand_manifest: URL string → dict (adcp v1.2.1)
+            brand_manifest = parameters.get("brand_manifest")
+            if isinstance(brand_manifest, str):
+                brand_manifest = {"url": brand_manifest}
+            elif brand_manifest is not None and not isinstance(brand_manifest, dict):
+                raise ServerError(
+                    InvalidParamsError(
+                        message=f"brand_manifest must be a dict or URL string, got {type(brand_manifest)}"
                     )
+                )
+
+            brief = parameters.get("brief", "")
 
             # Require either brand_manifest OR brief
             if not brief and not brand_manifest:
@@ -1493,22 +1482,19 @@ class AdCPRequestHandler(RequestHandler):
                     InvalidParamsError(message="Either 'brand_manifest' or 'brief' parameter is required")
                 )
 
-            # Call core function directly with individual parameters
-            # tool_context can be ToolContext or MinimalContext
-            # _tool_context_to_mcp_context only makes sense for ToolContext
+            # Call core function — _raw handles full schema validation via create_get_products_request
             if isinstance(tool_context, ToolContext):
                 mcp_ctx = self._tool_context_to_mcp_context(tool_context)
             else:
-                # MinimalContext works with core tools directly
                 mcp_ctx = cast(ToolContext, tool_context)
             response = await core_get_products_tool(
                 brief=brief,
                 brand_manifest=brand_manifest,
-                filters=filters,
-                min_exposures=min_exposures,
-                adcp_version=adcp_version,
-                strategy_id=strategy_id,
-                context=context,
+                filters=parameters.get("filters"),
+                min_exposures=parameters.get("min_exposures"),
+                adcp_version=parameters.get("adcp_version", "1.0.0"),
+                strategy_id=parameters.get("strategy_id"),
+                context=parameters.get("context"),
                 ctx=mcp_ctx,
             )
 
@@ -1548,15 +1534,22 @@ class AdCPRequestHandler(RequestHandler):
                 tool_name="create_media_buy",
             )
 
-            # Validate AdCP spec required parameters (per AdCP v2.2.0)
-            required_params = [
-                "brand_manifest",
-                "packages",
-                "start_time",
-                "end_time",
-            ]
-            missing_params = [param for param in required_params if param not in parameters]
+            # Parse parameters into typed request model (validation at A2A boundary)
+            from pydantic import ValidationError
 
+            from src.core.schemas import CreateMediaBuyRequest
+
+            # Pre-process: A2A field name translations
+            params = {**parameters}
+            if "custom_targeting" in params:
+                params.setdefault("targeting_overlay", params.pop("custom_targeting"))
+            # Set A2A defaults for optional fields
+            params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
+            params.setdefault("buyer_ref", f"A2A-{tool_context.principal_id}")
+
+            # Validate required AdCP parameters (packages is optional in model but required by spec)
+            required_params = ["brand_manifest", "packages", "start_time", "end_time"]
+            missing_params = [p for p in required_params if p not in params]
             if missing_params:
                 return {
                     "success": False,
@@ -1567,28 +1560,39 @@ class AdCPRequestHandler(RequestHandler):
                         {
                             "code": "validation_error",
                             "message": f"Missing required AdCP parameters: {missing_params}",
-                            "details": {
-                                "required": required_params,
-                                "received": list(parameters.keys()),
-                            },
                         }
                     ],
                 }
 
-            # Call core function with AdCP spec-compliant parameters
-            # Note: budget is NOT passed at top level per AdCP v2.2.0 - it's in packages
+            try:
+                req = CreateMediaBuyRequest.model_validate(params)
+            except ValidationError as e:
+                return {
+                    "success": False,
+                    "message": f"Invalid parameters: {e}",
+                    "required_parameters": required_params,
+                    "received_parameters": list(parameters.keys()),
+                    "errors": [
+                        {
+                            "code": "validation_error",
+                            "message": str(e),
+                        }
+                    ],
+                }
+
+            # Call core function with validated parameters
             response = await core_create_media_buy_tool(
-                brand_manifest=parameters["brand_manifest"],
-                po_number=parameters.get("po_number", f"A2A-{uuid.uuid4().hex[:8]}"),
-                buyer_ref=parameters.get("buyer_ref", f"A2A-{tool_context.principal_id}"),
-                packages=parameters["packages"],
-                start_time=parameters["start_time"],
-                end_time=parameters["end_time"],
-                budget=parameters.get("budget"),  # Optional legacy field - ignored if provided
-                targeting_overlay=parameters.get("custom_targeting", {}),
-                push_notification_config=parameters.get("push_notification_config"),
-                reporting_webhook=parameters.get("reporting_webhook"),
-                context=parameters.get("context"),
+                brand_manifest=params.get("brand_manifest"),
+                po_number=req.po_number,
+                buyer_ref=req.buyer_ref,
+                packages=params["packages"],  # Required — validated above
+                start_time=params.get("start_time"),
+                end_time=params.get("end_time"),
+                budget=params.get("budget"),
+                targeting_overlay=params.get("targeting_overlay", {}),
+                push_notification_config=params.get("push_notification_config"),
+                reporting_webhook=params.get("reporting_webhook"),
+                context=params.get("context"),
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
@@ -1870,7 +1874,7 @@ class AdCPRequestHandler(RequestHandler):
             # Import and call the core implementation
             from src.core.tools.capabilities import get_adcp_capabilities_raw
 
-            # Call core function with context
+            # Call core function with context (protocols param is currently unused by _raw)
             if isinstance(tool_context, ToolContext):
                 mcp_ctx = self._tool_context_to_mcp_context(tool_context)
             else:
@@ -2020,36 +2024,51 @@ class AdCPRequestHandler(RequestHandler):
                 tool_name="update_media_buy",
             )
 
-            # Validate required parameters (per AdCP v2.0+ spec: media_buy_id + optional packages)
-            if "media_buy_id" not in parameters and "buyer_ref" not in parameters:
+            # Parse parameters into typed request model (validation at A2A boundary)
+            from pydantic import ValidationError
+
+            from src.core.schemas import UpdateMediaBuyRequest
+
+            # Pre-process: support legacy 'updates.packages' → 'packages'
+            params = {**parameters}
+            if "packages" not in params and "updates" in params:
+                legacy_updates = params.pop("updates")
+                if isinstance(legacy_updates, dict) and "packages" in legacy_updates:
+                    params["packages"] = legacy_updates["packages"]
+
+            # Require at least one identifier
+            if "media_buy_id" not in params and "buyer_ref" not in params:
                 raise ServerError(
                     InvalidParamsError(
                         message="Missing required parameter: one of 'media_buy_id' or 'buyer_ref' is required"
                     )
                 )
 
-            # Extract update parameters (AdCP v2.0+ uses individual fields, not 'updates' wrapper)
-            # Support both 'packages' (AdCP v2.0+) and legacy 'updates' field for backward compatibility
-            packages = parameters.get("packages")
-            if packages is None and "updates" in parameters:
-                # Legacy format: extract packages from updates object
-                packages = parameters["updates"].get("packages")
+            # Validate top-level fields via typed model (packages validated by _raw
+            # which handles legacy formats with extra fields like 'status')
+            try:
+                req = UpdateMediaBuyRequest(
+                    media_buy_id=params.get("media_buy_id"),
+                    buyer_ref=params.get("buyer_ref"),
+                    paused=params.get("paused"),
+                    start_time=params.get("start_time"),
+                    end_time=params.get("end_time"),
+                    context=params.get("context"),
+                )
+            except ValidationError as e:
+                raise ServerError(InvalidParamsError(message=f"Invalid parameters: {e}"))
 
-            # Call core function directly with AdCP v2.0+ parameter names
-            media_buy_id = parameters.get("media_buy_id")
-            if media_buy_id is not None and not isinstance(media_buy_id, str):
-                raise ServerError(InvalidParamsError(message="media_buy_id must be a string"))
-
+            # Call core function with validated fields + raw nested structures
             response = core_update_media_buy_tool(
-                media_buy_id=media_buy_id or "",  # Provide default empty string if None
-                buyer_ref=parameters.get("buyer_ref"),
-                paused=parameters.get("paused"),
-                start_time=parameters.get("start_time"),
-                end_time=parameters.get("end_time"),
-                budget=parameters.get("budget"),
-                packages=packages,
-                push_notification_config=parameters.get("push_notification_config"),
-                context=parameters.get("context"),
+                media_buy_id=req.media_buy_id or "",
+                buyer_ref=req.buyer_ref,
+                paused=req.paused,
+                start_time=params.get("start_time"),
+                end_time=params.get("end_time"),
+                budget=params.get("budget"),
+                packages=params.get("packages"),
+                push_notification_config=params.get("push_notification_config"),
+                context=params.get("context"),
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
@@ -2084,33 +2103,33 @@ class AdCPRequestHandler(RequestHandler):
                 tool_name="get_media_buy_delivery",
             )
 
-            # Extract media_buy_ids - support both plural (spec) and singular (legacy)
-            media_buy_ids = parameters.get("media_buy_ids")
-            if not media_buy_ids:
-                # Fallback to singular form for backward compatibility
-                media_buy_id = parameters.get("media_buy_id")
-                if media_buy_id:
-                    media_buy_ids = [media_buy_id]
+            # Parse parameters into typed request model (validation at A2A boundary)
+            # Pre-process: support singular media_buy_id (legacy) → media_buy_ids (spec)
+            from src.core.schemas import GetMediaBuyDeliveryRequest
 
-            # Extract other optional parameters
-            buyer_refs = parameters.get("buyer_refs")
-            status_filter = parameters.get("status_filter")
-            start_date = parameters.get("start_date")
-            end_date = parameters.get("end_date")
+            params = {**parameters}
+            if "media_buy_ids" not in params and "media_buy_id" in params:
+                params["media_buy_ids"] = [params.pop("media_buy_id")]
 
-            # Call core function with all parameters (all are optional per AdCP spec)
+            req = GetMediaBuyDeliveryRequest.model_validate(params)
+
+            # Call core function with validated fields (all optional per AdCP spec)
+            # Pass raw values for fields where _raw handles its own type coercion
+            # (e.g., status_filter str→MediaBuyStatus, date str→date)
             response = core_get_media_buy_delivery_tool(
-                media_buy_ids=media_buy_ids,
-                buyer_refs=buyer_refs,
-                status_filter=status_filter,
-                start_date=start_date,
-                end_date=end_date,
-                context=parameters.get("context"),
+                media_buy_ids=req.media_buy_ids,
+                buyer_refs=req.buyer_refs,
+                status_filter=params.get("status_filter"),
+                start_date=params.get("start_date"),
+                end_date=params.get("end_date"),
+                context=params.get("context"),
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
             # Convert response to dict for A2A format
-            return response.model_dump(mode="json") if hasattr(response, "model_dump") else response
+            if isinstance(response, dict):
+                return response
+            return response.model_dump(mode="json")
 
         except Exception as e:
             logger.error(f"Error in get_media_buy_delivery skill: {e}")
@@ -2125,23 +2144,26 @@ class AdCPRequestHandler(RequestHandler):
                 tool_name="update_performance_index",
             )
 
-            # Validate required parameters
-            required_params = ["media_buy_id", "performance_data"]
-            missing_params = [param for param in required_params if param not in parameters]
+            # Parse parameters into typed request model (validation at A2A boundary)
+            from pydantic import ValidationError
 
-            if missing_params:
+            from src.core.schemas import UpdatePerformanceIndexRequest
+
+            try:
+                req = UpdatePerformanceIndexRequest.model_validate(parameters)
+            except ValidationError as e:
                 return {
                     "success": False,
-                    "message": f"Missing required parameters: {missing_params}",
-                    "required_parameters": required_params,
+                    "message": f"Invalid parameters: {e}",
+                    "required_parameters": ["media_buy_id", "performance_data"],
                     "received_parameters": list(parameters.keys()),
                 }
 
-            # Call core function directly
+            # Call core function with validated fields
             response = core_update_performance_index_tool(
-                media_buy_id=parameters["media_buy_id"],
-                performance_data=parameters["performance_data"],
-                context=parameters.get("context"),
+                media_buy_id=req.media_buy_id,
+                performance_data=[p.model_dump(mode="json") for p in req.performance_data],
+                context=req.context,
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
