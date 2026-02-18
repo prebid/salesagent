@@ -1974,6 +1974,11 @@ class SyncCreativesResponse(LibrarySyncCreativesResponse):
     Construction auto-wraps: SyncCreativesResponse(creatives=[...]) works without
     explicitly creating the variant. Field(exclude=True) on nested SyncCreativeResult
     is handled natively by Pydantic serialization.
+
+    Design decision (salesagent-g3c): KEEP proxy pattern over union type alias.
+    The error variant is never constructed (ToolError handles operation failures),
+    so the union pattern would add ~30 consumer-site changes for no functional
+    benefit. The only cost is one type:ignore[call-arg] at construction.
     """
 
     @property
