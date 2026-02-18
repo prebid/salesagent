@@ -26,7 +26,7 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 console = Console()
 
-from adcp.types import MediaBuyStatus
+from adcp.types import Error, MediaBuyStatus
 from adcp.types.generated_poc.core.context import ContextObject
 
 from src.core.auth import get_principal_object
@@ -81,7 +81,7 @@ def _get_media_buy_delivery_impl(
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
-            errors=[{"code": "principal_id_missing", "message": "Principal ID not found in context"}],
+            errors=[Error(code="principal_id_missing", message="Principal ID not found in context")],
             context=context_val,
         )
 
@@ -102,7 +102,7 @@ def _get_media_buy_delivery_impl(
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
-            errors=[{"code": "principal_not_found", "message": f"Principal {principal_id} not found"}],
+            errors=[Error(code="principal_not_found", message=f"Principal {principal_id} not found")],
             context=context_val,
         )
 
@@ -129,7 +129,7 @@ def _get_media_buy_delivery_impl(
                     media_buy_count=0,
                 ),
                 media_buy_deliveries=[],
-                errors=[{"code": "invalid_date_range", "message": "Start date must be before end date"}],
+                errors=[Error(code="invalid_date_range", message="Start date must be before end date")],
                 context=context_val,
             )
     else:
@@ -243,7 +243,7 @@ def _get_media_buy_delivery_impl(
                             media_buy_count=0,
                         ),
                         media_buy_deliveries=[],
-                        errors=[{"code": "adapter_error", "message": f"Error getting delivery for {media_buy_id}"}],
+                        errors=[Error(code="adapter_error", message=f"Error getting delivery for {media_buy_id}")],
                         context=context_val,
                     )
             else:
