@@ -291,8 +291,7 @@ async def get_adcp_capabilities(
     summary = "\n".join(summary_parts)
 
     # Return ToolResult with human-readable text and structured data
-    response_dict = response.model_dump(mode="json")
-    return ToolResult(content=summary, structured_content=response_dict)
+    return ToolResult(content=summary, structured_content=response)
 
 
 async def get_adcp_capabilities_raw(

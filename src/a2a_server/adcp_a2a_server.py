@@ -1365,6 +1365,39 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error deleting push notification config: {e}")
             raise ServerError(InternalError(message=f"Failed to delete push notification config: {str(e)}"))
 
+    @staticmethod
+    def _serialize_for_a2a(response: Any) -> dict:
+        """Serialize a handler response for A2A protocol at the framework boundary.
+
+        This is the single serialization point for all A2A skill responses.
+        Handlers return raw Pydantic models; this method converts them to
+        A2A-compatible dicts with protocol fields (message, success).
+
+        - Pydantic models: serialized via model_dump(mode="json"), protocol fields added
+        - Dicts: passed through as-is (early-return error/stub responses from handlers)
+
+        Protocol fields added:
+        - message: human-readable string from response.__str__()
+        - success: derived from absence of errors field (for responses that have one)
+
+        Args:
+            response: Pydantic model or dict from a skill handler
+
+        Returns:
+            Dict ready for A2A DataPart
+        """
+        if isinstance(response, dict):
+            return response
+
+        response_data = response.model_dump(mode="json")
+        response_data["message"] = str(response)
+
+        # Derive success from errors field if present (AdCP convention)
+        if "errors" in response_data:
+            response_data["success"] = not bool(response_data["errors"])
+
+        return response_data
+
     async def _handle_explicit_skill(
         self,
         skill_name: str,
@@ -1375,6 +1408,7 @@ class AdCPRequestHandler(RequestHandler):
         """Handle explicit AdCP skill invocations.
 
         Maps skill names to appropriate handlers and validates parameters.
+        Handlers return raw Pydantic models; serialization happens here at the boundary.
 
         Args:
             skill_name: The AdCP skill name (e.g., "get_products")
@@ -1431,9 +1465,10 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             handler = skill_handlers[skill_name]
-            # All handlers are async and call core tools
+            # Handlers return raw Pydantic models (or dicts for early-return errors)
             result = await cast(Any, handler)(parameters, auth_token)
-            return result
+            # Serialize at the boundary — models become dicts with protocol fields
+            return self._serialize_for_a2a(result)
         except ServerError:
             # Re-raise ServerError as-is (already properly formatted)
             raise
@@ -1498,18 +1533,7 @@ class AdCPRequestHandler(RequestHandler):
                 ctx=mcp_ctx,
             )
 
-            # Convert response to dict
-            if isinstance(response, dict):
-                response_data = response
-            else:
-                response_data = response.model_dump(mode="json")
-
-            # Add A2A protocol field: message for agent communication
-            # All AdCP response types support __str__() for human-readable messages
-            response_data["message"] = str(response)
-
-            # Return A2A-compatible response with message field
-            return response_data
+            return response
 
         except Exception as e:
             logger.error(f"Error in get_products skill: {e}")
@@ -1596,26 +1620,10 @@ class AdCPRequestHandler(RequestHandler):
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
-            # Convert response to dict and add A2A protocol fields
-            if isinstance(response, dict):
-                response_data = response
-            else:
-                response_data = response.model_dump(mode="json")
-
-            # Add A2A protocol fields: success indicator and message
-            # Check if there are domain-level errors (per AdCP spec)
-            has_errors = bool(response_data.get("errors"))
-            response_data["success"] = not has_errors
-            response_data["message"] = str(response)
-
-            # Return A2A-compatible response with protocol fields
-            # Domain errors are included in response.errors field per AdCP spec
-            return response_data
+            return response
 
         except Exception as e:
             logger.error(f"Error in create_media_buy skill: {e}")
-            # Raise ServerError for A2A protocol to handle
-            # The protocol layer will convert this to appropriate JSON-RPC error
             raise ServerError(InternalError(message=f"Failed to create media buy: {str(e)}"))
 
     async def _handle_sync_creatives_skill(self, parameters: dict, auth_token: str) -> dict:
@@ -1668,20 +1676,7 @@ class AdCPRequestHandler(RequestHandler):
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
-            # Convert response to dict
-            if isinstance(response, dict):
-                response_data = response
-            else:
-                response_data = response.model_dump(mode="json")
-
-            # Add A2A protocol fields for agent communication
-            # Success means the operation completed (even if some creatives had errors)
-            response_data["success"] = True
-            response_data["message"] = str(response)
-
-            # Return A2A-compatible response with protocol fields
-            # Domain errors are included in response.errors field per AdCP spec
-            return response_data
+            return response
 
         except Exception as e:
             logger.error(f"Error in sync_creatives skill: {e}")
@@ -1714,17 +1709,7 @@ class AdCPRequestHandler(RequestHandler):
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
-            # Convert response to dict
-            if isinstance(response, dict):
-                response_data = response
-            else:
-                response_data = response.model_dump(mode="json")
-
-            # Add A2A protocol field: message for agent communication
-            response_data["message"] = str(response)
-
-            # Return A2A-compatible response with message field
-            return response_data
+            return response
 
         except Exception as e:
             logger.error(f"Error in list_creatives skill: {e}")
@@ -1886,17 +1871,7 @@ class AdCPRequestHandler(RequestHandler):
                 ctx=mcp_ctx,
             )
 
-            # Convert response to dict
-            if isinstance(response, dict):
-                response_data = response
-            else:
-                response_data = response.model_dump(mode="json")
-
-            # Add A2A protocol field: message for agent communication
-            response_data["message"] = "AdCP capabilities for this sales agent"
-
-            # Return A2A-compatible response with message field
-            return response_data
+            return response
 
         except Exception as e:
             logger.error(f"Error in get_adcp_capabilities skill: {e}")
@@ -1947,17 +1922,7 @@ class AdCPRequestHandler(RequestHandler):
                 mcp_ctx = cast(ToolContext, tool_context)
             response = core_list_creative_formats_tool(req=req, ctx=mcp_ctx)
 
-            # Convert response to dict
-            if isinstance(response, dict):
-                response_data = response
-            else:
-                response_data = response.model_dump(mode="json")
-
-            # Add A2A protocol field: message for agent communication
-            response_data["message"] = str(response)
-
-            # Return A2A-compatible response with message field
-            return response_data
+            return response
 
         except Exception as e:
             logger.error(f"Error in list_creative_formats skill: {e}")
@@ -2003,13 +1968,7 @@ class AdCPRequestHandler(RequestHandler):
             # Context can be None for unauthenticated calls - tenant will be detected from headers
             response = core_list_authorized_properties_tool(req=request, ctx=cast(Any, tool_context))
 
-            # Return spec-compliant response (no extra fields)
-            # Per AdCP v2.4 spec: only publisher_domains, primary_channels, primary_countries,
-            # portfolio_description, advertising_policies, last_updated, and errors
-            if isinstance(response, dict):
-                return response
-            else:
-                return response.model_dump(mode="json")
+            return response
 
         except Exception as e:
             logger.error(f"Error in list_authorized_properties skill: {e}")
@@ -2072,12 +2031,7 @@ class AdCPRequestHandler(RequestHandler):
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
-            # Return spec-compliant response (no extra fields)
-            # Per AdCP spec: all fields from UpdateMediaBuyResponse
-            if isinstance(response, dict):
-                return response
-            else:
-                return response.model_dump(mode="json")
+            return response
 
         except Exception as e:
             logger.error(f"Error in update_media_buy skill: {e}")
@@ -2126,10 +2080,7 @@ class AdCPRequestHandler(RequestHandler):
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
-            # Convert response to dict for A2A format
-            if isinstance(response, dict):
-                return response
-            return response.model_dump(mode="json")
+            return response
 
         except Exception as e:
             logger.error(f"Error in get_media_buy_delivery skill: {e}")
@@ -2167,12 +2118,7 @@ class AdCPRequestHandler(RequestHandler):
                 ctx=self._tool_context_to_mcp_context(tool_context),
             )
 
-            # Return spec-compliant response (no extra fields)
-            # Per AdCP spec: all fields from ProvidePerformanceFeedbackResponse
-            if isinstance(response, dict):
-                return response
-            else:
-                return response.model_dump(mode="json")
+            return response
 
         except Exception as e:
             logger.error(f"Error in update_performance_index skill: {e}")

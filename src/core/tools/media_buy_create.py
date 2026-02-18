@@ -79,6 +79,7 @@ from src.core.schema_helpers import to_context_object, to_reporting_webhook
 from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
+    CreateMediaBuyResult,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     Error,
@@ -1298,7 +1299,7 @@ async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | BaseModel | None = None,
     ctx: Context | ToolContext | None = None,
-) -> tuple[CreateMediaBuySuccess | CreateMediaBuyError, AdcpTaskStatus]:
+) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
     Args:
@@ -1307,7 +1308,7 @@ async def _create_media_buy_impl(
         ctx: FastMCP context (automatically provided)
 
     Returns:
-        CreateMediaBuyResponse with media buy details
+        CreateMediaBuyResult wrapping response and status
     """
     # Normalize push_notification_config to dict for downstream dict-based operations
     # (A2A server passes a2a.types.PushNotificationConfig model)
@@ -1359,12 +1360,12 @@ async def _create_media_buy_impl(
     if not principal:
         error_msg = f"Principal {principal_id} not found"
         # Cannot create context or workflow step without valid principal
-        return (
-            CreateMediaBuyError(
+        return CreateMediaBuyResult(
+            response=CreateMediaBuyError(
                 errors=[Error(code="authentication_error", message=error_msg, details=None)],
                 context=req.context,
             ),
-            AdcpTaskStatus.failed,
+            status=AdcpTaskStatus.failed.value,
         )
 
     # Context management and workflow step creation - create workflow step FIRST
@@ -1872,12 +1873,12 @@ async def _create_media_buy_impl(
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
 
         # Return error response with failed status
-        return (
-            CreateMediaBuyError(
+        return CreateMediaBuyResult(
+            response=CreateMediaBuyError(
                 errors=[Error(code="validation_error", message=str(e), details=None)],
                 context=req.context,
             ),
-            AdcpTaskStatus.failed,
+            status=AdcpTaskStatus.failed.value,
         )
 
     # Type narrowing: in non-dry_run mode, step and persistent_ctx are guaranteed to exist
@@ -2343,8 +2344,8 @@ async def _create_media_buy_impl(
             # The workflow_step_id in packages indicates approval is required
             # buyer_ref is required by schema, but mypy needs explicit check
             response_buyer_ref = req.buyer_ref if req.buyer_ref else "unknown"
-            return (
-                CreateMediaBuySuccess(
+            return CreateMediaBuyResult(
+                response=CreateMediaBuySuccess(
                     buyer_ref=response_buyer_ref,
                     media_buy_id=media_buy_id,
                     creative_deadline=None,
@@ -2352,7 +2353,7 @@ async def _create_media_buy_impl(
                     workflow_step_id=step.step_id,  # Client can track approval via this ID
                     context=req.context,
                 ),
-                AdcpTaskStatus.submitted,
+                status=AdcpTaskStatus.submitted.value,
             )
 
         # Get products for the media buy to check product-level auto-creation settings
@@ -2413,14 +2414,14 @@ async def _create_media_buy_impl(
                 )
                 if step:
                     ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_detail)
-                return (
-                    CreateMediaBuyError(
+                return CreateMediaBuyResult(
+                    response=CreateMediaBuyError(
                         errors=[
                             Error(code="invalid_configuration", message=err, details=None) for err in config_errors
                         ],
                         context=req.context,
                     ),
-                    AdcpTaskStatus.failed,
+                    status=AdcpTaskStatus.failed.value,
                 )
 
         product_auto_create = all(
@@ -2504,15 +2505,15 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
-            return (
-                CreateMediaBuySuccess(
+            return CreateMediaBuyResult(
+                response=CreateMediaBuySuccess(
                     buyer_ref=req.buyer_ref if req.buyer_ref else "unknown",
                     media_buy_id=media_buy_id,
                     packages=response_packages,
                     workflow_step_id=step.step_id,
                     context=req.context,
                 ),
-                AdcpTaskStatus.submitted,
+                status=AdcpTaskStatus.submitted.value,
             )
 
         # Continue with synchronized media buy creation
@@ -2808,12 +2809,12 @@ async def _create_media_buy_impl(
             error_msg = "start_time and end_time are required but were not properly set"
             if step:
                 ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-            return (
-                CreateMediaBuyError(
+            return CreateMediaBuyResult(
+                response=CreateMediaBuyError(
                     errors=[Error(code="invalid_datetime", message=error_msg, details=None)],
                     context=req.context,
                 ),
-                AdcpTaskStatus.failed,
+                status=AdcpTaskStatus.failed.value,
             )
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
@@ -2845,7 +2846,7 @@ async def _create_media_buy_impl(
             error_msg = response.errors[0].message if response.errors else "Unknown error"
             error_code = response.errors[0].code if response.errors else "UNKNOWN"
             logger.error(f"[ADAPTER] Adapter returned error response: {error_code} - {error_msg}")
-            return (response, AdcpTaskStatus.failed)
+            return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.failed.value)
 
         # At this point, response is CreateMediaBuySuccess - safe to access success-specific fields
         # Type narrowing: media_buy_id must be present in successful response
@@ -2861,7 +2862,7 @@ async def _create_media_buy_impl(
         # Adapter validation has run, so errors (like unsupported pricing) are already caught above
         if testing_ctx.dry_run:
             logger.info("[DRY_RUN] Adapter validation passed, returning response without database writes")
-            return (response, AdcpTaskStatus.completed)
+            return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.completed.value)
 
         # Type narrowing: after dry_run return, step and persistent_ctx are guaranteed to exist
         # This is needed for mypy to understand these won't be None in the code below
@@ -3547,7 +3548,7 @@ async def _create_media_buy_impl(
             },
         )
 
-        return (modified_response, AdcpTaskStatus.completed)
+        return CreateMediaBuyResult(response=modified_response, status=AdcpTaskStatus.completed.value)
 
     except Exception as e:
         # Update workflow step as failed on any error during execution
@@ -3695,11 +3696,8 @@ async def create_media_buy(
     except ValidationError as e:
         raise ToolError(format_validation_error(e, context="request")) from e
 
-    response, status = await _create_media_buy_impl(req=req, ctx=ctx)
-    return ToolResult(
-        content=str(response),
-        structured_content={"status": status.value, **response.model_dump(mode="json")},
-    )
+    result = await _create_media_buy_impl(req=req, ctx=ctx)
+    return ToolResult(content=str(result), structured_content=result)
 
 
 async def create_media_buy_raw(
@@ -3772,12 +3770,11 @@ async def create_media_buy_raw(
     except ValidationError as e:
         raise ToolError(format_validation_error(e, context="request")) from e
 
-    response, status = await _create_media_buy_impl(
+    return await _create_media_buy_impl(
         req=req,
         push_notification_config=push_notification_config,
         ctx=ctx,
     )
-    return {"status": status.value, **response.model_dump()}
 
 
 # Unified update tools

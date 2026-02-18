@@ -301,6 +301,33 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
+class CreateMediaBuyResult(SalesAgentBaseModel):
+    """Wrapper combining create_media_buy domain response with protocol status.
+
+    Serializes to {"status": "...", ...response_fields}, allowing callers to
+    pass the model directly to ToolResult without calling model_dump().
+
+    Supports tuple unpacking (response, status) for backward compatibility
+    with existing callers and tests.
+    """
+
+    status: str
+    response: CreateMediaBuySuccess | CreateMediaBuyError
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        result = self.response.model_dump(mode=info.mode)
+        result["status"] = self.status
+        return result
+
+    def __iter__(self):
+        """Support tuple unpacking: response, status = result."""
+        return iter((self.response, self.status))
+
+    def __str__(self) -> str:
+        return str(self.response)
+
+
 # --- Update Media Buy Response Components ---
 
 
