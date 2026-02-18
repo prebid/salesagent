@@ -1362,7 +1362,7 @@ async def _create_media_buy_impl(
         return (
             CreateMediaBuyError(
                 errors=[Error(code="authentication_error", message=error_msg, details=None)],
-                context=to_context_object(req.context),
+                context=req.context,
             ),
             AdcpTaskStatus.failed,
         )
@@ -1875,7 +1875,7 @@ async def _create_media_buy_impl(
         return (
             CreateMediaBuyError(
                 errors=[Error(code="validation_error", message=str(e), details=None)],
-                context=to_context_object(req.context),
+                context=req.context,
             ),
             AdcpTaskStatus.failed,
         )
@@ -2350,7 +2350,7 @@ async def _create_media_buy_impl(
                     creative_deadline=None,
                     packages=pending_packages,
                     workflow_step_id=step.step_id,  # Client can track approval via this ID
-                    context=to_context_object(req.context),
+                    context=req.context,
                 ),
                 AdcpTaskStatus.submitted,
             )
@@ -2418,7 +2418,7 @@ async def _create_media_buy_impl(
                         errors=[
                             Error(code="invalid_configuration", message=err, details=None) for err in config_errors
                         ],
-                        context=to_context_object(req.context),
+                        context=req.context,
                     ),
                     AdcpTaskStatus.failed,
                 )
@@ -2510,7 +2510,7 @@ async def _create_media_buy_impl(
                     media_buy_id=media_buy_id,
                     packages=response_packages,
                     workflow_step_id=step.step_id,
-                    context=to_context_object(req.context),
+                    context=req.context,
                 ),
                 AdcpTaskStatus.submitted,
             )
@@ -2811,7 +2811,7 @@ async def _create_media_buy_impl(
             return (
                 CreateMediaBuyError(
                     errors=[Error(code="invalid_datetime", message=error_msg, details=None)],
-                    context=to_context_object(req.context),
+                    context=req.context,
                 ),
                 AdcpTaskStatus.failed,
             )
@@ -3426,7 +3426,7 @@ async def _create_media_buy_impl(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
             creative_deadline=response.creative_deadline,
-            context=to_context_object(req.context),
+            context=req.context,
         )
 
         # Log activity
