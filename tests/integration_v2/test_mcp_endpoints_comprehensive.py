@@ -347,7 +347,6 @@ class TestMCPEndpointsComprehensive:
                     ],
                     "start_time": start_time,
                     "end_time": end_time,
-                    "budget": {"total": 10000.0, "currency": "USD"},
                     "po_number": "PO-TEST-12345",  # Required per AdCP spec
                 },
             )

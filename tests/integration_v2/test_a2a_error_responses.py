@@ -236,7 +236,7 @@ class TestA2AErrorPropagation:
                         budget=10000.0,
                     )
                 ],
-                "budget": {"total": 10000.0, "currency": "USD"},  # Top-level budget keeps dict format
+
                 "start_time": start_time,
                 "end_time": end_time,
             }
@@ -286,7 +286,7 @@ class TestA2AErrorPropagation:
                         budget=10000.0,
                     )
                 ],
-                "budget": {"total": 10000.0, "currency": "USD"},  # Top-level budget keeps dict format
+
                 "start_time": start_time,
                 "end_time": end_time,
             }
@@ -343,7 +343,7 @@ class TestA2AErrorPropagation:
                         budget=10000.0,
                     )
                 ],
-                "budget": {"total": 10000.0, "currency": "USD"},  # Top-level budget keeps dict format
+
                 "start_time": start_time,
                 "end_time": end_time,
             }

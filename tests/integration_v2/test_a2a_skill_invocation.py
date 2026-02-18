@@ -383,7 +383,7 @@ class TestA2ASkillInvocation:
                         "pricing_option_id": "cpm_usd_fixed",  # Required in adcp 2.5.0
                     }
                 ],
-                "budget": {"total": 10000.0, "currency": "USD"},  # Top-level budget keeps dict format
+
                 "start_time": start_date.isoformat(),
                 "end_time": end_date.isoformat(),
             }
@@ -454,7 +454,6 @@ class TestA2ASkillInvocation:
                         "pricing_option_id": "cpm_usd_fixed",
                     }
                 ],
-                "budget": {"total": 10000.0, "currency": "USD"},
                 "start_time": start_date.isoformat(),
                 "end_time": end_date.isoformat(),
             }
