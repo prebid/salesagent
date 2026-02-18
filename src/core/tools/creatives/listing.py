@@ -435,8 +435,6 @@ def _list_creatives_impl(
     from src.core.schemas import Pagination as SchemaPagination
     from src.core.schemas import QuerySummary
 
-    # Convert ContextObject to dict for response
-    context_dict = req.context.model_dump() if req.context and hasattr(req.context, "model_dump") else None
     return ListCreativesResponse(
         query_summary=QuerySummary(
             total_matching=total_count,
@@ -454,7 +452,7 @@ def _list_creatives_impl(
         creatives=creatives,
         format_summary=None,
         status_summary=None,
-        context=context_dict,
+        context=req.context,
     )
 
 
@@ -502,11 +500,11 @@ async def list_creatives(
     """
     # Convert typed Pydantic models to dicts for the impl
     # FastMCP already coerced JSON inputs to these types
+    # TODO(salesagent-32k): Change _list_creatives_impl to accept typed models instead of dicts
     filters_dict = filters.model_dump(mode="json") if filters else None
     sort_dict = sort.model_dump(mode="json") if sort else None
     pagination_dict = pagination.model_dump(mode="json") if pagination else None
     fields_list = [f.value if isinstance(f, FieldModel) else f for f in fields] if fields else None
-    context_dict = context.model_dump(mode="json") if context else None
 
     response = _list_creatives_impl(
         media_buy_id=media_buy_id,
@@ -530,7 +528,7 @@ async def list_creatives(
         limit=limit,
         sort_by=sort_by,
         sort_order=sort_order,
-        context=context_dict,
+        context=context,  # type: ignore[arg-type]  # TODO(salesagent-32k): _list_creatives_impl should accept ContextObject
         ctx=ctx,
     )
     return ToolResult(content=str(response), structured_content=response)

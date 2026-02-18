@@ -32,7 +32,7 @@ from src.core.validation_helpers import format_validation_error
 def _update_performance_index_impl(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
-    context: dict | None = None,
+    context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> UpdatePerformanceIndexResponse:
     """Shared implementation for update_performance_index (used by both MCP and A2A).
@@ -143,17 +143,14 @@ def update_performance_index(
     Returns:
         ToolResult with UpdatePerformanceIndexResponse data
     """
-    # Convert typed Pydantic models to dicts for the impl
-    # FastMCP already coerced JSON inputs to these types
-    context_dict = context.model_dump(mode="json") if context else None
-    response = _update_performance_index_impl(media_buy_id, performance_data, context_dict, ctx)
+    response = _update_performance_index_impl(media_buy_id, performance_data, context, ctx)
     return ToolResult(content=str(response), structured_content=response)
 
 
 def update_performance_index_raw(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
-    context: dict | None = None,
+    context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update performance data for a media buy (raw function for A2A server use).

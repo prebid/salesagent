@@ -49,16 +49,6 @@ from src.core.testing_hooks import DeliverySimulator, TimeSimulator, apply_testi
 from src.core.validation_helpers import format_validation_error
 
 
-def _context_to_dict(context: ContextObject | None) -> dict[str, Any] | None:
-    """Convert ContextObject to dict for response, handling None case."""
-    if context is None:
-        return None
-    if hasattr(context, "model_dump"):
-        return context.model_dump()
-    # Fallback for dict-like objects
-    return dict(context) if context else None
-
-
 def _get_media_buy_delivery_impl(
     req: GetMediaBuyDeliveryRequest, ctx: Context | ToolContext | None
 ) -> GetMediaBuyDeliveryResponse:
@@ -79,8 +69,7 @@ def _get_media_buy_delivery_impl(
     if not principal_id:
         # Return AdCP-compliant error response
         # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??
-        # Convert ContextObject to dict if needed
-        context_dict = _context_to_dict(req.context)
+        context_val = req.context
         return GetMediaBuyDeliveryResponse(
             reporting_period=ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC)),
             currency="USD",
@@ -93,7 +82,7 @@ def _get_media_buy_delivery_impl(
             ),
             media_buy_deliveries=[],
             errors=[{"code": "principal_id_missing", "message": "Principal ID not found in context"}],
-            context=context_dict,
+            context=context_val,
         )
 
     # Get the Principal object
@@ -101,7 +90,7 @@ def _get_media_buy_delivery_impl(
     if not principal:
         # Return AdCP-compliant error response
         # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??
-        context_dict = _context_to_dict(req.context)
+        context_val = req.context
         return GetMediaBuyDeliveryResponse(
             reporting_period=ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC)),
             currency="USD",
@@ -114,7 +103,7 @@ def _get_media_buy_delivery_impl(
             ),
             media_buy_deliveries=[],
             errors=[{"code": "principal_not_found", "message": f"Principal {principal_id} not found"}],
-            context=context_dict,
+            context=context_val,
         )
 
     # Get the appropriate adapter
@@ -128,7 +117,7 @@ def _get_media_buy_delivery_impl(
         end_dt = datetime.strptime(req.end_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
         if start_dt >= end_dt:
-            context_dict = _context_to_dict(req.context)
+            context_val = req.context
             return GetMediaBuyDeliveryResponse(
                 reporting_period=ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC)),
                 currency="USD",
@@ -141,7 +130,7 @@ def _get_media_buy_delivery_impl(
                 ),
                 media_buy_deliveries=[],
                 errors=[{"code": "invalid_date_range", "message": "Start date must be before end date"}],
-                context=context_dict,
+                context=context_val,
             )
     else:
         # Default to last 30 days
@@ -242,7 +231,7 @@ def _get_media_buy_delivery_impl(
 
                 except Exception as e:
                     logger.error(f"Error getting delivery for {media_buy_id}: {e}")
-                    context_dict = _context_to_dict(req.context)
+                    context_val = req.context
                     return GetMediaBuyDeliveryResponse(
                         reporting_period=reporting_period,
                         currency=buy.currency,
@@ -255,7 +244,7 @@ def _get_media_buy_delivery_impl(
                         ),
                         media_buy_deliveries=[],
                         errors=[{"code": "adapter_error", "message": f"Error getting delivery for {media_buy_id}"}],
-                        context=context_dict,
+                        context=context_val,
                     )
             else:
                 # Use simulation for testing
@@ -394,7 +383,7 @@ def _get_media_buy_delivery_impl(
             # Continue with other media buys
 
     # Create AdCP-compliant response
-    context_dict = _context_to_dict(req.context)
+    context_val = req.context
     response = GetMediaBuyDeliveryResponse(
         reporting_period=reporting_period,
         currency="USD",  # TODO: @yusuf - This is wrong. Currency should be at the media buy delivery level, not on aggregated totals.
@@ -407,7 +396,7 @@ def _get_media_buy_delivery_impl(
         ),
         media_buy_deliveries=deliveries,
         errors=None,
-        context=context_dict,
+        context=context_val,
     )
 
     # Apply testing hooks if needed

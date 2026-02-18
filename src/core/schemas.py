@@ -1376,7 +1376,7 @@ class ProductPerformance(SalesAgentBaseModel):
 class UpdatePerformanceIndexRequest(SalesAgentBaseModel):
     media_buy_id: str
     performance_data: list[ProductPerformance]
-    context: dict[str, Any] | None = Field(
+    context: ContextObject | None = Field(
         None, description="Application-level context provided by the client (echoed in responses)"
     )
 
@@ -1384,7 +1384,7 @@ class UpdatePerformanceIndexRequest(SalesAgentBaseModel):
 class UpdatePerformanceIndexResponse(SalesAgentBaseModel):
     status: str
     detail: str
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
+    context: ContextObject | None = Field(None, description="Application-level context echoed from the request")
 
     def __str__(self) -> str:
         """Return human-readable text for MCP content field."""
@@ -3350,7 +3350,7 @@ class ActivateSignalResponse(SalesAgentBaseModel):
     signal_id: str = Field(..., description="Activated signal ID")
     activation_details: dict[str, Any] | None = Field(None, description="Platform-specific activation details")
     errors: list[Error] | None = Field(None, description="Optional error reporting")
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
+    context: ContextObject | None = Field(None, description="Application-level context echoed from the request")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
@@ -3366,7 +3366,7 @@ class SimulationControlRequest(SalesAgentBaseModel):
     strategy_id: str = Field(..., description="Strategy ID to control (must be simulation strategy with 'sim_' prefix)")
     action: Literal["jump_to", "reset", "set_scenario"] = Field(..., description="Action to perform on the simulation")
     parameters: dict[str, Any] = Field(default_factory=dict, description="Action-specific parameters")
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
+    context: ContextObject | None = Field(None, description="Application-level context echoed from the request")
 
 
 class SimulationControlResponse(SalesAgentBaseModel):
@@ -3376,7 +3376,7 @@ class SimulationControlResponse(SalesAgentBaseModel):
     message: str | None = None
     current_state: dict[str, Any] | None = None
     simulation_time: datetime | None = None
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
+    context: ContextObject | None = Field(None, description="Application-level context echoed from the request")
 
     def __str__(self) -> str:
         """Return human-readable text for MCP content field."""
@@ -3484,7 +3484,7 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
     """
 
     publisher_domains: list[str] = Field(..., description="Publisher domains this agent is authorized to represent")
-    context: dict[str, Any] | None = Field(None, description="Application-level context echoed from the request")
+    context: ContextObject | None = Field(None, description="Application-level context echoed from the request")
     primary_channels: list[str] | None = Field(
         None, description="Primary advertising channels in this portfolio (helps buyers filter relevance)"
     )

@@ -398,10 +398,8 @@ def _sync_creatives_impl(
         message += f", {len(creatives_needing_approval)} require approval"
 
     # Build AdCP-compliant response (per official spec)
-    # SyncCreativesResponse.context is dict[str, Any] | None — serialize model if needed
-    context_dict = context.model_dump() if isinstance(context, BaseModel) else context
     return SyncCreativesResponse(  # type: ignore[call-arg]  # RootModel auto-wrapping accepts variant kwargs
         creatives=results,
         dry_run=dry_run,
-        context=context_dict,
+        context=context,
     )

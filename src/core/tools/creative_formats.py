@@ -370,8 +370,6 @@ def list_creative_formats(
         # FastMCP already coerced JSON inputs to these types
         type_str = type.value if type else None
         asset_types_strs = [at.value for at in asset_types] if asset_types else None
-        context_dict = context.model_dump(mode="json") if context else None
-
         req = ListCreativeFormatsRequest(
             type=type_str,
             format_ids=format_ids,
@@ -382,7 +380,7 @@ def list_creative_formats(
             max_width=max_width,
             min_height=min_height,
             max_height=max_height,
-            context=context_dict,
+            context=context,
         )
     except ValidationError as e:
         raise ToolError(format_validation_error(e, context="list_creative_formats request")) from e
