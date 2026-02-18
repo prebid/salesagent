@@ -15,6 +15,7 @@ from typing import Any
 from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import McpWebhookPayload
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import NotificationType
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
@@ -252,18 +253,14 @@ class DeliveryWebhookScheduler:
 
             # Calculate next_expected_at for daily frequency: start of next day (UTC)
             next_day = datetime.now(UTC).date() + timedelta(days=1)
-            next_expected_at = datetime.combine(next_day, datetime.min.time(), tzinfo=UTC).isoformat()
+            next_expected_at = datetime.combine(next_day, datetime.min.time(), tzinfo=UTC)
 
-            # Convert delivery response to dict and add webhook-specific metadata
-            # Note: GetMediaBuyDeliveryResponse doesn't have these webhook fields,
-            # so we add them as extra data in the result dict
-            media_buy_delivery_result: dict[str, Any] = delivery_response.model_dump(mode="json")
-            media_buy_delivery_result["notification_type"] = "scheduled"
-            media_buy_delivery_result["next_expected_at"] = next_expected_at
-            media_buy_delivery_result["partial_data"] = (
-                False  # TODO: Check for reporting_delayed status in media_buy_deliveries
-            )
-            media_buy_delivery_result["unavailable_count"] = 0  # TODO: Count reporting_delayed/failed deliveries
+            # Set webhook-specific metadata directly on the response model
+            # These fields are defined on the library's GetMediaBuyDeliveryResponse
+            delivery_response.notification_type = NotificationType.scheduled
+            delivery_response.next_expected_at = next_expected_at
+            delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
+            delivery_response.unavailable_count = 0  # TODO: Count reporting_delayed/failed deliveries
 
             # Extract webhook URL and authentication
             webhook_url = reporting_webhook.get("url")
@@ -313,12 +310,13 @@ class DeliveryWebhookScheduler:
                 "media_buy_id": media_buy.media_buy_id,
             }
 
-            # TODO: Fix in adcp python client - create_mcp_webhook_payload should return
-            # McpWebhookPayload instead of dict[str, Any] for proper type safety
+            # TODO: Fix in adcp python client - create_mcp_webhook_payload should accept
+            # any BaseModel for result (it handles model_dump internally), and return
+            # McpWebhookPayload instead of dict[str, Any]
             mcp_payload_dict = create_mcp_webhook_payload(
                 task_id=media_buy.media_buy_id,  # TODO: @yusuf - double check if using media buy id is correct for media buy delivery???
                 task_type="media_buy_delivery",
-                result=media_buy_delivery_result,
+                result=delivery_response,  # type: ignore[arg-type]  # library handles BaseModel via hasattr(result, "model_dump")
                 status=AdcpTaskStatus.completed,
             )
             media_buy_delivery_payload = McpWebhookPayload.model_construct(**mcp_payload_dict)

@@ -20,7 +20,7 @@ from tests.integration.test_delivery_webhooks_integration import (
 def test_mock_response_validation():
     """Verify mock response passes validation checks."""
     mock_response = GetMediaBuyDeliveryResponse(
-        reporting_period={"start": "2025-01-01", "end": "2025-01-02"},
+        reporting_period={"start": "2025-01-01T00:00:00Z", "end": "2025-01-02T00:00:00Z"},
         currency="USD",
         media_buy_deliveries=[
             {
@@ -54,7 +54,7 @@ async def test_force_trigger_delivery_webhook_bypasses_duplicate_check(integrati
 
     # Mock delivery response to ensure success (avoiding actual adapter calls)
     mock_response = GetMediaBuyDeliveryResponse(
-        reporting_period={"start": "2025-01-01", "end": "2025-01-02"},
+        reporting_period={"start": "2025-01-01T00:00:00Z", "end": "2025-01-02T00:00:00Z"},
         currency="USD",
         media_buy_deliveries=[
             {

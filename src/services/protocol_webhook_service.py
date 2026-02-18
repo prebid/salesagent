@@ -108,12 +108,9 @@ class ProtocolWebhookService:
         }
         logger.info(f"push_notification_config (sanitized): {safe_config}")
 
-        # Serialize payload to dict for signing and sending
-        # Task/TaskStatusUpdateEvent need serialization; McpWebhookPayload is already SalesAgentBaseModel
+        # Serialize payload to dict at the delivery boundary (for HMAC signing and JSON send)
         payload_dict: dict[str, Any]
-        if isinstance(payload, (Task, TaskStatusUpdateEvent)):
-            payload_dict = payload.model_dump(mode="json", exclude_none=True)
-        elif isinstance(payload, McpWebhookPayload):
+        if isinstance(payload, (Task, TaskStatusUpdateEvent, McpWebhookPayload)):
             payload_dict = payload.model_dump(mode="json", exclude_none=True)
         else:
             payload_dict = payload
