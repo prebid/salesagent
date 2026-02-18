@@ -1,6 +1,7 @@
 """Unit tests for authorized properties functionality."""
 
 import pytest
+from adcp import Error
 from adcp.types import PropertyIdentifierTypes, PropertyType
 
 from src.core.schemas import (
@@ -186,7 +187,7 @@ class TestListAuthorizedPropertiesResponse:
             portfolio_description="Premium content portfolio",
             advertising_policies="No tobacco or alcohol ads",
             last_updated="2025-10-27T12:00:00Z",
-            errors=[{"code": "WARNING", "message": "Test warning"}],
+            errors=[Error(code="WARNING", message="Test warning")],
         )
 
         assert len(response.publisher_domains) == 1

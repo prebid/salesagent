@@ -3528,7 +3528,7 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
         None,
         description="ISO 8601 timestamp of when the agent's publisher authorization list was last updated.",
     )
-    errors: list[dict[str, Any]] | None = Field(
+    errors: list[Error] | None = Field(
         None, description="Task-specific errors and warnings (e.g., property availability issues)"
     )
 
