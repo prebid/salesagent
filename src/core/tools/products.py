@@ -571,7 +571,7 @@ async def _get_products_impl(
                 # Extract channel values from filter (enum values)
                 request_channels: set[str] = set()
                 for channel in req.filters.channels:
-                    request_channels.add(str(channel).lower())
+                    request_channels.add(channel.value.lower())
 
                 if product_channels:
                     # Product has explicit channels - must have at least one match
