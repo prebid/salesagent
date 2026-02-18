@@ -44,9 +44,7 @@ def _list_creatives_impl(
     created_after: str | None = None,
     created_before: str | None = None,
     search: str | None = None,
-    filters: dict | None = None,
-    sort: dict | None = None,
-    pagination: dict | None = None,
+    filters: CreativeFilters | None = None,
     fields: list[str] | None = None,
     include_performance: bool = False,
     include_assignments: bool = False,
@@ -55,7 +53,7 @@ def _list_creatives_impl(
     limit: int = 50,
     sort_by: str = "created_date",
     sort_order: str = "desc",
-    context: dict | None = None,  # Application level context per adcp spec
+    context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ) -> ListCreativesResponse:
     """List and search creative library (AdCP v2.5 spec endpoint).
@@ -74,9 +72,7 @@ def _list_creatives_impl(
         created_after: Filter by creation date (ISO string) (optional)
         created_before: Filter by creation date (ISO string) (optional)
         search: Search in creative names and descriptions (optional)
-        filters: Advanced filtering options (nested object, optional)
-        sort: Sort configuration (nested object, optional)
-        pagination: Pagination parameters (nested object, optional)
+        filters: Advanced filtering options (CreativeFilters model, optional)
         fields: Specific fields to return (optional)
         include_performance: Include performance metrics (optional)
         include_assignments: Include package assignments (optional)
@@ -124,11 +120,12 @@ def _list_creatives_impl(
     effective_limit = min(limit, 1000)
 
     # Build spec-compliant filters from flat parameters
+    # Library CreativeFilters uses plural field names (statuses, formats)
     filters_dict: dict[str, Any] = {}
     if status:
-        filters_dict["status"] = status
+        filters_dict["statuses"] = [status]
     if format:
-        filters_dict["format"] = format
+        filters_dict["formats"] = [format]
     if tags:
         filters_dict["tags"] = tags
     if created_after_dt:
@@ -151,9 +148,9 @@ def _list_creatives_impl(
     if effective_buyer_refs:
         filters_dict["buyer_refs"] = effective_buyer_refs
 
-    # Merge with provided filters dict
+    # Merge structured filters with flat params (flat params take precedence)
     if filters:
-        filters_dict = {**filters, **filters_dict}
+        filters_dict = {**filters.model_dump(exclude_none=True), **filters_dict}
 
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
@@ -183,7 +180,7 @@ def _list_creatives_impl(
             include_performance=include_performance,
             include_assignments=include_assignments,
             include_sub_assets=include_sub_assets,
-            context=to_context_object(context),
+            context=context,
         )
     except ValidationError as e:
         raise ToolError(format_validation_error(e, context="list_creatives request")) from e
@@ -378,24 +375,24 @@ def _list_creatives_impl(
     has_more = (page * limit) < total_count
     total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 
-    # Build filters_applied list from structured filters
+    # Build filters_applied list from structured filters (typed CreativeFilters model)
     filters_applied: list[str] = []
     if req.filters:
-        if hasattr(req.filters, "media_buy_ids") and req.filters.media_buy_ids:
+        if req.filters.media_buy_ids:
             filters_applied.append(f"media_buy_ids={','.join(req.filters.media_buy_ids)}")
-        if hasattr(req.filters, "buyer_refs") and req.filters.buyer_refs:
+        if req.filters.buyer_refs:
             filters_applied.append(f"buyer_refs={','.join(req.filters.buyer_refs)}")
-        if hasattr(req.filters, "status") and req.filters.status:
-            filters_applied.append(f"status={req.filters.status}")
-        if hasattr(req.filters, "format") and req.filters.format:
-            filters_applied.append(f"format={req.filters.format}")
-        if hasattr(req.filters, "tags") and req.filters.tags:
+        if req.filters.statuses:
+            filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
+        if req.filters.formats:
+            filters_applied.append(f"formats={','.join(req.filters.formats)}")
+        if req.filters.tags:
             filters_applied.append(f"tags={','.join(req.filters.tags)}")
-        if hasattr(req.filters, "created_after") and req.filters.created_after:
+        if req.filters.created_after:
             filters_applied.append(f"created_after={req.filters.created_after.isoformat()}")
-        if hasattr(req.filters, "created_before") and req.filters.created_before:
+        if req.filters.created_before:
             filters_applied.append(f"created_before={req.filters.created_before.isoformat()}")
-        if hasattr(req.filters, "name_contains") and req.filters.name_contains:
+        if req.filters.name_contains:
             filters_applied.append(f"search={req.filters.name_contains}")
 
     # Build sort_applied dict from structured sort
@@ -498,12 +495,7 @@ async def list_creatives(
     Returns:
         ToolResult with ListCreativesResponse data
     """
-    # Convert typed Pydantic models to dicts for the impl
-    # FastMCP already coerced JSON inputs to these types
-    # TODO(salesagent-32k): Change _list_creatives_impl to accept typed models instead of dicts
-    filters_dict = filters.model_dump(mode="json") if filters else None
-    sort_dict = sort.model_dump(mode="json") if sort else None
-    pagination_dict = pagination.model_dump(mode="json") if pagination else None
+    # Pass typed Pydantic models directly (no model_dump conversion needed)
     fields_list = [f.value if isinstance(f, FieldModel) else f for f in fields] if fields else None
 
     response = _list_creatives_impl(
@@ -517,9 +509,7 @@ async def list_creatives(
         created_after=created_after,
         created_before=created_before,
         search=search,
-        filters=filters_dict,
-        sort=sort_dict,
-        pagination=pagination_dict,
+        filters=filters,
         fields=fields_list,
         include_performance=include_performance,
         include_assignments=include_assignments,
@@ -528,7 +518,7 @@ async def list_creatives(
         limit=limit,
         sort_by=sort_by,
         sort_order=sort_order,
-        context=context,  # type: ignore[arg-type]  # TODO(salesagent-32k): _list_creatives_impl should accept ContextObject
+        context=context,
         ctx=ctx,
     )
     return ToolResult(content=str(response), structured_content=response)
@@ -592,6 +582,6 @@ def list_creatives_raw(
         limit=limit,
         sort_by=sort_by,
         sort_order=sort_order,
-        context=context,
+        context=to_context_object(context),
         ctx=ctx,
     )

@@ -300,10 +300,9 @@ class CreativeAgentRegistry:
                 # We convert to our Format subclass to get any additional internal fields.
                 formats = []
                 for fmt_data in formats_data.formats:
-                    # Convert library Format to our Format (which extends it)
-                    # model_dump() preserves Pydantic types (AnyUrl, etc.) since we're in the same type hierarchy
-                    fmt_dict = fmt_data if isinstance(fmt_data, dict) else fmt_data.model_dump()
-                    formats.append(Format(**fmt_dict))
+                    # Convert library Format to our local Format subclass
+                    # from_attributes=True allows accepting parent class instances
+                    formats.append(Format.model_validate(fmt_data, from_attributes=True))
 
                 return formats
 

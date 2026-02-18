@@ -160,7 +160,7 @@ def _sync_creatives_impl(
                     creative_data.setdefault("assets", {})
                     creative = CreativeAsset(**creative_data)
                 else:
-                    creative = CreativeAsset(**raw_creative.model_dump())
+                    creative = CreativeAsset.model_validate(raw_creative, from_attributes=True)
 
                 # Validate the creative against schema and business rules
                 try:

@@ -241,8 +241,10 @@ class TestCreativeAgentRegistry:
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio
-    async def test_fetch_formats_from_agent_handles_model_dump(self):
-        """Test _fetch_formats_from_agent handles Pydantic model responses."""
+    async def test_fetch_formats_from_agent_handles_library_format(self):
+        """Test _fetch_formats_from_agent converts library Format to local Format via model_validate."""
+        from adcp.types import Format as LibraryFormat
+
         registry = CreativeAgentRegistry()
 
         test_agent = CreativeAgent(
@@ -252,24 +254,21 @@ class TestCreativeAgentRegistry:
             priority=1,
         )
 
-        # Mock format data as Pydantic models with model_dump()
+        # Use a real library Format object (as returned by adcp client)
         mock_client = Mock()
         mock_agent_client = Mock()
 
-        mock_format_model = Mock()
-        mock_format_model.model_dump = Mock(
-            return_value={
-                "format_id": {"agent_url": "https://test-agent.example.com/mcp", "id": "display_300x250"},
-                "name": "Display 300x250",
-                "type": "display",
-                "renders": [{"role": "primary", "dimensions": {"width": 300, "height": 250, "unit": "px"}}],
-            }
+        library_format = LibraryFormat(
+            format_id={"agent_url": "https://test-agent.example.com/mcp", "id": "display_300x250"},
+            name="Display 300x250",
+            type="display",
+            renders=[{"role": "primary", "dimensions": {"width": 300, "height": 250}}],
         )
 
         mock_result = Mock()
         mock_result.status = "completed"
         mock_result.data = Mock()
-        mock_result.data.formats = [mock_format_model]
+        mock_result.data.formats = [library_format]
 
         mock_agent_client.list_creative_formats = AsyncMock(return_value=mock_result)
         mock_client.agent = Mock(return_value=mock_agent_client)
@@ -277,9 +276,6 @@ class TestCreativeAgentRegistry:
         # Call the method
         formats = await registry._fetch_formats_from_agent(mock_client, test_agent)
 
-        # Verify model_dump was called
-        mock_format_model.model_dump.assert_called_once()
-
-        # Verify format was constructed
+        # Verify format was constructed as our local Format subclass
         assert len(formats) == 1
         assert formats[0].format_id.id == "display_300x250"
