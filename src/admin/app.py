@@ -73,10 +73,19 @@ class CustomProxyFix:
         if not script_name and os.environ.get("PRODUCTION") == "true":
             # Check if this is a custom domain request via Approximated
             apx_host = environ.get("HTTP_APX_INCOMING_HOST", "")
-            if not apx_host:
-                # No Approximated header - use default /admin script_name
+
+            # Get the actual host being accessed
+            host = environ.get("HTTP_HOST", "")
+
+            # Check if this is a sales agent subdomain (tenant subdomain)
+            # Tenant subdomains should always use /admin prefix
+            from src.core.domain_config import is_sales_agent_domain
+            is_tenant_subdomain = is_sales_agent_domain(host)
+
+            if not apx_host or is_tenant_subdomain:
+                # No Approximated header OR tenant subdomain - use default /admin script_name
                 script_name = self.script_name
-            # If apx_host is set, leave script_name empty for custom domains
+            # If apx_host is set AND not a tenant subdomain, leave script_name empty for custom domains
 
         if script_name:
             # Store for use in response wrapper
@@ -323,11 +332,9 @@ def create_app(config=None):
 
         context = {}
 
-        # Inject script_name
-        if os.environ.get("PRODUCTION") == "true":
-            context["script_name"] = "/admin"
-        else:
-            context["script_name"] = ""
+        # Inject script_name from request.script_root (set by CustomProxyFix middleware)
+        from flask import request
+        context["script_name"] = request.script_root or ""
 
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()

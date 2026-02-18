@@ -380,7 +380,7 @@ def tenant_settings(tenant_id, section=None):
                 logger.warning(f"Failed to load setup checklist: {e}")
 
             # Get script_name for production URL handling
-            script_name = "/admin" if is_production else ""
+            script_name = request.script_root or ""
 
             # Get available currencies from Babel
             available_currencies = get_available_currencies()

@@ -262,6 +262,14 @@ def login():
                 logger.info(
                     f"Detected tenant context from Approximated headers: {approximated_host} -> {tenant_context}"
                 )
+            else:
+                # Approximated host detected but tenant doesn't exist
+                logger.warning(f"Tenant not found for virtual host: {approximated_host}")
+                return render_template(
+                    "error.html",
+                    error_title="Tenant Not Found",
+                    error_message=f"The tenant for domain '{approximated_host}' does not exist. Please check the URL or contact your administrator to create this tenant.",
+                ), 404
 
     # Fallback to direct domain routing (subdomain detection)
     if not tenant_context:
@@ -279,6 +287,14 @@ def login():
                     if not oauth_configured and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
                         test_mode = True
                     logger.info(f"Detected tenant context from Host header: {tenant_subdomain} -> {tenant_context}")
+                else:
+                    # Tenant subdomain detected but tenant doesn't exist
+                    logger.warning(f"Tenant not found for subdomain: {tenant_subdomain}")
+                    return render_template(
+                        "error.html",
+                        error_title="Tenant Not Found",
+                        error_message=f"The tenant '{tenant_subdomain}' does not exist. Please check the URL or contact your administrator to create this tenant.",
+                    ), 404
 
     # Check for tenant-specific OIDC configuration (multi-tenant or single-tenant)
     if tenant_context:
