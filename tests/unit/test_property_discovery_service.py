@@ -178,7 +178,10 @@ class TestPropertyDiscoveryService:
 
     @pytest.mark.asyncio
     async def test_sync_properties_multiple_domains(self):
-        """Test syncing properties from multiple domains."""
+        """Test syncing properties from multiple domains.
+
+        Each domain's adagents.json returns a property matching that domain.
+        """
         mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
 
         # Mock database queries to return empty lists
@@ -190,7 +193,8 @@ class TestPropertyDiscoveryService:
 
         mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
 
-        mock_adagents_data = {
+        # Each domain has its own adagents.json with a matching property
+        adagents_com = {
             "authorized_agents": [
                 {
                     "url": "https://sales-agent.example.com",
@@ -203,16 +207,38 @@ class TestPropertyDiscoveryService:
                 }
             ]
         }
+        adagents_org = {
+            "authorized_agents": [
+                {
+                    "url": "https://sales-agent.example.com",
+                    "properties": [
+                        {
+                            "property_type": "website",
+                            "identifiers": [{"type": "domain", "value": "example.org"}],
+                        }
+                    ],
+                }
+            ]
+        }
 
         with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
             with patch("src.services.property_discovery_service.get_all_properties") as mock_props:
                 with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
-                    mock_fetch.return_value = mock_adagents_data
-                    mock_props.return_value = [
-                        {
-                            "property_type": "website",
-                            "identifiers": [{"type": "domain", "value": "example.com"}],
-                        }
+                    # Return different adagents data per domain
+                    mock_fetch.side_effect = [adagents_com, adagents_org]
+                    mock_props.side_effect = [
+                        [
+                            {
+                                "property_type": "website",
+                                "identifiers": [{"type": "domain", "value": "example.com"}],
+                            }
+                        ],
+                        [
+                            {
+                                "property_type": "website",
+                                "identifiers": [{"type": "domain", "value": "example.org"}],
+                            }
+                        ],
                     ]
                     mock_tags.return_value = []
 
@@ -459,6 +485,9 @@ class TestPropertyDiscoveryService:
         (properties defined at top level, agents reference by ID), the old code using
         get_all_properties() returned empty. With agent_url, we use get_properties_by_agent()
         which correctly resolves property_ids references.
+
+        Also verifies domain filtering: only properties matching the publisher domain
+        (or without domain identifiers, like mobile apps) are synced.
         """
         mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
 
@@ -470,29 +499,31 @@ class TestPropertyDiscoveryService:
 
         mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
 
-        # Simulates capital.fr-style adagents.json: property_ids + top-level properties
+        # Simulates Prisma Media-style adagents.json: one file with properties for many domains
+        # Fetched from capital.fr, but contains properties for geo.fr, cotemaison.fr, etc.
         mock_adagents_data = {
             "authorized_agents": [
                 {
                     "url": "https://our-agent.example.com",
                     "authorized_for": "Display advertising",
-                    "property_ids": ["site_fr", "site_mobile", "app_ios"],
+                    "authorization_type": "property_ids",
+                    "property_ids": ["capital", "geo", "app_ios"],
                 }
             ],
             "properties": [
                 {
-                    "property_id": "site_fr",
+                    "property_id": "capital",
                     "property_type": "website",
-                    "name": "Capital.fr",
+                    "name": "Capital",
                     "identifiers": [{"type": "domain", "value": "capital.fr"}],
                     "tags": ["news", "finance"],
                 },
                 {
-                    "property_id": "site_mobile",
+                    "property_id": "geo",
                     "property_type": "website",
-                    "name": "Capital Mobile",
-                    "identifiers": [{"type": "domain", "value": "m.capital.fr"}],
-                    "tags": ["news", "mobile"],
+                    "name": "Geo",
+                    "identifiers": [{"type": "domain", "value": "geo.fr"}],
+                    "tags": ["news"],
                 },
                 {
                     "property_id": "app_ios",
@@ -504,21 +535,21 @@ class TestPropertyDiscoveryService:
             ],
         }
 
-        # The resolved properties that get_properties_by_agent would return
+        # get_properties_by_agent returns ALL 3 properties the agent is authorized for
         resolved_properties = [
             {
-                "property_id": "site_fr",
+                "property_id": "capital",
                 "property_type": "website",
-                "name": "Capital.fr",
+                "name": "Capital",
                 "identifiers": [{"type": "domain", "value": "capital.fr"}],
                 "tags": ["news", "finance"],
             },
             {
-                "property_id": "site_mobile",
+                "property_id": "geo",
                 "property_type": "website",
-                "name": "Capital Mobile",
-                "identifiers": [{"type": "domain", "value": "m.capital.fr"}],
-                "tags": ["news", "mobile"],
+                "name": "Geo",
+                "identifiers": [{"type": "domain", "value": "geo.fr"}],
+                "tags": ["news"],
             },
             {
                 "property_id": "app_ios",
@@ -534,8 +565,9 @@ class TestPropertyDiscoveryService:
                 with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
                     mock_fetch.return_value = mock_adagents_data
                     mock_by_agent.return_value = resolved_properties
-                    mock_tags.return_value = ["news", "finance", "mobile", "apps"]
+                    mock_tags.return_value = ["news", "finance", "apps"]
 
+                    # Sync for capital.fr only - should filter out geo.fr property
                     stats = await self.service.sync_properties_from_adagents(
                         "tenant1",
                         ["capital.fr"],
@@ -543,12 +575,96 @@ class TestPropertyDiscoveryService:
                     )
 
                     assert stats["domains_synced"] == 1
-                    assert stats["properties_found"] == 3, "Should resolve all 3 property_ids references"
-                    assert stats["properties_created"] == 3
+                    # Only 2: capital.fr website + mobile app (no domain identifier = kept)
+                    # geo.fr property is filtered out because it doesn't match capital.fr
+                    assert stats["properties_found"] == 2, (
+                        "Should only sync properties matching publisher domain "
+                        "(capital.fr website + mobile app without domain)"
+                    )
+                    assert stats["properties_created"] == 2
                     assert len(stats["errors"]) == 0
 
-                    # Verify get_properties_by_agent was called (not get_all_properties)
                     mock_by_agent.assert_called_once_with(mock_adagents_data, "https://our-agent.example.com")
+
+        mock_db_patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_sync_properties_multi_domain_adagents_each_gets_own_property(self):
+        """Test that a multi-domain adagents.json correctly links each property to its publisher.
+
+        Real-world case: Prisma Media hosts one adagents.json at creas.prismamediadigital.com
+        with properties for capital.fr, geo.fr, cotemaison.fr, etc. When syncing multiple
+        publisher domains, each should only get its own property.
+        """
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        # All domains serve the same adagents.json (Prisma Media pattern)
+        mock_adagents_data = {
+            "authorized_agents": [
+                {
+                    "url": "https://our-agent.example.com",
+                    "authorization_type": "property_ids",
+                    "property_ids": ["capital", "geo"],
+                }
+            ],
+            "properties": [
+                {
+                    "property_id": "capital",
+                    "property_type": "website",
+                    "name": "Capital",
+                    "identifiers": [{"type": "domain", "value": "capital.fr"}],
+                },
+                {
+                    "property_id": "geo",
+                    "property_type": "website",
+                    "name": "Geo",
+                    "identifiers": [{"type": "domain", "value": "geo.fr"}],
+                },
+            ],
+        }
+
+        all_resolved = [
+            {
+                "property_id": "capital",
+                "property_type": "website",
+                "name": "Capital",
+                "identifiers": [{"type": "domain", "value": "capital.fr"}],
+            },
+            {
+                "property_id": "geo",
+                "property_type": "website",
+                "name": "Geo",
+                "identifiers": [{"type": "domain", "value": "geo.fr"}],
+            },
+        ]
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = mock_adagents_data
+                    mock_by_agent.return_value = all_resolved
+                    mock_tags.return_value = []
+
+                    # Sync for both domains
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1",
+                        ["capital.fr", "geo.fr"],
+                        agent_url="https://our-agent.example.com",
+                    )
+
+                    assert stats["domains_synced"] == 2
+                    # Each domain gets exactly 1 property (its own)
+                    assert stats["properties_found"] == 2
+                    assert stats["properties_created"] == 2
+                    assert len(stats["errors"]) == 0
 
         mock_db_patcher.stop()
 
@@ -609,9 +725,10 @@ class TestPropertyDiscoveryService:
                     mock_by_agent.return_value = resolved_properties
                     mock_tags.return_value = ["premium"]
 
+                    # Publisher domain matches the property's domain identifier
                     stats = await self.service.sync_properties_from_adagents(
                         "tenant1",
-                        ["example.com"],
+                        ["premium.example.com"],
                         agent_url="https://our-agent.example.com",
                     )
 

@@ -196,6 +196,36 @@ class PropertyDiscoveryService:
                     else:
                         properties = []
 
+                    # Filter properties to only those belonging to this publisher domain.
+                    # An adagents.json may list properties for many domains (e.g., Prisma Media
+                    # lists capital.fr, geo.fr, etc. in one file). When syncing for "capital.fr",
+                    # we should only store the property whose domain identifier matches.
+                    # Properties without a domain identifier (e.g., mobile apps) are kept.
+                    if properties:
+                        filtered = []
+                        for prop in properties:
+                            identifiers = prop.get("identifiers", [])
+                            domain_identifiers = [
+                                ident.get("value", "") for ident in identifiers if ident.get("type") == "domain"
+                            ]
+                            if not domain_identifiers:
+                                # No domain identifier (e.g., mobile_app) - keep it
+                                filtered.append(prop)
+                            elif domain in domain_identifiers:
+                                # Domain matches this publisher
+                                filtered.append(prop)
+                            else:
+                                logger.debug(
+                                    f"Skipping property {prop.get('name', 'unknown')} - "
+                                    f"domain {domain_identifiers} doesn't match publisher {domain}"
+                                )
+                        if len(filtered) != len(properties):
+                            logger.info(
+                                f"Filtered {len(properties)} properties to {len(filtered)} "
+                                f"matching publisher domain {domain}"
+                            )
+                        properties = filtered
+
                     stats["properties_found"] += len(properties)
                     logger.info(f"Found {len(properties)} properties from {domain}")
 
