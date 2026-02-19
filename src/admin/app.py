@@ -67,10 +67,10 @@ class CustomProxyFix:
         if not script_name:
             script_name = environ.get("HTTP_X_FORWARDED_PREFIX", "")
 
-        # Use configured script_name if provided in production
+        # Use configured script_name if provided
         # BUT only if this is NOT a custom domain request (via Approximated)
         # Custom domains should have empty script_root to show landing page
-        if not script_name and os.environ.get("PRODUCTION") == "true":
+        if not script_name:
             # Check if this is a custom domain request via Approximated
             apx_host = environ.get("HTTP_APX_INCOMING_HOST", "")
 
@@ -132,24 +132,17 @@ def create_app(config=None):
     app.logger.setLevel(logging.INFO)
 
     # Configure session cookies for EventSource compatibility
-    if os.environ.get("PRODUCTION") == "true":
-        app.config["SESSION_COOKIE_SECURE"] = True  # Required for SameSite=None over HTTPS
-        app.config["SESSION_COOKIE_HTTPONLY"] = False  # Allow EventSource to access cookies
-        app.config["SESSION_COOKIE_SAMESITE"] = "None"  # Required for EventSource cross-origin requests
-        # Use root path so session works for both /admin/* and /auth/* (OAuth callbacks)
-        app.config["SESSION_COOKIE_PATH"] = "/"
-        # Only set cookie domain in multi-tenant mode for subdomain sharing
-        # In single-tenant mode, let Flask use the actual request domain
-        if not is_single_tenant_mode():
-            app.config["SESSION_COOKIE_DOMAIN"] = (
-                get_session_cookie_domain()
-            )  # Allow cookies across subdomains for OAuth
-    else:
-        app.config["SESSION_COOKIE_SECURE"] = False  # Allow HTTP in dev
-        app.config["SESSION_COOKIE_HTTPONLY"] = True  # Standard setting for dev
-        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # Works with HTTP in development
-        app.config["SESSION_COOKIE_PATH"] = "/"  # Standard root path for dev
-        # No domain restriction in dev (localhost)
+    app.config["SESSION_COOKIE_SECURE"] = True  # Required for SameSite=None over HTTPS
+    app.config["SESSION_COOKIE_HTTPONLY"] = False  # Allow EventSource to access cookies
+    app.config["SESSION_COOKIE_SAMESITE"] = "None"  # Required for EventSource cross-origin requests
+    # Use root path so session works for both /admin/* and /auth/* (OAuth callbacks)
+    app.config["SESSION_COOKIE_PATH"] = "/"
+    # Only set cookie domain in multi-tenant mode for subdomain sharing
+    # In single-tenant mode, let Flask use the actual request domain
+    if not is_single_tenant_mode():
+        app.config["SESSION_COOKIE_DOMAIN"] = (
+            get_session_cookie_domain()
+        )  # Allow cookies across subdomains for OAuth
 
     # Add custom Jinja2 filters
     def from_json_filter(s):
@@ -175,44 +168,39 @@ def create_app(config=None):
     app.jinja_env.filters["from_json"] = from_json_filter
     app.jinja_env.filters["markdown"] = markdown_filter
 
-    # Trust proxy headers in production
-    if os.environ.get("PRODUCTION") == "true":
-        app.config["PREFERRED_URL_SCHEME"] = "https"
-        # Force external URLs to use HTTPS
-        app.config["SERVER_NAME"] = None  # Let Flask detect from request
-        app.config["APPLICATION_ROOT"] = "/"
+    # Trust proxy headers
+    app.config["PREFERRED_URL_SCHEME"] = "https"
+    # Force external URLs to use HTTPS
+    app.config["SERVER_NAME"] = None  # Let Flask detect from request
+    app.config["APPLICATION_ROOT"] = "/"
 
     # Apply any additional config
     if config:
         app.config.update(config)
 
-    # Apply proxy fixes for production
-    if os.environ.get("PRODUCTION") == "true":
-        # Create a middleware to copy Fly.io headers to standard headers
-        # Fly sends Fly-Forwarded-Proto but Werkzeug expects X-Forwarded-Proto
-        class FlyHeadersMiddleware:
-            def __init__(self, app):
-                self.app = app
+    # Apply proxy fixes
+    # Create a middleware to copy Fly.io headers to standard headers
+    # Fly sends Fly-Forwarded-Proto but Werkzeug expects X-Forwarded-Proto
+    class FlyHeadersMiddleware:
+        def __init__(self, app):
+            self.app = app
 
-            def __call__(self, environ, start_response):
-                # Copy Fly-Forwarded-Proto to X-Forwarded-Proto if not already set
-                if "HTTP_FLY_FORWARDED_PROTO" in environ and "HTTP_X_FORWARDED_PROTO" not in environ:
-                    environ["HTTP_X_FORWARDED_PROTO"] = environ["HTTP_FLY_FORWARDED_PROTO"]
-                # Copy Fly-Client-Ip to X-Forwarded-For if not already set
-                if "HTTP_FLY_CLIENT_IP" in environ and "HTTP_X_FORWARDED_FOR" not in environ:
-                    environ["HTTP_X_FORWARDED_FOR"] = environ["HTTP_FLY_CLIENT_IP"]
-                return self.app(environ, start_response)
+        def __call__(self, environ, start_response):
+            # Copy Fly-Forwarded-Proto to X-Forwarded-Proto if not already set
+            if "HTTP_FLY_FORWARDED_PROTO" in environ and "HTTP_X_FORWARDED_PROTO" not in environ:
+                environ["HTTP_X_FORWARDED_PROTO"] = environ["HTTP_FLY_FORWARDED_PROTO"]
+            # Copy Fly-Client-Ip to X-Forwarded-For if not already set
+            if "HTTP_FLY_CLIENT_IP" in environ and "HTTP_X_FORWARDED_FOR" not in environ:
+                environ["HTTP_X_FORWARDED_FOR"] = environ["HTTP_FLY_CLIENT_IP"]
+            return self.app(environ, start_response)
 
-        # Apply middlewares in correct order (last applied = first to run)
-        # 1. WerkzeugProxyFix processes X-Forwarded headers and sets wsgi.url_scheme
-        app.wsgi_app = WerkzeugProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=0)
-        # 2. FlyHeadersMiddleware copies Fly headers to X-Forwarded headers BEFORE ProxyFix runs
-        app.wsgi_app = FlyHeadersMiddleware(app.wsgi_app)
-        # 3. CustomProxyFix handles X-Forwarded-Prefix (runs first, before Fly headers)
-        app.wsgi_app = CustomProxyFix(app.wsgi_app)
-    else:
-        # In development, still apply custom proxy fix if needed
-        app.wsgi_app = CustomProxyFix(app.wsgi_app)
+    # Apply middlewares in correct order (last applied = first to run)
+    # 1. WerkzeugProxyFix processes X-Forwarded headers and sets wsgi.url_scheme
+    app.wsgi_app = WerkzeugProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=0)
+    # 2. FlyHeadersMiddleware copies Fly headers to X-Forwarded headers BEFORE ProxyFix runs
+    app.wsgi_app = FlyHeadersMiddleware(app.wsgi_app)
+    # 3. CustomProxyFix handles X-Forwarded-Prefix (runs first, before Fly headers)
+    app.wsgi_app = CustomProxyFix(app.wsgi_app)
 
     # Initialize OAuth
     init_oauth(app)
@@ -283,12 +271,7 @@ def create_app(config=None):
             f"/admin{request.full_path}" if not request.full_path.startswith("/admin") else request.full_path
         )
 
-        if os.environ.get("PRODUCTION") == "true":
-            redirect_url = f"{get_tenant_url(tenant_subdomain)}{path_with_admin}"
-        else:
-            # Local dev: Use localhost with port
-            port = os.environ.get("ADMIN_UI_PORT", "8001")
-            redirect_url = f"http://{tenant_subdomain}.localhost:{port}{path_with_admin}"
+        redirect_url = f"{get_tenant_url(tenant_subdomain)}{path_with_admin}"
 
         logger.info(f"Redirecting external domain {apx_host}/admin to subdomain: {redirect_url}")
         return redirect(redirect_url, code=302)
@@ -360,7 +343,7 @@ def create_app(config=None):
     @app.after_request
     def fix_hardcoded_urls(response):
         """Fix hardcoded URLs in HTML responses to include script_name prefix."""
-        if os.environ.get("PRODUCTION") == "true" and response.content_type and "text/html" in response.content_type:
+        if response.content_type and "text/html" in response.content_type:
             # Only process HTML responses
             try:
                 html = response.get_data(as_text=True)
