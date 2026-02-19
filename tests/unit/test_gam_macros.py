@@ -19,11 +19,11 @@ class TestMacroMapping:
     # ==========================================================================
     # Common Macros
     # ==========================================================================
-    def test_common_macros_ids_are_none(self):
-        """ID macros are None - they should already be filled by the system."""
-        assert ADCP_TO_GAM_MACRO_MAP["{MEDIA_BUY_ID}"] is None
-        assert ADCP_TO_GAM_MACRO_MAP["{PACKAGE_ID}"] is None
-        assert ADCP_TO_GAM_MACRO_MAP["{CREATIVE_ID}"] is None
+    def test_common_macros_ids(self):
+        """ID macros map to GAM expand macros."""
+        assert ADCP_TO_GAM_MACRO_MAP["{MEDIA_BUY_ID}"] == "%ebuy!"
+        assert ADCP_TO_GAM_MACRO_MAP["{PACKAGE_ID}"] == "%eaid!"
+        assert ADCP_TO_GAM_MACRO_MAP["{CREATIVE_ID}"] == "%ecid!"
 
     def test_common_macros_tracking(self):
         """Standard tracking macros use %%MACRO%% format."""
@@ -38,9 +38,10 @@ class TestMacroMapping:
     def test_privacy_macros(self):
         """Privacy macros use various GAM formats."""
         assert ADCP_TO_GAM_MACRO_MAP["{GDPR}"] == "${GDPR}"
-        assert ADCP_TO_GAM_MACRO_MAP["{GDPR_CONSENT}"] is None  # Should already be filled
-        assert ADCP_TO_GAM_MACRO_MAP["{US_PRIVACY}"] == "%%TAG_PARAM:us_privacy%%"
-        assert ADCP_TO_GAM_MACRO_MAP["{GPP_STRING}"] is None  # Should already be filled
+        assert ADCP_TO_GAM_MACRO_MAP["{GDPR_CONSENT}"] == "${GDPR_CONSENT_XXX}"
+        assert ADCP_TO_GAM_MACRO_MAP["{US_PRIVACY}"] == "${US_PRIVACY}"
+        assert ADCP_TO_GAM_MACRO_MAP["{GPP_STRING}"] == "${GPP_STRING}"
+        assert ADCP_TO_GAM_MACRO_MAP["{GPP_SID}"] == "${GPP_SID}"
         assert ADCP_TO_GAM_MACRO_MAP["{LIMIT_AD_TRACKING}"] == "%%ADVERTISING_IDENTIFIER_IS_LAT%%"
 
     # ==========================================================================
@@ -126,7 +127,7 @@ class TestMacroMapping:
     # ==========================================================================
     def test_other_macros(self):
         """Other macros."""
-        assert ADCP_TO_GAM_MACRO_MAP["{AXEM}"] == "%{AXEM}"
+        assert ADCP_TO_GAM_MACRO_MAP["{AXEM}"] == "%%PATTERN:axem%%"
 
 
 class TestSubstituteMacros:
@@ -135,13 +136,13 @@ class TestSubstituteMacros:
     # ==========================================================================
     # Common Macros
     # ==========================================================================
-    def test_id_macros_passthrough(self):
-        """ID macros pass through unchanged (should be pre-filled)."""
+    def test_id_macros_substituted(self):
+        """ID macros are substituted to GAM expand macros."""
         url = "https://t.com/p?mb={MEDIA_BUY_ID}&pkg={PACKAGE_ID}&cid={CREATIVE_ID}"
         result = substitute_macros(url)
-        assert "{MEDIA_BUY_ID}" in result
-        assert "{PACKAGE_ID}" in result
-        assert "{CREATIVE_ID}" in result
+        assert "%ebuy!" in result
+        assert "%eaid!" in result
+        assert "%ecid!" in result
 
     def test_cachebuster_substitution(self):
         """CACHEBUSTER uses %%CACHEBUSTER%% format."""
@@ -166,23 +167,24 @@ class TestSubstituteMacros:
     # Privacy & Compliance Macros
     # ==========================================================================
     def test_gdpr_uses_dollar_format(self):
-        """GDPR uses ${} format, GDPR_CONSENT passes through (already filled)."""
+        """GDPR and GDPR_CONSENT use ${} format."""
         url = "https://t.com/p?gdpr={GDPR}&consent={GDPR_CONSENT}"
         result = substitute_macros(url)
         assert "${GDPR}" in result
-        assert "{GDPR_CONSENT}" in result  # Passes through unchanged
+        assert "${GDPR_CONSENT_XXX}" in result
 
-    def test_us_privacy_uses_tag_param(self):
-        """US_PRIVACY uses TAG_PARAM format."""
+    def test_us_privacy_uses_dollar_format(self):
+        """US_PRIVACY uses ${} format."""
         url = "https://t.com/p?usp={US_PRIVACY}"
         result = substitute_macros(url)
-        assert result == "https://t.com/p?usp=%%TAG_PARAM:us_privacy%%"
+        assert result == "https://t.com/p?usp=${US_PRIVACY}"
 
-    def test_gpp_string_passthrough(self):
-        """GPP_STRING passes through unchanged (already filled)."""
-        url = "https://t.com/p?gpp={GPP_STRING}"
+    def test_gpp_macros(self):
+        """GPP_STRING and GPP_SID use ${} format."""
+        url = "https://t.com/p?gpp={GPP_STRING}&gpp_sid={GPP_SID}"
         result = substitute_macros(url)
-        assert "{GPP_STRING}" in result  # Passes through unchanged
+        assert "${GPP_STRING}" in result
+        assert "${GPP_SID}" in result
 
     def test_limit_ad_tracking(self):
         """LIMIT_AD_TRACKING uses advertising identifier LAT macro."""
@@ -302,11 +304,11 @@ class TestSubstituteMacros:
     # ==========================================================================
     # Other Macros
     # ==========================================================================
-    def test_axem_converted_to_prebid_format(self):
-        """AXEM is converted to prebid macro format."""
+    def test_axem_converted_to_pattern_format(self):
+        """AXEM is converted to GAM PATTERN macro format."""
         url = "https://t.com/p?axe={AXEM}"
         result = substitute_macros(url)
-        assert "%{AXEM}" in result
+        assert "%%PATTERN:axem%%" in result
 
     # ==========================================================================
     # General Substitution Behavior
@@ -350,17 +352,13 @@ class TestSubstituteMacros:
 
         # Expand macros (%macro! format)
         assert "%epid!" in result  # PLACEMENT_ID
+        assert "%ecid!" in result  # CREATIVE_ID
+        assert "%ebuy!" in result  # MEDIA_BUY_ID
 
-        # GDPR macros (${} format for GDPR, passthrough for GDPR_CONSENT)
+        # GDPR/Privacy macros (${} format)
         assert "${GDPR}" in result
-        assert "{GDPR_CONSENT}" in result  # Passes through (already filled)
-
-        # TAG_PARAM macros
-        assert "%%TAG_PARAM:us_privacy%%" in result
-
-        # ID macros should pass through (None mapping)
-        assert "{CREATIVE_ID}" in result
-        assert "{MEDIA_BUY_ID}" in result
+        assert "${GDPR_CONSENT_XXX}" in result
+        assert "${US_PRIVACY}" in result
 
         # Unmapped macros should pass through
         assert "{TIMESTAMP}" in result
@@ -587,7 +585,7 @@ class TestAddTrackingUrlsToCreative:
 
         assert "destinationUrl" in creative
         assert "%%CACHEBUSTER%%" in creative["destinationUrl"]
-        assert "%{AXEM}" in creative["destinationUrl"]
+        assert "%%PATTERN:axem%%" in creative["destinationUrl"]
 
     # -------------------------------------------------------------------------
     # Edge cases
