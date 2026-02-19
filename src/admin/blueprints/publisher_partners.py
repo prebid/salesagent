@@ -241,10 +241,16 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
                     discovery_service = get_property_discovery_service()
 
+                    # Compute agent_url for property resolution (handles property_ids, property_tags)
+                    if tenant.virtual_host:
+                        agent_url_for_sync: str | None = f"https://{tenant.virtual_host}"
+                    else:
+                        agent_url_for_sync = get_tenant_url(tenant.subdomain)
+
                     for domain in verified_domains:
                         # Try to fetch real properties from adagents.json
                         property_stats = discovery_service.sync_properties_from_adagents_sync(
-                            tenant_id, publisher_domains=[domain], dry_run=False
+                            tenant_id, publisher_domains=[domain], dry_run=False, agent_url=agent_url_for_sync
                         )
                         domain_properties_created = property_stats.get("properties_created", 0)
                         properties_created += domain_properties_created
@@ -443,7 +449,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
                 discovery_service = get_property_discovery_service()
                 property_stats = discovery_service.sync_properties_from_adagents_sync(
-                    tenant_id, publisher_domains=verified_domains, dry_run=False
+                    tenant_id, publisher_domains=verified_domains, dry_run=False, agent_url=agent_url
                 )
                 logger.info(
                     f"Property sync completed: {property_stats['properties_created']} created, "

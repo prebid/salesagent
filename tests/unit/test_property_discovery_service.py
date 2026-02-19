@@ -451,8 +451,275 @@ class TestPropertyDiscoveryService:
 
         mock_db_patcher.stop()
 
+    @pytest.mark.asyncio
+    async def test_sync_properties_property_ids_authorization_with_agent_url(self):
+        """Test property_ids authorization resolves top-level properties when agent_url is provided.
+
+        This is the key bug fix: when publishers use authorization_type: "property_ids"
+        (properties defined at top level, agents reference by ID), the old code using
+        get_all_properties() returned empty. With agent_url, we use get_properties_by_agent()
+        which correctly resolves property_ids references.
+        """
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        # Simulates capital.fr-style adagents.json: property_ids + top-level properties
+        mock_adagents_data = {
+            "authorized_agents": [
+                {
+                    "url": "https://our-agent.example.com",
+                    "authorized_for": "Display advertising",
+                    "property_ids": ["site_fr", "site_mobile", "app_ios"],
+                }
+            ],
+            "properties": [
+                {
+                    "property_id": "site_fr",
+                    "property_type": "website",
+                    "name": "Capital.fr",
+                    "identifiers": [{"type": "domain", "value": "capital.fr"}],
+                    "tags": ["news", "finance"],
+                },
+                {
+                    "property_id": "site_mobile",
+                    "property_type": "website",
+                    "name": "Capital Mobile",
+                    "identifiers": [{"type": "domain", "value": "m.capital.fr"}],
+                    "tags": ["news", "mobile"],
+                },
+                {
+                    "property_id": "app_ios",
+                    "property_type": "mobile_app",
+                    "name": "Capital iOS",
+                    "identifiers": [{"type": "bundle_id", "value": "com.capital.ios"}],
+                    "tags": ["apps"],
+                },
+            ],
+        }
+
+        # The resolved properties that get_properties_by_agent would return
+        resolved_properties = [
+            {
+                "property_id": "site_fr",
+                "property_type": "website",
+                "name": "Capital.fr",
+                "identifiers": [{"type": "domain", "value": "capital.fr"}],
+                "tags": ["news", "finance"],
+            },
+            {
+                "property_id": "site_mobile",
+                "property_type": "website",
+                "name": "Capital Mobile",
+                "identifiers": [{"type": "domain", "value": "m.capital.fr"}],
+                "tags": ["news", "mobile"],
+            },
+            {
+                "property_id": "app_ios",
+                "property_type": "mobile_app",
+                "name": "Capital iOS",
+                "identifiers": [{"type": "bundle_id", "value": "com.capital.ios"}],
+                "tags": ["apps"],
+            },
+        ]
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = mock_adagents_data
+                    mock_by_agent.return_value = resolved_properties
+                    mock_tags.return_value = ["news", "finance", "mobile", "apps"]
+
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1",
+                        ["capital.fr"],
+                        agent_url="https://our-agent.example.com",
+                    )
+
+                    assert stats["domains_synced"] == 1
+                    assert stats["properties_found"] == 3, "Should resolve all 3 property_ids references"
+                    assert stats["properties_created"] == 3
+                    assert len(stats["errors"]) == 0
+
+                    # Verify get_properties_by_agent was called (not get_all_properties)
+                    mock_by_agent.assert_called_once_with(mock_adagents_data, "https://our-agent.example.com")
+
+        mock_db_patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_sync_properties_property_tags_authorization_with_agent_url(self):
+        """Test property_tags authorization resolves top-level properties when agent_url is provided."""
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        mock_adagents_data = {
+            "authorized_agents": [
+                {
+                    "url": "https://our-agent.example.com",
+                    "authorized_for": "Premium inventory",
+                    "property_tags": ["premium"],
+                }
+            ],
+            "properties": [
+                {
+                    "property_id": "site_premium",
+                    "property_type": "website",
+                    "name": "Premium Site",
+                    "identifiers": [{"type": "domain", "value": "premium.example.com"}],
+                    "tags": ["premium"],
+                },
+                {
+                    "property_id": "site_basic",
+                    "property_type": "website",
+                    "name": "Basic Site",
+                    "identifiers": [{"type": "domain", "value": "basic.example.com"}],
+                    "tags": ["basic"],
+                },
+            ],
+        }
+
+        # get_properties_by_agent filters by tag, only returns the premium one
+        resolved_properties = [
+            {
+                "property_id": "site_premium",
+                "property_type": "website",
+                "name": "Premium Site",
+                "identifiers": [{"type": "domain", "value": "premium.example.com"}],
+                "tags": ["premium"],
+            },
+        ]
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = mock_adagents_data
+                    mock_by_agent.return_value = resolved_properties
+                    mock_tags.return_value = ["premium"]
+
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1",
+                        ["example.com"],
+                        agent_url="https://our-agent.example.com",
+                    )
+
+                    assert stats["domains_synced"] == 1
+                    assert stats["properties_found"] == 1, "Should only resolve tag-matched properties"
+                    assert stats["properties_created"] == 1
+                    assert len(stats["errors"]) == 0
+
+                    mock_by_agent.assert_called_once_with(mock_adagents_data, "https://our-agent.example.com")
+
+        mock_db_patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_sync_properties_publisher_properties_filtered_out(self):
+        """Test that publisher_properties selectors (no property_type) are filtered out."""
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        mock_adagents_data = {
+            "authorized_agents": [
+                {
+                    "url": "https://our-agent.example.com",
+                    "publisher_properties": [{"publisher_domain": "other-publisher.com"}],
+                }
+            ],
+        }
+
+        # get_properties_by_agent returns publisher_properties selectors (no property_type)
+        resolved_properties = [
+            {"publisher_domain": "other-publisher.com"},  # No property_type = cross-domain ref
+        ]
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = mock_adagents_data
+                    mock_by_agent.return_value = resolved_properties
+                    mock_tags.return_value = []
+
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1",
+                        ["example.com"],
+                        agent_url="https://our-agent.example.com",
+                    )
+
+                    assert stats["domains_synced"] == 1
+                    assert stats["properties_found"] == 0, "publisher_properties selectors should be filtered out"
+                    assert len(stats["errors"]) == 0
+
+        mock_db_patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_sync_properties_without_agent_url_uses_get_all_properties(self):
+        """Test backward compatibility: without agent_url, still uses get_all_properties."""
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        mock_adagents_data = {
+            "authorized_agents": [
+                {
+                    "url": "https://agent.example.com",
+                    "properties": [
+                        {
+                            "property_type": "website",
+                            "identifiers": [{"type": "domain", "value": "example.com"}],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_all_properties") as mock_all_props:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = mock_adagents_data
+                    mock_all_props.return_value = [
+                        {
+                            "property_type": "website",
+                            "identifiers": [{"type": "domain", "value": "example.com"}],
+                        }
+                    ]
+                    mock_tags.return_value = []
+
+                    # No agent_url = backward compatible path
+                    stats = await self.service.sync_properties_from_adagents("tenant1", ["example.com"])
+
+                    assert stats["properties_found"] == 1
+                    # Verify get_all_properties was used (not get_properties_by_agent)
+                    mock_all_props.assert_called_once_with(mock_adagents_data)
+
+        mock_db_patcher.stop()
+
     def test_sync_properties_sync_wrapper(self):
-        """Test that sync wrapper calls async implementation."""
+        """Test that sync wrapper calls async implementation with all parameters."""
         with patch.object(self.service, "sync_properties_from_adagents", new_callable=AsyncMock) as mock_async:
             mock_async.return_value = {
                 "domains_synced": 1,
@@ -468,4 +735,27 @@ class TestPropertyDiscoveryService:
             result = self.service.sync_properties_from_adagents_sync("tenant1", ["example.com"])
 
             assert result["domains_synced"] == 1
-            mock_async.assert_called_once_with("tenant1", ["example.com"], False)
+            mock_async.assert_called_once_with("tenant1", ["example.com"], False, agent_url=None)
+
+    def test_sync_properties_sync_wrapper_passes_agent_url(self):
+        """Test that sync wrapper passes agent_url through to async implementation."""
+        with patch.object(self.service, "sync_properties_from_adagents", new_callable=AsyncMock) as mock_async:
+            mock_async.return_value = {
+                "domains_synced": 1,
+                "properties_found": 3,
+                "tags_found": 0,
+                "properties_created": 3,
+                "properties_updated": 0,
+                "tags_created": 0,
+                "errors": [],
+                "dry_run": False,
+            }
+
+            result = self.service.sync_properties_from_adagents_sync(
+                "tenant1", ["example.com"], agent_url="https://our-agent.example.com"
+            )
+
+            assert result["properties_found"] == 3
+            mock_async.assert_called_once_with(
+                "tenant1", ["example.com"], False, agent_url="https://our-agent.example.com"
+            )

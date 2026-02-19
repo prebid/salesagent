@@ -17,6 +17,7 @@ from adcp import (
     get_all_properties,
     get_all_tags,
 )
+from adcp.adagents import get_properties_by_agent
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -36,7 +37,11 @@ class PropertyDiscoveryService:
     """
 
     async def sync_properties_from_adagents(
-        self, tenant_id: str, publisher_domains: list[str] | None = None, dry_run: bool = False
+        self,
+        tenant_id: str,
+        publisher_domains: list[str] | None = None,
+        dry_run: bool = False,
+        agent_url: str | None = None,
     ) -> dict[str, Any]:
         """Fetch properties and tags from publisher adagents.json files.
 
@@ -45,6 +50,9 @@ class PropertyDiscoveryService:
             publisher_domains: List of domains to sync. If None, syncs all unique domains
                               from existing AuthorizedProperty records.
             dry_run: If True, fetch and process but don't commit to database
+            agent_url: Our agent's URL. When provided, uses get_properties_by_agent()
+                      which handles all authorization types (property_ids, property_tags,
+                      inline properties). Without this, only inline properties are found.
 
         Returns:
             Dict with sync stats: {
@@ -162,8 +170,17 @@ class PropertyDiscoveryService:
                             break
 
                     # Extract properties using adcp library
-                    # This gets properties explicitly listed in authorized_agents[].properties
-                    properties_from_agents = get_all_properties(adagents_data)
+                    # When agent_url is provided, use get_properties_by_agent() which
+                    # handles all authorization types: property_ids, property_tags,
+                    # inline properties, and publisher_properties
+                    if agent_url:
+                        properties_from_agents = get_properties_by_agent(adagents_data, agent_url)
+                        # Filter out publisher_properties selectors (cross-domain refs
+                        # without property_type - these are unresolved references)
+                        properties_from_agents = [p for p in properties_from_agents if p.get("property_type")]
+                    else:
+                        # Fallback: only gets inline agent.properties arrays
+                        properties_from_agents = get_all_properties(adagents_data)
 
                     # If we have an unrestricted agent AND top-level properties exist,
                     # sync all top-level properties (since agent has access to all of them)
@@ -174,9 +191,10 @@ class PropertyDiscoveryService:
                         )
                         # Use top-level properties as the authoritative list
                         properties = all_properties_from_file
-                    else:
-                        # Use per-agent properties (standard case)
+                    elif properties_from_agents:
                         properties = properties_from_agents
+                    else:
+                        properties = []
 
                     stats["properties_found"] += len(properties)
                     logger.info(f"Found {len(properties)} properties from {domain}")
@@ -491,7 +509,11 @@ class PropertyDiscoveryService:
         return True
 
     def sync_properties_from_adagents_sync(
-        self, tenant_id: str, publisher_domains: list[str] | None = None, dry_run: bool = False
+        self,
+        tenant_id: str,
+        publisher_domains: list[str] | None = None,
+        dry_run: bool = False,
+        agent_url: str | None = None,
     ) -> dict[str, Any]:
         """Synchronous wrapper for async sync_properties_from_adagents.
 
@@ -499,11 +521,14 @@ class PropertyDiscoveryService:
             tenant_id: Tenant ID
             publisher_domains: List of domains to sync (optional)
             dry_run: If True, fetch and process but don't commit
+            agent_url: Our agent's URL for property resolution (optional)
 
         Returns:
             Sync stats dictionary
         """
-        return asyncio.run(self.sync_properties_from_adagents(tenant_id, publisher_domains, dry_run))
+        return asyncio.run(
+            self.sync_properties_from_adagents(tenant_id, publisher_domains, dry_run, agent_url=agent_url)
+        )
 
 
 def get_property_discovery_service() -> PropertyDiscoveryService:
