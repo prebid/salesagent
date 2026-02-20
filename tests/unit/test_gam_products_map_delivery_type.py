@@ -127,11 +127,20 @@ def test_products_map_includes_delivery_type():
             package_pricing_info=package_pricing_info,
         )
 
-    # Assert: products_map must contain delivery_type
+    # Assert: products_map entry has exactly the keys that orders.py consumes.
+    # orders.py reads: implementation_config (line 413), product_id (line 738), delivery_type (line 771).
+    # If you add a new .get() in orders.py, add the key here too.
     assert "pkg_prod_abc_001" in captured_products_map, "Package should be in products_map"
     product_entry = captured_products_map["pkg_prod_abc_001"]
-    assert "delivery_type" in product_entry, (
-        "products_map entry must include delivery_type — without it, "
-        "is_guaranteed is always False and wrong line item type is selected"
+
+    expected_keys = {"product_id", "implementation_config", "delivery_type"}
+    assert set(product_entry.keys()) == expected_keys, (
+        f"products_map entry has unexpected shape. "
+        f"Expected keys: {expected_keys}, got: {set(product_entry.keys())}. "
+        f"If orders.py now reads a new field, add it to both google_ad_manager.py and this test."
     )
-    assert product_entry["delivery_type"] == "guaranteed", "delivery_type should be 'guaranteed' from the Product model"
+
+    # Verify values are correct (not None or wrong type)
+    assert product_entry["product_id"] == "prod_abc"
+    assert product_entry["delivery_type"] == "guaranteed"
+    assert isinstance(product_entry["implementation_config"], dict)

@@ -2,9 +2,10 @@
 name: mol-execute
 description: >
   Execute beads tasks through the full lifecycle using molecular workflow.
-  Creates a crash-recoverable atom graph: research → architect review → triage
-  → implement → commit. All research stored in beads (not filesystem).
-  Use for any beads task that needs research before implementation.
+  Auto-selects formula based on task type: bug tasks use bug-triage (reproduce
+  → trace similar → review → triage → fix → e2e verify → commit), all other
+  tasks use task-execute (research → review → triage → implement → commit).
+  All findings stored in beads (not filesystem).
 args: <task-id-1> [task-id-2] [task-id-3] ...
 ---
 
@@ -20,13 +21,34 @@ findings are stored in the bead itself, making each task self-contained.
 /mol-execute <task-id-1> [task-id-2] [task-id-3] ...
 ```
 
-One or more beads task IDs. Each task gets 5 atoms (research, review, triage,
-implement, commit) chained in sequence. Multiple tasks execute sequentially.
+One or more beads task IDs. Each task gets atoms chained in sequence.
+Multiple tasks execute sequentially.
+
+## Formula Selection
+
+**Auto-select based on task type** — run `bd show <id>` to check the type:
+
+| Task Type | Formula | Atoms |
+|-----------|---------|-------|
+| `bug` | `bug-triage.yaml` | reproduce → trace-similar → review → triage → fix → e2e-verify → commit |
+| All others | `task-execute.yaml` | research → review → triage → implement → commit |
+
+If a batch contains mixed types, cook separate molecules per formula — don't
+mix bug and non-bug tasks in the same epic.
 
 ## Protocol
 
 ### Step 1: Cook the molecule
 
+**For bugs** (`bd show` shows type=bug):
+```bash
+python3 .claude/scripts/cook_formula.py \
+  --formula .claude/formulas/bug-triage.yaml \
+  --var "BUG_IDS={all_args}" \
+  --epic-title "Bug triage: {all_args}"
+```
+
+**For tasks/features** (default):
 ```bash
 python3 .claude/scripts/cook_formula.py \
   --formula .claude/formulas/task-execute.yaml \
@@ -40,9 +62,9 @@ and all created atoms.
 **Dry run first** (recommended):
 ```bash
 python3 .claude/scripts/cook_formula.py \
-  --formula .claude/formulas/task-execute.yaml \
-  --var "TASK_IDS={all_args}" \
-  --epic-title "Execute: {all_args}" \
+  --formula .claude/formulas/<formula>.yaml \
+  --var "<VAR>={all_args}" \
+  --epic-title "<title>" \
   --dry-run
 ```
 
@@ -61,12 +83,12 @@ Each atom's description is self-contained:
 
 If context compacts mid-workflow: `bd ready` picks up where you left off.
 
-**Research gate**: The review atom won't proceed unless `research:complete` label
-is on the task AND notes/design fields are populated. This prevents rushing into
-implementation without proper research.
+**Gate labels** (formula-dependent):
+- task-execute: `research:complete` on the task before review proceeds
+- bug-triage: `reproduce:complete` on the bug before trace-similar proceeds
 
-**Triage routing**:
-- ALL_LOW → implement proceeds
+**Triage routing** (same for both formulas):
+- ALL_LOW → implement/fix proceeds
 - NEEDS_REFINEMENT → spawns refine atom (agent handles autonomously)
 - NEEDS_USER_INPUT → blocks for human direction
 
@@ -99,12 +121,15 @@ and rethink. Never adjust tests to fit code without documented justification.
 
 ## Anti-Patterns
 
-- Don't skip atoms (even trivial ones like commits)
+- Don't skip atoms (even trivial ones like commits or e2e-verify)
 - Don't combine atoms (defeats crash recovery)
 - Don't hold workflow state in memory (it's in beads)
 - Don't store research on filesystem (it goes in the bead)
-- Don't proceed past review without `research:complete` label
+- Don't proceed past review without the gate label (`research:complete` or `reproduce:complete`)
 - Don't apply fixes inside the triage atom (triage routes, doesn't execute)
 - Don't re-research in the refine atom (use existing findings, only adjust approach)
 - Don't modify existing tests without first checking the Core Invariant
 - Don't execute plan steps mechanically — validate each against the invariant
+- Don't mix bug and non-bug tasks in the same epic (use separate cooks)
+- Don't skip the trace-similar atom for bugs — it catches systemic issues
+- Don't refactor surrounding code in the fix atom — fix the bug only

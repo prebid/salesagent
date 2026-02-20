@@ -1,0 +1,470 @@
+name: bug-triage
+description: >
+  Triage and fix bugs through a reproduction-first workflow: reproduce → trace
+  similar → architect review → triage → fix → e2e verify → commit. Each atom is
+  self-contained — findings stored in the beads task itself, making every bug fix
+  a complete unit of context.
+
+variables:
+  BUG_IDS:
+    description: "Space-separated beads bug task IDs to triage (e.g., fck o0d a53)"
+    required: true
+
+labels:
+  - "mol:bug-triage"
+
+iterate:
+  over: "BUG_IDS"
+  item_var: "BUG_ID"
+  all_var: "ALL_BUGS"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # ── Atom 1: Reproduce ────────────────────────────────────────
+    - id: "reproduce-{BUG_ID}"
+      title: "Reproduce bug {BUG_ID}"
+      description: |
+        Write a failing test that demonstrates bug {BUG_ID} and trace the root cause.
+
+        ## Instructions
+
+        1. **Read the task**: `bd show {BUG_ID}`
+        2. **Understand the bug**: What is the observed vs expected behavior?
+        3. **Trace the data flow**:
+           - Find the entry point (MCP tool, A2A function, adapter method)
+           - Walk the data through each layer: input → parsing → business logic → output
+           - Identify exactly where the bug manifests
+           - Use Grep/Read to trace concrete values, not abstract reasoning
+        4. **Write a failing test**:
+           - Place it in the appropriate test file (`tests/unit/test_<area>.py`)
+           - The test should demonstrate the bug clearly and minimally
+           - Run it and confirm it fails for the RIGHT reason:
+             ```bash
+             uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+             ```
+        5. **Confirm root cause**: After tracing, state in one sentence what is wrong
+           and why. This becomes the basis for the fix.
+
+        ## Store Findings in the Bead
+
+        ```bash
+        bd update {BUG_ID} --append-notes "## Reproduction
+        - Failing test: tests/unit/test_<area>.py::test_<name>
+        - Root cause: [one sentence]
+        - Data flow trace: [entry point] → [layer] → [bug manifests here]
+
+        ## Relevant Code
+        - path/to/file.py:line — [description of buggy code]"
+        ```
+
+        Write the root cause and fix approach to the design field:
+
+        ```bash
+        bd update {BUG_ID} --design "## Root Cause
+        [One sentence: what is wrong and why]
+
+        ## Fix Approach
+        [Minimal change needed to fix the bug]
+
+        ## Files to Modify
+        - path/to/file.py — [what changes]"
+        ```
+
+        ## Gate: Add Label
+
+        ONLY after failing test exists AND root cause is identified:
+        ```bash
+        bd label add {BUG_ID} reproduce:complete
+        ```
+
+        If the bug cannot be reproduced:
+        ```bash
+        bd label add {BUG_ID} reproduce:not-reproducible
+        bd update {BUG_ID} --append-notes "CANNOT REPRODUCE: [what was tried]"
+        ```
+        Do NOT close this atom if not reproducible — leave it open for triage.
+
+      acceptance: "Failing test exists that demonstrates the bug. Root cause identified. reproduce:complete label added. Notes contain Reproduction section. Design contains Root Cause + Fix Approach."
+      labels: ["atom:reproduce"]
+
+    # ── Atom 2: Trace Similar ────────────────────────────────────
+    - id: "trace-similar-{BUG_ID}"
+      title: "Trace similar patterns for {BUG_ID}"
+      description: |
+        Check if the same bug pattern exists elsewhere in the codebase for {BUG_ID}.
+
+        ## Precondition
+
+        Run `bd show {BUG_ID}` and verify:
+        1. Label `reproduce:complete` is present
+        2. Notes contain ## Reproduction with root cause
+        3. Design contains ## Root Cause
+
+        If ANY precondition fails: do NOT proceed. Update this atom's notes
+        explaining what's missing and leave it open.
+
+        ## Instructions
+
+        1. **Read the root cause** from the design field of `bd show {BUG_ID}`
+        2. **Identify the bug pattern**: What category of mistake is this?
+           - Missing field propagation?
+           - Wrong type mapping?
+           - Missing validation?
+           - Incorrect default value?
+           - Logic error in conditional?
+        3. **Search for the same pattern**:
+           - Check sibling functions (e.g., if `create_media_buy` has the bug,
+             check `update_media_buy`, `get_media_buy`)
+           - Check all adapters for the same issue (GAM, Mock, any others)
+           - Check both MCP and A2A code paths
+           - Use Grep to search for the buggy pattern across the codebase
+        4. **Document findings**: For each similar occurrence found, note whether
+           it has the same bug or is already correct.
+
+        ## Store Findings
+
+        ```bash
+        bd update {BUG_ID} --append-notes "## Similar Pattern Analysis
+        - Pattern: [category of bug]
+        - Searched: [what code paths were checked]
+        - Found similar:
+          - path/to/file.py:line — [same bug / already correct / different variant]
+        - Scope: [fix only original | fix N additional locations]"
+        ```
+
+        If additional bugs are found, create separate beads tasks:
+        ```bash
+        bd create --title="Bug: [description of similar bug]" --type=bug --priority=2
+        ```
+
+        ## Gate
+
+        Close this atom when the analysis is complete, regardless of whether
+        similar bugs were found.
+
+      acceptance: "Similar pattern analysis written to task notes. Additional bugs filed as separate tasks if found."
+      depends_on: ["reproduce-{BUG_ID}"]
+      labels: ["atom:trace-similar"]
+
+    # ── Atom 3: Architect Review ─────────────────────────────────
+    - id: "review-{BUG_ID}"
+      title: "Architect review of {BUG_ID}"
+      description: |
+        Pragmatic architect review of the proposed fix for {BUG_ID}.
+
+        ## Precondition
+
+        Run `bd show {BUG_ID}` and verify:
+        1. Label `reproduce:complete` is present
+        2. Notes contain ## Reproduction and ## Similar Pattern Analysis
+        3. Design contains ## Root Cause and ## Fix Approach
+
+        If ANY precondition fails: do NOT proceed. Update this atom's notes
+        explaining what's missing and leave it open.
+
+        ## Review Criteria
+
+        Read the task's notes and design fields. Evaluate:
+
+        1. **Root cause correctness**: Is the identified root cause actually the
+           root cause? Could it be a symptom of a deeper issue?
+        2. **Fix minimality**: Is the proposed fix the smallest change that
+           correctly addresses the root cause? Over-engineering a bug fix is a
+           common antipattern.
+        3. **Regression risk**: Could the fix break existing functionality?
+           Check what tests cover the affected code path.
+        4. **CLAUDE.md compliance**: Does the fix follow applicable critical
+           patterns? (AdCP schema, nested serialization, shared impl, etc.)
+        5. **Similar bugs**: If trace-similar found other instances, does the
+           fix approach scale to those too?
+        6. **Test coverage**: Is the failing test sufficient? Does it need
+           additional edge cases?
+
+        ## Rate Each Finding
+
+        - **LOW**: Minor suggestion, cosmetic, nice-to-have
+        - **MEDIUM**: Real concern but agent can resolve autonomously with the suggestion
+        - **HIGH**: Fundamental issue — user input required before proceeding
+
+        ## Write Review
+
+        ```bash
+        bd update {BUG_ID} --append-notes "## Architect Review
+        - [RATING] Finding: [description]. Suggestion: [what to do]
+        ...
+
+        Overall: [ALL_LOW | NEEDS_REFINEMENT | NEEDS_USER_INPUT]"
+        ```
+
+      acceptance: "Review written to task notes with rated findings and overall verdict."
+      depends_on: ["trace-similar-{BUG_ID}"]
+      labels: ["atom:review", "atom:gate"]
+
+    # ── Atom 4: Triage ───────────────────────────────────────────
+    - id: "triage-{BUG_ID}"
+      title: "Triage review findings for {BUG_ID}"
+      description: |
+        Read the architect review and decide next steps for {BUG_ID}.
+        This is a TRIAGE atom — it routes, not executes.
+
+        ## Instructions
+
+        1. Read `bd show {BUG_ID}` — find the "## Architect Review" section in notes
+        2. Check the overall verdict:
+
+        ### If ALL_LOW:
+        No action needed. Note "Clean review — proceeding to fix."
+        Close this atom.
+
+        ### If NEEDS_REFINEMENT (has MEDIUM findings):
+        Create a refine atom that addresses the MEDIUM findings:
+
+        ```bash
+        REFINE_ID=$(bd create --silent --type=task \
+          --parent {EPIC_ID} \
+          --title "Refine fix approach for {BUG_ID}" \
+          --description "## Instructions
+        Read bd show {BUG_ID} — the Architect Review section has MEDIUM findings.
+        For each MEDIUM finding, update the design field with the refined approach.
+
+        After refinement, verify the design is self-consistent and update notes:
+        bd update {BUG_ID} --append-notes '## Refinement Applied
+        - [what changed and why]'
+
+        ## Anti-Pattern
+        Do NOT re-research. Use existing findings. Only refine the approach." \
+          --acceptance "Design field updated. Refinement documented in notes.")
+        bd label add $REFINE_ID mol:bug-triage atom:refine
+        bd dep add $REFINE_ID {TRIAGE_ID}
+        bd dep add fix-{BUG_ID}-bead $REFINE_ID
+        ```
+
+        (Where `fix-{BUG_ID}-bead` is the bead ID of the fix atom.
+        Look it up: `bd list --label mol:bug-triage` and find the fix atom for {BUG_ID}.)
+
+        ### If NEEDS_USER_INPUT (has HIGH findings):
+        Do NOT create any atoms. Update task notes:
+        ```bash
+        bd update {BUG_ID} --append-notes "## BLOCKED: User Input Required
+        HIGH findings need human decision. See Architect Review above."
+        ```
+        Leave this atom OPEN. The user will provide direction and close it manually.
+
+        ## Key Principle
+        Triage ROUTES work. It does not DO work.
+
+      acceptance: "Verdict acted on: clean pass noted, refine atom spawned, or blocked for user input."
+      depends_on: ["review-{BUG_ID}"]
+      labels: ["atom:triage"]
+
+    # ── Atom 5: Fix ──────────────────────────────────────────────
+    - id: "fix-{BUG_ID}"
+      title: "Fix bug {BUG_ID}"
+      description: |
+        Apply the minimal fix for bug {BUG_ID}.
+
+        ## Prerequisites
+
+        Run `bd show {BUG_ID}`. The bead contains everything you need:
+        - **Notes**: Reproduction trace, similar pattern analysis, architect review
+        - **Design**: Root cause, fix approach, files to modify
+
+        Read ALL of these before writing any code.
+
+        ## Workflow
+
+        Unlike task-execute, the TDD "red" step is already done (in the reproduce
+        atom). The failing test already exists.
+
+        1. **Verify the test still fails**:
+           ```bash
+           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           ```
+           If the test now passes (e.g., someone else fixed it), note this and
+           close the atom.
+
+        2. **Apply the fix**: Make the minimal change described in the design field.
+           - Follow CLAUDE.md critical patterns
+           - Follow existing codebase conventions
+           - Don't refactor surrounding code — fix the bug only
+
+        3. **Verify the fix**:
+           ```bash
+           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           ```
+           The previously failing test must now pass.
+
+        4. **Run full quality gate**:
+           ```bash
+           make quality
+           ```
+
+        ## When EXISTING Tests Fail
+
+        If your fix causes pre-existing tests to fail:
+
+        1. **STOP. Do NOT modify the failing tests.**
+        2. Re-read the root cause from the design field.
+        3. Ask: "Is my fix too broad? Am I changing behavior beyond the bug?"
+        4. If YES → narrow the fix. The bug fix should not change unrelated behavior.
+        5. If NO → the test has a genuine issue. Document WHY in task notes BEFORE
+           modifying any test.
+
+        ## If Blocked
+
+        If `make quality` fails or the fix is more complex than expected:
+        ```bash
+        bd update {BUG_ID} --append-notes "## Fix Blocked
+        - [describe the blocker]
+        - [what was tried]
+        - [what direction is needed]"
+        ```
+        Leave this atom OPEN for user direction.
+
+        ## If Successful
+
+        Close the original beads task:
+        ```bash
+        bd close {BUG_ID}
+        ```
+
+      acceptance: "make quality passes. Failing test from reproduce atom now passes. No existing tests modified without documented justification. Original task {BUG_ID} closed."
+      depends_on: ["triage-{BUG_ID}"]
+      depends_on_prev_barrier: true
+      labels: ["atom:fix"]
+
+    # ── Atom 6: E2E Verify (Optional) ───────────────────────────
+    - id: "e2e-verify-{BUG_ID}"
+      title: "E2E verify fix for {BUG_ID}"
+      description: |
+        Optional verification for bug {BUG_ID} against real systems.
+
+        ## When to Skip
+
+        If the bug is purely in business logic (no adapter/API interaction),
+        this atom can be closed immediately with a note:
+        ```bash
+        bd update {BUG_ID} --append-notes "## E2E Verification: Skipped
+        Bug is in business logic only — unit test coverage is sufficient."
+        ```
+
+        ## When to Execute
+
+        If the bug touches:
+        - Adapter code (GAM, etc.)
+        - External API calls
+        - Data serialization sent to external systems
+        - Protocol-level behavior (MCP, A2A)
+
+        ## Instructions
+
+        1. **Check if e2e test infrastructure exists** for the affected area:
+           ```bash
+           ls tests/e2e/
+           ```
+
+        2. **If e2e test exists**: Run it and verify it passes:
+           ```bash
+           uv run pytest tests/e2e/test_<area>.py -x -v
+           ```
+
+        3. **If no e2e test exists**: Either:
+           a. Write a minimal e2e test if the infrastructure supports it
+           b. Document manual verification steps and ask the user to confirm:
+              ```bash
+              bd update {BUG_ID} --append-notes "## E2E Verification: Manual
+              Steps to verify in real environment:
+              1. [step 1]
+              2. [step 2]
+              Expected result: [what should happen]"
+              ```
+
+        4. **Record result**:
+           ```bash
+           bd update {BUG_ID} --append-notes "## E2E Verification: [PASS | MANUAL | SKIPPED]
+           [details]"
+           ```
+
+      acceptance: "E2E verification completed, skipped with justification, or manual steps documented."
+      depends_on: ["fix-{BUG_ID}"]
+      labels: ["atom:e2e-verify"]
+
+    # ── Atom 7: Commit ───────────────────────────────────────────
+    - id: "commit-{BUG_ID}"
+      title: "Commit fix for {BUG_ID}"
+      description: |
+        Commit the bug fix for {BUG_ID}.
+
+        ## Instructions
+
+        1. Check what changed:
+           ```bash
+           git status
+           git diff --stat
+           ```
+
+        2. **Test change review**: Check if any test files were modified beyond
+           the new regression test:
+           ```bash
+           git diff --name-only -- 'tests/'
+           ```
+           If existing test files were changed (not just the new test), review:
+           - `git diff -- tests/` to see exactly what changed
+           - Re-read the root cause from `bd show {BUG_ID}`
+           - For each test change, confirm it's justified by the bug fix
+           - If any test change does NOT fit: STOP. Revert, fix the implementation,
+             re-run `make quality`, and restart this atom.
+
+        3. Stage relevant files (be specific, don't use `git add .`):
+           ```bash
+           git add <specific-files>
+           ```
+
+        4. Commit with `fix:` prefix:
+           ```bash
+           git commit -m "fix: <description from task title>"
+           ```
+
+        5. Verify:
+           ```bash
+           git log -1 --oneline
+           ```
+
+      acceptance: "Git commit exists for {BUG_ID} fix with fix: prefix."
+      depends_on: ["e2e-verify-{BUG_ID}"]
+      labels: ["atom:commit"]
+
+# ── Finalize (after all bugs) ──────────────────────────────────
+finalize:
+  - id: sync-and-verify
+    title: "Sync beads and verify clean state"
+    description: |
+      Final cleanup after all {N} bugs are fixed.
+
+      ## Instructions
+
+      1. Sync beads:
+         ```bash
+         bd sync --from-main
+         ```
+
+      2. Verify all original bug tasks are closed:
+         ```bash
+         bd show {ALL_BUGS}
+         ```
+         All should be CLOSED.
+
+      3. Check git state:
+         ```bash
+         git status
+         git log --oneline -20
+         ```
+
+      4. Final quality check:
+         ```bash
+         make quality
+         ```
+
+    acceptance: "All {N} bugs closed. bd sync done. make quality passes. git clean."
+    depends_on_all_barriers: true
+    labels: ["atom:verify"]
