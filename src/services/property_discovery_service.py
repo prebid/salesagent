@@ -17,7 +17,7 @@ from adcp import (
     get_all_properties,
     get_all_tags,
 )
-from adcp.adagents import get_properties_by_agent
+from adcp.adagents import get_properties_by_agent, normalize_url
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -159,7 +159,9 @@ class PropertyDiscoveryService:
                         if not isinstance(agent, dict):
                             continue
                         # When agent_url is provided, only check the matching agent
-                        if agent_url and agent.get("url") != agent_url:
+                        # Use normalize_url for protocol-agnostic comparison (same as
+                        # get_properties_by_agent in the adcp library)
+                        if agent_url and normalize_url(agent.get("url", "")) != normalize_url(agent_url):
                             continue
                         # Check if ALL authorization fields are missing/empty
                         has_property_ids = bool(agent.get("property_ids"))
