@@ -626,6 +626,14 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
                             )
                         )
 
+        # Compute agent_url for property resolution (handles property_ids, property_tags)
+        agent_url: str | None = None
+        if tenant:
+            if tenant.virtual_host:
+                agent_url = f"https://{tenant.virtual_host}"
+            else:
+                agent_url = get_tenant_url(tenant.subdomain)
+
         # Get optional domain filter from form
         publisher_domains_str = request.form.get("publisher_domains", "").strip()
         publisher_domains = None
@@ -643,7 +651,7 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
 
         # Run sync
         service = get_property_discovery_service()
-        stats = service.sync_properties_from_adagents_sync(tenant_id, publisher_domains, dry_run)
+        stats = service.sync_properties_from_adagents_sync(tenant_id, publisher_domains, dry_run, agent_url=agent_url)
 
         # Update last sync timestamp and save sync history
         with get_db_session() as session:

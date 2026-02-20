@@ -147,13 +147,19 @@ class PropertyDiscoveryService:
                     # others list them per-agent in "authorized_agents[].properties"
                     all_properties_from_file = adagents_data.get("properties", [])
 
-                    # Check if any agent has no property restrictions (means access to ALL properties)
+                    # Check if the relevant agent has no property restrictions (means access to ALL properties)
                     # Per AdCP spec: if property_ids/property_tags/properties/publisher_properties
                     # are all missing/empty, agent has access to ALL properties from this publisher
+                    #
+                    # When agent_url is provided, only check OUR agent — another agent being
+                    # unrestricted doesn't grant us access to all properties.
                     authorized_agents = adagents_data.get("authorized_agents", [])
                     has_unrestricted_agent = False
                     for agent in authorized_agents:
                         if not isinstance(agent, dict):
+                            continue
+                        # When agent_url is provided, only check the matching agent
+                        if agent_url and agent.get("url") != agent_url:
                             continue
                         # Check if ALL authorization fields are missing/empty
                         has_property_ids = bool(agent.get("property_ids"))

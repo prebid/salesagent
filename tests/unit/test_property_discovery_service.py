@@ -478,6 +478,97 @@ class TestPropertyDiscoveryService:
         mock_db_patcher.stop()
 
     @pytest.mark.asyncio
+    async def test_sync_properties_unrestricted_check_scoped_to_our_agent(self):
+        """Test that unrestricted agent check is scoped to our agent when agent_url is provided.
+
+        Scenario: adagents.json has two agents:
+        - A media agency with no restrictions (unrestricted)
+        - Our agent restricted to property_ids: ["capital"]
+
+        When agent_url identifies our restricted agent, we should only get "capital",
+        NOT all top-level properties. The media agency's unrestricted status should
+        not override our agent's restrictions.
+        """
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        mock_adagents_data = {
+            "authorized_agents": [
+                {
+                    "url": "https://media-agency.example.com",
+                    "authorized_for": "Full portfolio management",
+                    # No restrictions — unrestricted agent
+                },
+                {
+                    "url": "https://our-agent.example.com",
+                    "authorization_type": "property_ids",
+                    "property_ids": ["capital"],
+                },
+            ],
+            "properties": [
+                {
+                    "property_id": "capital",
+                    "property_type": "website",
+                    "name": "Capital",
+                    "identifiers": [{"type": "domain", "value": "capital.fr"}],
+                },
+                {
+                    "property_id": "geo",
+                    "property_type": "website",
+                    "name": "Geo",
+                    "identifiers": [{"type": "domain", "value": "geo.fr"}],
+                },
+                {
+                    "property_id": "voici",
+                    "property_type": "website",
+                    "name": "Voici",
+                    "identifiers": [{"type": "domain", "value": "voici.fr"}],
+                },
+            ],
+        }
+
+        # get_properties_by_agent correctly returns only "capital" for our agent
+        resolved_properties = [
+            {
+                "property_id": "capital",
+                "property_type": "website",
+                "name": "Capital",
+                "identifiers": [{"type": "domain", "value": "capital.fr"}],
+            },
+        ]
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = mock_adagents_data
+                    mock_by_agent.return_value = resolved_properties
+                    mock_tags.return_value = []
+
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1",
+                        ["capital.fr"],
+                        agent_url="https://our-agent.example.com",
+                    )
+
+                    assert stats["domains_synced"] == 1
+                    # Must be 1 (only capital), NOT 3 (all top-level properties)
+                    assert stats["properties_found"] == 1, (
+                        "Our restricted agent should only get 'capital', not all properties. "
+                        "The media agency's unrestricted status must not override our restrictions."
+                    )
+                    assert stats["properties_created"] == 1
+                    assert len(stats["errors"]) == 0
+
+        mock_db_patcher.stop()
+
+    @pytest.mark.asyncio
     async def test_sync_properties_property_ids_authorization_with_agent_url(self):
         """Test property_ids authorization resolves top-level properties when agent_url is provided.
 
@@ -784,6 +875,66 @@ class TestPropertyDiscoveryService:
                     assert stats["domains_synced"] == 1
                     assert stats["properties_found"] == 0, "publisher_properties selectors should be filtered out"
                     assert len(stats["errors"]) == 0
+
+        mock_db_patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_sync_properties_property_ids_without_agent_url_finds_zero(self):
+        """Regression test: property_ids authorization without agent_url returns 0 properties.
+
+        This demonstrates the original bug: get_all_properties() only reads inline
+        agent.properties arrays. When publishers use authorization_type: "property_ids"
+        (properties at top level, agents reference by ID), get_all_properties() returns
+        nothing because there are no inline properties.
+
+        Without this test, the agent_url plumbing could be removed and all other tests
+        would still pass.
+        """
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        # Prisma Media-style adagents.json: properties at top level, agent references by ID
+        mock_adagents_data = {
+            "authorized_agents": [
+                {
+                    "url": "https://our-agent.example.com",
+                    "authorization_type": "property_ids",
+                    "property_ids": ["capital"],
+                }
+            ],
+            "properties": [
+                {
+                    "property_id": "capital",
+                    "property_type": "website",
+                    "name": "Capital",
+                    "identifiers": [{"type": "domain", "value": "capital.fr"}],
+                },
+            ],
+        }
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_all_properties") as mock_all_props:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = mock_adagents_data
+                    # get_all_properties returns [] because there are no inline agent.properties
+                    mock_all_props.return_value = []
+                    mock_tags.return_value = []
+
+                    # Without agent_url, the old code path is used
+                    stats = await self.service.sync_properties_from_adagents("tenant1", ["capital.fr"])
+
+                    # Bug: 0 properties found because get_all_properties can't resolve property_ids
+                    assert stats["properties_found"] == 0, (
+                        "Without agent_url, property_ids authorization returns 0 properties "
+                        "(this is the original bug — use agent_url to fix)"
+                    )
 
         mock_db_patcher.stop()
 
