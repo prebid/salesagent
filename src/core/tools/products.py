@@ -809,7 +809,7 @@ async def get_products(
     response = await _get_products_impl(req, ctx)
 
     # Return ToolResult with human-readable text and structured data
-    response_dict = response.model_dump()
+    response_dict = response.model_dump(mode="json")
     # Apply v2.x backward-compat fields only for pre-3.0 clients
     if needs_v2_compat(adcp_version) and "products" in response_dict:
         response_dict["products"] = add_v2_compat_to_products(response_dict["products"])
