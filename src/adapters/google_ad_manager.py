@@ -485,6 +485,7 @@ class GoogleAdManager(AdServerAdapter):
                     products_map[package.package_id] = {
                         "product_id": product.product_id,
                         "implementation_config": impl_config,
+                        "delivery_type": product.delivery_type,
                     }
                 else:
                     logger.error(f"Product NOT FOUND for package_id: {package.package_id}")
