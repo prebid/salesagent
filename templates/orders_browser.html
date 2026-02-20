@@ -137,6 +137,7 @@
 <script>
 let currentOrders = [];
 const tenantId = '{{ tenant_id }}';
+const scriptName = '{{ script_name }}';
 
 // Load orders on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -435,7 +436,7 @@ function displayOrderDetails(order) {
                                     <td>${liDeliveryPercentage.toFixed(1)}%</td>
                                     <td>${li.cost_per_unit ? '$' + li.cost_per_unit.toFixed(2) : '-'}</td>
                                     <td>
-                                        <a href="/tenant/${tenantId}/gam/line-item/${li.line_item_id}"
+                                        <a href="${scriptName}/tenant/${tenantId}/gam/line-item/${li.line_item_id}"
                                            class="btn btn-sm btn-outline-info"
                                            target="_blank"
                                            title="View full line item details including targeting, creatives, and JSON representation">
