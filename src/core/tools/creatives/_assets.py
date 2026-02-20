@@ -64,7 +64,7 @@ def _build_creative_data(
         Data dict for storing in the creative's data field.
     """
     if context is not None and not isinstance(context, dict):
-        context = context.model_dump()
+        context = context.model_dump(mode="json")
 
     data: dict[str, Any] = {
         "url": url,

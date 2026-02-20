@@ -2942,7 +2942,7 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
             unwrapped = []
             for pkg in values["packages"]:
                 if isinstance(pkg, RootModel):
-                    unwrapped.append(pkg.root.model_dump())
+                    unwrapped.append(pkg.root.model_dump(mode="json"))
                 else:
                     unwrapped.append(pkg)
             values["packages"] = unwrapped
