@@ -25,7 +25,6 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     GetMediaBuyDeliveryRequest,
     GetProductsRequest,
-    GetSignalsRequest,
     ListCreativesRequest,
     SyncCreativesRequest,
     UpdateMediaBuyRequest,
@@ -50,7 +49,7 @@ SCHEMA_TO_MODEL_MAP = {
     "/schemas/latest/media-buy/get-media-buy-delivery-request.json": GetMediaBuyDeliveryRequest,
     "/schemas/latest/media-buy/sync-creatives-request.json": SyncCreativesRequest,
     "/schemas/latest/media-buy/list-creatives-request.json": ListCreativesRequest,
-    "/schemas/latest/signals/get-signals-request.json": GetSignalsRequest,
+    # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
 
