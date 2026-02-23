@@ -421,10 +421,7 @@ def main():
     admin_thread.start()
     threads.append(admin_thread)
 
-    # A2A Server thread for agent-to-agent communication
-    a2a_thread = threading.Thread(target=run_a2a_server, daemon=True)
-    a2a_thread.start()
-    threads.append(a2a_thread)
+    # A2A is now integrated into the MCP server process (src/app.py)
 
     # Cron thread for scheduled tasks (syncing GAM tenants, etc.)
     skip_cron = os.environ.get("SKIP_CRON", "false").lower() == "true"
