@@ -14,11 +14,10 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-import google.oauth2.service_account
-from googleads import ad_manager, oauth2
+from googleads import ad_manager
 
 from .constants import GAM_API_VERSION
-from .error_handler import GAMAuthenticationError, GAMConfigurationError
+from .error_handler import GAMAuthenticationError
 from .logging import logger
 
 
@@ -69,21 +68,20 @@ class GAMHealthChecker:
         self.last_results: list[HealthCheckResult] = []
 
     def _init_client(self) -> bool:
-        """Initialize GAM client for health checks."""
+        """Initialize GAM client for health checks.
+
+        Supports all auth methods via GAMAuthManager: service_account_json,
+        service_account_key_file, and refresh_token.
+        """
         if self.dry_run:
             logger.info("Health check running in dry-run mode")
             return True
 
         try:
-            key_file = self.config.get("service_account_key_file")
-            if not key_file:
-                raise GAMConfigurationError("Missing service_account_key_file in config")
+            from src.adapters.gam.auth import GAMAuthManager
 
-            credentials = google.oauth2.service_account.Credentials.from_service_account_file(
-                key_file, scopes=["https://www.googleapis.com/auth/dfp"]
-            )
-            # Wrap in GoogleCredentialsClient for AdManagerClient compatibility
-            oauth2_client = oauth2.GoogleCredentialsClient(credentials)
+            auth_manager = GAMAuthManager(self.config)
+            oauth2_client = auth_manager.get_credentials()
 
             self.client = ad_manager.AdManagerClient(
                 oauth2_client, "AdCP Health Check", network_code=self.config.get("network_code")
@@ -113,7 +111,7 @@ class GAMHealthChecker:
 
             # Try a simple API call to verify auth
             assert self.client is not None  # Type narrowing for mypy
-            network_service = self.client.GetService("NetworkService")
+            network_service = self.client.GetService("NetworkService", version=GAM_API_VERSION)
             network = network_service.getCurrentNetwork()
 
             return HealthCheckResult(
@@ -121,10 +119,12 @@ class GAMHealthChecker:
                 check_name="authentication",
                 message="Successfully authenticated with GAM",
                 details={
-                    "network_code": network.get("networkCode"),
-                    "display_name": network.get("displayName"),
-                    "currency_code": network.get("currencyCode"),
-                    "secondary_currency_codes": network.get("secondaryCurrencyCodes", []),
+                    "network_code": str(network["networkCode"]),
+                    "display_name": str(network["displayName"]),
+                    "currency_code": str(network["currencyCode"]),
+                    "secondary_currency_codes": network.get("secondaryCurrencyCodes", [])
+                    if hasattr(network, "get")
+                    else getattr(network, "secondaryCurrencyCodes", []),
                 },
                 duration_ms=(time.time() - start_time) * 1000,
             )
@@ -160,7 +160,7 @@ class GAMHealthChecker:
             missing_permissions = []
 
             # Check if we can access the advertiser
-            company_service = self.client.GetService("CompanyService")
+            company_service = self.client.GetService("CompanyService", version=GAM_API_VERSION)
             from googleads import ad_manager
 
             statement = (
@@ -171,21 +171,21 @@ class GAMHealthChecker:
             )
 
             response = company_service.getCompaniesByStatement(statement)
-            if not response.get("results"):
+            if "results" not in response or not response["results"]:
                 permissions_ok = False
                 missing_permissions.append("Cannot access advertiser")
 
             # Check if we can create orders
             # This is a read-only check, we're not actually creating anything
-            user_service = self.client.GetService("UserService")
+            user_service = self.client.GetService("UserService", version=GAM_API_VERSION)
             current_user = user_service.getCurrentUser()
 
-            if not current_user.get("isActive"):
+            if not current_user["isActive"]:
                 permissions_ok = False
                 missing_permissions.append("User is not active")
 
             # Check role permissions
-            role_id = current_user.get("roleId")
+            role_id = current_user["roleId"] if "roleId" in current_user else None
             if role_id:
                 # In a real implementation, we'd check specific permissions
                 # For now, we just verify we have a role
@@ -197,8 +197,8 @@ class GAMHealthChecker:
                     check_name="permissions",
                     message="All required permissions verified",
                     details={
-                        "user_id": current_user.get("id"),
-                        "user_email": current_user.get("email"),
+                        "user_id": str(current_user["id"]),
+                        "user_email": str(current_user["email"]),
                         "advertiser_accessible": True,
                     },
                     duration_ms=(time.time() - start_time) * 1000,
@@ -287,7 +287,7 @@ class GAMHealthChecker:
                 raise GAMAuthenticationError("Client not initialized")
 
             assert self.client is not None  # Type narrowing for mypy
-            inventory_service = self.client.GetService("InventoryService")
+            inventory_service = self.client.GetService("InventoryService", version=GAM_API_VERSION)
 
             # Check first few ad units
             accessible_units = []
@@ -303,7 +303,7 @@ class GAMHealthChecker:
                     )
 
                     response = inventory_service.getAdUnitsByStatement(statement)
-                    if response.get("results"):
+                    if "results" in response and response["results"]:
                         accessible_units.append(ad_unit_id)
                     else:
                         inaccessible_units.append(ad_unit_id)

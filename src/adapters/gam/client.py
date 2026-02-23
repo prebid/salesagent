@@ -129,7 +129,9 @@ class GAMClientManager:
             GAMHealthChecker instance
         """
         if self._health_checker is None:
-            self._health_checker = GAMHealthChecker(self.config, dry_run=dry_run)
+            # Merge network_code into config for health checker's own client init
+            health_config = {**self.config, "network_code": self.network_code}
+            self._health_checker = GAMHealthChecker(health_config, dry_run=dry_run)
         return self._health_checker
 
     def check_health(
