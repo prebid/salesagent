@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 from adcp.types.aliases import Package as ResponsePackage
 from flask import Flask
 
-from src.adapters.base import AdServerAdapter, TargetingCapabilities
+from src.adapters.base import AdapterCapabilities, AdServerAdapter, TargetingCapabilities
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager
@@ -69,6 +69,10 @@ class GoogleAdManager(AdServerAdapter):
     """Google Ad Manager adapter using modular architecture."""
 
     adapter_name = "google_ad_manager"
+
+    capabilities = AdapterCapabilities(
+        supports_realtime_reporting=True,  # Snapshots via cached GAM line item stats
+    )
 
     # GAM supports display, olv (online video), and social advertising
     # V3 channel names: video → olv, native → social

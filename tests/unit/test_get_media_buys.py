@@ -19,7 +19,10 @@ from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
 from src.core.schemas import (
     ApprovalStatus,
+    CreativeApproval,
     DeliveryStatus,
+    GetMediaBuysMediaBuy,
+    GetMediaBuysPackage,
     GetMediaBuysRequest,
     GetMediaBuysResponse,
     Snapshot,
@@ -249,6 +252,7 @@ class TestGetMediaBuysImpl:
         mock_fetch_approvals.return_value = {}
 
         mock_adapter = MagicMock()
+        mock_adapter.capabilities.supports_realtime_reporting = True
         mock_adapter.get_packages_snapshot = MagicMock()
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
@@ -294,6 +298,7 @@ class TestGetMediaBuysImpl:
             delivery_status=DeliveryStatus.delivering,
         )
         mock_adapter = MagicMock()
+        mock_adapter.capabilities.supports_realtime_reporting = True
         mock_adapter.get_packages_snapshot.return_value = {"buy_1": {"pkg_1": snapshot}}
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
@@ -337,8 +342,8 @@ class TestGetMediaBuysImpl:
         mock_fetch_packages.return_value = {"buy_1": [pkg]}
         mock_fetch_approvals.return_value = {}
 
-        # Adapter without get_packages_snapshot
-        mock_adapter = MagicMock(spec=[])  # no attributes
+        mock_adapter = MagicMock()
+        mock_adapter.capabilities.supports_realtime_reporting = False
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request(include_snapshot=True)
@@ -366,6 +371,72 @@ class TestGetMediaBuysResponseStructure:
         data = resp.model_dump()
         assert "media_buys" in data
         assert data["media_buys"] == []
+
+    def test_nested_serialization_roundtrip(self):
+        """model_dump() recursively serializes all nested models to plain dicts.
+
+        Guards against the Pydantic issue where model_dump() on a parent doesn't
+        call custom model_dump() on nested children, leaving Pydantic model instances
+        inside the dict instead of plain dicts.
+        """
+        now = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        resp = GetMediaBuysResponse(
+            media_buys=[
+                GetMediaBuysMediaBuy(
+                    media_buy_id="mb_1",
+                    status=MediaBuyStatus.active,
+                    currency="USD",
+                    total_budget=1000.0,
+                    packages=[
+                        GetMediaBuysPackage(
+                            package_id="pkg_1",
+                            creative_approvals=[
+                                CreativeApproval(
+                                    creative_id="cr_1",
+                                    approval_status=ApprovalStatus.approved,
+                                ),
+                            ],
+                            snapshot=Snapshot(
+                                as_of=now,
+                                impressions=5000.0,
+                                spend=100.0,
+                                staleness_seconds=900,
+                            ),
+                        ),
+                    ],
+                ),
+            ],
+        )
+
+        data = resp.model_dump()
+
+        # Top level
+        assert isinstance(data, dict)
+        assert isinstance(data["media_buys"], list)
+
+        # GetMediaBuysMediaBuy should be a dict, not a model instance
+        mb = data["media_buys"][0]
+        assert isinstance(mb, dict), f"Expected dict, got {type(mb)}"
+        assert mb["media_buy_id"] == "mb_1"
+        assert mb["status"] == MediaBuyStatus.active
+
+        # GetMediaBuysPackage should be a dict
+        assert isinstance(mb["packages"], list)
+        pkg = mb["packages"][0]
+        assert isinstance(pkg, dict), f"Expected dict, got {type(pkg)}"
+        assert pkg["package_id"] == "pkg_1"
+
+        # CreativeApproval should be a dict
+        assert isinstance(pkg["creative_approvals"], list)
+        approval = pkg["creative_approvals"][0]
+        assert isinstance(approval, dict), f"Expected dict, got {type(approval)}"
+        assert approval["creative_id"] == "cr_1"
+        assert approval["approval_status"] == ApprovalStatus.approved
+
+        # Snapshot should be a dict
+        snap = pkg["snapshot"]
+        assert isinstance(snap, dict), f"Expected dict, got {type(snap)}"
+        assert snap["impressions"] == 5000.0
 
     def test_media_buy_status_values(self):
         """MediaBuyStatus enum values match AdCP spec strings."""

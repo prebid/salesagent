@@ -73,7 +73,7 @@ class MockAdServer(AdServerAdapter):
         supports_dynamic_products=False,
         supported_pricing_models=["cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"],
         supports_webhooks=False,
-        supports_realtime_reporting=False,
+        supports_realtime_reporting=True,
     )
 
     # Supported targeting dimensions (mock supports everything)

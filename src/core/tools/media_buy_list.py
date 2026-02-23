@@ -85,7 +85,7 @@ def _get_media_buys_impl(req: GetMediaBuysRequest, ctx: Context | ToolContext | 
             dry_run=testing_ctx.dry_run if testing_ctx else False,
             testing_context=testing_ctx,
         )
-        if hasattr(adapter, "get_packages_snapshot"):
+        if adapter.capabilities.supports_realtime_reporting:
             # Build list of (media_buy_id, package_id, platform_line_item_id) for the adapter
             package_refs = []
             for buy in target_media_buys:
@@ -262,6 +262,8 @@ def _fetch_target_media_buys(
     """Fetch media buys from database matching the request filters."""
     with get_db_session() as session:
         if req.media_buy_ids:
+            # When caller specifies exact IDs, return them regardless of status.
+            # The caller already knows which buys they want.
             stmt = select(MediaBuy).where(
                 MediaBuy.tenant_id == tenant["tenant_id"],
                 MediaBuy.principal_id == principal_id,
