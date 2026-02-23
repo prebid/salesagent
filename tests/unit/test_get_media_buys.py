@@ -31,6 +31,7 @@ from src.core.schemas import (
 from src.core.tool_context import ToolContext
 from src.core.tools.media_buy_list import (
     _compute_status,
+    _fetch_target_media_buys,
     _get_media_buys_impl,
     _map_creative_status,
     _resolve_status_filter,
@@ -146,6 +147,48 @@ class TestResolveStatusFilter:
         mock_root.root = [MediaBuyStatus.pending_activation]
         result = _resolve_status_filter(mock_root)
         assert result == {MediaBuyStatus.pending_activation}
+
+
+class TestFetchTargetMediaBuys:
+    """status_filter applies consistently regardless of which filter key is used."""
+
+    TENANT = {"tenant_id": "tenant_1"}
+    TODAY = date(2025, 6, 15)
+
+    def _run(self, req, buys):
+        mock_session = MagicMock()
+        mock_session.__enter__ = lambda s: s
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_session.scalars.return_value.all.return_value = buys
+        with patch("src.core.tools.media_buy_list.get_db_session", return_value=mock_session):
+            return _fetch_target_media_buys(req, "principal_1", self.TENANT, self.TODAY)
+
+    def test_media_buy_ids_with_status_filter_excludes_non_matching(self):
+        active = make_media_buy("buy_active", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        completed = make_media_buy("buy_done", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
+        req = GetMediaBuysRequest(
+            media_buy_ids=["buy_active", "buy_done"],
+            status_filter=MediaBuyStatus.active,
+        )
+        result = self._run(req, [active, completed])
+        assert [b.media_buy_id for b in result] == ["buy_active"]
+
+    def test_buyer_refs_with_status_filter_excludes_non_matching(self):
+        active = make_media_buy("buy_active", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        completed = make_media_buy("buy_done", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
+        req = GetMediaBuysRequest(
+            buyer_refs=["ref_1"],
+            status_filter=MediaBuyStatus.active,
+        )
+        result = self._run(req, [active, completed])
+        assert [b.media_buy_id for b in result] == ["buy_active"]
+
+    def test_no_filter_defaults_to_active_only(self):
+        active = make_media_buy("buy_active", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        completed = make_media_buy("buy_done", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
+        req = GetMediaBuysRequest()
+        result = self._run(req, [active, completed])
+        assert [b.media_buy_id for b in result] == ["buy_active"]
 
 
 class TestMapCreativeStatus:

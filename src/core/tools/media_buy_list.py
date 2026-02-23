@@ -260,16 +260,17 @@ def _fetch_target_media_buys(
     today: date,
 ) -> list[MediaBuy]:
     """Fetch media buys from database matching the request filters."""
+    filter_statuses = _resolve_status_filter(req.status_filter)
+
     with get_db_session() as session:
         if req.media_buy_ids:
-            # When caller specifies exact IDs, return them regardless of status.
-            # The caller already knows which buys they want.
             stmt = select(MediaBuy).where(
                 MediaBuy.tenant_id == tenant["tenant_id"],
                 MediaBuy.principal_id == principal_id,
                 MediaBuy.media_buy_id.in_(req.media_buy_ids),
             )
-            return list(session.scalars(stmt).all())
+            buys = session.scalars(stmt).all()
+            return [buy for buy in buys if _compute_status(buy, today) in filter_statuses]
 
         if req.buyer_refs:
             stmt = select(MediaBuy).where(
@@ -277,17 +278,14 @@ def _fetch_target_media_buys(
                 MediaBuy.principal_id == principal_id,
                 MediaBuy.buyer_ref.in_(req.buyer_refs),
             )
-            return list(session.scalars(stmt).all())
+            buys = session.scalars(stmt).all()
+            return [buy for buy in buys if _compute_status(buy, today) in filter_statuses]
 
-        # No specific IDs — fetch all and apply status filter
         stmt = select(MediaBuy).where(
             MediaBuy.tenant_id == tenant["tenant_id"],
             MediaBuy.principal_id == principal_id,
         )
         all_buys = session.scalars(stmt).all()
-
-        # Determine which statuses to include
-        filter_statuses = _resolve_status_filter(req.status_filter)
         return [buy for buy in all_buys if _compute_status(buy, today) in filter_statuses]
 
 
