@@ -391,7 +391,7 @@ class GAMCreativesManager:
 
                 line_item = line_items[0]
                 # GAM Zeep objects support dict-style access for both read and write
-                current_rotation = line_item.get("creativeRotationType", "EVEN")
+                current_rotation = line_item["creativeRotationType"] if "creativeRotationType" in line_item else "EVEN"
 
                 if current_rotation != "MANUAL":
                     # Update to MANUAL rotation
