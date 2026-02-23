@@ -97,31 +97,30 @@ async def test_invalid_get_products_response():
 async def test_get_products_request_validation():
     """Test validation of get-products request parameters.
 
-    Per AdCP spec, all fields in GetProductsRequest are OPTIONAL.
+    Per AdCP spec, buying_mode is required. Two modes:
+    - 'brief': publisher curates recommendations; requires 'brief' field
+    - 'wholesale': buyer requests raw inventory; 'brief' must not be provided
     """
     async with AdCPSchemaValidator() as validator:
-        # Empty request is valid per spec
-        empty_request = {}
-        await validator.validate_request("get-products", empty_request)
+        # Wholesale mode - minimal valid request (no brief needed)
+        wholesale_request = {"buying_mode": "wholesale"}
+        await validator.validate_request("get-products", wholesale_request)
 
-        # Brief only (no brand_manifest)
-        brief_only = {"brief": "Looking for display advertising"}
-        await validator.validate_request("get-products", brief_only)
+        # Brief mode - requires buying_mode and brief
+        brief_request = {"buying_mode": "brief", "brief": "Looking for display advertising"}
+        await validator.validate_request("get-products", brief_request)
 
-        # brand_manifest only (no brief)
-        brand_only = {"brand_manifest": {"name": "Test Brand"}}
-        await validator.validate_request("get-products", brand_only)
+        # Wholesale with brand context (no brief) - brand uses domain reference
+        wholesale_with_brand = {"buying_mode": "wholesale", "brand": {"domain": "example.com"}}
+        await validator.validate_request("get-products", wholesale_with_brand)
 
-        # Full request with both
+        # Full brief request with brand
         full_request = {
+            "buying_mode": "brief",
             "brief": "Looking for display advertising",
-            "brand_manifest": {"url": "https://example.com", "name": "Example Brand"},
+            "brand": {"domain": "example.com"},
         }
         await validator.validate_request("get-products", full_request)
-
-        # Test with brand_manifest as URL string (alternative format)
-        url_request = {"brand_manifest": "https://cdn.example.com/brand-manifest.json"}
-        await validator.validate_request("get-products", url_request)
 
 
 @pytest.mark.asyncio
