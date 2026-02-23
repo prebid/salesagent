@@ -239,6 +239,14 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 
 
 # ---------------------------------------------------------------------------
+# Health and debug routes
+# ---------------------------------------------------------------------------
+
+from src.routes.health import router as health_router  # noqa: E402
+
+app.include_router(health_router)
+
+# ---------------------------------------------------------------------------
 # CORS — allow all origins (nginx handles production restrictions)
 # ---------------------------------------------------------------------------
 
@@ -309,11 +317,7 @@ async def _handle_landing_page(request: Request):
 # NOTE: These landing routes must be added BEFORE the /admin mount catch-all
 # so FastAPI matches them first. We insert at position 0 (before mounts).
 
-app.router.routes.insert(
-    0, Route("/", _handle_landing_page, methods=["GET"])
-)
-app.router.routes.insert(
-    1, Route("/landing", _handle_landing_page, methods=["GET"])
-)
+app.router.routes.insert(0, Route("/", _handle_landing_page, methods=["GET"]))
+app.router.routes.insert(1, Route("/landing", _handle_landing_page, methods=["GET"]))
 
 logger.info("FastAPI app created: MCP at /mcp, A2A at /a2a, Admin at /admin")
