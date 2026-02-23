@@ -154,8 +154,8 @@ class TestA2AAgentCardCreation:
         try:
             from src.a2a_server.adcp_a2a_server import create_agent_card
         except ImportError as e:
-            if "a2a" in str(e):
-                pytest.skip("a2a library not available in CI environment")
+            if e.name and e.name.startswith("a2a"):
+                pytest.skip(f"a2a-sdk library not installed: {e}")
             raise
 
         agent_card = create_agent_card()
@@ -403,8 +403,8 @@ def test_a2a_regression_summary():
 
         assert callable(core_get_products_tool), "REGRESSION: Core function not callable"
     except ImportError as e:
-        if "a2a" in str(e):
-            pytest.skip("a2a library not available in CI environment")
+        if e.name and e.name.startswith("a2a"):
+            pytest.skip(f"a2a-sdk library not installed: {e}")
         raise
 
     print("✅ A2A regression tests passed")

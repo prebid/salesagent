@@ -24,23 +24,16 @@ class TestCoreToolImports:
 
     def test_core_tools_are_functions_not_objects(self):
         """Test that imported core tools are actual functions, not FunctionTool objects."""
-        try:
-            from src.a2a_server.adcp_a2a_server import (
-                core_create_media_buy_tool,
-                core_get_products_tool,
-                core_get_signals_tool,
-                core_list_creatives_tool,
-                core_sync_creatives_tool,
-            )
-        except ImportError as e:
-            if "a2a" in str(e):
-                pytest.skip("a2a library not available in CI environment")
-            raise
+        from src.a2a_server.adcp_a2a_server import (
+            core_create_media_buy_tool,
+            core_get_products_tool,
+            core_list_creatives_tool,
+            core_sync_creatives_tool,
+        )
 
         tools = {
             "core_get_products_tool": core_get_products_tool,
             "core_create_media_buy_tool": core_create_media_buy_tool,
-            "core_get_signals_tool": core_get_signals_tool,
             "core_list_creatives_tool": core_list_creatives_tool,
             "core_sync_creatives_tool": core_sync_creatives_tool,
         }
@@ -59,38 +52,40 @@ class TestCoreToolImports:
                 )
 
     def test_async_functions_identified_correctly(self):
-        """Test that async functions are properly identified."""
-        try:
-            from src.a2a_server.adcp_a2a_server import core_get_products_tool, core_get_signals_tool
-        except ImportError as e:
-            if "a2a" in str(e):
-                pytest.skip("a2a library not available in CI environment")
-            raise
+        """Test that async/sync nature of each tool is correctly identified."""
+        from src.a2a_server.adcp_a2a_server import (
+            core_create_media_buy_tool,
+            core_get_products_tool,
+            core_list_creatives_tool,
+            core_sync_creatives_tool,
+        )
 
-        # These should be async functions
+        # These tools are async (they call async _impl functions)
         assert inspect.iscoroutinefunction(core_get_products_tool), "core_get_products_tool should be async"
-        assert inspect.iscoroutinefunction(core_get_signals_tool), "core_get_signals_tool should be async"
+        assert inspect.iscoroutinefunction(core_create_media_buy_tool), "core_create_media_buy_tool should be async"
+
+        # These tools are sync (they call sync _impl functions)
+        assert not inspect.iscoroutinefunction(core_list_creatives_tool), "core_list_creatives_tool should be sync"
+        assert not inspect.iscoroutinefunction(core_sync_creatives_tool), "core_sync_creatives_tool should be sync"
 
     def test_function_signatures_accessible(self):
         """Test that function signatures can be inspected (indicates proper import)."""
-        try:
-            from src.a2a_server.adcp_a2a_server import core_get_products_tool, core_get_signals_tool
-        except ImportError as e:
-            if "a2a" in str(e):
-                pytest.skip("a2a library not available in CI environment")
-            raise
+        from src.a2a_server.adcp_a2a_server import (
+            core_create_media_buy_tool,
+            core_get_products_tool,
+            core_list_creatives_tool,
+            core_sync_creatives_tool,
+        )
 
-        # Should be able to get signature without errors
-        try:
-            sig1 = inspect.signature(core_get_products_tool)
-            sig2 = inspect.signature(core_get_signals_tool)
-
-            # Should have parameters
-            assert len(sig1.parameters) > 0, "core_get_products_tool should have parameters"
-            assert len(sig2.parameters) > 0, "core_get_signals_tool should have parameters"
-
-        except Exception as e:
-            pytest.fail(f"Failed to get function signatures: {e}")
+        # All tools should have inspectable signatures with parameters
+        for name, tool in [
+            ("core_get_products_tool", core_get_products_tool),
+            ("core_create_media_buy_tool", core_create_media_buy_tool),
+            ("core_list_creatives_tool", core_list_creatives_tool),
+            ("core_sync_creatives_tool", core_sync_creatives_tool),
+        ]:
+            sig = inspect.signature(tool)
+            assert len(sig.parameters) > 0, f"{name} should have parameters"
 
 
 class TestA2AHandlerMethodCalls:
