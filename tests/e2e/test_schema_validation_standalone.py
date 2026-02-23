@@ -97,30 +97,31 @@ async def test_invalid_get_products_response():
 async def test_get_products_request_validation():
     """Test validation of get-products request parameters.
 
-    Per AdCP spec, all fields in GetProductsRequest are OPTIONAL.
+    Per AdCP spec, buying_mode is required. When buying_mode is 'brief',
+    the brief field is also required. When 'wholesale', brief must not be provided.
     """
     async with AdCPSchemaValidator() as validator:
-        # Empty request is valid per spec
-        empty_request = {}
-        await validator.validate_request("get-products", empty_request)
+        # Brief mode with brief text
+        brief_request = {"buying_mode": "brief", "brief": "Looking for display advertising"}
+        await validator.validate_request("get-products", brief_request)
 
-        # Brief only (no brand_manifest)
-        brief_only = {"brief": "Looking for display advertising"}
-        await validator.validate_request("get-products", brief_only)
+        # Wholesale mode (no brief)
+        wholesale_request = {"buying_mode": "wholesale"}
+        await validator.validate_request("get-products", wholesale_request)
 
-        # brand_manifest only (no brief)
-        brand_only = {"brand_manifest": {"name": "Test Brand"}}
-        await validator.validate_request("get-products", brand_only)
-
-        # Full request with both
+        # Brief mode with brand_manifest
         full_request = {
+            "buying_mode": "brief",
             "brief": "Looking for display advertising",
             "brand_manifest": {"url": "https://example.com", "name": "Example Brand"},
         }
         await validator.validate_request("get-products", full_request)
 
-        # Test with brand_manifest as URL string (alternative format)
-        url_request = {"brand_manifest": "https://cdn.example.com/brand-manifest.json"}
+        # Wholesale mode with brand_manifest as URL string
+        url_request = {
+            "buying_mode": "wholesale",
+            "brand_manifest": "https://cdn.example.com/brand-manifest.json",
+        }
         await validator.validate_request("get-products", url_request)
 
 
