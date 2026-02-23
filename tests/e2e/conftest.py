@@ -110,18 +110,16 @@ def docker_services_e2e(request):
 
         print(f"Using ports: MCP={mcp_port}, A2A={a2a_port}, Admin={admin_port}, Postgres={postgres_port}")
 
-        # Set environment variables for docker-compose AND for tests that read os.environ directly
-        # (e.g., test_a2a_endpoints_working.py, test_landing_pages.py use os.getenv for port lookup)
+        # Set port env vars in os.environ so that:
+        # 1. docker-compose subprocess inherits them via os.environ.copy()
+        # 2. Tests that read ports via os.getenv() (e.g., test_a2a_endpoints_working.py,
+        #    test_landing_pages.py) pick up the correct dynamic ports
         os.environ["ADCP_SALES_PORT"] = str(mcp_port)
         os.environ["A2A_PORT"] = str(a2a_port)
         os.environ["ADMIN_UI_PORT"] = str(admin_port)
         os.environ["POSTGRES_PORT"] = str(postgres_port)
 
         env = os.environ.copy()
-        env["ADCP_SALES_PORT"] = str(mcp_port)
-        env["A2A_PORT"] = str(a2a_port)
-        env["ADMIN_UI_PORT"] = str(admin_port)
-        env["POSTGRES_PORT"] = str(postgres_port)
         # Set 5 seconds interval for delivery webhooks in E2E tests
         env["DELIVERY_WEBHOOK_INTERVAL"] = "5"
         # Ensure ADCP_TESTING is passed to Docker containers (for test mode validation)
