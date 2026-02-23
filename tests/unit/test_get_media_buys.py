@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from pydantic import RootModel
 
 from src.core.schemas import (
     ApprovalStatus,
@@ -142,10 +143,12 @@ class TestResolveStatusFilter:
         assert result == {MediaBuyStatus.active, MediaBuyStatus.completed}
 
     def test_root_model_style(self):
-        """Handles RootModel (has .root attribute) from AdCP SDK."""
-        mock_root = MagicMock()
-        mock_root.root = [MediaBuyStatus.pending_activation]
-        result = _resolve_status_filter(mock_root)
+        """Handles RootModel wrapping a list (adcp SDK StatusFilter style)."""
+
+        class StatusFilter(RootModel[list[MediaBuyStatus]]):
+            pass
+
+        result = _resolve_status_filter(StatusFilter([MediaBuyStatus.pending_activation]))
         assert result == {MediaBuyStatus.pending_activation}
 
 

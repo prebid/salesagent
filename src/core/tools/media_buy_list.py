@@ -12,7 +12,7 @@ from typing import Any, cast
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
+from pydantic import RootModel, ValidationError
 from sqlalchemy import select
 
 from src.core.tool_context import ToolContext
@@ -46,6 +46,9 @@ def _get_media_buys_impl(req: GetMediaBuysRequest, ctx: Context | ToolContext | 
     """Get media buys with status, creative approval state, and optional delivery snapshots."""
     if ctx is None:
         raise ToolError("Context is required")
+
+    if req.account_id is not None:
+        raise ToolError("account_id filtering is not yet supported")
 
     testing_ctx = get_testing_context(ctx)
     principal_id = get_principal_id_from_context(ctx)
@@ -100,23 +103,7 @@ def _get_media_buys_impl(req: GetMediaBuysRequest, ctx: Context | ToolContext | 
     # Build response
     response_media_buys = []
     for buy in target_media_buys:
-        # Compute status from dates
-        if buy.start_time:
-            start_compare = buy.start_time.date()
-        else:
-            start_compare = cast(date, buy.start_date)
-
-        if buy.end_time:
-            end_compare = buy.end_time.date()
-        else:
-            end_compare = cast(date, buy.end_date)
-
-        if today < start_compare:
-            status = MediaBuyStatus.pending_activation
-        elif today > end_compare:
-            status = MediaBuyStatus.completed
-        else:
-            status = MediaBuyStatus.active
+        status = _compute_status(buy, today)
 
         # Build packages
         packages = packages_by_media_buy.get(buy.media_buy_id, [])
@@ -297,8 +284,7 @@ def _resolve_status_filter(
         # Default: active only
         return {MediaBuyStatus.active}
 
-    # Handle StatusFilter (RootModel wrapping a list) - adcp SDK types use .root
-    if hasattr(status_filter, "root"):  # noqa: rootmodel
+    if isinstance(status_filter, RootModel):
         return set(status_filter.root)
 
     if isinstance(status_filter, list):
@@ -356,26 +342,26 @@ def _fetch_creative_approvals(
         creative_stmt = select(Creative).where(Creative.creative_id.in_(creative_ids))
         creatives = {c.creative_id: c for c in session.scalars(creative_stmt).all()}
 
-    # Build approval objects grouped by (media_buy_id, package_id)
-    result: dict[tuple[str, str], list[CreativeApproval]] = {}
-    for assignment in assignments:
-        creative = creatives.get(assignment.creative_id)
-        if creative is None:
-            continue
+        # Build approval objects grouped by (media_buy_id, package_id)
+        result: dict[tuple[str, str], list[CreativeApproval]] = {}
+        for assignment in assignments:
+            creative = creatives.get(assignment.creative_id)
+            if creative is None:
+                continue
 
-        approval_status = _map_creative_status(creative.status)
-        rejection_reason = None
-        if approval_status == ApprovalStatus.rejected:
-            rejection_reason = creative.data.get("rejection_reason") if creative.data else None
+            approval_status = _map_creative_status(creative.status)
+            rejection_reason = None
+            if approval_status == ApprovalStatus.rejected:
+                rejection_reason = creative.data.get("rejection_reason") if creative.data else None
 
-        key = (assignment.media_buy_id, assignment.package_id)
-        result.setdefault(key, []).append(
-            CreativeApproval(
-                creative_id=assignment.creative_id,
-                approval_status=approval_status,
-                rejection_reason=rejection_reason,
+            key = (assignment.media_buy_id, assignment.package_id)
+            result.setdefault(key, []).append(
+                CreativeApproval(
+                    creative_id=assignment.creative_id,
+                    approval_status=approval_status,
+                    rejection_reason=rejection_reason,
+                )
             )
-        )
 
     return result
 

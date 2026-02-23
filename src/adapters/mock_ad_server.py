@@ -1303,13 +1303,8 @@ class MockAdServer(AdServerAdapter):
             start_time = buy.get("start_time", now)
             end_time = buy.get("end_time", now)
 
-            if start_time.tzinfo and not now.tzinfo:
-                check_now = now.replace(tzinfo=UTC)
-            else:
-                check_now = now
-
             campaign_duration = max((end_time - start_time).total_seconds() / 86400, 1)
-            elapsed = (check_now - start_time).total_seconds() / 86400
+            elapsed = (now - start_time).total_seconds() / 86400
             progress = max(0.0, min(elapsed / campaign_duration, 1.0))
 
             spend = total_budget * progress * random.uniform(0.85, 1.05)
