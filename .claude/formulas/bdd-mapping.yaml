@@ -1,0 +1,492 @@
+name: bdd-mapping
+description: >
+  Map adcp-req BDD scenarios to salesagent tests through a structured workflow:
+  read scenarios and trace contextgit → cross-reference with existing tests →
+  architect review → triage → implement gap tests → commit. Each atom is
+  self-contained with a fresh context window — critical for avoiding drift
+  when processing 130+ scenarios across 9 use cases.
+
+  The adcp-req project at /Users/konst/projects/adcp-req contains BDD scenarios
+  derived by AI agents from the AdCP spec, documentation, and salesagent source.
+  Each scenario has contextgit metadata linking to UC flows and business rules.
+  These are NOT human-verified golden tests — they are the best available
+  behavioral specification and must be critically evaluated, not taken at face value.
+
+variables:
+  TASK_IDS:
+    description: "Space-separated beads task IDs for UC mapping tasks (e.g., dxwd xumh 5u0n)"
+    required: true
+
+labels:
+  - "mol:bdd-mapping"
+
+iterate:
+  over: "TASK_IDS"
+  item_var: "TASK_ID"
+  all_var: "ALL_TASKS"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # ── Atom 1: Read Scenarios & Trace Sources ──────────────────
+    - id: "read-scenarios-{TASK_ID}"
+      title: "Read BDD scenarios for {TASK_ID}"
+      description: |
+        Read the BDD feature file and trace every scenario back to its sources
+        via contextgit references. This is the foundation — everything downstream
+        depends on accurate scenario understanding.
+
+        ## Instructions
+
+        1. **Read the task**: `bd show {TASK_ID}`
+           Extract the feature file path from the description.
+
+        2. **Read the feature file**:
+           The file is at `/Users/konst/projects/adcp-req/tests/features/<filename>.feature`
+           Read the ENTIRE file. Parse:
+           - Every `Scenario:` and `Scenario Outline:` with their steps
+           - Every `@contextgit` tag (e.g., `# @contextgit id=T-UC-XXX-flow upstream=[BR-UC-XXX-flow]`)
+           - Every `@post-*` tag (postcondition markers)
+           - Every `@main-flow`, `@alternative`, `@extension` tag
+           - Every `Examples:` table (for Scenario Outlines)
+
+        3. **Trace contextgit upstream references**:
+           For each scenario, read the upstream UC flow document:
+           - Flow docs are at `/Users/konst/projects/adcp-req/docs/requirements/use-cases/`
+           - Business rules at `/Users/konst/projects/adcp-req/docs/requirements/business-rules/`
+           - Field constraints at `/Users/konst/projects/adcp-req/docs/requirements/constraints/`
+
+           For EACH upstream reference, answer:
+           - What source document defines this requirement? (spec JSON schema, salesagent code, or both)
+           - Is the requirement still accurate given current salesagent code?
+           - Are there contradictions between the BDD scenario and the source?
+
+        4. **Catalog scenarios**:
+           Create a structured inventory. For each scenario:
+           - ID and title
+           - Flow type (main/alternative/extension)
+           - Postconditions being tested
+           - Upstream sources traced
+           - Accuracy assessment: ACCURATE / STALE / CONTRADICTS_CODE / CONTRADICTS_SPEC
+
+        5. **Check implementation coverage mapping**:
+           Read the implementation coverage file if it exists:
+           `/Users/konst/projects/adcp-req/.impl-coverage/BR-UC-XXX.yaml`
+           This maps UC steps to salesagent code locations — use it to understand
+           which code paths each scenario exercises.
+
+        ## Critical Thinking Rules
+
+        - Do NOT assume a BDD scenario is correct. Verify against actual code.
+        - If a scenario references behavior salesagent doesn't implement, mark it STALE.
+        - If a scenario contradicts what salesagent actually does, mark it CONTRADICTS_CODE
+          and note whether the code or the spec is likely correct.
+        - If the upstream UC flow document is vague or missing, note it explicitly.
+
+        ## Store Findings in the Bead
+
+        ```bash
+        bd update {TASK_ID} --append-notes "## BDD Scenario Inventory
+
+        ### Scenario: [title]
+        - contextgit: [id] upstream: [refs]
+        - Flow type: [main/alt/ext]
+        - Postconditions: [list]
+        - Sources traced: [UC flow doc, business rule, constraint file]
+        - Accuracy: [ACCURATE | STALE | CONTRADICTS_CODE | CONTRADICTS_SPEC]
+        - Notes: [any observations]
+
+        [repeat for each scenario]
+
+        ## Summary
+        - Total scenarios: N
+        - Accurate: N
+        - Stale: N
+        - Contradicts code: N
+        - Contradicts spec: N"
+        ```
+
+        ## Gate: Add Label
+
+        ONLY after ALL scenarios are cataloged with accuracy assessments:
+        ```bash
+        bd label add {TASK_ID} scenarios:cataloged
+        ```
+
+      acceptance: "All scenarios cataloged with accuracy assessments. contextgit references traced. scenarios:cataloged label added."
+      labels: ["atom:read-scenarios"]
+
+    # ── Atom 2: Cross-Reference with Existing Tests ─────────────
+    - id: "cross-reference-{TASK_ID}"
+      title: "Cross-reference {TASK_ID} scenarios with salesagent tests"
+      description: |
+        For each BDD scenario cataloged in {TASK_ID}, determine whether an existing
+        salesagent test covers the same behavior.
+
+        ## Precondition
+
+        Run `bd show {TASK_ID}` and verify:
+        1. Label `scenarios:cataloged` is present
+        2. Notes contain ## BDD Scenario Inventory with accuracy assessments
+
+        If ANY precondition fails: do NOT proceed.
+
+        ## Instructions
+
+        1. **Read the scenario inventory** from `bd show {TASK_ID}` notes
+
+        2. **For each ACCURATE scenario** (skip STALE and CONTRADICTS_* for now):
+
+           a. **Identify the behavior under test**: What specific behavior does this
+              scenario verify? Express as: "When [input], then [expected output/effect]"
+
+           b. **Search salesagent tests**:
+              - Search `tests/unit/` for the tool name and key assertions
+              - Search `tests/integration/` and `tests/integration_v2/` for integration coverage
+              - Search `tests/e2e/` for end-to-end coverage
+              - Use Grep to find test functions matching the scenario's behavior
+
+           c. **Classify coverage**:
+              - **COVERED**: An existing test verifies this exact behavior.
+                Note: `test_file.py::test_name` (file:line if possible)
+              - **PARTIALLY_COVERED**: A test exists but misses edge cases or doesn't
+                verify all postconditions from the BDD scenario.
+                Note: what's missing.
+              - **NOT_COVERED**: No existing test covers this behavior.
+                Note: which test file it should go in.
+              - **COVERED_DIFFERENTLY**: The behavior IS tested but the test approach
+                differs from what the BDD scenario suggests (e.g., different mock strategy,
+                different validation point). This is fine — note the existing approach.
+
+        3. **For STALE/CONTRADICTS scenarios**: Mark as DEFERRED with a note about why.
+           These may need separate investigation.
+
+        4. **Prioritize gaps**: For NOT_COVERED scenarios, assess migration risk:
+           - **HIGH_RISK**: This behavior could silently break during FastAPI migration
+             (touches routing, middleware, serialization, auth)
+           - **MEDIUM_RISK**: Important behavior but less likely to be affected by migration
+           - **LOW_RISK**: Edge case or already covered by adjacent tests
+
+        ## Store Findings
+
+        ```bash
+        bd update {TASK_ID} --append-notes "## Coverage Cross-Reference
+
+        ### [Scenario title]
+        - Behavior: When [input], then [output]
+        - Coverage: [COVERED | PARTIALLY_COVERED | NOT_COVERED | COVERED_DIFFERENTLY | DEFERRED]
+        - Existing test: [file:line or N/A]
+        - Migration risk: [HIGH | MEDIUM | LOW]
+        - Gap details: [what specific test is needed, if any]
+
+        [repeat for each scenario]
+
+        ## Gap Summary
+        - Total ACCURATE scenarios: N
+        - COVERED: N
+        - PARTIALLY_COVERED: N
+        - NOT_COVERED: N (HIGH_RISK: N, MEDIUM_RISK: N, LOW_RISK: N)
+        - DEFERRED: N"
+        ```
+
+        Write the implementation plan for gap tests to the design field:
+
+        ```bash
+        bd update {TASK_ID} --design "## Core Invariant
+        Behavioral snapshot: every BDD scenario marked ACCURATE must have a
+        corresponding salesagent test that will fail if the behavior changes.
+
+        ## Tests to Create
+        [Ordered by migration risk: HIGH first]
+
+        1. test_file.py::test_name — [scenario title] — [what to assert]
+        2. ...
+
+        ## Tests to Enhance
+        [PARTIALLY_COVERED scenarios]
+
+        1. test_file.py::test_name — add assertion for [missing postcondition]
+        2. ...
+
+        ## Deferred (Not Actionable Now)
+        - [STALE/CONTRADICTS scenarios with reasons]"
+        ```
+
+        ## Gate
+
+        ```bash
+        bd label add {TASK_ID} cross-reference:complete
+        ```
+
+      acceptance: "Every ACCURATE scenario has a coverage classification. Gap summary written. Design field has prioritized test creation plan. cross-reference:complete label added."
+      depends_on: ["read-scenarios-{TASK_ID}"]
+      labels: ["atom:cross-reference"]
+
+    # ── Atom 3: Architect Review ────────────────────────────────
+    - id: "review-{TASK_ID}"
+      title: "Review BDD mapping for {TASK_ID}"
+      description: |
+        Architect review of the cross-reference findings and test creation plan for {TASK_ID}.
+
+        ## Precondition
+
+        Run `bd show {TASK_ID}` and verify:
+        1. Labels `scenarios:cataloged` AND `cross-reference:complete` are present
+        2. Notes contain ## BDD Scenario Inventory AND ## Coverage Cross-Reference
+        3. Design contains ## Tests to Create
+
+        If ANY precondition fails: do NOT proceed.
+
+        ## Review Criteria
+
+        Read the task's notes and design fields. Evaluate:
+
+        1. **Scenario accuracy**: Were the accuracy assessments reasonable?
+           Spot-check 2-3 ACCURATE scenarios by reading the actual salesagent code.
+           If any should actually be STALE or CONTRADICTS_CODE, that's a HIGH finding.
+
+        2. **Coverage classifications**: Were NOT_COVERED vs COVERED_DIFFERENTLY
+           correctly distinguished? Sometimes a scenario IS covered by a test that
+           approaches the problem differently — that's fine, not a gap.
+
+        3. **Migration risk**: Are HIGH_RISK gaps truly high risk for FastAPI migration?
+           The key risks are: auth middleware changes, route handler signatures,
+           response serialization, context propagation, error handling middleware.
+
+        4. **Test plan quality**: Are the proposed tests specific enough to implement?
+           Each test should have: what to assert, which schema/function to test,
+           what the expected behavior is.
+
+        5. **Scope control**: Is the test plan creating too many tests? Focus on
+           HIGH_RISK and MEDIUM_RISK gaps. LOW_RISK gaps can be filed as separate
+           follow-up tasks.
+
+        6. **False negatives**: Are there obvious behaviors that SHOULD have BDD
+           scenarios but don't? (The adcp-req project may have missed things.)
+
+        ## Rate Each Finding
+
+        - **LOW**: Minor suggestion
+        - **MEDIUM**: Real concern, agent can resolve
+        - **HIGH**: Fundamental issue, user input required
+
+        ## Write Review
+
+        ```bash
+        bd update {TASK_ID} --append-notes "## Architect Review
+        - [RATING] Finding: [description]. Suggestion: [what to do]
+        ...
+
+        Overall: [ALL_LOW | NEEDS_REFINEMENT | NEEDS_USER_INPUT]"
+        ```
+
+      acceptance: "Review written to task notes with rated findings and overall verdict."
+      depends_on: ["cross-reference-{TASK_ID}"]
+      labels: ["atom:review", "atom:gate"]
+
+    # ── Atom 4: Triage ──────────────────────────────────────────
+    - id: "triage-{TASK_ID}"
+      title: "Triage review findings for {TASK_ID}"
+      description: |
+        Read the architect review and decide next steps for {TASK_ID}.
+        This is a TRIAGE atom — it routes, not executes.
+
+        ## Instructions
+
+        1. Read `bd show {TASK_ID}` — find the "## Architect Review" section in notes
+        2. Check the overall verdict:
+
+        ### If ALL_LOW:
+        No action needed. Note "Clean review — proceeding to implement."
+        Close this atom.
+
+        ### If NEEDS_REFINEMENT (has MEDIUM findings):
+        Update the design field to address MEDIUM findings:
+        ```bash
+        bd update {TASK_ID} --append-notes "## Refinement Applied
+        - [what changed and why for each MEDIUM finding]"
+        ```
+        Then update the design field's ## Tests to Create section accordingly.
+        Close this atom.
+
+        ### If NEEDS_USER_INPUT (has HIGH findings):
+        Do NOT proceed. Update task notes:
+        ```bash
+        bd update {TASK_ID} --append-notes "## BLOCKED: User Input Required
+        HIGH findings need human decision. See Architect Review above."
+        ```
+        Leave this atom OPEN.
+
+        ## Key Principle
+        Triage ROUTES work. It does not DO work.
+
+      acceptance: "Verdict acted on: clean pass noted, refinements applied, or blocked for user input."
+      depends_on: ["review-{TASK_ID}"]
+      labels: ["atom:triage"]
+
+    # ── Atom 5: Implement Gap Tests ────────────────────────────
+    - id: "implement-{TASK_ID}"
+      title: "Implement gap tests for {TASK_ID}"
+      description: |
+        Write tests for the BDD scenarios identified as NOT_COVERED or
+        PARTIALLY_COVERED in the cross-reference for {TASK_ID}.
+
+        ## Prerequisites
+
+        Run `bd show {TASK_ID}`. The bead contains everything you need:
+        - **Notes**: Scenario inventory, coverage cross-reference, architect review
+        - **Design**: Prioritized test creation plan with Core Invariant
+
+        Read ALL of these before writing any code.
+
+        ## Pre-Implementation Invariant Check
+
+        The Core Invariant is: "Every BDD scenario marked ACCURATE must have a
+        corresponding salesagent test that will fail if the behavior changes."
+
+        For each test you plan to write, verify:
+        - It tests a specific behavior from the BDD scenario
+        - It will break if that behavior changes (not just "passes because nothing happens")
+        - It follows existing test conventions in the target test file
+
+        ## Workflow
+
+        For each test in the ## Tests to Create plan (HIGH_RISK first):
+
+        1. **Read the BDD scenario** one more time to confirm understanding
+        2. **Read the salesagent code** that implements the behavior
+        3. **Write the test**:
+           - Follow TDD: write the assertion first, then build the test around it
+           - Use existing fixtures and helpers from the target test file
+           - Follow CLAUDE.md testing patterns (max 10 mocks, test YOUR code, etc.)
+           - Name clearly: `test_<uc>_<behavior>_<expected_outcome>`
+        4. **Run and verify**:
+           ```bash
+           uv run pytest tests/unit/test_<file>.py::test_<name> -x -v
+           ```
+        5. **For PARTIALLY_COVERED scenarios**: Add assertions to existing tests
+           rather than creating new test functions (less duplication)
+
+        After all tests:
+        ```bash
+        make quality
+        ```
+
+        ## When Tests Fail Unexpectedly
+
+        If a test you write reveals that salesagent does NOT behave as the BDD
+        scenario expects:
+
+        1. **STOP. This is valuable information, not a bug to fix.**
+        2. Determine: Is the BDD scenario wrong, or is the code wrong?
+        3. If the code is correct and the BDD scenario is wrong: mark the scenario
+           as CONTRADICTS_CODE in the notes and skip the test.
+        4. If the code is wrong: file a separate bug task with `bd create --type=bug`
+           and write the test as xfail with the bug ID in the reason.
+
+        ## Store Results
+
+        ```bash
+        bd update {TASK_ID} --append-notes "## Implementation Results
+        - Tests created: N
+        - Tests enhanced: N
+        - Scenarios confirmed contradicting code: N (filed as bugs)
+        - Scenarios confirmed stale: N
+
+        ## New Tests
+        - test_file.py::test_name — [scenario title] — PASS
+        [repeat]
+
+        ## Bugs Filed
+        - salesagent-XXX: [description] (from scenario [title])"
+        ```
+
+        ## If Successful
+
+        Close the original beads task:
+        ```bash
+        bd close {TASK_ID}
+        ```
+
+      acceptance: "make quality passes. All HIGH_RISK and MEDIUM_RISK gaps have tests. No existing tests modified without justification. Results documented in task notes. Original task {TASK_ID} closed."
+      depends_on: ["triage-{TASK_ID}"]
+      depends_on_prev_barrier: true
+      labels: ["atom:implement"]
+
+    # ── Atom 6: Commit ──────────────────────────────────────────
+    - id: "commit-{TASK_ID}"
+      title: "Commit BDD mapping tests for {TASK_ID}"
+      description: |
+        Commit the gap tests implemented for {TASK_ID}.
+
+        ## Instructions
+
+        1. Check what changed:
+           ```bash
+           git status
+           git diff --stat
+           ```
+
+        2. **Test change review**: If ANY existing test files were modified:
+           ```bash
+           git diff -- tests/
+           ```
+           For each change to an existing test, verify:
+           - The change adds assertions (not removes or weakens them)
+           - The change aligns with a specific BDD scenario from the cross-reference
+           - The change doesn't modify behavior that other scenarios depend on
+
+        3. Stage relevant files:
+           ```bash
+           git add <specific-test-files>
+           ```
+
+        4. Commit:
+           ```bash
+           git commit -m "feat: add behavioral snapshot tests for BR-UC-XXX ([scenario count] scenarios)"
+           ```
+           Use the UC number from the task title.
+
+        5. Verify:
+           ```bash
+           git log -1 --oneline
+           ```
+
+      acceptance: "Git commit exists for {TASK_ID} with descriptive message referencing the UC."
+      depends_on: ["implement-{TASK_ID}"]
+      labels: ["atom:commit"]
+
+# ── Finalize (after all UCs) ──────────────────────────────────
+finalize:
+  - id: coverage-report
+    title: "Generate final coverage report"
+    description: |
+      Generate a summary report of BDD-to-test coverage across all {N} use cases.
+
+      ## Instructions
+
+      1. Read the notes from each completed task:
+         ```bash
+         bd show {ALL_TASKS}
+         ```
+
+      2. Compile a cross-UC coverage summary:
+         ```
+         | UC | Scenarios | Covered | Gaps Filled | Stale | Contradicts | Bugs Filed |
+         |----+-----------+---------+-------------+-------+-------------+------------|
+         | 001 | ... | ... | ... | ... | ... | ... |
+         [repeat]
+         ```
+
+      3. Write the report to a research artifact:
+         `/Users/konst/projects/salesagent/.claude/research/bdd-coverage-report.md`
+
+      4. Sync beads and verify clean state:
+         ```bash
+         bd sync
+         git status
+         make quality
+         ```
+
+    acceptance: "Coverage report written. All {N} tasks closed. bd sync done. make quality passes."
+    depends_on_all_barriers: true
+    labels: ["atom:verify"]
