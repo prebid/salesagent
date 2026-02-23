@@ -23,6 +23,7 @@ import pytz
 from googleads import ad_manager
 from zeep.helpers import serialize_object
 
+from src.adapters.gam.utils.constants import GAM_API_VERSION
 from src.adapters.gam.utils.error_handler import with_retry
 from src.adapters.gam.utils.logging import logger
 from src.adapters.gam.utils.timeout_handler import timeout
@@ -273,7 +274,7 @@ class GAMInventoryDiscovery:
         discovered_units = []
 
         # Build statement to query ACTIVE ad units only (excludes ARCHIVED to reduce sync time)
-        statement_builder = ad_manager.StatementBuilder(version="v202505")
+        statement_builder = ad_manager.StatementBuilder(version=GAM_API_VERSION)
         statement_builder = statement_builder.Where("status != :archived").WithBindVariable("archived", "ARCHIVED")
 
         # Add incremental sync filter if requested
@@ -328,7 +329,7 @@ class GAMInventoryDiscovery:
         discovered_placements = []
 
         # Filter out ARCHIVED placements
-        statement_builder = ad_manager.StatementBuilder(version="v202505")
+        statement_builder = ad_manager.StatementBuilder(version=GAM_API_VERSION)
         statement_builder = statement_builder.Where("status != :archived").WithBindVariable("archived", "ARCHIVED")
 
         if since:
@@ -378,7 +379,7 @@ class GAMInventoryDiscovery:
         label_service = self.client.GetService("LabelService")
         discovered_labels = []
 
-        statement_builder = ad_manager.StatementBuilder(version="v202505")
+        statement_builder = ad_manager.StatementBuilder(version=GAM_API_VERSION)
 
         # Note: LabelService doesn't support lastModifiedDateTime filtering in GAM API
         # So we always fetch all labels, even during incremental sync
@@ -440,7 +441,7 @@ class GAMInventoryDiscovery:
         discovered_keys = []
 
         # Discover keys first
-        statement_builder = ad_manager.StatementBuilder(version="v202505")
+        statement_builder = ad_manager.StatementBuilder(version=GAM_API_VERSION)
 
         # Note: CustomTargetingService doesn't support lastModifiedDateTime filtering in GAM API
         # So we always fetch all keys, even during incremental sync
@@ -519,7 +520,7 @@ class GAMInventoryDiscovery:
         discovered_values = []
 
         statement_builder = (
-            ad_manager.StatementBuilder(version="v202505")
+            ad_manager.StatementBuilder(version=GAM_API_VERSION)
             .Where("customTargetingKeyId = :keyId")
             .WithBindVariable("keyId", int(key_id))
         )
@@ -574,7 +575,7 @@ class GAMInventoryDiscovery:
 
         # Only fetch FIRST_PARTY segments (skip THIRD_PARTY to massively reduce sync time)
         # Google makes all 3rd party segments available to everyone, so they're huge and not tenant-specific
-        statement_builder = ad_manager.StatementBuilder(version="v202505")
+        statement_builder = ad_manager.StatementBuilder(version=GAM_API_VERSION)
         statement_builder = statement_builder.Where("type = :type").WithBindVariable("type", "FIRST_PARTY")
 
         if since:

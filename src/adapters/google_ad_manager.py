@@ -39,6 +39,7 @@ from src.adapters.gam.managers.orders import (
     NON_GUARANTEED_LINE_ITEM_TYPES,
 )
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
+from src.adapters.gam.utils.constants import GAM_API_VERSION
 from src.adapters.gam_data_freshness import validate_and_log_freshness
 from src.core.audit_logger import AuditLogger
 from src.core.schemas import (
@@ -138,7 +139,7 @@ class GoogleAdManager(AdServerAdapter):
             # Auto-detect trafficker_id if not provided
             if not self.trafficker_id:
                 try:
-                    user_service = self.client.GetService("UserService", version="v202411")
+                    user_service = self.client.GetService("UserService", version=GAM_API_VERSION)
                     current_user = user_service.getCurrentUser()
                     self.trafficker_id = str(current_user["id"])
                     logger.info(
