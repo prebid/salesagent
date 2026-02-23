@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     "adcp>=3.2.0",
-    "fastmcp>=2.14.0", # Minimum for MCP 2025-11-25 spec and all security patches
+    "fastmcp>=3.0.2", # v3 for combine_lifespans, better FastAPI integration
     "google-generativeai>=0.5.4",
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",

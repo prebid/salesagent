@@ -46,9 +46,11 @@ class TestListTasksTool:
 
     def _get_list_tasks_fn(self):
         """Get the list_tasks function from MCP tool registry."""
+        import asyncio
+
         from src.core.main import mcp
 
-        tool = mcp._tool_manager._tools.get("list_tasks")
+        tool = asyncio.new_event_loop().run_until_complete(mcp.get_tool("list_tasks"))
         assert tool is not None, "list_tasks should be registered (unified mode is default)"
         return tool.fn
 
@@ -132,9 +134,11 @@ class TestGetTaskTool:
 
     def _get_get_task_fn(self):
         """Get the get_task function from MCP tool registry."""
+        import asyncio
+
         from src.core.main import mcp
 
-        tool = mcp._tool_manager._tools.get("get_task")
+        tool = asyncio.new_event_loop().run_until_complete(mcp.get_tool("get_task"))
         assert tool is not None, "get_task should be registered (unified mode is default)"
         return tool.fn
 
@@ -207,9 +211,11 @@ class TestCompleteTaskTool:
 
     def _get_complete_task_fn(self):
         """Get the complete_task function from MCP tool registry."""
+        import asyncio
+
         from src.core.main import mcp
 
-        tool = mcp._tool_manager._tools.get("complete_task")
+        tool = asyncio.new_event_loop().run_until_complete(mcp.get_tool("complete_task"))
         assert tool is not None, "complete_task should be registered (unified mode is default)"
         return tool.fn
 
