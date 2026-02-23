@@ -2452,10 +2452,8 @@ async def _create_media_buy_impl(
                 product_format_keys: set[tuple[str | None, str]] = set()
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
-                        # pkg_product.format_ids are dicts from database JSONB (type annotation says FormatId but runtime is dict)
-                        agent_url = fmt["agent_url"]  # type: ignore[index]
-                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
-                        product_format_keys.add((normalized_url, fmt["id"]))  # type: ignore[index]
+                        normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
+                        product_format_keys.add((normalized_url, fmt.id))
 
                 # Build set of requested format keys for comparison
                 requested_format_keys: set[tuple[str | None, str]] = set()
