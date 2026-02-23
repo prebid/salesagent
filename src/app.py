@@ -250,4 +250,70 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logger.info("FastAPI app created: MCP at /mcp, A2A at /a2a")
+# ---------------------------------------------------------------------------
+# Admin UI — mount Flask admin via WSGIMiddleware
+# ---------------------------------------------------------------------------
+
+from starlette.middleware.wsgi import WSGIMiddleware  # noqa: E402
+
+from src.admin.app import create_app  # noqa: E402
+
+flask_admin_app, _ = create_app()
+admin_wsgi = WSGIMiddleware(flask_admin_app)
+
+# Mount Flask admin at all paths it handles.
+# Order matters: specific routes before catch-all.
+_ADMIN_PATHS = ["/admin", "/static", "/auth", "/api", "/callback", "/logout", "/login", "/signup", "/test"]
+
+for _path in _ADMIN_PATHS:
+    app.mount(_path, admin_wsgi)
+
+# Tenant-specific admin: /tenant/{tenant_id}/admin/...
+app.mount("/tenant", admin_wsgi)
+
+
+# ---------------------------------------------------------------------------
+# Landing page routes
+# ---------------------------------------------------------------------------
+
+from fastapi.responses import HTMLResponse  # noqa: E402
+
+from src.core.domain_routing import route_landing_page  # noqa: E402
+from src.landing import generate_tenant_landing_page  # noqa: E402
+from src.landing.landing_page import generate_fallback_landing_page  # noqa: E402
+
+
+async def _handle_landing_page(request: Request):
+    """Common landing page logic for root and /landing routes."""
+    result = route_landing_page(dict(request.headers))
+    logger.info(
+        f"[LANDING] Routing decision: type={result.type}, host={result.effective_host}, "
+        f"tenant={'yes' if result.tenant else 'no'}"
+    )
+
+    if result.type in ("custom_domain", "subdomain") and result.tenant:
+        try:
+            html_content = generate_tenant_landing_page(result.tenant, result.effective_host)
+            return HTMLResponse(content=html_content)
+        except Exception as e:
+            logger.error(f"Error generating landing page: {e}", exc_info=True)
+            return HTMLResponse(
+                content=generate_fallback_landing_page(
+                    f"Error generating landing page for {result.tenant.get('name', 'tenant')}"
+                )
+            )
+
+    return HTMLResponse(content=generate_fallback_landing_page("No tenant found"))
+
+
+# NOTE: These landing routes must be added BEFORE the /admin mount catch-all
+# so FastAPI matches them first. We insert at position 0 (before mounts).
+
+app.router.routes.insert(
+    0, Route("/", _handle_landing_page, methods=["GET"])
+)
+app.router.routes.insert(
+    1, Route("/landing", _handle_landing_page, methods=["GET"])
+)
+
+logger.info("FastAPI app created: MCP at /mcp, A2A at /a2a, Admin at /admin")

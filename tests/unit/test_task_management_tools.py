@@ -66,9 +66,9 @@ class TestListTasksTool:
         ]
 
         with (
-            patch("src.core.main.get_principal_from_context") as mock_get_principal,
-            patch("src.core.main.set_current_tenant"),
-            patch("src.core.main.get_db_session", return_value=mock_db_session),
+            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
+            patch("src.core.tools.task_management.set_current_tenant"),
+            patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
@@ -89,9 +89,9 @@ class TestListTasksTool:
         ]
 
         with (
-            patch("src.core.main.get_principal_from_context") as mock_get_principal,
-            patch("src.core.main.set_current_tenant"),
-            patch("src.core.main.get_db_session", return_value=mock_db_session),
+            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
+            patch("src.core.tools.task_management.set_current_tenant"),
+            patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
@@ -150,9 +150,9 @@ class TestGetTaskTool:
         mock_db_session.scalars.return_value.all.return_value = []  # no mappings
 
         with (
-            patch("src.core.main.get_principal_from_context") as mock_get_principal,
-            patch("src.core.main.set_current_tenant"),
-            patch("src.core.main.get_db_session", return_value=mock_db_session),
+            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
+            patch("src.core.tools.task_management.set_current_tenant"),
+            patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
@@ -168,9 +168,9 @@ class TestGetTaskTool:
         mock_db_session.scalars.return_value.first.return_value = None
 
         with (
-            patch("src.core.main.get_principal_from_context") as mock_get_principal,
-            patch("src.core.main.set_current_tenant"),
-            patch("src.core.main.get_db_session", return_value=mock_db_session),
+            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
+            patch("src.core.tools.task_management.set_current_tenant"),
+            patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
@@ -226,9 +226,9 @@ class TestCompleteTaskTool:
         mock_db_session.scalars.return_value.first.return_value = sample_pending_step
 
         with (
-            patch("src.core.main.get_principal_from_context") as mock_get_principal,
-            patch("src.core.main.set_current_tenant"),
-            patch("src.core.main.get_db_session", return_value=mock_db_session),
+            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
+            patch("src.core.tools.task_management.set_current_tenant"),
+            patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
@@ -243,8 +243,8 @@ class TestCompleteTaskTool:
         complete_task_fn = self._get_complete_task_fn()
 
         with (
-            patch("src.core.main.get_principal_from_context") as mock_get_principal,
-            patch("src.core.main.set_current_tenant"),
+            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
+            patch("src.core.tools.task_management.set_current_tenant"),
         ):
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 

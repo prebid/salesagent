@@ -1,6 +1,5 @@
 import logging
 import os
-from datetime import UTC, datetime
 from typing import Any
 
 from fastmcp import FastMCP
@@ -10,7 +9,6 @@ from rich.console import Console
 from sqlalchemy import select
 
 from src.adapters.mock_creative_engine import MockCreativeEngine
-from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     get_principal_from_context,
 )
@@ -29,14 +27,12 @@ from src.core.config_loader import (
 )
 from src.core.database.database import init_db
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Context as DBContext  # Avoid collision with fastmcp.Context
+from src.core.database.models import Principal as ModelPrincipal
+from src.core.database.models import Product as ModelProduct
 from src.core.database.models import (
-    ObjectWorkflowMapping,
     Tenant,
     WorkflowStep,
 )
-from src.core.database.models import Principal as ModelPrincipal
-from src.core.database.models import Product as ModelProduct
 from src.core.domain_config import (
     extract_subdomain_from_host,
     is_sales_agent_domain,
@@ -631,370 +627,9 @@ async def health_config(request: Request):
         )
 
 
-# Unified mode: combine Admin UI with MCP server in single process
-# Default to enabled - set ADCP_UNIFIED_MODE=false to disable
-unified_mode = os.environ.get("ADCP_UNIFIED_MODE", "true").lower() not in ("false", "0", "no")
-logger.info(f"STARTUP: ADCP_UNIFIED_MODE = {unified_mode}")
-if unified_mode:
-    from fastapi.middleware.wsgi import WSGIMiddleware
-    from fastapi.responses import HTMLResponse, RedirectResponse
 
-    from src.admin.app import create_app
-
-    # Create Flask app and get the app instance
-    flask_admin_app, _ = create_app()
-
-    # Create WSGI middleware for Flask app
-    admin_wsgi = WSGIMiddleware(flask_admin_app)
-
-    logger.info("STARTUP: Registering unified mode routes...")
-
-    logger.info("STARTUP: ADCP_UNIFIED_MODE enabled, registering routes...")
-
-    async def handle_landing_page(request: Request):
-        """Common landing page logic for both root and /landing routes."""
-        from src.core.domain_routing import route_landing_page
-
-        # Use centralized routing logic
-        result = route_landing_page(dict(request.headers))
-
-        logger.info(
-            f"[LANDING] Routing decision: type={result.type}, host={result.effective_host}, "
-            f"tenant={'yes' if result.tenant else 'no'}"
-        )
-
-        # Handle routing based on result type
-        if result.type in ("custom_domain", "subdomain") and result.tenant:
-            # Show agent landing page for tenant domains
-            try:
-                html_content = generate_tenant_landing_page(result.tenant, result.effective_host)
-                return HTMLResponse(content=html_content)
-            except Exception as e:
-                logger.error(f"Error generating landing page: {e}", exc_info=True)
-                from src.landing.landing_page import generate_fallback_landing_page
-
-                return HTMLResponse(
-                    content=generate_fallback_landing_page(
-                        f"Error generating landing page for {result.tenant.get('name', 'tenant')}"
-                    )
-                )
-
-        # Fallback for unrecognized domains or errors
-        from src.landing.landing_page import generate_fallback_landing_page
-
-        return HTMLResponse(content=generate_fallback_landing_page("No tenant found"))
-
-    # Task Management Tools (for HITL)
-
-    @mcp.tool
-    def list_tasks(
-        status: str | None = None,
-        object_type: str | None = None,
-        object_id: str | None = None,
-        limit: int = 20,
-        offset: int = 0,
-        context: Context | None = None,
-    ) -> dict[str, Any]:
-        """List workflow tasks with filtering options.
-
-        Args:
-            status: Filter by task status ("pending", "in_progress", "completed", "failed", "requires_approval")
-            object_type: Filter by object type ("media_buy", "creative", "product")
-            object_id: Filter by specific object ID
-            limit: Maximum number of tasks to return (default: 20)
-            offset: Number of tasks to skip (default: 0)
-            context: MCP context (automatically provided)
-
-        Returns:
-            Dict containing tasks list and pagination info
-        """
-
-        # Establish tenant context first (CRITICAL for multi-tenancy)
-        # This resolves tenant from headers (apx-incoming-host, host, x-adcp-tenant)
-        # and sets it in the ContextVar before any database queries
-        principal_id, tenant = get_principal_from_context(context, require_valid_token=True)
-
-        if not tenant:
-            raise ToolError("No tenant context available. Check x-adcp-auth token and host headers.")
-
-        # Set tenant context explicitly for this async context
-        set_current_tenant(tenant)
-
-        with get_db_session() as session:
-            # Base query for workflow steps in this tenant
-            # WorkflowStep doesn't have tenant_id directly - filter via Context join
-            stmt = select(WorkflowStep).join(DBContext).filter(DBContext.tenant_id == tenant["tenant_id"])
-
-            # Apply status filter
-            if status:
-                stmt = stmt.where(WorkflowStep.status == status)
-
-            # Apply object type/ID filters
-            if object_type and object_id:
-                stmt = stmt.join(ObjectWorkflowMapping).where(
-                    ObjectWorkflowMapping.object_type == object_type, ObjectWorkflowMapping.object_id == object_id
-                )
-            elif object_type:
-                stmt = stmt.join(ObjectWorkflowMapping).where(ObjectWorkflowMapping.object_type == object_type)
-
-            # Get total count before pagination
-            from sqlalchemy import func
-
-            total = session.scalar(select(func.count()).select_from(stmt.subquery()))
-
-            # Apply pagination and ordering
-            tasks = session.scalars(stmt.order_by(WorkflowStep.created_at.desc()).offset(offset).limit(limit)).all()
-
-            # Format tasks for response
-            formatted_tasks = []
-            for task in tasks:
-                # Get associated objects
-                mapping_stmt = select(ObjectWorkflowMapping).filter_by(step_id=task.step_id)
-                mappings = session.scalars(mapping_stmt).all()
-
-                formatted_task = {
-                    "task_id": task.step_id,
-                    "status": task.status,
-                    "type": task.step_type,
-                    "tool_name": task.tool_name,
-                    "owner": task.owner,
-                    "created_at": (
-                        task.created_at.isoformat() if hasattr(task.created_at, "isoformat") else str(task.created_at)
-                    ),
-                    "updated_at": None,  # WorkflowStep doesn't have updated_at field
-                    "context_id": task.context_id,
-                    "associated_objects": [
-                        {"type": m.object_type, "id": m.object_id, "action": m.action} for m in mappings
-                    ],
-                }
-
-                # Add error message if failed
-                if task.status == "failed" and task.error_message:
-                    formatted_task["error_message"] = task.error_message
-
-                # Add basic request info if available
-                if task.request_data:
-                    if isinstance(task.request_data, dict):
-                        formatted_task["summary"] = {  # type: ignore[assignment]
-                            "operation": task.request_data.get("operation"),
-                            "media_buy_id": task.request_data.get("media_buy_id"),
-                            "po_number": (
-                                task.request_data.get("request", {}).get("po_number")
-                                if task.request_data.get("request")
-                                else None
-                            ),
-                        }
-
-                formatted_tasks.append(formatted_task)
-
-            return {
-                "tasks": formatted_tasks,
-                "total": total,
-                "offset": offset,
-                "limit": limit,
-                "has_more": offset + limit < total if total is not None else False,
-            }
-
-    @mcp.tool
-    def get_task(task_id: str, context: Context | None = None) -> dict[str, Any]:
-        """Get detailed information about a specific task.
-
-        Args:
-            task_id: The unique task/workflow step ID
-            context: MCP context (automatically provided)
-
-        Returns:
-            Dict containing complete task details
-        """
-
-        # Establish tenant context first (CRITICAL for multi-tenancy)
-        principal_id, tenant = get_principal_from_context(context, require_valid_token=True)
-
-        if not tenant:
-            raise ToolError("No tenant context available. Check x-adcp-auth token and host headers.")
-
-        # Set tenant context explicitly for this async context
-        set_current_tenant(tenant)
-
-        with get_db_session() as session:
-            # Find the task in this tenant
-            stmt = (
-                select(WorkflowStep)
-                .join(DBContext)
-                .where(WorkflowStep.step_id == task_id, DBContext.tenant_id == tenant["tenant_id"])
-            )
-            task = session.scalars(stmt).first()
-
-            if not task:
-                raise ValueError(f"Task {task_id} not found")
-
-            # Get associated objects
-            mapping_stmt2 = select(ObjectWorkflowMapping).filter_by(step_id=task_id)
-            mappings = session.scalars(mapping_stmt2).all()
-
-            # Build detailed response
-            task_detail = {
-                "task_id": task.step_id,
-                "context_id": task.context_id,
-                "status": task.status,
-                "type": task.step_type,
-                "tool_name": task.tool_name,
-                "owner": task.owner,
-                "created_at": (
-                    task.created_at.isoformat() if hasattr(task.created_at, "isoformat") else str(task.created_at)
-                ),
-                "updated_at": None,  # WorkflowStep doesn't have updated_at field
-                "request_data": task.request_data,
-                "response_data": task.response_data,
-                "error_message": task.error_message,
-                "associated_objects": [
-                    {
-                        "type": m.object_type,
-                        "id": m.object_id,
-                        "action": m.action,
-                        "created_at": (
-                            m.created_at.isoformat() if hasattr(m.created_at, "isoformat") else str(m.created_at)
-                        ),
-                    }
-                    for m in mappings
-                ],
-            }
-
-            return task_detail
-
-    @mcp.tool
-    def complete_task(
-        task_id: str,
-        status: str = "completed",
-        response_data: dict[str, Any] | None = None,
-        error_message: str | None = None,
-        context: Context | None = None,
-    ) -> dict[str, Any]:
-        """Complete a pending task (simulates human approval or async completion).
-
-        Args:
-            task_id: The unique task/workflow step ID
-            status: New status ("completed" or "failed")
-            response_data: Optional response data for completed tasks
-            error_message: Error message if status is "failed"
-            context: MCP context (automatically provided)
-
-        Returns:
-            Dict containing task completion status
-        """
-
-        # Establish tenant context first (CRITICAL for multi-tenancy)
-        principal_id, tenant = get_principal_from_context(context, require_valid_token=True)
-
-        if not tenant:
-            raise ToolError("No tenant context available. Check x-adcp-auth token and host headers.")
-
-        # Set tenant context explicitly for this async context
-        set_current_tenant(tenant)
-
-        if status not in ["completed", "failed"]:
-            raise ValueError(f"Invalid status '{status}'. Must be 'completed' or 'failed'")
-
-        with get_db_session() as session:
-            # Find the task in this tenant
-            stmt = (
-                select(WorkflowStep)
-                .join(DBContext)
-                .where(WorkflowStep.step_id == task_id, DBContext.tenant_id == tenant["tenant_id"])
-            )
-            task = session.scalars(stmt).first()
-
-            if not task:
-                raise ValueError(f"Task {task_id} not found")
-
-            if task.status not in ["pending", "in_progress", "requires_approval"]:
-                raise ValueError(f"Task {task_id} is already {task.status} and cannot be completed")
-
-            # Update task status
-            task.status = status
-            completed_time = datetime.now(UTC)
-            task.completed_at = completed_time
-
-            if status == "completed":
-                task.response_data = response_data or {"manually_completed": True, "completed_by": principal_id}
-                task.error_message = None
-            else:  # failed
-                task.error_message = error_message or "Task marked as failed manually"
-                if response_data:
-                    task.response_data = response_data
-
-            session.commit()
-
-            # Log the completion
-            audit_logger = get_audit_logger("task_management", tenant["tenant_id"])
-            audit_logger.log_operation(
-                operation="complete_task",
-                principal_name="Manual Completion",
-                principal_id=principal_id or "unknown",
-                adapter_id="system",
-                success=True,
-                details={
-                    "task_id": task_id,
-                    "new_status": status,
-                    "original_status": "pending",  # We know it was pending/in_progress
-                    "task_type": task.step_type,
-                },
-            )
-
-            return {
-                "task_id": task_id,
-                "status": status,
-                "message": f"Task {task_id} marked as {status}",
-                "completed_at": completed_time.isoformat(),
-                "completed_by": principal_id,
-            }
-
-    @mcp.custom_route("/", methods=["GET"])
-    async def root(request: Request):
-        """Root route handler for all domains."""
-        return await handle_landing_page(request)
-
-    @mcp.custom_route("/landing", methods=["GET"])
-    async def landing_page(request: Request):
-        """Landing page route for external domains."""
-        return await handle_landing_page(request)
-
-    logger.info("STARTUP: Registered root route")
-
-    @mcp.custom_route(
-        "/admin/{path:path}",
-        methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
-    )
-    async def admin_handler(request: Request, path: str = ""):
-        """Handle admin UI requests."""
-        # Forward to Flask app
-        scope = dict(request.scope)
-        scope["path"] = f"/{path}" if path else "/"
-
-        receive = request.receive
-        send = request._send
-
-        await admin_wsgi(scope, receive, send)
-
-    @mcp.custom_route(  # type: ignore[arg-type]
-        "/tenant/{tenant_id}/admin/{path:path}",
-        methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
-    )
-    async def tenant_admin_handler(request: Request, tenant_id: str, path: str = ""):
-        """Handle tenant-specific admin requests."""
-        # Forward to Flask app with tenant context
-        scope = dict(request.scope)
-        scope["path"] = f"/tenant/{tenant_id}/{path}" if path else f"/tenant/{tenant_id}"
-
-        receive = request.receive
-        send = request._send
-
-        await admin_wsgi(scope, receive, send)
-
-    @mcp.custom_route("/tenant/{tenant_id}", methods=["GET"])  # type: ignore[arg-type]
-    async def tenant_root(request: Request, tenant_id: str):
-        """Redirect to tenant admin."""
-        return RedirectResponse(url=f"/tenant/{tenant_id}/admin/")
+# Admin and landing routes moved to src/app.py (FastAPI migration).
+# Task management tools extracted to src/core/tools/task_management.py.
 
 
 # Import MCP tools from separate modules at the end to avoid circular imports
@@ -1010,8 +645,7 @@ from src.core.tools.media_buy_update import update_media_buy
 from src.core.tools.performance import update_performance_index
 from src.core.tools.products import get_products
 from src.core.tools.properties import list_authorized_properties
-
-# Signals tools removed - should come from dedicated signals agents, not sales agent
+from src.core.tools.task_management import complete_task, get_task, list_tasks
 
 # Register tools with MCP (must be done after imports to avoid circular dependency)
 # This breaks the circular import: tool modules no longer import mcp from main.py
@@ -1026,3 +660,6 @@ mcp.tool()(with_error_logging(create_media_buy))
 mcp.tool()(with_error_logging(update_media_buy))
 mcp.tool()(with_error_logging(get_media_buy_delivery))
 mcp.tool()(with_error_logging(update_performance_index))
+mcp.tool()(with_error_logging(list_tasks))
+mcp.tool()(with_error_logging(get_task))
+mcp.tool()(with_error_logging(complete_task))
