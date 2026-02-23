@@ -666,6 +666,7 @@ class TestA2ASkillInvocation:
                     "optimize_media_buy",
                     "list_creative_formats",  # Keep existing creative format endpoint
                     "list_authorized_properties",  # Added for AdCP compliance
+                    "get_media_buys",
                 ], f"Skill {skill_name} not in expected skill list"
             except Exception as e:
                 pytest.fail(f"Skill {skill_name} should be handled but caused error: {e}")
