@@ -158,7 +158,7 @@ class TestA2AErrorPropagation:
 
         for part in artifact.parts:
             # Check for DataPart with root.data structure
-            if hasattr(part, "root") and hasattr(part.root, "data"):
+            if hasattr(part, "root") and hasattr(part.root, "data"):  # noqa: rootmodel
                 return part.root.data
             # Check for direct data attribute
             if hasattr(part, "data") and isinstance(part.data, dict):
@@ -236,7 +236,6 @@ class TestA2AErrorPropagation:
                         budget=10000.0,
                     )
                 ],
-
                 "start_time": start_time,
                 "end_time": end_time,
             }
@@ -286,7 +285,6 @@ class TestA2AErrorPropagation:
                         budget=10000.0,
                     )
                 ],
-
                 "start_time": start_time,
                 "end_time": end_time,
             }
@@ -302,9 +300,9 @@ class TestA2AErrorPropagation:
 
             # CRITICAL ASSERTIONS: Success response
             assert artifact_data["success"] is True, "success must be True for successful operation"
-            assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
-                "errors field must be None or empty array for success"
-            )
+            assert (
+                artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0
+            ), "errors field must be None or empty array for success"
             assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
             assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
@@ -343,7 +341,6 @@ class TestA2AErrorPropagation:
                         budget=10000.0,
                     )
                 ],
-
                 "start_time": start_time,
                 "end_time": end_time,
             }

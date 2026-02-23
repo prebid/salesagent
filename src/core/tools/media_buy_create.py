@@ -20,11 +20,9 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.format import Assets
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
 from adcp.types.generated_poc.core.targeting import TargetingOverlay
 from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
-from adcp.utils.format_assets import get_individual_assets, has_assets
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -492,7 +490,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         # Legacy dict format (Budget object) - extract total
                         total_budget = float(budget_data.get("total", 0.0))
                         budget = total_budget  # MediaPackage expects float
-                    elif isinstance(budget_data, (int, float)):
+                    elif isinstance(budget_data, int | float):
                         # AdCP 2.5.0 format - flat number
                         total_budget = float(budget_data)
                         budget = total_budget  # MediaPackage expects float
@@ -819,11 +817,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     # Add impression tracker URL in the format expected by GAM adapter
                     if impression_tracker_url:
-                        asset["delivery_settings"] = {
-                            "tracking_urls": {
-                                "impression": [impression_tracker_url]
-                            }
-                        }
+                        asset["delivery_settings"] = {"tracking_urls": {"impression": [impression_tracker_url]}}
 
                     # GAM requires width, height, and url for creative upload
                     # Validate required fields and accumulate all errors
@@ -2047,7 +2041,7 @@ async def _create_media_buy_impl(
                             # ADCP 2.5.0 sends flat numbers, but we normalize to object with currency for DB
                             budget_value: dict[str, Any] | None = None
                             if req_pkg.budget is not None:
-                                if isinstance(req_pkg.budget, (int, float)):
+                                if isinstance(req_pkg.budget, int | float):
                                     # ADCP 2.5.0 flat format: normalize to object with currency from pricing
                                     package_currency = request_currency  # Use request-level currency
                                     if pricing_info_for_package:
@@ -2084,7 +2078,7 @@ async def _create_media_buy_impl(
                     if budget_value:
                         if isinstance(budget_value, dict):
                             budget_total = budget_value.get("total")
-                        elif isinstance(budget_value, (int, float)):
+                        elif isinstance(budget_value, int | float):
                             budget_total = float(budget_value)
 
                     bid_price_value = None
@@ -2529,9 +2523,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         # pkg_product.format_ids are dicts from database JSONB
@@ -2644,7 +2638,7 @@ async def _create_media_buy_impl(
                     raw_budget = matching_package.budget
                     # Normalize budget: MediaPackage expects float | None (ADCP 2.5.0)
                     if raw_budget is not None:
-                        if isinstance(raw_budget, (int, float)):
+                        if isinstance(raw_budget, int | float):
                             # ADCP 2.5.0 flat format: use as-is (float)
                             package_budget_value = float(raw_budget)
                         elif isinstance(raw_budget, dict):
@@ -2878,7 +2872,7 @@ async def _create_media_buy_impl(
                     if budget_data:
                         if isinstance(budget_data, dict):
                             budget_total = budget_data.get("total")
-                        elif isinstance(budget_data, (int, float)):
+                        elif isinstance(budget_data, int | float):
                             budget_total = float(budget_data)
 
                     bid_price_value = None
@@ -3086,9 +3080,7 @@ async def _create_media_buy_impl(
                                             )
 
                                     # Extract URL and dimensions using shared helper
-                                    url, width, height = extract_media_url_and_dimensions(
-                                        creative_data, format_spec
-                                    )
+                                    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
 
                                     # Extract click-through URL separately from media URL (with macro substitution)
                                     click_url = extract_click_url(creative_data, format_spec)
@@ -3111,9 +3103,7 @@ async def _create_media_buy_impl(
                                     # Add impression tracker URL in the format expected by GAM adapter
                                     if impression_tracker_url:
                                         asset["delivery_settings"] = {
-                                            "tracking_urls": {
-                                                "impression": [impression_tracker_url]
-                                            }
+                                            "tracking_urls": {"impression": [impression_tracker_url]}
                                         }
 
                                     # Validate required fields - FAIL FAST, do not skip

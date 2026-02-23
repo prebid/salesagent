@@ -283,7 +283,7 @@ repos:
           - types-pytz
           - types-Markdown
           - types-waitress
-          - adcp>=3.0.0
+          - adcp==3.2.0
           - fastmcp
           - alembic
         files: '^src/'

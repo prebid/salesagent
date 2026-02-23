@@ -1,9 +1,12 @@
 import random
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    from src.core.schemas import Snapshot
+
+from adcp.types import BrandManifest
 from adcp.types.aliases import Package as ResponsePackage
-from adcp.types.generated_poc.core.brand_manifest import BrandManifest
 from pydantic import Field
 
 from src.adapters.base import (
@@ -1278,6 +1281,64 @@ class MockAdServer(AdServerAdapter):
             by_package=by_package,
             currency="USD",
         )
+
+    def get_packages_snapshot(
+        self, package_refs: list[tuple[str, str, str | None]]
+    ) -> dict[str, dict[str, "Snapshot | None"]]:
+        """Return simulated near-real-time delivery snapshots for packages."""
+        from datetime import UTC, datetime
+
+        from src.core.schemas import DeliveryStatus, Snapshot
+
+        result: dict[str, dict[str, Snapshot | None]] = {}
+        now = datetime.now(UTC)
+
+        for media_buy_id, package_id, _line_item_id in package_refs:
+            buy = self._media_buys.get(media_buy_id)
+            if not buy:
+                result.setdefault(media_buy_id, {})[package_id] = None
+                continue
+
+            total_budget = float(buy.get("total_budget", 0))
+            start_time = buy.get("start_time", now)
+            end_time = buy.get("end_time", now)
+
+            if start_time.tzinfo and not now.tzinfo:
+                check_now = now.replace(tzinfo=UTC)
+            else:
+                check_now = now
+
+            campaign_duration = max((end_time - start_time).total_seconds() / 86400, 1)
+            elapsed = (check_now - start_time).total_seconds() / 86400
+            progress = max(0.0, min(elapsed / campaign_duration, 1.0))
+
+            spend = total_budget * progress * random.uniform(0.85, 1.05)
+            impressions = spend / 0.01  # $10 CPM
+
+            pacing_index = (progress / max(elapsed / campaign_duration, 0.001)) if elapsed > 0 else 1.0
+            pacing_index = round(min(pacing_index, 5.0), 2)
+
+            if elapsed <= 0:
+                delivery_status = DeliveryStatus.not_delivering
+            elif progress >= 1.0:
+                delivery_status = DeliveryStatus.completed
+            elif impressions < 100:
+                delivery_status = DeliveryStatus.not_delivering
+            else:
+                delivery_status = DeliveryStatus.delivering
+
+            snapshot = Snapshot(
+                as_of=now,
+                impressions=impressions,
+                spend=spend,
+                clicks=impressions * 0.01,
+                pacing_index=pacing_index,
+                delivery_status=delivery_status,
+                staleness_seconds=900,
+            )
+            result.setdefault(media_buy_id, {})[package_id] = snapshot
+
+        return result
 
     def update_media_buy_performance_index(
         self, media_buy_id: str, package_performance: list[PackagePerformance]
