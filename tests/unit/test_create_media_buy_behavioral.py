@@ -511,29 +511,119 @@ class TestCreativeUploadFailure:
     """GAP-004: Creative upload failure raises CREATIVE_UPLOAD_FAILED.
 
     The upload exception wrapping is at media_buy_create.py:3162-3168.
-    Testing the full _create_media_buy_impl path to reach that point requires
-    traversing the entire auto-approval pipeline. We verify this with:
-    1. A structural test confirming the pattern exists in source
+    We verify this with:
+    1. A behavioral test exercising the actual code path through _create_media_buy_impl
     2. A behavioral test of the ToolError wrapping logic
     """
 
-    def test_creative_upload_failure_pattern_exists(self):
-        """Verify the CREATIVE_UPLOAD_FAILED error wrapping exists in source.
+    @pytest.mark.asyncio
+    async def test_creative_upload_failure_raises_tool_error(self):
+        """When adapter.add_creative_assets() raises a generic exception during auto-approval,
+        _create_media_buy_impl wraps it as ToolError('CREATIVE_UPLOAD_FAILED').
+
+        Exercises the real code path at media_buy_create.py:3132-3168 by mocking
+        the pipeline deep enough to reach the creative upload code.
 
         Anchors: media_buy_create.py:3162-3168
         """
-        import inspect
-
+        from src.core.schemas import CreateMediaBuySuccess
+        from src.core.schemas import Package as RespPackage
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        source = inspect.getsource(_create_media_buy_impl)
-
-        # Verify the exception handler exists
-        assert "CREATIVE_UPLOAD_FAILED" in source, (
-            "CREATIVE_UPLOAD_FAILED error code must exist in _create_media_buy_impl"
+        # Request with a package that has creative_ids (triggers the creative upload path)
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "buyer_ref": "pkg-1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ["creative_no_platform"],
+                },
+            ]
         )
-        assert "except Exception as upload_error:" in source, "Generic exception handler for upload errors must exist"
-        assert "Failed to upload creative" in source, "Upload failure error message must exist"
+
+        product = _mock_product("prod_1")
+
+        # Mock creative in DB: no platform_creative_id -> triggers upload path
+        mock_creative = MagicMock()
+        mock_creative.creative_id = "creative_no_platform"
+        mock_creative.format = "display_300x250_image"
+        mock_creative.agent_url = "https://creative.example.com"
+        mock_creative.name = "Test Creative"
+        mock_creative.data = {}  # No platform_creative_id
+
+        # Build a successful adapter response
+        resp_package = MagicMock(spec=RespPackage)
+        resp_package.package_id = "pkg_prod_1_abc_1"
+        resp_package.platform_line_item_id = None
+        adapter_response = MagicMock(spec=CreateMediaBuySuccess)
+        adapter_response.media_buy_id = "mb_test123"
+        adapter_response.packages = [resp_package]
+        # Make isinstance(response, CreateMediaBuyError) return False
+        adapter_response.__class__ = CreateMediaBuySuccess
+
+        # Mock adapter whose add_creative_assets raises a generic exception
+        mock_adapter = MagicMock()
+        mock_adapter.manual_approval_required = False
+        mock_adapter.manual_approval_operations = []
+        mock_adapter.__class__.__name__ = "MockAdapter"
+        mock_adapter.add_creative_assets.side_effect = ConnectionError("Network timeout during GAM upload")
+
+        # Mock product catalog for products_in_buy lookup
+        mock_schema_product = MagicMock()
+        mock_schema_product.product_id = "prod_1"
+        mock_schema_product.name = "Test Product"
+        mock_schema_product.implementation_config = None
+        mock_schema_product.format_ids = None
+        mock_schema_product.delivery_type = MagicMock()
+        mock_schema_product.delivery_type.value = "non_guaranteed"
+
+        with _PatchContext(products=[product]) as pc:
+            # Override the scalars chain to handle multiple .all() and .first() calls.
+            # .all() call 1 (products query at line 1464) -> [product]
+            # .all() call 2 (creatives query at line 2954) -> [mock_creative]
+            # .first() calls: currency_limit (1554), adapter_config=None (1569),
+            #   package_record=None (2919), product_format_check=None (2986)
+            all_results = iter([[product], [mock_creative]])
+            first_results = iter([_mock_currency_limit(), None, None, None, None, None])
+            scalars_mock = MagicMock()
+            scalars_mock.all.side_effect = lambda: next(all_results)
+            scalars_mock.first.side_effect = lambda: next(first_results, None)
+            pc.db_session.scalars.return_value = scalars_mock
+
+            with (
+                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+                patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
+                patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
+                patch(
+                    "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
+                ),
+                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
+                patch("src.core.main.media_buys", {}),
+                patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+                patch("src.core.helpers.validate_creative_format_against_product", return_value=(True, None)),
+                patch(
+                    "src.core.tools.media_buy_create._get_format_spec_sync",
+                    return_value=MagicMock(output_format_ids=None),
+                ),
+                patch(
+                    "src.core.tools.media_buy_create.extract_media_url_and_dimensions",
+                    return_value=("https://example.com/ad.jpg", 300, 250),
+                ),
+                patch("src.core.tools.media_buy_create.extract_click_url", return_value=None),
+                patch("src.core.tools.media_buy_create.extract_impression_tracker_url", return_value=None),
+                patch("src.core.tools.media_buy_create.get_slack_notifier"),
+                patch("src.core.tools.media_buy_create.activity_feed"),
+            ):
+                mock_upload.return_value = (req.packages, {})
+
+                with pytest.raises(ToolError) as exc_info:
+                    await _create_media_buy_impl(req=req, ctx=pc.ctx)
+
+                assert "CREATIVE_UPLOAD_FAILED" in str(exc_info.value)
+                assert "creative_no_platform" in str(exc_info.value)
+                assert "Network timeout" in str(exc_info.value)
 
     def test_creative_upload_failure_wraps_exception_as_tool_error(self):
         """The try/except pattern at line 3162-3168 wraps generic exceptions
@@ -757,23 +847,99 @@ class TestCreativeIdsNotFound:
 
     The set-difference logic at media_buy_create.py:2957-2966 checks
     requested creative IDs against found IDs and raises ToolError if any
-    are missing. We verify with structural + behavioral tests.
+    are missing. We verify with behavioral tests exercising the actual code path.
     """
 
-    def test_creative_ids_not_found_pattern_exists(self):
-        """Verify the CREATIVES_NOT_FOUND error handling exists in source.
+    @pytest.mark.asyncio
+    async def test_creative_ids_not_found_raises_tool_error(self):
+        """When creative_ids reference IDs that don't exist in the database,
+        _create_media_buy_impl raises ToolError('CREATIVES_NOT_FOUND') with
+        the missing IDs listed.
+
+        Exercises the real code path at media_buy_create.py:2957-2966 by mocking
+        the pipeline deep enough to reach the creative ID lookup.
 
         Anchors: media_buy_create.py:2957-2966
         """
-        import inspect
-
+        from src.core.schemas import CreateMediaBuySuccess
+        from src.core.schemas import Package as RespPackage
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        source = inspect.getsource(_create_media_buy_impl)
+        # Request with creative_ids that includes one that won't be found in DB
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "buyer_ref": "pkg-1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ["creative_exists", "creative_missing_1", "creative_missing_2"],
+                },
+            ]
+        )
 
-        assert "CREATIVES_NOT_FOUND" in source, "CREATIVES_NOT_FOUND error code must exist in _create_media_buy_impl"
-        assert "Creative IDs not found" in source, "Error message for missing creative IDs must exist"
-        assert "missing_ids" in source, "Set-difference logic for missing IDs must exist"
+        product = _mock_product("prod_1")
+
+        # Only one creative exists in DB — the other two are missing
+        mock_creative = MagicMock()
+        mock_creative.creative_id = "creative_exists"
+
+        # Build a successful adapter response
+        resp_package = MagicMock(spec=RespPackage)
+        resp_package.package_id = "pkg_prod_1_abc_1"
+        adapter_response = MagicMock(spec=CreateMediaBuySuccess)
+        adapter_response.media_buy_id = "mb_test123"
+        adapter_response.packages = [resp_package]
+        adapter_response.__class__ = CreateMediaBuySuccess
+
+        # Mock adapter
+        mock_adapter = MagicMock()
+        mock_adapter.manual_approval_required = False
+        mock_adapter.manual_approval_operations = []
+        mock_adapter.__class__.__name__ = "MockAdapter"
+
+        # Mock product catalog for products_in_buy lookup
+        mock_schema_product = MagicMock()
+        mock_schema_product.product_id = "prod_1"
+        mock_schema_product.name = "Test Product"
+        mock_schema_product.implementation_config = None
+        mock_schema_product.format_ids = None
+        mock_schema_product.delivery_type = MagicMock()
+        mock_schema_product.delivery_type.value = "non_guaranteed"
+
+        with _PatchContext(products=[product]) as pc:
+            # Override the scalars chain to handle multiple .all() and .first() calls.
+            # .all() call 1 (products query at line 1464) -> [product]
+            # .all() call 2 (creatives query at line 2954) -> [mock_creative] (only 1 of 3)
+            # .first() returns currency_limit then None for subsequent calls
+            all_results = iter([[product], [mock_creative]])
+            first_results = iter([_mock_currency_limit(), None, None, None, None, None])
+            scalars_mock = MagicMock()
+            scalars_mock.all.side_effect = lambda: next(all_results)
+            scalars_mock.first.side_effect = lambda: next(first_results, None)
+            pc.db_session.scalars.return_value = scalars_mock
+
+            with (
+                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+                patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
+                patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
+                patch(
+                    "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
+                ),
+                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
+                patch("src.core.main.media_buys", {}),
+                patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+                patch("src.core.tools.media_buy_create.get_slack_notifier"),
+                patch("src.core.tools.media_buy_create.activity_feed"),
+            ):
+                mock_upload.return_value = (req.packages, {})
+
+                with pytest.raises(ToolError) as exc_info:
+                    await _create_media_buy_impl(req=req, ctx=pc.ctx)
+
+                assert "CREATIVES_NOT_FOUND" in str(exc_info.value)
+                assert "creative_missing_1" in str(exc_info.value)
+                assert "creative_missing_2" in str(exc_info.value)
 
     def test_set_difference_logic_detects_missing_creative_ids(self):
         """The set-difference logic (requested - found) correctly identifies missing IDs.

@@ -47,22 +47,50 @@ class TestInventoryAdapterRestrictions:
         assert "name" in first_placement
         assert "sizes" in first_placement
 
-    def test_mock_adapter_comment_says_skips_inventory_validation(self):
-        """Mock adapter code explicitly states it skips inventory validation.
+    def test_mock_adapter_skips_inventory_validation(self):
+        """Mock adapter accepts media buy requests without inventory targeting.
 
-        This test verifies the code comment exists (documentation contract).
-        Full integration testing of media buy creation is done in integration tests.
+        Real adapters like GAM enforce inventory targeting (ad unit IDs, placement IDs).
+        The mock adapter should succeed even when no inventory targeting is provided,
+        allowing test scenarios to run without configuring ad unit IDs.
         """
-        import inspect
+        from datetime import UTC, datetime, timedelta
 
         from src.adapters.mock_ad_server import MockAdServer
+        from src.core.schemas import MediaPackage, Principal
 
-        # Get the source code of _validate_media_buy_request
-        source = inspect.getsource(MockAdServer._validate_media_buy_request)
+        principal = Principal(
+            principal_id="test_principal",
+            name="Test Advertiser",
+            platform_mappings={},
+        )
+        adapter = MockAdServer(config={}, principal=principal, dry_run=False, tenant_id="test_tenant")
 
-        # Verify the comment about skipping inventory validation exists
-        assert "Mock adapter skips inventory targeting validation" in source
-        assert "testing flexibility" in source
+        start_time = datetime.now(UTC) + timedelta(days=1)
+        end_time = start_time + timedelta(days=7)
+
+        # Create a package with NO inventory targeting (no ad_unit_ids, no placement_ids)
+        package = MediaPackage(
+            package_id="pkg_1",
+            name="Test Package",
+            delivery_type="guaranteed",
+            cpm=10.0,
+            impressions=100000,
+            format_ids=[],
+            targeting_overlay=None,  # No targeting at all — Run of Site
+        )
+
+        # Mock the request — _validate_media_buy_request only calls get_total_budget()
+        mock_request = MagicMock()
+        mock_request.get_total_budget.return_value = 5000.0
+
+        # _validate_media_buy_request should NOT raise — inventory validation is skipped
+        adapter._validate_media_buy_request(
+            request=mock_request,
+            packages=[package],
+            start_time=start_time,
+            end_time=end_time,
+        )
 
     def test_inventory_browser_checks_adapter_type(self):
         """Test that inventory_browser function checks adapter type before proceeding."""

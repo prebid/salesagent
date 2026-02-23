@@ -69,25 +69,6 @@ class TestCreateMediaBuyDryRunResponseStructure:
         assert response.packages[0].budget == 1000.0
         assert response.packages[1].bid_price == 5.0
 
-    def test_dry_run_code_path_exists(self):
-        """Verify the dry_run early return logic exists in create_media_buy.
-
-        This is a structural test that verifies the implementation contains
-        the expected dry_run handling. While not testing behavior directly,
-        it catches accidental removal of the dry_run code path.
-        """
-        import inspect
-
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        source = inspect.getsource(_create_media_buy_impl)
-
-        # Verify key structural elements exist
-        assert "testing_ctx.dry_run" in source, "dry_run check should exist"
-        # dry_run mode returns adapter response without database writes (adapter generates IDs)
-        assert "DRY_RUN" in source, "dry_run logging should exist"
-        assert "if not testing_ctx.dry_run:" in source, "workflow step should be guarded by dry_run check"
-
 
 class TestUpdateMediaBuyDryRunNoPersistence:
     """Verify update_media_buy in dry_run mode doesn't write to database."""
