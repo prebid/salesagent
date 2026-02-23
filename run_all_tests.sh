@@ -41,12 +41,13 @@ echo ""
 # Find available ports dynamically using a helper script that avoids race conditions
 echo "🔍 Finding available ports..."
 
-# Use Python to find a block of 4 available ports (reduces race conditions)
-read POSTGRES_PORT MCP_PORT A2A_PORT ADMIN_PORT <<< $(uv run python -c "
+# Use Python to find a block of 2 available ports (reduces race conditions)
+# All services (MCP, A2A, Admin) run on a single port in the unified FastAPI process
+read POSTGRES_PORT MCP_PORT <<< $(uv run python -c "
 import socket
 import random
 
-def find_free_port_block(count=4, start=50000, end=60000):
+def find_free_port_block(count=2, start=50000, end=60000):
     '''Find a block of consecutive free ports'''
     for base_port in range(start, end - count):
         sockets = []
@@ -72,8 +73,11 @@ def find_free_port_block(count=4, start=50000, end=60000):
 ports = find_free_port_block()
 print(' '.join(map(str, ports)))
 ")
+# A2A and Admin share the same port as MCP (unified FastAPI process)
+A2A_PORT=$MCP_PORT
+ADMIN_PORT=$MCP_PORT
 
-echo -e "${GREEN}✓ Using dynamic ports: PostgreSQL=$POSTGRES_PORT, MCP=$MCP_PORT, A2A=$A2A_PORT, Admin=$ADMIN_PORT${NC}"
+echo -e "${GREEN}✓ Using dynamic ports: PostgreSQL=$POSTGRES_PORT, Server=$MCP_PORT (MCP+A2A+Admin)${NC}"
 echo ""
 
 # Docker compose setup function - starts entire stack once
@@ -97,10 +101,10 @@ setup_docker_stack() {
     # If ports are still in use, find new ones
     if lsof -i :${POSTGRES_PORT} >/dev/null 2>&1; then
         echo "Port conflict detected, finding new port block..."
-        read POSTGRES_PORT MCP_PORT A2A_PORT ADMIN_PORT <<< $(uv run python -c "
+        read POSTGRES_PORT MCP_PORT <<< $(uv run python -c "
 import socket
 
-def find_free_port_block(count=4, start=50000, end=60000):
+def find_free_port_block(count=2, start=50000, end=60000):
     for base_port in range(start, end - count):
         sockets = []
         try:
@@ -121,7 +125,9 @@ def find_free_port_block(count=4, start=50000, end=60000):
 ports = find_free_port_block()
 print(' '.join(map(str, ports)))
 ")
-        echo "Using new ports: PostgreSQL=${POSTGRES_PORT}, MCP=${MCP_PORT}, A2A=${A2A_PORT}, Admin=${ADMIN_PORT}"
+        A2A_PORT=$MCP_PORT
+        ADMIN_PORT=$MCP_PORT
+        echo "Using new ports: PostgreSQL=${POSTGRES_PORT}, Server=${MCP_PORT} (MCP+A2A+Admin)"
     fi
 
     # Export environment for docker-compose.e2e.yml port mappings
@@ -139,7 +145,7 @@ print(' '.join(map(str, ports)))
 
     # Build and start services using docker-compose.e2e.yml
     # This uses the Dockerfile ENTRYPOINT (run_all_services.py) which starts
-    # MCP server (port 8080), A2A server (port 8091), and Admin UI — all in one container
+    # a unified FastAPI server (MCP + A2A + Admin on port 8080) in one container
     echo "Building Docker images (this may take 2-3 minutes on first run)..."
     if ! docker-compose -f docker-compose.e2e.yml -p "$TEST_PROJECT_NAME" build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -20; then
         echo -e "${RED}❌ Docker build failed${NC}"
@@ -153,13 +159,12 @@ print(' '.join(map(str, ports)))
         exit 1
     fi
 
-    # Wait for services to be ready
+    # Wait for services to be ready (unified server: MCP + A2A + Admin on same port)
     echo "Waiting for services to be ready..."
     local max_wait=120
     local start_time=$(date +%s)
     local pg_ready=false
-    local mcp_ready=false
-    local a2a_ready=false
+    local server_ready=false
 
     while true; do
         local elapsed=$(($(date +%s) - start_time))
@@ -178,24 +183,16 @@ print(' '.join(map(str, ports)))
             fi
         fi
 
-        # Check MCP server
-        if [ "$mcp_ready" = false ]; then
+        # Check unified server (MCP + A2A + Admin)
+        if [ "$server_ready" = false ]; then
             if curl -sf "http://localhost:${MCP_PORT}/health" >/dev/null 2>&1; then
-                echo -e "${GREEN}✓ MCP server is ready (${elapsed}s)${NC}"
-                mcp_ready=true
-            fi
-        fi
-
-        # Check A2A server
-        if [ "$a2a_ready" = false ]; then
-            if curl -sf "http://localhost:${A2A_PORT}/" >/dev/null 2>&1 || curl -sf "http://localhost:${A2A_PORT}/.well-known/agent.json" >/dev/null 2>&1; then
-                echo -e "${GREEN}✓ A2A server is ready (${elapsed}s)${NC}"
-                a2a_ready=true
+                echo -e "${GREEN}✓ Server is ready (${elapsed}s)${NC}"
+                server_ready=true
             fi
         fi
 
         # All services ready
-        if [ "$pg_ready" = true ] && [ "$mcp_ready" = true ] && [ "$a2a_ready" = true ]; then
+        if [ "$pg_ready" = true ] && [ "$server_ready" = true ]; then
             break
         fi
 
@@ -213,9 +210,7 @@ print(' '.join(map(str, ports)))
 
     echo -e "${GREEN}✓ Docker stack is ready${NC}"
     echo "  PostgreSQL: localhost:${POSTGRES_PORT}"
-    echo "  MCP Server: localhost:${MCP_PORT}"
-    echo "  A2A Server: localhost:${A2A_PORT}"
-    echo "  Admin UI:   localhost:${ADMIN_PORT}"
+    echo "  Server:     localhost:${MCP_PORT} (MCP + A2A + Admin)"
 }
 
 # Docker teardown function
