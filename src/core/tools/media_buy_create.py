@@ -20,11 +20,9 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.format import Assets
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
 from adcp.types.generated_poc.core.targeting import TargetingOverlay
 from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
-from adcp.utils.format_assets import get_individual_assets, has_assets
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -819,11 +817,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     # Add impression tracker URL in the format expected by GAM adapter
                     if impression_tracker_url:
-                        asset["delivery_settings"] = {
-                            "tracking_urls": {
-                                "impression": [impression_tracker_url]
-                            }
-                        }
+                        asset["delivery_settings"] = {"tracking_urls": {"impression": [impression_tracker_url]}}
 
                     # GAM requires width, height, and url for creative upload
                     # Validate required fields and accumulate all errors
@@ -3086,9 +3080,7 @@ async def _create_media_buy_impl(
                                             )
 
                                     # Extract URL and dimensions using shared helper
-                                    url, width, height = extract_media_url_and_dimensions(
-                                        creative_data, format_spec
-                                    )
+                                    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
 
                                     # Extract click-through URL separately from media URL (with macro substitution)
                                     click_url = extract_click_url(creative_data, format_spec)
@@ -3111,9 +3103,7 @@ async def _create_media_buy_impl(
                                     # Add impression tracker URL in the format expected by GAM adapter
                                     if impression_tracker_url:
                                         asset["delivery_settings"] = {
-                                            "tracking_urls": {
-                                                "impression": [impression_tracker_url]
-                                            }
+                                            "tracking_urls": {"impression": [impression_tracker_url]}
                                         }
 
                                     # Validate required fields - FAIL FAST, do not skip

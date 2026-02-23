@@ -383,7 +383,6 @@ class TestA2ASkillInvocation:
                         "pricing_option_id": "cpm_usd_fixed",  # Required in adcp 2.5.0
                     }
                 ],
-
                 "start_time": start_date.isoformat(),
                 "end_time": end_date.isoformat(),
             }

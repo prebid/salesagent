@@ -236,7 +236,6 @@ class TestA2AErrorPropagation:
                         budget=10000.0,
                     )
                 ],
-
                 "start_time": start_time,
                 "end_time": end_time,
             }
@@ -286,7 +285,6 @@ class TestA2AErrorPropagation:
                         budget=10000.0,
                     )
                 ],
-
                 "start_time": start_time,
                 "end_time": end_time,
             }
@@ -343,7 +341,6 @@ class TestA2AErrorPropagation:
                         budget=10000.0,
                     )
                 ],
-
                 "start_time": start_time,
                 "end_time": end_time,
             }

@@ -856,9 +856,7 @@ def extract_click_url(
     return click_url
 
 
-def extract_impression_tracker_url(
-    creative_data: dict[str, Any], format_spec: Any | None
-) -> str | None:
+def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: Any | None) -> str | None:
     """Extract impression tracker URL from creative data.
 
     Looks for impression tracker URL in the creative's assets, checking:

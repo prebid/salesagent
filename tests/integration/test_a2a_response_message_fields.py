@@ -143,7 +143,11 @@ class TestA2AMessageFieldValidation:
         GetProductsResponse DOES have a .message field, but we should use str() consistently
         """
         with mock_auth_context(handler):
-            params = {"brand_manifest": {"name": "Test product search"}, "brief": "Looking for display ads", "adcp_version": "3.0"}
+            params = {
+                "brand_manifest": {"name": "Test product search"},
+                "brief": "Looking for display ads",
+                "adcp_version": "3.0",
+            }
 
             raw_result = await handler._handle_get_products_skill(params, sample_principal["access_token"])
             result = handler._serialize_for_a2a(raw_result)
