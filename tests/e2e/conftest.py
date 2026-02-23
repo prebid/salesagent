@@ -552,14 +552,12 @@ GAM_TEST_AD_UNIT_IDS = ["23340594484", "23340594268"]
 
 
 def _get_gam_service_account_json():
-    """Get GAM service account JSON from environment or well-known file paths.
+    """Get GAM service account JSON from environment variables.
 
     Checks (in order):
     1. GAM_SERVICE_ACCOUNT_JSON env var (raw JSON string)
     2. GAM_SERVICE_ACCOUNT_KEY_FILE env var (path to JSON file)
-    3. Well-known local path: ~/Downloads/salesagenttest-*.json
     """
-    import glob
     import json
 
     # 1. Raw JSON from env var
@@ -574,13 +572,6 @@ def _get_gam_service_account_json():
         with open(key_file) as f:
             return f.read()
 
-    # 3. Well-known local path
-    pattern = os.path.expanduser("~/Downloads/salesagenttest-*.json")
-    matches = glob.glob(pattern)
-    if matches:
-        with open(matches[0]) as f:
-            return f.read()
-
     return None
 
 
@@ -593,8 +584,7 @@ def gam_service_account_json():
     sa_json = _get_gam_service_account_json()
     if sa_json is None:
         pytest.skip(
-            "GAM credentials not available. Set GAM_SERVICE_ACCOUNT_JSON, "
-            "GAM_SERVICE_ACCOUNT_KEY_FILE, or place key at ~/Downloads/salesagenttest-*.json"
+            "GAM credentials not available. Set GAM_SERVICE_ACCOUNT_JSON or GAM_SERVICE_ACCOUNT_KEY_FILE"
         )
     return sa_json
 
