@@ -199,7 +199,7 @@ def gam_lifecycle_db(gam_service_account_json):
 
 
 def _seed_lifecycle_test_data():
-    """Seed the test database with tenant, products, and inventory mappings."""
+    """Seed the test database with tenant, principal, products, and inventory mappings."""
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
         GAMInventory,
@@ -207,6 +207,7 @@ def _seed_lifecycle_test_data():
         ProductInventoryMapping,
         Tenant,
     )
+    from src.core.database.models import Principal as PrincipalModel
 
     with get_db_session() as session:
         # Create tenant
@@ -222,6 +223,18 @@ def _seed_lifecycle_test_data():
             auth_setup_mode=True,
         )
         session.add(tenant)
+
+        # Create principal (required by MediaBuy FK)
+        principal = PrincipalModel(
+            tenant_id=GAM_LIFECYCLE_TENANT_ID,
+            principal_id="e2e_lifecycle_test",
+            name="E2E Lifecycle Test Principal",
+            platform_mappings={
+                "google_ad_manager": {"advertiser_id": GAM_TEST_ADVERTISER_ID},
+            },
+            access_token=f"e2e_test_token_{uuid.uuid4().hex[:8]}",
+        )
+        session.add(principal)
 
         # Create GAM inventory records for test ad units
         for ad_unit_id in GAM_TEST_AD_UNIT_IDS:
@@ -434,6 +447,55 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
     return request, [package], start_time, end_time, pricing_info
 
 
+def _persist_media_buy(response, request, packages, start_time, end_time):
+    """Persist a media buy to the DB after GAM order creation.
+
+    This is normally done by media_buy_create.py. The lifecycle tests need
+    DB records so update_media_buy can find the order's packages and line items.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy as MediaBuyModel
+    from src.core.database.models import MediaPackage as MediaPackageModel
+
+    with get_db_session() as session:
+        media_buy = MediaBuyModel(
+            media_buy_id=response.media_buy_id,
+            tenant_id=GAM_LIFECYCLE_TENANT_ID,
+            principal_id="e2e_lifecycle_test",
+            buyer_ref=request.buyer_ref,
+            order_name=f"E2E Order {response.media_buy_id}",
+            advertiser_name="E2E Test Advertiser",
+            budget=10.00,
+            currency="USD",
+            start_date=start_time.date(),
+            end_date=end_time.date(),
+            start_time=start_time,
+            end_time=end_time,
+            status="approved",
+            raw_request={"brand_manifest": {"name": "E2E Lifecycle Test"}, "buyer_ref": request.buyer_ref},
+        )
+        session.add(media_buy)
+        session.flush()
+
+        # Get platform_line_item_ids from the response
+        platform_ids = getattr(response, "_platform_line_item_ids", {})
+
+        for pkg in packages:
+            media_package = MediaPackageModel(
+                media_buy_id=response.media_buy_id,
+                package_id=pkg.package_id,
+                package_config={
+                    "package_id": pkg.package_id,
+                    "product_id": pkg.product_id,
+                    "name": pkg.name,
+                    "platform_line_item_id": platform_ids.get(pkg.package_id),
+                },
+            )
+            session.add(media_package)
+
+        session.commit()
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -534,12 +596,47 @@ class TestGAMOrderCreation:
 class TestGAMLifecycle:
     """Test GAM order lifecycle operations (pause, archive)."""
 
-    def test_pause_and_archive_order(self, gam_adapter, gam_order_cleanup):
-        """Can create and archive a HOUSE order."""
+    def test_pause_media_buy(self, gam_adapter, gam_order_cleanup):
+        """Can pause an approved non-guaranteed order via update_media_buy.
+
+        Mirrors manual script's pause step in test_lifecycle_archive_order.
+        Uses adapter's update_media_buy which requires DB persistence.
+        """
+        from src.core.schemas import CreateMediaBuySuccess, UpdateMediaBuySuccess
+
+        request, packages, start_time, end_time, pricing_info = _make_create_request(
+            "gam_e2e_non_guaranteed", f"E2E-PAUSE-{uuid.uuid4().hex[:6]}"
+        )
+
+        response = gam_adapter.create_media_buy(request, packages, start_time, end_time, pricing_info)
+        assert isinstance(response, CreateMediaBuySuccess)
+        order_id = response.media_buy_id
+        gam_order_cleanup.append(order_id)
+
+        # Persist the media buy to DB (update_media_buy needs it)
+        _persist_media_buy(response, request, packages, start_time, end_time)
+
+        # Pause the order via adapter's update_media_buy
+        pause_response = gam_adapter.update_media_buy(
+            media_buy_id=order_id,
+            buyer_ref=request.buyer_ref,
+            action="pause_media_buy",
+            package_id=None,
+            budget=None,
+            today=datetime.now(UTC),
+        )
+
+        assert isinstance(pause_response, UpdateMediaBuySuccess), f"Expected success, got: {pause_response}"
+
+    def test_pause_then_archive_order(self, gam_adapter, gam_order_cleanup):
+        """Can create, pause, and archive a HOUSE order.
+
+        Mirrors manual script's test_lifecycle_archive_order: create → pause → archive.
+        """
         from googleads import ad_manager as gam_module
 
         from src.adapters.gam.utils.constants import GAM_API_VERSION
-        from src.core.schemas import CreateMediaBuySuccess
+        from src.core.schemas import CreateMediaBuySuccess, UpdateMediaBuySuccess
 
         request, packages, start_time, end_time, pricing_info = _make_create_request(
             "gam_e2e_house", f"E2E-ARCH-{uuid.uuid4().hex[:6]}"
@@ -550,7 +647,22 @@ class TestGAMLifecycle:
         assert response.media_buy_id is not None
         order_id = response.media_buy_id
 
-        # Archive the order via direct GAM API
+        # Persist the media buy to DB (update_media_buy needs it)
+        _persist_media_buy(response, request, packages, start_time, end_time)
+
+        # Step 1: Pause the order (like the manual script does before archiving)
+        pause_response = gam_adapter.update_media_buy(
+            media_buy_id=order_id,
+            buyer_ref=request.buyer_ref,
+            action="pause_media_buy",
+            package_id=None,
+            budget=None,
+            today=datetime.now(UTC),
+        )
+        assert isinstance(pause_response, UpdateMediaBuySuccess), f"Pause should succeed, got: {pause_response}"
+
+        # Step 2: Archive the order via direct GAM API
+        # (adapter's archive_order has the .get() zeep bug — salesagent-mzpq)
         order_service = gam_adapter.client_manager.get_service("OrderService")
         archive_action = {"xsi_type": "ArchiveOrders"}
         sb = gam_module.StatementBuilder()
