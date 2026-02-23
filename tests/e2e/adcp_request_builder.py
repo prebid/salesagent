@@ -210,7 +210,7 @@ def build_creative(
     name: str,
     asset_url: str,
     click_through_url: str | None = None,
-    status: str = "active",
+    status: str = "processing",
 ) -> dict[str, Any]:
     """
     Build a valid AdCP V2.4 creative object with assets.
@@ -221,7 +221,7 @@ def build_creative(
         name: Human-readable creative name
         asset_url: URL to the creative asset (converted to assets structure)
         click_through_url: Optional click-through destination
-        status: Creative status (default: active)
+        status: Creative status (default: processing). Valid: processing, approved, rejected, pending_review, archived
 
     Returns:
         Valid AdCP V2.4 Creative dict with assets
