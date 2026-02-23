@@ -239,6 +239,71 @@ class TestA2AErrorShapes:
                 )
 
 
+class TestUpdateMediaBuyErrorShapes:
+    """Test that update_media_buy error paths produce consistent errors."""
+
+    @pytest.mark.asyncio
+    async def test_missing_context_raises_value_error(self):
+        """update_media_buy _impl raises ValueError when context is None."""
+        from src.core.schemas import UpdateMediaBuyRequest
+        from src.core.tools.media_buy_update import _update_media_buy_impl
+
+        req = UpdateMediaBuyRequest(
+            media_buy_id="buy_001",
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            _update_media_buy_impl(req=req, ctx=None)
+
+        assert "Context is required" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_a2a_missing_auth_raises_server_error(self):
+        """A2A update_media_buy raises ServerError when auth is missing."""
+        handler = AdCPRequestHandler()
+
+        with pytest.raises(ServerError) as exc_info:
+            await handler._handle_explicit_skill(
+                skill_name="update_media_buy",
+                parameters={"media_buy_id": "buy_001"},
+                auth_token=None,
+            )
+
+        error = exc_info.value
+        assert isinstance(error, ServerError)
+        assert "Authentication token required" in str(error)
+
+
+class TestListCreativesErrorShapes:
+    """Test that list_creatives error paths produce consistent errors."""
+
+    @pytest.mark.asyncio
+    async def test_missing_auth_raises_tool_error(self):
+        """list_creatives _impl raises ToolError when auth header is missing."""
+        from src.core.tools.creatives.listing import _list_creatives_impl
+
+        with pytest.raises(ToolError) as exc_info:
+            _list_creatives_impl(ctx=None)
+
+        assert "x-adcp-auth" in str(exc_info.value).lower() or "Missing" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_a2a_missing_auth_raises_server_error(self):
+        """A2A list_creatives raises ServerError when auth is missing."""
+        handler = AdCPRequestHandler()
+
+        with pytest.raises(ServerError) as exc_info:
+            await handler._handle_explicit_skill(
+                skill_name="list_creatives",
+                parameters={},
+                auth_token=None,
+            )
+
+        error = exc_info.value
+        assert isinstance(error, ServerError)
+        assert "Authentication token required" in str(error)
+
+
 class TestCrossTransportErrorConsistency:
     """Test that the SAME error scenario produces consistent errors across transports.
 

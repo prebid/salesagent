@@ -575,7 +575,209 @@ class TestListAuthorizedPropertiesResponseShape:
 
 
 # ===========================================================================
-# 7. Cross-cutting: model_dump(mode="json") roundtrip consistency
+# 7. UpdateMediaBuyResponse (Success variant)
+# ===========================================================================
+
+
+class TestUpdateMediaBuyResponseShape:
+    """Verify the serialized shape of UpdateMediaBuySuccess."""
+
+    def test_minimal_success_response(self):
+        """Minimal success response has required fields."""
+        from src.core.schemas import UpdateMediaBuySuccess
+
+        resp = UpdateMediaBuySuccess(
+            media_buy_id="buy_100",
+            buyer_ref="ref_100",
+        )
+        data = resp.model_dump(mode="json")
+
+        assert_field_type(data, "media_buy_id", str)
+        assert_field_type(data, "buyer_ref", str)
+
+        assert data["media_buy_id"] == "buy_100"
+        assert data["buyer_ref"] == "ref_100"
+
+    def test_success_response_with_packages(self):
+        """Response with affected_packages has correct nested package structure."""
+        from src.core.schemas import AffectedPackage, UpdateMediaBuySuccess
+
+        package = AffectedPackage(
+            package_id="pkg_001",
+            paused=False,
+        )
+        resp = UpdateMediaBuySuccess(
+            media_buy_id="buy_101",
+            buyer_ref="ref_101",
+            affected_packages=[package],
+        )
+        data = resp.model_dump(mode="json")
+
+        assert_field_type(data, "affected_packages", list)
+        assert len(data["affected_packages"]) == 1
+
+        pkg = data["affected_packages"][0]
+        assert_field_type(pkg, "package_id", str)
+        assert_field_type(pkg, "paused", bool)
+        assert pkg["package_id"] == "pkg_001"
+
+    def test_internal_fields_excluded(self):
+        """Internal fields (workflow_step_id, changes_applied, buyer_package_ref) are excluded."""
+        from src.core.schemas import AffectedPackage, UpdateMediaBuySuccess
+
+        package = AffectedPackage(
+            package_id="pkg_002",
+            paused=True,
+            changes_applied={"creative_ids_added": ["c1", "c2"]},
+            buyer_package_ref="buyer_pkg_ref_002",
+        )
+        resp = UpdateMediaBuySuccess(
+            media_buy_id="buy_102",
+            buyer_ref="ref_102",
+            affected_packages=[package],
+            workflow_step_id="wf_456",
+        )
+        data = resp.model_dump(mode="json")
+
+        assert "workflow_step_id" not in data
+
+        pkg = data["affected_packages"][0]
+        assert "changes_applied" not in pkg, "Internal 'changes_applied' field should be excluded"
+        assert "buyer_package_ref" not in pkg, "Internal 'buyer_package_ref' field should be excluded"
+
+
+# ===========================================================================
+# 8. ListCreativesResponse
+# ===========================================================================
+
+
+class TestListCreativesResponseShape:
+    """Verify the serialized shape of ListCreativesResponse."""
+
+    def test_empty_creatives_response(self):
+        """Empty creatives list produces correct top-level structure."""
+        from src.core.schemas import ListCreativesResponse, Pagination, QuerySummary
+
+        resp = ListCreativesResponse(
+            creatives=[],
+            query_summary=QuerySummary(returned=0, total_matching=0, filters_applied=[]),
+            pagination=Pagination(limit=10, offset=0, total_pages=0, current_page=1, has_more=False),
+        )
+        data = resp.model_dump(mode="json")
+
+        assert_field_type(data, "creatives", list)
+        assert_field_type(data, "query_summary", dict)
+        assert_field_type(data, "pagination", dict)
+        assert len(data["creatives"]) == 0
+
+    def test_creatives_response_with_creative(self):
+        """Response with a creative has correct nested structure."""
+        from src.core.schemas import Creative, ListCreativesResponse, Pagination, QuerySummary
+
+        creative = Creative(
+            creative_id="creative_001",
+            name="Premium Banner",
+            format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+        )
+        resp = ListCreativesResponse(
+            creatives=[creative],
+            query_summary=QuerySummary(returned=1, total_matching=1, filters_applied=[]),
+            pagination=Pagination(limit=10, offset=0, total_pages=1, current_page=1, has_more=False),
+        )
+        data = resp.model_dump(mode="json")
+
+        assert_field_type(data, "creatives", list)
+        assert len(data["creatives"]) == 1
+
+        c = data["creatives"][0]
+        assert_field_type(c, "creative_id", str)
+        assert_field_type(c, "name", str)
+        assert_field_type(c, "format_id", dict)
+        assert_field_type(c, "status", str)
+        assert_field_type(c, "created_date", str)
+        assert_field_type(c, "updated_date", str)
+
+        assert c["creative_id"] == "creative_001"
+        assert c["name"] == "Premium Banner"
+
+    def test_query_summary_shape(self):
+        """Query summary has expected fields."""
+        from src.core.schemas import ListCreativesResponse, Pagination, QuerySummary
+
+        resp = ListCreativesResponse(
+            creatives=[],
+            query_summary=QuerySummary(returned=5, total_matching=42, filters_applied=["status"]),
+            pagination=Pagination(limit=10, offset=0, total_pages=5, current_page=1, has_more=True),
+        )
+        data = resp.model_dump(mode="json")
+
+        qs = data["query_summary"]
+        assert_field_type(qs, "returned", int)
+        assert_field_type(qs, "total_matching", int)
+        assert_field_type(qs, "filters_applied", list)
+
+    def test_pagination_shape(self):
+        """Pagination has expected fields."""
+        from src.core.schemas import ListCreativesResponse, Pagination, QuerySummary
+
+        resp = ListCreativesResponse(
+            creatives=[],
+            query_summary=QuerySummary(returned=0, total_matching=0, filters_applied=[]),
+            pagination=Pagination(limit=25, offset=50, total_pages=4, current_page=3, has_more=True),
+        )
+        data = resp.model_dump(mode="json")
+
+        pg = data["pagination"]
+        assert_field_type(pg, "limit", int)
+        assert_field_type(pg, "offset", int)
+        assert_field_type(pg, "total_pages", int)
+        assert_field_type(pg, "current_page", int)
+        assert_field_type(pg, "has_more", bool)
+
+    def test_internal_fields_excluded(self):
+        """Internal fields (principal_id) on creatives are excluded from serialization."""
+        from src.core.schemas import Creative, ListCreativesResponse, Pagination, QuerySummary
+
+        creative = Creative(
+            creative_id="creative_002",
+            name="Confidential Ad",
+            format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
+            principal_id="principal_secret_123",
+        )
+        resp = ListCreativesResponse(
+            creatives=[creative],
+            query_summary=QuerySummary(returned=1, total_matching=1, filters_applied=[]),
+            pagination=Pagination(limit=10, offset=0, total_pages=1, current_page=1, has_more=False),
+        )
+        data = resp.model_dump(mode="json")
+
+        c = data["creatives"][0]
+        assert "principal_id" not in c, "Internal 'principal_id' field should be excluded"
+
+    def test_creative_format_id_structure(self):
+        """format_id within each creative has agent_url and id."""
+        from src.core.schemas import Creative, ListCreativesResponse, Pagination, QuerySummary
+
+        creative = Creative(
+            creative_id="creative_003",
+            name="Video Ad",
+            format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "video_1920x1080"},
+        )
+        resp = ListCreativesResponse(
+            creatives=[creative],
+            query_summary=QuerySummary(returned=1, total_matching=1, filters_applied=[]),
+            pagination=Pagination(limit=10, offset=0, total_pages=1, current_page=1, has_more=False),
+        )
+        data = resp.model_dump(mode="json")
+
+        fid = data["creatives"][0]["format_id"]
+        assert_field_type(fid, "id", str)
+        assert_field_type(fid, "agent_url", str)
+        assert fid["id"] == "video_1920x1080"
+
+
+# ===========================================================================
+# 9. Cross-cutting: model_dump(mode="json") roundtrip consistency
 # ===========================================================================
 
 
@@ -608,6 +810,24 @@ class TestSerializationConsistency:
                     "src.core.schemas", fromlist=["ListAuthorizedPropertiesResponse"]
                 ).ListAuthorizedPropertiesResponse(publisher_domains=["example.com"]),
                 id="list_authorized_properties",
+            ),
+            pytest.param(
+                lambda: __import__("src.core.schemas", fromlist=["UpdateMediaBuySuccess"]).UpdateMediaBuySuccess(
+                    media_buy_id="buy_1", buyer_ref="ref_1"
+                ),
+                id="update_media_buy",
+            ),
+            pytest.param(
+                lambda: __import__("src.core.schemas", fromlist=["ListCreativesResponse"]).ListCreativesResponse(
+                    creatives=[],
+                    query_summary=__import__("src.core.schemas", fromlist=["QuerySummary"]).QuerySummary(
+                        returned=0, total_matching=0, filters_applied=[]
+                    ),
+                    pagination=__import__("src.core.schemas", fromlist=["Pagination"]).Pagination(
+                        limit=10, offset=0, total_pages=0, current_page=1, has_more=False
+                    ),
+                ),
+                id="list_creatives",
             ),
         ],
     )
