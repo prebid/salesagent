@@ -1478,6 +1478,10 @@ class GetProductsRequest(LibraryGetProductsRequest):
     # via .root (e.g., brand_manifest.root.name).
 
     # Spec fields not yet in adcp library v3.2.0
+    buying_mode: str | None = Field(
+        None,
+        description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
+    )
     brand: dict[str, Any] | None = Field(
         None,
         description="Brand reference for product discovery context (spec: brand-ref.json)",
@@ -1490,16 +1494,15 @@ class GetProductsRequest(LibraryGetProductsRequest):
         None,
         description="Buyer's campaign reference label for CRM and ad server correlation",
     )
+    pagination: dict[str, Any] | None = Field(
+        None,
+        description="Cursor-based pagination parameters (max_results, cursor)",
+    )
 
     # Internal-only fields (not in AdCP spec)
     product_selectors: LibraryPromotedProducts | None = Field(
         None,
         description="Selectors to filter the brand manifest product catalog for product discovery",
-        exclude=True,
-    )
-    pagination: dict[str, Any] | None = Field(
-        None,
-        description="Cursor-based pagination parameters (max_results, cursor)",
         exclude=True,
     )
 

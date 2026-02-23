@@ -122,9 +122,9 @@ class TestSchemaMatchesLibrary:
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
         # TODO(adcp-lib): Remove allowlist when adcp library adds these fields
-        # product_selectors, pagination — internal-only fields
-        # brand, catalog, buyer_campaign_ref — spec fields not yet in adcp library v3.2.0
-        local_extensions = {"product_selectors", "pagination", "brand", "catalog", "buyer_campaign_ref"}
+        # product_selectors — internal-only field
+        # buying_mode, brand, catalog, buyer_campaign_ref, pagination — spec fields not yet in adcp library v3.2.0
+        local_extensions = {"product_selectors", "buying_mode", "pagination", "brand", "catalog", "buyer_campaign_ref"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
         )

@@ -583,9 +583,7 @@ def gam_service_account_json():
     """
     sa_json = _get_gam_service_account_json()
     if sa_json is None:
-        pytest.skip(
-            "GAM credentials not available. Set GAM_SERVICE_ACCOUNT_JSON or GAM_SERVICE_ACCOUNT_KEY_FILE"
-        )
+        pytest.skip("GAM credentials not available. Set GAM_SERVICE_ACCOUNT_JSON or GAM_SERVICE_ACCOUNT_KEY_FILE")
     return sa_json
 
 
