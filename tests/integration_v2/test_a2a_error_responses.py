@@ -108,6 +108,7 @@ class TestA2AErrorPropagation:
                     "name": "A2A Error Test Tenant",
                     "subdomain": "a2aerror",
                     "ad_server": "mock",
+                    "human_review_required": False,
                 }
             )
 
@@ -116,6 +117,7 @@ class TestA2AErrorPropagation:
                 "name": "A2A Error Test Tenant",
                 "subdomain": "a2aerror",
                 "ad_server": "mock",
+                "human_review_required": False,
             }
 
     @pytest.fixture

@@ -1528,7 +1528,13 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(response, dict):
                 response_data = response
             else:
+                # Capture human-readable message before converting to dict
+                message = str(response)
                 response_data = response.model_dump(mode="json")
+                # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
+                # since returning a dict bypasses that logic
+                response_data["message"] = message
+                response_data.setdefault("success", True)
             return apply_version_compat("get_products", response_data, adcp_version)
 
         except Exception as e:

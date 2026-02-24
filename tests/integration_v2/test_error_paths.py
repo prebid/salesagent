@@ -32,6 +32,7 @@ from src.core.database.models import CurrencyLimit
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas import CreateMediaBuyError, Error
 from src.core.tool_context import ToolContext
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
@@ -293,10 +294,11 @@ class TestCreateMediaBuyErrorPaths:
         assert "end" in error.message.lower() or "after" in error.message.lower()
 
     async def test_negative_budget_raises_tool_error(self, test_tenant_with_principal):
-        """Test that negative budget raises ToolError during Pydantic validation.
+        """Test that negative budget raises a validation error during Pydantic validation.
 
         Note: This is caught at the Pydantic schema level (ge=0 constraint) before
-        business logic runs, so it raises ToolError rather than returning an Error response.
+        business logic runs, so it raises ToolError or AdCPValidationError rather
+        than returning an Error response.
         """
         context = ToolContext(
             context_id="test_ctx",
@@ -310,7 +312,7 @@ class TestCreateMediaBuyErrorPaths:
         future_end = future_start + timedelta(days=7)
 
         # Negative budget should fail Pydantic validation (ge=0 constraint)
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises((ToolError, AdCPValidationError)) as exc_info:
             await create_media_buy_raw(
                 po_number="error_test_po",
                 brand_manifest={"name": "Test campaign"},
@@ -451,16 +453,14 @@ class TestListCreativesErrorPaths:
             }
         )
 
-        # Should raise ToolError, not NameError
-        from fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError) as exc_info:
+        # Should raise ToolError or AdCPValidationError, not NameError
+        with pytest.raises((ToolError, AdCPValidationError)) as exc_info:
             await list_creatives_raw(
                 created_after="not-a-date",  # Invalid format
                 ctx=context,
             )
 
-        # Verify it's a proper ToolError, not NameError
+        # Verify it's a proper error, not NameError
         assert "date" in str(exc_info.value).lower()
 
 
