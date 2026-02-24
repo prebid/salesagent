@@ -224,11 +224,7 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
         tenant_id = tenant["tenant_id"]
 
     with get_db_session() as session:
-        stmt = (
-            select(ModelProduct)
-            .filter_by(tenant_id=tenant_id)
-            .options(selectinload(ModelProduct.pricing_options))
-        )
+        stmt = select(ModelProduct).filter_by(tenant_id=tenant_id).options(selectinload(ModelProduct.pricing_options))
         products = session.scalars(stmt).all()
 
         # Use shared conversion function - handles all required fields,

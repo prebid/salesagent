@@ -257,12 +257,15 @@ class TestHighRiskMCP:
 
         identity = _make_identity()
 
-        with patch(
-            "src.core.helpers.context_helpers.ensure_tenant_context",
-            return_value={"tenant_id": "tenant_1"},
-        ), patch(
-            "src.core.tools.performance._verify_principal",
-            side_effect=ValueError("Media buy 'mb_999' not found."),
+        with (
+            patch(
+                "src.core.helpers.context_helpers.ensure_tenant_context",
+                return_value={"tenant_id": "tenant_1"},
+            ),
+            patch(
+                "src.core.tools.performance._verify_principal",
+                side_effect=ValueError("Media buy 'mb_999' not found."),
+            ),
         ):
             with pytest.raises(ValueError, match="not found"):
                 _update_performance_index_impl(

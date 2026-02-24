@@ -1126,13 +1126,13 @@ class MockAdServer(AdServerAdapter):
             end_time = buy["end_time"]
 
             # Load test scenario if present (stored as dict from creation)
-            from src.adapters.test_scenario_parser import TestScenario
+            from src.adapters.test_scenario_parser import ScenarioSpec
 
             test_scenario_data = buy.get("test_scenario")
             test_scenario = None
             if test_scenario_data:
-                # Reconstruct TestScenario from stored dict
-                test_scenario = TestScenario(**test_scenario_data)
+                # Reconstruct ScenarioSpec from stored dict
+                test_scenario = ScenarioSpec(**test_scenario_data)
 
             # Ensure consistent timezone handling for arithmetic operations
             # Convert today to match timezone of stored dates or vice versa

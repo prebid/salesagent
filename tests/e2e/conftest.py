@@ -202,7 +202,7 @@ def docker_services_e2e(request):
             print("\n❌ Health check timeout. Attempting to get container logs...")
 
             # Get logs from all services
-            for service in ["adcp-server", "postgres"]:
+            for service in ["proxy", "adcp-server", "postgres"]:
                 try:
                     print(f"\n📋 {service} logs (last 100 lines):")
                     result = subprocess.run(
