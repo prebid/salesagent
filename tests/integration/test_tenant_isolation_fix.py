@@ -32,6 +32,7 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal as ModelPrincipal
     from src.core.database.models import Tenant
+    from src.core.exceptions import AdCPAuthenticationError
 
     # Create two tenants
     with get_db_session() as session:
@@ -83,7 +84,7 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
         mock_get_headers.return_value = mock_context.meta["headers"]
 
         # Verify cross-tenant token is REJECTED
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(mock_context)
 
         # Verify the error message mentions the tenant

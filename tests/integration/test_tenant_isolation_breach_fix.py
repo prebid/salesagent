@@ -8,6 +8,8 @@ from unittest.mock import Mock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPAuthenticationError
+
 
 @pytest.mark.requires_db
 def test_tenant_isolation_with_valid_subdomain(integration_db):
@@ -146,8 +148,8 @@ def test_cross_tenant_token_rejected(integration_db):
     }
 
     with patch("src.core.auth.get_http_headers", return_value={}):
-        # Should raise ToolError because token doesn't belong to detected tenant
-        with pytest.raises(ToolError) as exc_info:
+        # Should raise ToolError or AdCPAuthenticationError because token doesn't belong to detected tenant
+        with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(context)
 
         error = exc_info.value

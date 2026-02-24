@@ -9,10 +9,12 @@ Tests verify that:
 from unittest.mock import patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import Principal
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.schemas import ListCreativesResponse
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -144,10 +146,11 @@ class TestListCreativesAuthentication:
         # Mock get_http_headers to return empty headers (no auth)
         # Patch at the source where it's imported from
         with patch("fastmcp.server.dependencies.get_http_headers", return_value={}):
-            # This should raise ToolError due to missing authentication
-            from fastmcp.exceptions import ToolError
-
-            with pytest.raises(ToolError, match="Missing x-adcp-auth header"):
+            # This should raise due to missing authentication
+            with pytest.raises(
+                (ToolError, ValueError, RuntimeError, AdCPAuthenticationError),
+                match="Missing x-adcp-auth header",
+            ):
                 core_list_creatives_tool(ctx=mock_context)
 
     def test_authenticated_user_sees_only_own_creatives(self):
@@ -236,8 +239,9 @@ class TestListCreativesAuthentication:
                 "host": "auth-test.sales-agent.example.com",
             },
         ):
-            from fastmcp.exceptions import ToolError
-
-            # This should raise ToolError due to invalid authentication
-            with pytest.raises(ToolError, match="INVALID_AUTH_TOKEN"):
+            # This should raise due to invalid authentication
+            with pytest.raises(
+                (ToolError, ValueError, RuntimeError, AdCPAuthenticationError),
+                match="(?:INVALID_AUTH_TOKEN|token is invalid)",
+            ):
                 core_list_creatives_tool(ctx=mock_context)

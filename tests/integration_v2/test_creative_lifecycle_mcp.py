@@ -896,23 +896,27 @@ class TestCreativeLifecycleMCP:
         # Authentication errors manifest as various exception types (ToolError, ValueError, etc.)
         from fastmcp.exceptions import ToolError
 
-        with pytest.raises((ToolError, ValueError, RuntimeError)):
+        from src.core.exceptions import AdCPAuthenticationError
+
+        with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
             core_sync_creatives_tool(creatives=sample_creatives, ctx=mock_context)
 
     def test_list_creatives_authentication_optional(self, mock_context):
         """Test list_creatives authentication behavior."""
         from fastmcp.exceptions import ToolError
 
+        from src.core.exceptions import AdCPAuthenticationError
+
         _, core_list_creatives_tool = self._import_mcp_tools()
 
         # Test 1: Invalid token should raise error
         mock_context = MockContext("invalid-token")
-        with pytest.raises((ToolError, ValueError, RuntimeError)):
+        with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
             core_list_creatives_tool(ctx=mock_context)
 
         # Test 2: No token also requires auth (list_creatives is not anonymous)
         mock_context_no_auth = MockContext(None)
-        with pytest.raises((ToolError, ValueError, RuntimeError)):
+        with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
             core_list_creatives_tool(ctx=mock_context_no_auth)
 
     def test_sync_creatives_missing_tenant(self, sample_creatives):
