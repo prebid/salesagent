@@ -13,8 +13,17 @@ from unittest.mock import MagicMock, patch
 from starlette.testclient import TestClient
 
 from src.app import app
+from src.core.resolved_identity import ResolvedIdentity
 
 client = TestClient(app)
+
+_MOCK_IDENTITY = ResolvedIdentity(
+    principal_id="test-principal",
+    tenant_id="default",
+    tenant={"tenant_id": "default"},
+    auth_token="test-token",
+    protocol="rest",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +87,11 @@ class TestAuthorizedPropertiesEndpoint:
 class TestCreateMediaBuyEndpoint:
     """Verify POST /api/v1/media-buys endpoint."""
 
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.routes.api_v1.get_principal_from_token", return_value="test-principal")
     @patch("src.core.config_loader.set_current_tenant")
     @patch("src.core.tools.media_buy_create.create_media_buy_raw")
-    def test_returns_200(self, mock_impl, mock_tenant, mock_auth):
+    def test_returns_200(self, mock_impl, mock_tenant, mock_auth, mock_resolve):
         mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"media_buy_id": "mb1"})
         response = client.post(
             "/api/v1/media-buys",
@@ -108,10 +118,11 @@ class TestCreateMediaBuyEndpoint:
 class TestUpdateMediaBuyEndpoint:
     """Verify PUT /api/v1/media-buys/{id} endpoint."""
 
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.routes.api_v1.get_principal_from_token", return_value="test-principal")
     @patch("src.core.config_loader.set_current_tenant")
     @patch("src.core.tools.media_buy_update.update_media_buy_raw")
-    def test_returns_200(self, mock_impl, mock_tenant, mock_auth):
+    def test_returns_200(self, mock_impl, mock_tenant, mock_auth, mock_resolve):
         mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"media_buy_id": "mb1"})
         response = client.put(
             "/api/v1/media-buys/mb1",
@@ -124,10 +135,11 @@ class TestUpdateMediaBuyEndpoint:
 class TestGetMediaBuyDeliveryEndpoint:
     """Verify POST /api/v1/media-buys/delivery endpoint."""
 
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.routes.api_v1.get_principal_from_token", return_value="test-principal")
     @patch("src.core.config_loader.set_current_tenant")
     @patch("src.core.tools.media_buy_delivery.get_media_buy_delivery_raw")
-    def test_returns_200(self, mock_impl, mock_tenant, mock_auth):
+    def test_returns_200(self, mock_impl, mock_tenant, mock_auth, mock_resolve):
         mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"media_buys": []})
         response = client.post(
             "/api/v1/media-buys/delivery",
@@ -140,10 +152,11 @@ class TestGetMediaBuyDeliveryEndpoint:
 class TestSyncCreativesEndpoint:
     """Verify POST /api/v1/creatives/sync endpoint."""
 
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.routes.api_v1.get_principal_from_token", return_value="test-principal")
     @patch("src.core.config_loader.set_current_tenant")
     @patch("src.core.tools.creatives.sync_wrappers.sync_creatives_raw")
-    def test_returns_200(self, mock_impl, mock_tenant, mock_auth):
+    def test_returns_200(self, mock_impl, mock_tenant, mock_auth, mock_resolve):
         mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"creatives": []})
         response = client.post(
             "/api/v1/creatives/sync",
@@ -156,10 +169,11 @@ class TestSyncCreativesEndpoint:
 class TestListCreativesEndpoint:
     """Verify POST /api/v1/creatives endpoint."""
 
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.routes.api_v1.get_principal_from_token", return_value="test-principal")
     @patch("src.core.config_loader.set_current_tenant")
     @patch("src.core.tools.creatives.listing.list_creatives_raw")
-    def test_returns_200(self, mock_impl, mock_tenant, mock_auth):
+    def test_returns_200(self, mock_impl, mock_tenant, mock_auth, mock_resolve):
         mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"creatives": []})
         response = client.post(
             "/api/v1/creatives",
@@ -172,10 +186,11 @@ class TestListCreativesEndpoint:
 class TestUpdatePerformanceIndexEndpoint:
     """Verify POST /api/v1/performance-index endpoint."""
 
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.routes.api_v1.get_principal_from_token", return_value="test-principal")
     @patch("src.core.config_loader.set_current_tenant")
     @patch("src.core.tools.performance.update_performance_index_raw")
-    def test_returns_200(self, mock_impl, mock_tenant, mock_auth):
+    def test_returns_200(self, mock_impl, mock_tenant, mock_auth, mock_resolve):
         mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"status": "ok"})
         response = client.post(
             "/api/v1/performance-index",

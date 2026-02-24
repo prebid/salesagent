@@ -5,8 +5,13 @@ REST transport for AdCP tools, proving the 3-transport pattern
 and applies version compat at the boundary.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.core.resolved_identity import ResolvedIdentity
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -38,9 +43,14 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # ---------------------------------------------------------------------------
 
 
-def _resolve_auth(request: Request) -> tuple[str | None, Any]:
-    """Resolve authentication from request. Returns (principal_id, ctx) or (None, None)."""
+def _resolve_auth(request: Request) -> tuple[str | None, ResolvedIdentity | None]:
+    """Resolve authentication from request using shared 4-strategy tenant detection.
+
+    Returns (principal_id, ResolvedIdentity) or (None, None).
+    Uses the same resolve_identity() as MCP and A2A transports.
+    """
     from src.core.auth_context import AuthContext
+    from src.core.resolved_identity import ResolvedIdentity, resolve_identity
 
     auth_ctx: AuthContext = getattr(request.state, "auth_context", AuthContext.unauthenticated())
 
@@ -51,27 +61,36 @@ def _resolve_auth(request: Request) -> tuple[str | None, Any]:
     if not principal_id:
         return None, None
 
-    from datetime import UTC, datetime
-
-    from src.core.tool_context import ToolContext
-
-    ctx = ToolContext(
-        context_id="rest-api",
-        tenant_id=principal_id.split("_")[0] if "_admin" in principal_id else "default",
-        principal_id=principal_id,
-        tool_name="rest-api",
-        request_timestamp=datetime.now(UTC),
+    # Use shared resolve_identity with request headers for proper 4-strategy tenant detection
+    identity = resolve_identity(
+        headers=auth_ctx.headers,
+        require_valid_token=False,
+        protocol="rest",
     )
-    set_current_tenant({"tenant_id": ctx.tenant_id})
-    return principal_id, ctx
+    # Override principal_id from token validation (resolve_identity may not have it if headers lack auth)
+    if identity.principal_id != principal_id:
+        identity = ResolvedIdentity(
+            principal_id=principal_id,
+            tenant_id=identity.tenant_id,
+            tenant=identity.tenant,
+            auth_token=auth_ctx.auth_token,
+            protocol="rest",
+        )
+
+    if identity.tenant:
+        set_current_tenant(identity.tenant)
+    elif identity.tenant_id:
+        set_current_tenant({"tenant_id": identity.tenant_id})
+
+    return principal_id, identity
 
 
-def _require_auth(request: Request) -> tuple[str, Any]:
+def _require_auth(request: Request) -> tuple[str, ResolvedIdentity]:
     """Resolve auth or raise 401."""
-    principal_id, ctx = _resolve_auth(request)
-    if not principal_id:
+    principal_id, identity = _resolve_auth(request)
+    if not principal_id or identity is None:
         raise AdCPAuthenticationError("Authentication required")
-    return principal_id, ctx
+    return principal_id, identity
 
 
 def _handle_tool_error(e: ToolError) -> JSONResponse:
@@ -167,7 +186,7 @@ class ListAuthorizedPropertiesBody(BaseModel):
 @router.post("/products")
 async def get_products(body: GetProductsBody, request: Request):
     """Get available products matching the brief (auth-optional discovery skill)."""
-    _, ctx = _resolve_auth(request)
+    _, identity = _resolve_auth(request)
 
     req = products_module.create_get_products_request(
         brief=body.brief,
@@ -176,10 +195,6 @@ async def get_products(body: GetProductsBody, request: Request):
     )
 
     try:
-        # Convert ToolContext to ResolvedIdentity for _impl call
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
         response = await products_module._get_products_impl(req, identity)
     except ToolError as e:
         return _handle_tool_error(e)
@@ -191,10 +206,10 @@ async def get_products(body: GetProductsBody, request: Request):
 @router.get("/capabilities")
 async def get_capabilities(request: Request):
     """Get AdCP capabilities (auth-optional discovery skill)."""
-    _, ctx = _resolve_auth(request)
+    _, identity = _resolve_auth(request)
 
     try:
-        response = await capabilities_module.get_adcp_capabilities_raw(ctx=ctx)
+        response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
     except ToolError as e:
         return _handle_tool_error(e)
 
@@ -204,10 +219,10 @@ async def get_capabilities(request: Request):
 @router.post("/creative-formats")
 async def list_creative_formats(body: ListCreativeFormatsBody, request: Request):
     """List available creative formats (auth-optional discovery skill)."""
-    _, ctx = _resolve_auth(request)
+    _, identity = _resolve_auth(request)
 
     try:
-        response = creative_formats_module.list_creative_formats_raw(ctx=ctx)
+        response = creative_formats_module.list_creative_formats_raw(identity=identity)
     except ToolError as e:
         return _handle_tool_error(e)
 
@@ -217,10 +232,10 @@ async def list_creative_formats(body: ListCreativeFormatsBody, request: Request)
 @router.post("/authorized-properties")
 async def list_authorized_properties(body: ListAuthorizedPropertiesBody, request: Request):
     """List authorized properties (auth-optional discovery skill)."""
-    _, ctx = _resolve_auth(request)
+    _, identity = _resolve_auth(request)
 
     try:
-        response = properties_module.list_authorized_properties_raw(ctx=ctx)
+        response = properties_module.list_authorized_properties_raw(identity=identity)
     except ToolError as e:
         return _handle_tool_error(e)
 
@@ -235,7 +250,7 @@ async def list_authorized_properties(body: ListAuthorizedPropertiesBody, request
 @router.post("/media-buys")
 async def create_media_buy(body: CreateMediaBuyBody, request: Request):
     """Create a new media buy (auth required)."""
-    _, ctx = _require_auth(request)
+    _, identity = _require_auth(request)
 
     try:
         response = await media_buy_create_module.create_media_buy_raw(
@@ -248,7 +263,7 @@ async def create_media_buy(body: CreateMediaBuyBody, request: Request):
             po_number=body.po_number,
             product_ids=body.product_ids,
             total_budget=body.total_budget,
-            ctx=ctx,
+            identity=identity,
         )
     except ToolError as e:
         return _handle_tool_error(e)
@@ -259,7 +274,7 @@ async def create_media_buy(body: CreateMediaBuyBody, request: Request):
 @router.put("/media-buys/{media_buy_id}")
 async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, request: Request):
     """Update an existing media buy (auth required)."""
-    _, ctx = _require_auth(request)
+    _, identity = _require_auth(request)
 
     try:
         response = media_buy_update_module.update_media_buy_raw(
@@ -271,7 +286,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, request:
             currency=body.currency,
             start_time=body.start_time,
             end_time=body.end_time,
-            ctx=ctx,
+            identity=identity,
         )
     except ToolError as e:
         return _handle_tool_error(e)
@@ -282,7 +297,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, request:
 @router.post("/media-buys/delivery")
 async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, request: Request):
     """Get delivery metrics for media buys (auth required)."""
-    _, ctx = _require_auth(request)
+    _, identity = _require_auth(request)
 
     try:
         response = media_buy_delivery_module.get_media_buy_delivery_raw(
@@ -290,7 +305,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, request: Request
             buyer_refs=body.buyer_refs,
             start_date=body.start_date,
             end_date=body.end_date,
-            ctx=ctx,
+            identity=identity,
         )
     except ToolError as e:
         return _handle_tool_error(e)
@@ -301,7 +316,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, request: Request
 @router.post("/creatives/sync")
 async def sync_creatives(body: SyncCreativesBody, request: Request):
     """Sync creatives (auth required)."""
-    _, ctx = _require_auth(request)
+    _, identity = _require_auth(request)
 
     try:
         response = creatives_sync_module.sync_creatives_raw(
@@ -311,7 +326,7 @@ async def sync_creatives(body: SyncCreativesBody, request: Request):
             delete_missing=body.delete_missing,
             dry_run=body.dry_run,
             validation_mode=body.validation_mode,
-            ctx=ctx,
+            identity=identity,
         )
     except ToolError as e:
         return _handle_tool_error(e)
@@ -322,7 +337,7 @@ async def sync_creatives(body: SyncCreativesBody, request: Request):
 @router.post("/creatives")
 async def list_creatives(body: ListCreativesBody, request: Request):
     """List creatives (auth required)."""
-    _, ctx = _require_auth(request)
+    _, identity = _require_auth(request)
 
     try:
         response = creatives_listing_module.list_creatives_raw(
@@ -331,7 +346,7 @@ async def list_creatives(body: ListCreativesBody, request: Request):
             buyer_ref=body.buyer_ref,
             status=body.status,
             format=body.format,
-            ctx=ctx,
+            identity=identity,
         )
     except ToolError as e:
         return _handle_tool_error(e)
@@ -342,13 +357,13 @@ async def list_creatives(body: ListCreativesBody, request: Request):
 @router.post("/performance-index")
 async def update_performance_index(body: UpdatePerformanceIndexBody, request: Request):
     """Update performance index for a media buy (auth required)."""
-    _, ctx = _require_auth(request)
+    _, identity = _require_auth(request)
 
     try:
         response = performance_module.update_performance_index_raw(
             media_buy_id=body.media_buy_id,
             performance_data=body.performance_data,
-            ctx=ctx,
+            identity=identity,
         )
     except ToolError as e:
         return _handle_tool_error(e)

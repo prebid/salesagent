@@ -47,31 +47,23 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.validation_helpers import format_validation_error
 
 
-def _verify_principal(media_buy_id: str, context: "Context | ToolContext | ResolvedIdentity"):
+def _verify_principal(media_buy_id: str, context: "ResolvedIdentity"):
     """Verify that the principal from context owns the media buy.
 
     Checks database for media buy ownership, not in-memory dictionary.
 
     Args:
         media_buy_id: Media buy ID to verify
-        context: FastMCP Context, ToolContext, or ResolvedIdentity with principal info
+        context: ResolvedIdentity with principal info
 
     Raises:
+        AdCPAuthenticationError: Missing principal
         ValueError: Media buy not found
         PermissionError: Principal doesn't own media buy
     """
     from src.core.database.models import MediaBuy as MediaBuyModel
-    from src.core.resolved_identity import ResolvedIdentity
 
-    # Get principal_id from context
-    if isinstance(context, ResolvedIdentity):
-        principal_id: str | None = context.principal_id
-    elif isinstance(context, ToolContext):
-        principal_id = context.principal_id
-    else:
-        from src.core.helpers import get_principal_id_from_context
-
-        principal_id = get_principal_id_from_context(context)
+    principal_id: str | None = context.principal_id
 
     # CRITICAL: principal_id is required for media buy updates
     if not principal_id:

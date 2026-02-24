@@ -174,8 +174,14 @@ class TestA2AErrorShapes:
     @pytest.mark.asyncio
     async def test_missing_params_returns_error_dict(self):
         """A2A create_media_buy returns error dict for missing required params."""
+        from src.core.resolved_identity import ResolvedIdentity
+
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
         with (
             patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create,
+            patch.object(self.handler, "_resolve_identity", return_value=mock_identity),
         ):
             mock_ctx = MagicMock()
             mock_ctx.principal_id = "test_principal"
@@ -198,8 +204,14 @@ class TestA2AErrorShapes:
     @pytest.mark.asyncio
     async def test_validation_error_returns_error_dict(self):
         """A2A create_media_buy returns error dict for invalid parameter types."""
+        from src.core.resolved_identity import ResolvedIdentity
+
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
         with (
             patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create,
+            patch.object(self.handler, "_resolve_identity", return_value=mock_identity),
         ):
             mock_ctx = MagicMock()
             mock_ctx.principal_id = "test_principal"
@@ -389,7 +401,15 @@ class TestCrossTransportErrorConsistency:
             mcp_error_message = str(e)
 
         # A2A path: missing required params
-        with patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create:
+        from src.core.resolved_identity import ResolvedIdentity
+
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
+        with (
+            patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create,
+            patch.object(self.handler, "_resolve_identity", return_value=mock_identity),
+        ):
             mock_ctx = MagicMock()
             mock_ctx.principal_id = "test_principal"
             mock_create.return_value = mock_ctx

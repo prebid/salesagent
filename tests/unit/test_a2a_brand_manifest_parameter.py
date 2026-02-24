@@ -25,11 +25,11 @@ async def test_handle_get_products_skill_extracts_brand_manifest():
     with (
         patch.object(handler, "_create_tool_context_from_a2a") as mock_create_context,
         patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool,
-        patch.object(handler, "_tool_context_to_mcp_context") as mock_to_mcp,
+        patch.object(handler, "_resolve_identity") as mock_resolve,
     ):
         # Setup mocks
         mock_create_context.return_value = MagicMock(tenant_id="test_tenant", principal_id="test_principal")
-        mock_to_mcp.return_value = MagicMock()
+        mock_resolve.return_value = MagicMock()
 
         # Mock successful response
         mock_response = MagicMock()
@@ -66,11 +66,11 @@ async def test_handle_get_products_skill_extracts_all_parameters():
     with (
         patch.object(handler, "_create_tool_context_from_a2a") as mock_create_context,
         patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool,
-        patch.object(handler, "_tool_context_to_mcp_context") as mock_to_mcp,
+        patch.object(handler, "_resolve_identity") as mock_resolve,
     ):
         # Setup mocks
         mock_create_context.return_value = MagicMock(tenant_id="test_tenant", principal_id="test_principal")
-        mock_to_mcp.return_value = MagicMock()
+        mock_resolve.return_value = MagicMock()
 
         # Mock successful response
         mock_response = MagicMock()
@@ -116,11 +116,11 @@ async def test_handle_get_products_skill_backward_compat_promoted_offering():
     with (
         patch.object(handler, "_create_tool_context_from_a2a") as mock_create_context,
         patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool,
-        patch.object(handler, "_tool_context_to_mcp_context") as mock_to_mcp,
+        patch.object(handler, "_resolve_identity") as mock_resolve,
     ):
         # Setup mocks
         mock_create_context.return_value = MagicMock(tenant_id="test_tenant", principal_id="test_principal")
-        mock_to_mcp.return_value = MagicMock()
+        mock_resolve.return_value = MagicMock()
 
         # Mock successful response
         mock_response = MagicMock()
@@ -157,11 +157,11 @@ async def test_handle_get_products_skill_brand_manifest_url_string():
     with (
         patch.object(handler, "_create_tool_context_from_a2a") as mock_create_context,
         patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool,
-        patch.object(handler, "_tool_context_to_mcp_context") as mock_to_mcp,
+        patch.object(handler, "_resolve_identity") as mock_resolve,
     ):
         # Setup mocks
         mock_create_context.return_value = MagicMock(tenant_id="test_tenant", principal_id="test_principal")
-        mock_to_mcp.return_value = MagicMock()
+        mock_resolve.return_value = MagicMock()
 
         # Mock successful response
         mock_response = MagicMock()

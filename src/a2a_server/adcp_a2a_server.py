@@ -11,7 +11,7 @@ from collections.abc import AsyncGenerator
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any
 
 from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import Event
@@ -55,6 +55,7 @@ from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
@@ -87,6 +88,7 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
+from src.core.transport_helpers import resolve_identity_from_context
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -123,34 +125,6 @@ DISCOVERY_SKILLS = frozenset(
 # Context variables for current request (works with async code, unlike threading.local())
 _request_auth_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_auth_token", default=None)
 _request_headers: contextvars.ContextVar[dict | None] = contextvars.ContextVar("request_headers", default=None)
-
-
-class MinimalContext:
-    """Minimal context for unauthenticated requests that need tenant detection.
-
-    This lightweight context object is used when authentication is not required
-    but tenant detection via headers is still needed (e.g., discovery endpoints).
-    It provides the same interface as FastMCP Context for header access.
-    """
-
-    def __init__(self, headers: dict[str, Any]):
-        """Initialize minimal context with request headers.
-
-        Args:
-            headers: Request headers for tenant detection
-        """
-        self.headers: dict[str, Any] = headers
-        self.meta: dict[str, Any] = {"headers": headers}
-
-    @classmethod
-    def from_request_context(cls) -> "MinimalContext":
-        """Create minimal context from current request context.
-
-        Returns:
-            MinimalContext with headers from current request
-        """
-        headers = _request_headers.get() or {}
-        return cls(headers)
 
 
 class AdCPRequestHandler(RequestHandler):
@@ -315,14 +289,35 @@ class AdCPRequestHandler(RequestHandler):
             testing_context=AdCPTestContext(),  # Default testing context for A2A requests
         )
 
-    def _tool_context_to_mcp_context(self, tool_context: ToolContext) -> ToolContext:
-        """Convert ToolContext to a context object for raw function calls.
+    def _resolve_identity(self, tool_context: ToolContext) -> ResolvedIdentity:
+        """Resolve a ResolvedIdentity from an authenticated ToolContext.
 
-        Raw functions now accept ToolContext directly (no conversion needed).
-        The tools handle both ToolContext and legacy FastMCP Context.
+        Args:
+            tool_context: ToolContext created from A2A authentication
+
+        Returns:
+            ResolvedIdentity with tenant and principal info
         """
-        # Return ToolContext directly - tools handle ToolContext natively
-        return tool_context
+        identity = resolve_identity_from_context(tool_context, protocol="a2a")
+        assert identity is not None, "resolve_identity_from_context returned None for authenticated context"
+        return identity
+
+    def _resolve_identity_unauthenticated(self) -> ResolvedIdentity:
+        """Resolve identity for unauthenticated discovery requests.
+
+        Uses request headers for tenant detection without requiring auth token.
+
+        Returns:
+            ResolvedIdentity with tenant info (no principal)
+        """
+        headers = _request_headers.get() or {}
+        from src.core.resolved_identity import resolve_identity
+
+        return resolve_identity(
+            headers=headers,
+            require_valid_token=False,
+            protocol="a2a",
+        )
 
     def _log_a2a_operation(
         self,
@@ -1461,7 +1456,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or dicts for early-return errors)
-            result = await cast(Any, handler)(parameters, auth_token)
+            result = await handler(parameters, auth_token)  # type: ignore[arg-type]
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
         except ServerError:
@@ -1484,18 +1479,17 @@ class AdCPRequestHandler(RequestHandler):
         brand_manifest_policy setting (public/require_brand/require_auth).
         """
         try:
-            # Create ToolContext from A2A auth info (if provided)
-            tool_context: ToolContext | MinimalContext
-
+            # Resolve identity from A2A auth info (if provided)
             if auth_token:
                 # Token provided - authentication MUST succeed (don't silently fall back)
                 tool_context = self._create_tool_context_from_a2a(
                     auth_token=auth_token,
                     tool_name="get_products",
                 )
+                identity = self._resolve_identity(tool_context)
             else:
-                # No auth token - create minimal Context-like object with headers for tenant detection
-                tool_context = MinimalContext.from_request_context()
+                # No auth token - resolve identity from headers for tenant detection
+                identity = self._resolve_identity_unauthenticated()
 
             # Normalize brand_manifest: URL string → dict (adcp v1.2.1)
             brand_manifest = parameters.get("brand_manifest")
@@ -1516,11 +1510,7 @@ class AdCPRequestHandler(RequestHandler):
                     InvalidParamsError(message="Either 'brand_manifest' or 'brief' parameter is required")
                 )
 
-            # Call core function — _raw handles full schema validation via create_get_products_request
-            if isinstance(tool_context, ToolContext):
-                mcp_ctx = self._tool_context_to_mcp_context(tool_context)
-            else:
-                mcp_ctx = cast(ToolContext, tool_context)
+            # Call core function with identity — _raw handles full schema validation
             response = await core_get_products_tool(
                 brief=brief,
                 brand_manifest=brand_manifest,
@@ -1528,7 +1518,7 @@ class AdCPRequestHandler(RequestHandler):
                 min_exposures=parameters.get("min_exposures"),
                 strategy_id=parameters.get("strategy_id"),
                 context=parameters.get("context"),
-                ctx=mcp_ctx,
+                identity=identity,
             )
 
             # Apply v2 compat for pre-3.0 clients at the boundary
@@ -1558,11 +1548,12 @@ class AdCPRequestHandler(RequestHandler):
         Legacy format (product_ids, total_budget, start_date, end_date) is NOT supported.
         """
         try:
-            # Create ToolContext from A2A auth info
+            # Create ToolContext from A2A auth info and resolve identity
             tool_context = self._create_tool_context_from_a2a(
                 auth_token=auth_token,
                 tool_name="create_media_buy",
             )
+            identity = self._resolve_identity(tool_context)
 
             # Parse parameters into typed request model (validation at A2A boundary)
             from pydantic import ValidationError
@@ -1610,7 +1601,7 @@ class AdCPRequestHandler(RequestHandler):
                     ],
                 }
 
-            # Call core function with validated parameters
+            # Call core function with validated parameters and identity
             response = await core_create_media_buy_tool(
                 brand_manifest=params.get("brand_manifest"),
                 po_number=req.po_number,
@@ -1623,7 +1614,7 @@ class AdCPRequestHandler(RequestHandler):
                 push_notification_config=params.get("push_notification_config"),
                 reporting_webhook=params.get("reporting_webhook"),
                 context=params.get("context"),
-                ctx=self._tool_context_to_mcp_context(tool_context),
+                identity=identity,
             )
 
             return response
@@ -1640,11 +1631,12 @@ class AdCPRequestHandler(RequestHandler):
             logger.info(f"[A2A sync_creatives] assignments param: {parameters.get('assignments')}")
             logger.info(f"[A2A sync_creatives] creatives count: {len(parameters.get('creatives', []))}")
 
-            # Create ToolContext from A2A auth info
+            # Create ToolContext from A2A auth info and resolve identity
             tool_context = self._create_tool_context_from_a2a(
                 auth_token=auth_token,
                 tool_name="sync_creatives",
             )
+            identity = self._resolve_identity(tool_context)
 
             # Map A2A parameters - creatives is required
             if "creatives" not in parameters:
@@ -1679,7 +1671,7 @@ class AdCPRequestHandler(RequestHandler):
                 validation_mode=parameters.get("validation_mode", "strict"),
                 push_notification_config=parameters.get("push_notification_config"),
                 context=context,
-                ctx=self._tool_context_to_mcp_context(tool_context),
+                identity=identity,
             )
 
             return response
@@ -1691,11 +1683,12 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_list_creatives_skill(self, parameters: dict, auth_token: str) -> dict:
         """Handle explicit list_creatives skill invocation (AdCP spec endpoint)."""
         try:
-            # Create ToolContext from A2A auth info
+            # Create ToolContext from A2A auth info and resolve identity
             tool_context = self._create_tool_context_from_a2a(
                 auth_token=auth_token,
                 tool_name="list_creatives",
             )
+            identity = self._resolve_identity(tool_context)
 
             # Call core function with optional parameters (fixing original validation bug)
             response = core_list_creatives_tool(
@@ -1712,7 +1705,7 @@ class AdCPRequestHandler(RequestHandler):
                 sort_by=parameters.get("sort_by", "created_date"),
                 sort_order=parameters.get("sort_order", "desc"),
                 context=parameters.get("context"),
-                ctx=self._tool_context_to_mcp_context(tool_context),
+                identity=identity,
             )
 
             return response
@@ -1761,13 +1754,14 @@ class AdCPRequestHandler(RequestHandler):
             )
 
             # TODO: Implement get_creatives tool
+            # identity = self._resolve_identity(tool_context)
             # response = core_get_creatives_tool(
             #     group_id=parameters.get("group_id"),
             #     media_buy_id=parameters.get("media_buy_id"),
             #     status=parameters.get("status"),
             #     tags=parameters.get("tags", []),
             #     include_assignments=parameters.get("include_assignments", False),
-            #     context=self._tool_context_to_mcp_context(tool_context),
+            #     identity=identity,
             # )
             raise ServerError(UnsupportedOperationError(message="get_creatives skill not yet implemented"))
 
@@ -1797,6 +1791,7 @@ class AdCPRequestHandler(RequestHandler):
                 }
 
             # TODO: Implement assign_creative tool
+            # identity = self._resolve_identity(tool_context)
             # response = core_assign_creative_tool(
             #     media_buy_id=parameters["media_buy_id"],
             #     package_id=parameters["package_id"],
@@ -1805,7 +1800,7 @@ class AdCPRequestHandler(RequestHandler):
             #     percentage_goal=parameters.get("percentage_goal"),
             #     rotation_type=parameters.get("rotation_type", "weighted"),
             #     override_click_url=parameters.get("override_click_url"),
-            #     context=self._tool_context_to_mcp_context(tool_context),
+            #     identity=identity,
             # )
             raise ServerError(UnsupportedOperationError(message="assign_creative skill not yet implemented"))
 
@@ -1849,32 +1844,25 @@ class AdCPRequestHandler(RequestHandler):
         Returns agent capabilities including supported protocols, targeting, and portfolio info.
         """
         try:
-            # Create ToolContext from A2A auth info (if provided)
-            tool_context: ToolContext | MinimalContext
-
+            # Resolve identity from A2A auth info (if provided)
             if auth_token:
                 # Token provided - authentication MUST succeed (don't silently fall back)
                 tool_context = self._create_tool_context_from_a2a(
                     auth_token=auth_token,
                     tool_name="get_adcp_capabilities",
                 )
+                identity = self._resolve_identity(tool_context)
             else:
-                # No auth token - create minimal Context-like object with headers for tenant detection
-                tool_context = MinimalContext.from_request_context()
+                # No auth token - resolve identity from headers for tenant detection
+                identity = self._resolve_identity_unauthenticated()
 
             # Import and call the core implementation
             from src.core.tools.capabilities import get_adcp_capabilities_raw
 
-            # Call core function with context (protocols param is currently unused by _raw)
-            if isinstance(tool_context, ToolContext):
-                mcp_ctx = self._tool_context_to_mcp_context(tool_context)
-            else:
-                # MinimalContext works with core tools directly
-                mcp_ctx = cast(ToolContext, tool_context)
-
+            # Call core function with identity
             response = await get_adcp_capabilities_raw(
                 protocols=parameters.get("protocols"),
-                ctx=mcp_ctx,
+                identity=identity,
             )
 
             return response
@@ -1889,18 +1877,17 @@ class AdCPRequestHandler(RequestHandler):
         NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.
         """
         try:
-            # Create ToolContext from A2A auth info (if provided)
-            tool_context: ToolContext | MinimalContext
-
+            # Resolve identity from A2A auth info (if provided)
             if auth_token:
                 # Token provided - authentication MUST succeed (don't silently fall back)
                 tool_context = self._create_tool_context_from_a2a(
                     auth_token=auth_token,
                     tool_name="list_creative_formats",
                 )
+                identity = self._resolve_identity(tool_context)
             else:
-                # No auth token - create minimal Context-like object with headers for tenant detection
-                tool_context = MinimalContext.from_request_context()
+                # No auth token - resolve identity from headers for tenant detection
+                identity = self._resolve_identity_unauthenticated()
 
             # Build request from parameters (all optional)
             # Use local schema (extends library type) for proper type compatibility
@@ -1919,14 +1906,8 @@ class AdCPRequestHandler(RequestHandler):
                 context=parameters.get("context"),
             )
 
-            # Call core function with request
-            # tool_context can be ToolContext or MinimalContext
-            if isinstance(tool_context, ToolContext):
-                mcp_ctx = self._tool_context_to_mcp_context(tool_context)
-            else:
-                # MinimalContext works with core tools directly
-                mcp_ctx = cast(ToolContext, tool_context)
-            response = core_list_creative_formats_tool(req=req, ctx=mcp_ctx)
+            # Call core function with identity
+            response = core_list_creative_formats_tool(req=req, identity=identity)
 
             return response
 
@@ -1943,19 +1924,18 @@ class AdCPRequestHandler(RequestHandler):
         Per AdCP v2.4 spec, returns publisher_domains (not properties/tags).
         """
         try:
-            # Create ToolContext from A2A auth info (which sets tenant context as side effect)
-            tool_context: ToolContext | MinimalContext | None = None
-
+            # Resolve identity from A2A auth info (if provided)
             if auth_token:
                 # Token provided - authentication MUST succeed (don't silently fall back)
                 tool_context = self._create_tool_context_from_a2a(
                     auth_token=auth_token,
                     tool_name="list_authorized_properties",
                 )
+                identity = self._resolve_identity(tool_context)
             else:
-                # No auth token - create minimal Context-like object with headers for tenant detection
+                # No auth token - resolve identity from headers for tenant detection
                 # This allows tenant detection via Apx-Incoming-Host, Host, or x-adcp-tenant headers
-                tool_context = MinimalContext.from_request_context()
+                identity = self._resolve_identity_unauthenticated()
 
             # Map A2A parameters to ListAuthorizedPropertiesRequest
             # Note: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0, use local schema
@@ -1970,9 +1950,8 @@ class AdCPRequestHandler(RequestHandler):
 
             request = ListAuthorizedPropertiesRequest(context=parameters.get("context"))
 
-            # Call core function directly
-            # Context can be None for unauthenticated calls - tenant will be detected from headers
-            response = core_list_authorized_properties_tool(req=request, ctx=cast(Any, tool_context))
+            # Call core function with identity
+            response = core_list_authorized_properties_tool(req=request, identity=identity)
 
             return response
 
@@ -1983,11 +1962,12 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_update_media_buy_skill(self, parameters: dict, auth_token: str) -> dict:
         """Handle explicit update_media_buy skill invocation (CRITICAL for campaign management)."""
         try:
-            # Create ToolContext from A2A auth info
+            # Create ToolContext from A2A auth info and resolve identity
             tool_context = self._create_tool_context_from_a2a(
                 auth_token=auth_token,
                 tool_name="update_media_buy",
             )
+            identity = self._resolve_identity(tool_context)
 
             # Parse parameters into typed request model (validation at A2A boundary)
             from pydantic import ValidationError
@@ -2023,7 +2003,7 @@ class AdCPRequestHandler(RequestHandler):
             except ValidationError as e:
                 raise ServerError(InvalidParamsError(message=f"Invalid parameters: {e}"))
 
-            # Call core function with validated fields + raw nested structures
+            # Call core function with validated fields + raw nested structures and identity
             response = core_update_media_buy_tool(
                 media_buy_id=req.media_buy_id or "",
                 buyer_ref=req.buyer_ref,
@@ -2034,7 +2014,7 @@ class AdCPRequestHandler(RequestHandler):
                 packages=params.get("packages"),
                 push_notification_config=params.get("push_notification_config"),
                 context=params.get("context"),
-                ctx=self._tool_context_to_mcp_context(tool_context),
+                identity=identity,
             )
 
             return response
@@ -2057,11 +2037,12 @@ class AdCPRequestHandler(RequestHandler):
         the requester has access to, filtered by the provided criteria.
         """
         try:
-            # Create ToolContext from A2A auth info
+            # Create ToolContext from A2A auth info and resolve identity
             tool_context = self._create_tool_context_from_a2a(
                 auth_token=auth_token,
                 tool_name="get_media_buy_delivery",
             )
+            identity = self._resolve_identity(tool_context)
 
             # Parse parameters into typed request model (validation at A2A boundary)
             # Pre-process: support singular media_buy_id (legacy) → media_buy_ids (spec)
@@ -2083,7 +2064,7 @@ class AdCPRequestHandler(RequestHandler):
                 start_date=params.get("start_date"),
                 end_date=params.get("end_date"),
                 context=params.get("context"),
-                ctx=self._tool_context_to_mcp_context(tool_context),
+                identity=identity,
             )
 
             return response
@@ -2095,11 +2076,12 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_update_performance_index_skill(self, parameters: dict, auth_token: str) -> dict:
         """Handle explicit update_performance_index skill invocation (CRITICAL for optimization)."""
         try:
-            # Create ToolContext from A2A auth info
+            # Create ToolContext from A2A auth info and resolve identity
             tool_context = self._create_tool_context_from_a2a(
                 auth_token=auth_token,
                 tool_name="update_performance_index",
             )
+            identity = self._resolve_identity(tool_context)
 
             # Parse parameters into typed request model (validation at A2A boundary)
             from pydantic import ValidationError
@@ -2116,12 +2098,12 @@ class AdCPRequestHandler(RequestHandler):
                     "received_parameters": list(parameters.keys()),
                 }
 
-            # Call core function with validated fields
+            # Call core function with validated fields and identity
             response = core_update_performance_index_tool(
                 media_buy_id=req.media_buy_id,
                 performance_data=[p.model_dump(mode="json") for p in req.performance_data],
                 context=req.context,
-                ctx=self._tool_context_to_mcp_context(tool_context),
+                identity=identity,
             )
 
             return response
@@ -2141,11 +2123,12 @@ class AdCPRequestHandler(RequestHandler):
             Dictionary containing product information
         """
         try:
-            # Create ToolContext from A2A auth info
+            # Create ToolContext from A2A auth info and resolve identity
             tool_context = self._create_tool_context_from_a2a(
                 auth_token=auth_token,
                 tool_name="get_products",
             )
+            identity = self._resolve_identity(tool_context)
 
             # Extract brand name from query and create brand_manifest
             # This provides backward compatibility for natural language queries
@@ -2156,7 +2139,7 @@ class AdCPRequestHandler(RequestHandler):
             response = await core_get_products_tool(
                 brief=query,
                 brand_manifest=brand_manifest,
-                ctx=self._tool_context_to_mcp_context(tool_context),
+                identity=identity,
             )
 
             # Convert to A2A response format with v2.x backward compatibility

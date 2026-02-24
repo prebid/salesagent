@@ -12,7 +12,8 @@ import pytest
 from a2a.types import InvalidRequestError
 from a2a.utils.errors import ServerError
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, MinimalContext
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.resolved_identity import ResolvedIdentity
 
 
 class TestAuthOptionalSkills:
@@ -21,11 +22,20 @@ class TestAuthOptionalSkills:
     def setup_method(self):
         """Set up test fixtures."""
         self.handler = AdCPRequestHandler()
+        self.mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
+        self.anon_identity = ResolvedIdentity(
+            principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
 
     @pytest.mark.asyncio
     async def test_list_creative_formats_without_auth(self):
         """list_creative_formats should work without authentication."""
-        with patch("src.a2a_server.adcp_a2a_server.core_list_creative_formats_tool") as mock_tool:
+        with (
+            patch("src.a2a_server.adcp_a2a_server.core_list_creative_formats_tool") as mock_tool,
+            patch.object(self.handler, "_resolve_identity_unauthenticated", return_value=self.anon_identity),
+        ):
             mock_tool.return_value = {"formats": []}
 
             result = await self.handler._handle_list_creative_formats_skill(parameters={}, auth_token=None)
@@ -40,6 +50,7 @@ class TestAuthOptionalSkills:
         with (
             patch("src.a2a_server.adcp_a2a_server.core_list_creative_formats_tool") as mock_tool,
             patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create_context,
+            patch.object(self.handler, "_resolve_identity", return_value=self.mock_identity),
         ):
             mock_tool.return_value = {"formats": []}
             mock_create_context.return_value = MagicMock()
@@ -65,7 +76,10 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_list_authorized_properties_without_auth(self):
         """list_authorized_properties should work without authentication."""
-        with patch("src.a2a_server.adcp_a2a_server.core_list_authorized_properties_tool") as mock_tool:
+        with (
+            patch("src.a2a_server.adcp_a2a_server.core_list_authorized_properties_tool") as mock_tool,
+            patch.object(self.handler, "_resolve_identity_unauthenticated", return_value=self.anon_identity),
+        ):
             mock_tool.return_value = {"publisher_domains": []}
 
             result = await self.handler._handle_list_authorized_properties_skill(parameters={}, auth_token=None)
@@ -79,6 +93,7 @@ class TestAuthOptionalSkills:
         with (
             patch("src.a2a_server.adcp_a2a_server.core_list_authorized_properties_tool") as mock_tool,
             patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create_context,
+            patch.object(self.handler, "_resolve_identity", return_value=self.mock_identity),
         ):
             mock_tool.return_value = {"publisher_domains": []}
             mock_create_context.return_value = MagicMock()
@@ -103,7 +118,10 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_get_products_without_auth(self):
         """get_products should work without authentication (depending on policy)."""
-        with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_tool:
+        with (
+            patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_tool,
+            patch.object(self.handler, "_resolve_identity_unauthenticated", return_value=self.anon_identity),
+        ):
             mock_tool.return_value = {"products": []}
 
             result = await self.handler._handle_get_products_skill(
@@ -119,6 +137,7 @@ class TestAuthOptionalSkills:
         with (
             patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_tool,
             patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create_context,
+            patch.object(self.handler, "_resolve_identity", return_value=self.mock_identity),
         ):
             mock_tool.return_value = {"products": []}
             mock_create_context.return_value = MagicMock()
@@ -167,17 +186,14 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_discovery_skills_list(self):
         """Verify discovery_skills set includes only auth-optional endpoints."""
-        # This test documents which skills are auth-optional
-        # Call _handle_explicit_skill with None auth and verify behavior
-
-        # Discovery skills should accept None auth
         discovery_skills = ["list_creative_formats", "list_authorized_properties", "get_products"]
 
         for skill_name in discovery_skills:
-            # Should not raise auth error (may raise other errors)
-            # We just verify that None auth_token doesn't immediately fail
             try:
-                with patch(f"src.a2a_server.adcp_a2a_server.core_{skill_name}_tool") as mock_tool:
+                with (
+                    patch(f"src.a2a_server.adcp_a2a_server.core_{skill_name}_tool") as mock_tool,
+                    patch.object(self.handler, "_resolve_identity_unauthenticated", return_value=self.anon_identity),
+                ):
                     mock_tool.return_value = {}
                     await self.handler._handle_explicit_skill(
                         skill_name=skill_name,
@@ -185,7 +201,6 @@ class TestAuthOptionalSkills:
                         auth_token=None,
                     )
             except ServerError as e:
-                # Should not be an auth error
                 assert "Authentication token required" not in str(e)
 
     @pytest.mark.asyncio
@@ -233,35 +248,3 @@ class TestAuthOptionalSkills:
                     else:
                         # Re-raise non-auth errors to expose actual bugs
                         raise
-
-
-class TestMinimalContext:
-    """Test MinimalContext helper class."""
-
-    def test_minimal_context_creation(self):
-        """MinimalContext should initialize with headers."""
-        headers = {"Host": "example.com", "x-adcp-tenant": "test"}
-        context = MinimalContext(headers)
-
-        assert context.headers == headers
-        assert context.meta["headers"] == headers
-
-    def test_minimal_context_from_request_context(self):
-        """MinimalContext.from_request_context should use request headers."""
-        with patch("src.a2a_server.adcp_a2a_server._request_headers") as mock_headers:
-            mock_headers.get.return_value = {"Host": "test.com"}
-
-            context = MinimalContext.from_request_context()
-
-            assert context.headers == {"Host": "test.com"}
-            assert context.meta["headers"] == {"Host": "test.com"}
-
-    def test_minimal_context_from_request_context_no_headers(self):
-        """MinimalContext.from_request_context should handle missing headers."""
-        with patch("src.a2a_server.adcp_a2a_server._request_headers") as mock_headers:
-            mock_headers.get.return_value = None
-
-            context = MinimalContext.from_request_context()
-
-            assert context.headers == {}
-            assert context.meta["headers"] == {}
