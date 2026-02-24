@@ -32,7 +32,7 @@ class ResolvedIdentity(BaseModel, frozen=True):
 
     principal_id: str | None = None
     tenant_id: str | None = None
-    tenant: dict[str, Any] | None = None
+    tenant: Any = None  # TenantContext | dict[str, Any] | None (transitional)
     auth_token: str | None = None
     protocol: Literal["mcp", "a2a", "rest"] = "mcp"
     testing_context: AdCPTestContext | None = None
@@ -201,10 +201,20 @@ def resolve_identity(
         if tenant_context:
             tenant_id = tenant_context.get("tenant_id", tenant_id)
 
+    # Wrap raw dict in TenantContext if possible (both paths produce typed model)
+    tenant_model = tenant_context
+    if isinstance(tenant_context, dict) and "tenant_id" in tenant_context:
+        from src.core.tenant_context import TenantContext
+
+        try:
+            tenant_model = TenantContext.from_dict(tenant_context)
+        except Exception:
+            tenant_model = tenant_context  # Keep dict if model construction fails
+
     return ResolvedIdentity(
         principal_id=principal_id,
         tenant_id=tenant_id,
-        tenant=tenant_context,
+        tenant=tenant_model,
         auth_token=auth_token,
         protocol=protocol,
         testing_context=testing_context,

@@ -1241,10 +1241,10 @@ async def _create_media_buy_impl(
     if principal_id is None:
         raise AdCPAuthenticationError("Principal ID not found in identity - authentication required")
 
-    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
-    from src.core.helpers.context_helpers import ensure_tenant_context
-
-    tenant = ensure_tenant_context(identity)
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Validate setup completion (only in production, skip for testing)
     if not testing_ctx.dry_run and not testing_ctx.test_session_id:

@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from rich.console import Console
 from sqlalchemy import select
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -142,10 +142,10 @@ def _get_media_buy_delivery_impl(
     # Determine reference date for status calculations use end_date, it either will be today or the user provided end_date.
     reference_date = end_dt.date()
 
-    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
-    from src.core.helpers.context_helpers import ensure_tenant_context
-
-    tenant = ensure_tenant_context(identity)
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Determine which media buys to fetch from database
 

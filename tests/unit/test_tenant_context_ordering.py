@@ -61,11 +61,12 @@ def test_get_current_tenant_succeeds_after_set_current_tenant():
 
 
 def test_update_media_buy_calls_auth_before_tenant():
-    """Regression test: update_media_buy must use identity.principal_id before ensure_tenant_context().
+    """Regression test: update_media_buy must use identity.principal_id before identity.tenant.
 
     With the ResolvedIdentity migration, _impl receives an already-resolved identity.
-    This test verifies that identity.principal_id is accessed before ensure_tenant_context().
-    We inspect the source code to confirm the ordering, since the identity is now a parameter.
+    This test verifies that identity.principal_id is accessed before identity.tenant.
+    Tenant resolution happens at the transport boundary — _impl must NOT call
+    ensure_tenant_context() or get_current_tenant().
     """
     from pathlib import Path
 
@@ -81,19 +82,25 @@ def test_update_media_buy_calls_auth_before_tenant():
     impl_end = source.find("\ndef ", impl_start + 1)
     impl_source = source[impl_start:impl_end] if impl_end != -1 else source[impl_start:]
 
-    # Verify identity.principal_id is accessed before ensure_tenant_context()
+    # Verify identity.principal_id is accessed before identity.tenant
     auth_pos = impl_source.find("identity.principal_id")
-    tenant_pos = impl_source.find("ensure_tenant_context(")
+    tenant_pos = impl_source.find("identity.tenant")
 
     assert auth_pos != -1, "identity.principal_id not found in _update_media_buy_impl"
-    assert tenant_pos != -1, "ensure_tenant_context() not found in _update_media_buy_impl"
+    assert tenant_pos != -1, "identity.tenant not found in _update_media_buy_impl"
 
-    # Auth (identity.principal_id) must come before tenant lookup
+    # Auth (identity.principal_id) must come before tenant access
     assert auth_pos < tenant_pos, (
-        f"BUG: ensure_tenant_context() called before identity.principal_id in _update_media_buy_impl\n"
+        f"BUG: identity.tenant accessed before identity.principal_id in _update_media_buy_impl\n"
         f"  Auth access at position {auth_pos}\n"
-        f"  Tenant call at position {tenant_pos}\n"
-        f"  identity.principal_id must be checked BEFORE ensure_tenant_context()!"
+        f"  Tenant access at position {tenant_pos}\n"
+        f"  identity.principal_id must be checked BEFORE identity.tenant!"
+    )
+
+    # Ensure ensure_tenant_context is NOT used (tenant comes from transport boundary)
+    assert "ensure_tenant_context" not in impl_source, (
+        "_update_media_buy_impl still uses ensure_tenant_context — "
+        "tenant should come from identity.tenant (resolved at transport boundary)"
     )
 
 

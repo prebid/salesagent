@@ -42,10 +42,10 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     # Principal ID available via identity.principal_id if needed
     _ = identity.principal_id if identity else None
 
-    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
-    from src.core.helpers.context_helpers import ensure_tenant_context
-
-    tenant = ensure_tenant_context(identity)
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Mock implementation - in production, this would query from a signal provider
     # or the ad server's available audience segments
@@ -202,10 +202,9 @@ async def _activate_signal_impl(
     # Authentication required for signal activation
     principal_id = identity.principal_id if identity else None
 
-    # Ensure tenant context is a proper dict
-    from src.core.helpers.context_helpers import ensure_tenant_context
-
-    ensure_tenant_context(identity)
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    if not identity or not identity.tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Get the Principal object with ad server mappings
     if not principal_id:

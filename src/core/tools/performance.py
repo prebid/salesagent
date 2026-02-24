@@ -58,10 +58,10 @@ def _update_performance_index_impl(
     if identity is None:
         raise ValueError("Identity is required for update_performance_index")
 
-    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
-    from src.core.helpers.context_helpers import ensure_tenant_context
-
-    tenant = ensure_tenant_context(identity)
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     _verify_principal(req.media_buy_id, identity)
     principal_id = identity.principal_id

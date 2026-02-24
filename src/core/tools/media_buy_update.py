@@ -70,10 +70,10 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity"):
             "Authentication required: Missing or invalid x-adcp-auth header. Media buy updates require authentication."
         )
 
-    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
-    from src.core.helpers.context_helpers import ensure_tenant_context
-
-    tenant = ensure_tenant_context(context)
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = context.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Query database for media buy (try media_buy_id first, then buyer_ref)
     with get_db_session() as session:
@@ -137,10 +137,10 @@ def _update_media_buy_impl(
     if principal_id is None:
         raise ValueError("principal_id is required but was None - authentication required")
 
-    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
-    from src.core.helpers.context_helpers import ensure_tenant_context
-
-    tenant = ensure_tenant_context(identity)
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Resolve media_buy_id from buyer_ref if needed (AdCP oneOf constraint)
     media_buy_id_to_use = req.media_buy_id

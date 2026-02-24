@@ -87,10 +87,11 @@ def _sync_creatives_impl(
             "Creative sync requires authentication to associate creatives with an advertiser principal."
         )
 
-    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
-    from src.core.helpers.context_helpers import ensure_tenant_context
-
-    tenant = ensure_tenant_context(identity)
+    # Tenant context is resolved at the transport boundary (resolve_identity_from_context).
+    # By the time we reach _impl, identity.tenant is a fully-populated TenantContext.
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Track actions per creative for AdCP-compliant response
 
