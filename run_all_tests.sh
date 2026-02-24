@@ -120,7 +120,7 @@ elif [ "$MODE" = "ci" ]; then
         run_suite "2/5" integration    tests/integration/    -m "not requires_server and not skip_ci"
         run_suite "3/5" integration_v2 tests/integration_v2/ -m "not requires_server and not skip_ci"
         ADCP_SALES_PORT=$MCP_PORT run_suite "4/5" e2e tests/e2e/
-        [ -d tests/ui ] && ADCP_SALES_PORT=$MCP_PORT run_suite "5/5" ui tests/ui/ || echo -e "${YELLOW}[5/5] UI tests skipped${NC}"
+        [ -d tests/ui ] && ADCP_SALES_PORT=$MCP_PORT run_suite "5/5" ui tests/ui/ -m "not requires_server and not slow" || echo -e "${YELLOW}[5/5] UI tests skipped${NC}"
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"

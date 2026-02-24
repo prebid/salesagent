@@ -126,6 +126,8 @@ def test_add_product_json_encoding(client, test_tenant, integration_db):
             ("price_guidance_max", "15.0"),
             ("min_spend", "1000"),
             ("max_impressions", "1000000"),
+            ("property_mode", "tags"),
+            ("selected_property_tags", "all_inventory"),  # Required: at least one property tag
         ]
     )
 
@@ -320,7 +322,7 @@ def test_list_products_json_parsing(client, test_tenant, integration_db):
             pricing_model="CPM",
             rate="10.00",
             is_fixed=False,
-            formats=[
+            format_ids=[
                 {"format_id": "display_300x250", "name": "Display 300x250", "type": "display"},
                 {"format_id": "video_16x9", "name": "Video 16:9", "type": "video"},
             ],

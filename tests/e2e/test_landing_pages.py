@@ -183,8 +183,10 @@ class TestAuthOptionalEndpoints:
 
         try:
             response = requests.post(
-                f"{base_url}/mcp/tools/call",
+                f"{base_url}/mcp/",
                 json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
                     "method": "tools/call",
                     "params": {"name": "list_creative_formats", "arguments": {}},
                 },
@@ -210,8 +212,10 @@ class TestAuthOptionalEndpoints:
 
         try:
             response = requests.post(
-                f"{base_url}/mcp/tools/call",
+                f"{base_url}/mcp/",
                 json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
                     "method": "tools/call",
                     "params": {"name": "list_creative_formats", "arguments": {}},
                 },
@@ -236,8 +240,10 @@ class TestAuthOptionalEndpoints:
 
         try:
             response = requests.post(
-                f"{base_url}/mcp/tools/call",
+                f"{base_url}/mcp/",
                 json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
                     "method": "tools/call",
                     "params": {"name": "list_authorized_properties", "arguments": {}},
                 },
@@ -263,8 +269,10 @@ class TestAuthOptionalEndpoints:
 
         try:
             response = requests.post(
-                f"{base_url}/mcp/tools/call",
+                f"{base_url}/mcp/",
                 json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
                     "method": "tools/call",
                     "params": {"name": "list_authorized_properties", "arguments": {}},
                 },
@@ -289,8 +297,10 @@ class TestAuthOptionalEndpoints:
 
         try:
             response = requests.post(
-                f"{base_url}/mcp/tools/call",
+                f"{base_url}/mcp/",
                 json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
                     "method": "tools/call",
                     "params": {
                         "name": "get_products",
@@ -319,8 +329,10 @@ class TestAuthOptionalEndpoints:
 
         try:
             response = requests.post(
-                f"{base_url}/mcp/tools/call",
+                f"{base_url}/mcp/",
                 json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
                     "method": "tools/call",
                     "params": {
                         "name": "get_products",
@@ -347,8 +359,10 @@ class TestAuthOptionalEndpoints:
         try:
             # Call get_products without auth
             response = requests.post(
-                f"{base_url}/mcp/tools/call",
+                f"{base_url}/mcp/",
                 json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
                     "method": "tools/call",
                     "params": {
                         "name": "get_products",
