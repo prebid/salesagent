@@ -194,6 +194,37 @@ _replace_routes()
 
 
 @app.middleware("http")
+async def auth_context_middleware(request: Request, call_next):
+    """Populate request.state.auth_context for all routes.
+
+    Extracts auth token from headers. Does NOT resolve tenant or principal
+    (that requires DB and is done by route-specific handlers).
+    """
+    from src.core.auth_context import AuthContext
+
+    headers = dict(request.headers)
+    token = None
+
+    # Extract token from Authorization or x-adcp-auth header
+    for key, value in request.headers.items():
+        if key.lower() == "authorization":
+            auth_header = value.strip()
+            if auth_header.startswith("Bearer "):
+                token = auth_header[7:]
+                break
+        elif key.lower() == "x-adcp-auth":
+            token = value.strip()
+
+    request.state.auth_context = AuthContext(
+        auth_token=token,
+        headers=headers,
+    )
+
+    response = await call_next(request)
+    return response
+
+
+@app.middleware("http")
 async def a2a_auth_middleware(request: Request, call_next):
     """Extract Bearer token and set authentication context for A2A requests.
 
