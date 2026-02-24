@@ -9,6 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Import integration_db fixture so UI integration tests (e.g. test_product_creation_integration.py)
+# can access it. The fixture is defined in tests/integration/conftest.py.
+from tests.integration.conftest import integration_db  # noqa: F401
+
 
 @pytest.fixture
 def ui_test_mode():

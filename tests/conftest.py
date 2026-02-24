@@ -92,8 +92,9 @@ def test_environment(monkeypatch, request):
     monkeypatch.setenv("ADCP_TESTING", "true")
     monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")  # Enable test mode for auth
 
-    # Check if this is an integration test that needs the database
+    # Check if this is a test that needs the database
     is_integration_test = "integration" in str(request.fspath)
+    has_requires_db_marker = request.node.get_closest_marker("requires_db") is not None
     database_url = os.environ.get("DATABASE_URL")
 
     # Check if this is a unittest.TestCase (which manages its own DATABASE_URL)
@@ -105,8 +106,9 @@ def test_environment(monkeypatch, request):
     # IMPORTANT: Unit tests should NEVER use real database connections
     # Remove database-related env vars UNLESS:
     # 1. This is an integration test with DATABASE_URL set (for integration_db fixture), OR
-    # 2. This is a unittest.TestCase class (manages its own DATABASE_URL in setUpClass)
-    should_preserve_db = is_integration_test and (database_url or is_unittest_class)
+    # 2. This is a unittest.TestCase class (manages its own DATABASE_URL in setUpClass), OR
+    # 3. This test has @pytest.mark.requires_db marker (e.g. UI integration tests)
+    should_preserve_db = (is_integration_test or has_requires_db_marker) and (database_url or is_unittest_class)
 
     if not should_preserve_db:
         if "DATABASE_URL" in os.environ:

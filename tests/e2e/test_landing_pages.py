@@ -176,22 +176,12 @@ class TestLandingPages:
 class TestAuthOptionalEndpoints:
     """Test auth-optional MCP endpoints (list_creative_formats, list_authorized_properties, get_products)."""
 
-    def _get_base_url(self) -> str:
-        """Get base URL for tests (supports dynamic ports via ADCP_SALES_PORT env var)."""
-        port = os.getenv("ADCP_SALES_PORT", "8080")
-        return os.getenv("TEST_BASE_URL", f"http://localhost:{port}")
-
-    def _get_test_token(self) -> str | None:
-        """Get test auth token from environment."""
-        return os.getenv("TEST_AUTH_TOKEN")
-
     @pytest.mark.integration
-    def test_list_creative_formats_without_auth(self):
+    def test_list_creative_formats_without_auth(self, live_server):
         """list_creative_formats should work without authentication."""
-        base_url = self._get_base_url()
+        base_url = live_server["mcp"]
 
         try:
-            # Call list_creative_formats without auth token
             response = requests.post(
                 f"{base_url}/mcp/tools/call",
                 json={
@@ -200,12 +190,11 @@ class TestAuthOptionalEndpoints:
                 },
                 headers={
                     "Content-Type": "application/json",
-                    "Host": "test-custom-domain.example.com",  # Provide tenant context via Host
+                    "Host": "test-custom-domain.example.com",
                 },
                 timeout=5,
             )
 
-            # Should succeed without auth (discovery endpoint)
             assert response.status_code in (200, 404), (
                 f"list_creative_formats without auth should succeed (200) or indicate missing tenant (404), "
                 f"got {response.status_code}"
@@ -215,16 +204,11 @@ class TestAuthOptionalEndpoints:
             pytest.skip(f"MCP server not running at {base_url}")
 
     @pytest.mark.integration
-    def test_list_creative_formats_with_auth(self):
+    def test_list_creative_formats_with_auth(self, live_server, test_auth_token):
         """list_creative_formats should work with authentication and return same/more data."""
-        base_url = self._get_base_url()
-        auth_token = self._get_test_token()
-
-        if not auth_token:
-            pytest.skip("TEST_AUTH_TOKEN not set - cannot test authenticated access")
+        base_url = live_server["mcp"]
 
         try:
-            # Call list_creative_formats with auth token
             response = requests.post(
                 f"{base_url}/mcp/tools/call",
                 json={
@@ -233,12 +217,11 @@ class TestAuthOptionalEndpoints:
                 },
                 headers={
                     "Content-Type": "application/json",
-                    "x-adcp-auth": auth_token,
+                    "x-adcp-auth": test_auth_token,
                 },
                 timeout=5,
             )
 
-            # Should succeed with auth
             assert response.status_code == 200, (
                 f"list_creative_formats with auth should succeed, got {response.status_code}"
             )
@@ -247,12 +230,11 @@ class TestAuthOptionalEndpoints:
             pytest.skip(f"MCP server not running at {base_url}")
 
     @pytest.mark.integration
-    def test_list_authorized_properties_without_auth(self):
+    def test_list_authorized_properties_without_auth(self, live_server):
         """list_authorized_properties should work without authentication."""
-        base_url = self._get_base_url()
+        base_url = live_server["mcp"]
 
         try:
-            # Call list_authorized_properties without auth token
             response = requests.post(
                 f"{base_url}/mcp/tools/call",
                 json={
@@ -261,12 +243,11 @@ class TestAuthOptionalEndpoints:
                 },
                 headers={
                     "Content-Type": "application/json",
-                    "Host": "test-custom-domain.example.com",  # Provide tenant context via Host
+                    "Host": "test-custom-domain.example.com",
                 },
                 timeout=5,
             )
 
-            # Should succeed without auth (discovery endpoint)
             assert response.status_code in (200, 404), (
                 f"list_authorized_properties without auth should succeed (200) or indicate missing tenant (404), "
                 f"got {response.status_code}"
@@ -276,16 +257,11 @@ class TestAuthOptionalEndpoints:
             pytest.skip(f"MCP server not running at {base_url}")
 
     @pytest.mark.integration
-    def test_list_authorized_properties_with_auth(self):
+    def test_list_authorized_properties_with_auth(self, live_server, test_auth_token):
         """list_authorized_properties should work with authentication."""
-        base_url = self._get_base_url()
-        auth_token = self._get_test_token()
-
-        if not auth_token:
-            pytest.skip("TEST_AUTH_TOKEN not set - cannot test authenticated access")
+        base_url = live_server["mcp"]
 
         try:
-            # Call list_authorized_properties with auth token
             response = requests.post(
                 f"{base_url}/mcp/tools/call",
                 json={
@@ -294,12 +270,11 @@ class TestAuthOptionalEndpoints:
                 },
                 headers={
                     "Content-Type": "application/json",
-                    "x-adcp-auth": auth_token,
+                    "x-adcp-auth": test_auth_token,
                 },
                 timeout=5,
             )
 
-            # Should succeed with auth
             assert response.status_code == 200, (
                 f"list_authorized_properties with auth should succeed, got {response.status_code}"
             )
@@ -308,13 +283,11 @@ class TestAuthOptionalEndpoints:
             pytest.skip(f"MCP server not running at {base_url}")
 
     @pytest.mark.integration
-    def test_get_products_without_auth_public_policy(self):
+    def test_get_products_without_auth_public_policy(self, live_server):
         """get_products should work without authentication when tenant has public brand_manifest_policy."""
-        base_url = self._get_base_url()
+        base_url = live_server["mcp"]
 
         try:
-            # Call get_products without auth token
-            # Note: This will only work if tenant has brand_manifest_policy=public
             response = requests.post(
                 f"{base_url}/mcp/tools/call",
                 json={
@@ -326,13 +299,11 @@ class TestAuthOptionalEndpoints:
                 },
                 headers={
                     "Content-Type": "application/json",
-                    "Host": "test-custom-domain.example.com",  # Provide tenant context via Host
+                    "Host": "test-custom-domain.example.com",
                 },
                 timeout=5,
             )
 
-            # May succeed or fail depending on tenant policy
-            # Accept: 200 (public policy), 400/401 (auth required), 404 (no tenant)
             assert response.status_code in (200, 400, 401, 404), (
                 f"get_products without auth should succeed (public policy) or fail with auth error, "
                 f"got {response.status_code}"
@@ -342,16 +313,11 @@ class TestAuthOptionalEndpoints:
             pytest.skip(f"MCP server not running at {base_url}")
 
     @pytest.mark.integration
-    def test_get_products_with_auth(self):
+    def test_get_products_with_auth(self, live_server, test_auth_token):
         """get_products should work with authentication regardless of policy."""
-        base_url = self._get_base_url()
-        auth_token = self._get_test_token()
-
-        if not auth_token:
-            pytest.skip("TEST_AUTH_TOKEN not set - cannot test authenticated access")
+        base_url = live_server["mcp"]
 
         try:
-            # Call get_products with auth token
             response = requests.post(
                 f"{base_url}/mcp/tools/call",
                 json={
@@ -363,21 +329,20 @@ class TestAuthOptionalEndpoints:
                 },
                 headers={
                     "Content-Type": "application/json",
-                    "x-adcp-auth": auth_token,
+                    "x-adcp-auth": test_auth_token,
                 },
                 timeout=5,
             )
 
-            # Should succeed with auth
             assert response.status_code == 200, f"get_products with auth should succeed, got {response.status_code}"
 
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip(f"MCP server not running at {base_url}")
 
     @pytest.mark.integration
-    def test_get_products_filters_pricing_for_anonymous(self):
+    def test_get_products_filters_pricing_for_anonymous(self, live_server):
         """get_products should hide pricing information for anonymous users."""
-        base_url = self._get_base_url()
+        base_url = live_server["mcp"]
 
         try:
             # Call get_products without auth
