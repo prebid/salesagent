@@ -9,7 +9,6 @@ tests will skip rather than fail, since external service availability is outside
 our control.
 """
 
-from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -27,8 +26,9 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.tool_context import ToolContext
+from src.core.testing_hooks import AdCPTestContext
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -387,16 +387,15 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
         end_time="2026-03-31T23:59:59Z",
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser_pricing",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_pricing_tenant",
+        tenant={"tenant_id": "test_gam_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -437,16 +436,15 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
         end_time="2026-03-31T23:59:59Z",
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser_pricing",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_pricing_tenant",
+        tenant={"tenant_id": "test_gam_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -488,16 +486,15 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
         end_time="2026-03-31T23:59:59Z",
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser_pricing",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_pricing_tenant",
+        tenant={"tenant_id": "test_gam_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -540,16 +537,15 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
         end_time="2026-03-10T23:59:59Z",  # 10 days
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser_pricing",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_pricing_tenant",
+        tenant={"tenant_id": "test_gam_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -603,16 +599,15 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
         end_time="2026-03-31T23:59:59Z",
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser_pricing",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_pricing_tenant",
+        tenant={"tenant_id": "test_gam_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -670,19 +665,18 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         end_time="2026-03-31T23:59:59Z",
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser_pricing",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_pricing_tenant",
+        tenant={"tenant_id": "test_gam_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
     # Auction CPC should be rejected because adcp library v2.5.0 doesn't support CpcAuctionPricingOption
     # Only CpcPricingOption exists, which requires is_fixed=true
     with pytest.raises(ToolError) as exc_info:
-        await _create_media_buy_impl(req=request, ctx=context)
+        await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify error message explains the limitation
     error_message = str(exc_info.value)

@@ -26,8 +26,9 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.tool_context import ToolContext
+from src.core.testing_hooks import AdCPTestContext
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -299,20 +300,19 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_tenant",
+        tenant={"tenant_id": "test_gam_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
     from src.core.schemas import CreateMediaBuyError
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     # GAM adapter rejects unsupported pricing models by returning CreateMediaBuyError
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify adapter returned error response
     assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
@@ -346,17 +346,16 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_tenant",
+        tenant={"tenant_id": "test_gam_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
     # This should succeed
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -391,19 +390,18 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_tenant",
+        tenant={"tenant_id": "test_gam_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
     from src.core.schemas import CreateMediaBuyError
 
     # GAM adapter rejects unsupported pricing models by returning CreateMediaBuyError
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify adapter returned error response
     assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
@@ -437,17 +435,16 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_gam_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_gam_tenant",
+        tenant={"tenant_id": "test_gam_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
     # This should succeed - buyer chose CPM from multi-option product
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field

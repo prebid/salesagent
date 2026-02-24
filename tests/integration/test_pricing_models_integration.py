@@ -11,8 +11,9 @@ from adcp import GetProductsRequest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, PricingModel
-from src.core.tool_context import ToolContext
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl
 from tests.helpers.adcp_factories import create_test_package_request
@@ -244,17 +245,16 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     """Test that get_products returns pricing_options for products."""
     request = GetProductsRequest(brief="display ads", brand_manifest={"name": "Test Brand"})
 
-    # Create context
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_pricing_tenant",
+    # Create identity
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="get_products",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_pricing_tenant",
+        tenant={"tenant_id": "test_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response = await _get_products_impl(request, context)
+    response = await _get_products_impl(request, identity)
 
     assert response.products is not None
     assert len(response.products) > 0
@@ -301,16 +301,15 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_pricing_tenant",
+        tenant={"tenant_id": "test_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -340,16 +339,15 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_pricing_tenant",
+        tenant={"tenant_id": "test_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -379,17 +377,16 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_pricing_tenant",
+        tenant={"tenant_id": "test_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
     # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Check for errors in response (AdCP 2.4 compliant)
     assert response.errors is not None and len(response.errors) > 0, "Expected errors in response"
@@ -416,16 +413,15 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_pricing_tenant",
+        tenant={"tenant_id": "test_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -454,17 +450,16 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_pricing_tenant",
+        tenant={"tenant_id": "test_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
     # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Check for errors in response (AdCP 2.4 compliant)
     assert response.errors is not None and len(response.errors) > 0, "Expected errors in response"
@@ -491,16 +486,15 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_pricing_tenant",
+        tenant={"tenant_id": "test_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -529,17 +523,16 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         end_time=end_time,
     )
 
-    context = ToolContext(
-        context_id="test_ctx",
-        tenant_id="test_pricing_tenant",
+    identity = ResolvedIdentity(
         principal_id="test_advertiser",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id="test_pricing_tenant",
+        tenant={"tenant_id": "test_pricing_tenant"},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
     # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
-    response, _ = await _create_media_buy_impl(req=request, ctx=context)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
     # Check for errors in response (AdCP 2.4 compliant)
     assert response.errors is not None and len(response.errors) > 0, "Expected errors in response"

@@ -32,7 +32,9 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.integration_v2.conftest import create_test_product_with_pricing, get_pricing_option_id
@@ -294,11 +296,13 @@ class TestMinimumSpendValidation:
 
     async def test_currency_minimum_spend_enforced(self, setup_test_data):
         """Test that currency-specific minimum spend is enforced."""
-        from unittest.mock import MagicMock
-
-        # Create mock context
-        context = MagicMock()
-        context.headers = {"x-adcp-auth": "test_minspend_token"}
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_minspend_tenant",
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            protocol="mcp",
+        )
 
         # Try to create media buy below USD minimum ($1000)
         start_time = datetime.now(UTC) + timedelta(days=1)
@@ -319,7 +323,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, ctx=context)
+        response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify validation failed
         assert response.errors is not None and len(response.errors) > 0
@@ -330,10 +334,13 @@ class TestMinimumSpendValidation:
 
     async def test_product_override_enforced(self, setup_test_data):
         """Test that product-specific minimum spend override is enforced."""
-        from unittest.mock import MagicMock
-
-        context = MagicMock()
-        context.headers = {"x-adcp-auth": "test_minspend_token"}
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_minspend_tenant",
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            protocol="mcp",
+        )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)
@@ -354,7 +361,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, ctx=context)
+        response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify validation failed
         assert response.errors is not None and len(response.errors) > 0
@@ -365,10 +372,13 @@ class TestMinimumSpendValidation:
 
     async def test_lower_override_allows_smaller_spend(self, setup_test_data):
         """Test that lower product override allows smaller spend than currency limit."""
-        from unittest.mock import MagicMock
-
-        context = MagicMock()
-        context.headers = {"x-adcp-auth": "test_minspend_token"}
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_minspend_tenant",
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            protocol="mcp",
+        )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)
@@ -389,7 +399,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, ctx=context)
+        response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None
@@ -397,10 +407,13 @@ class TestMinimumSpendValidation:
 
     async def test_minimum_spend_met_success(self, setup_test_data):
         """Test that media buy succeeds when minimum spend is met."""
-        from unittest.mock import MagicMock
-
-        context = MagicMock()
-        context.headers = {"x-adcp-auth": "test_minspend_token"}
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_minspend_tenant",
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            protocol="mcp",
+        )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)
@@ -420,7 +433,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, ctx=context)
+        response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None
@@ -428,10 +441,13 @@ class TestMinimumSpendValidation:
 
     async def test_unsupported_currency_rejected(self, setup_test_data):
         """Test that excessively high budgets are rejected by the adapter (raises ToolError)."""
-        from unittest.mock import MagicMock
-
-        context = MagicMock()
-        context.headers = {"x-adcp-auth": "test_minspend_token"}
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_minspend_tenant",
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            protocol="mcp",
+        )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)
@@ -453,7 +469,7 @@ class TestMinimumSpendValidation:
             end_time=end_time.isoformat(),
         )
         with pytest.raises(ToolError) as exc_info:
-            await _create_media_buy_impl(req=req, ctx=context)
+            await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify the error message indicates adapter rejection
         error_message = str(exc_info.value)
@@ -461,10 +477,13 @@ class TestMinimumSpendValidation:
 
     async def test_different_currency_different_minimum(self, setup_test_data):
         """Test that different currencies have different minimums."""
-        from unittest.mock import MagicMock
-
-        context = MagicMock()
-        context.headers = {"x-adcp-auth": "test_minspend_token"}
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_minspend_tenant",
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            protocol="mcp",
+        )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)
@@ -485,7 +504,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, ctx=context)
+        response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify validation failed with USD minimum
         assert response.errors is not None and len(response.errors) > 0
@@ -496,8 +515,6 @@ class TestMinimumSpendValidation:
 
     async def test_no_minimum_when_not_set(self, setup_test_data):
         """Test that media buys with no minimum set in currency limit are allowed."""
-        from unittest.mock import MagicMock
-
         # Create a new currency limit with NO minimum (only max)
         with get_db_session() as session:
             currency_limit_gbp = CurrencyLimit(
@@ -509,8 +526,13 @@ class TestMinimumSpendValidation:
             session.add(currency_limit_gbp)
             session.commit()
 
-        context = MagicMock()
-        context.headers = {"x-adcp-auth": "test_minspend_token"}
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_minspend_tenant",
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            protocol="mcp",
+        )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)
@@ -530,7 +552,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, ctx=context)
+        response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None

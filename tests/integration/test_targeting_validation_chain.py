@@ -18,8 +18,9 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest
-from src.core.tool_context import ToolContext
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -102,14 +103,13 @@ def targeting_tenant(integration_db):
     yield TENANT_ID
 
 
-def _make_context() -> ToolContext:
-    return ToolContext(
-        context_id="test_ctx",
-        tenant_id=TENANT_ID,
+def _make_identity() -> ResolvedIdentity:
+    return ResolvedIdentity(
         principal_id="test_adv",
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_targeting"},
+        tenant_id=TENANT_ID,
+        tenant={"tenant_id": TENANT_ID},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_targeting"),
+        protocol="mcp",
     )
 
 
@@ -136,7 +136,7 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
         end_time=end,
     )
 
-    response, status = await _create_media_buy_impl(req=request, ctx=_make_context())
+    response, status = await _create_media_buy_impl(req=request, identity=_make_identity())
 
     assert isinstance(response, CreateMediaBuyError), f"Expected error response, got {type(response).__name__}"
     error_text = response.errors[0].message
@@ -167,7 +167,7 @@ async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
         end_time=end,
     )
 
-    response, status = await _create_media_buy_impl(req=request, ctx=_make_context())
+    response, status = await _create_media_buy_impl(req=request, identity=_make_identity())
 
     assert isinstance(response, CreateMediaBuyError), f"Expected error response, got {type(response).__name__}"
     error_text = response.errors[0].message

@@ -19,21 +19,21 @@ from src.core.database.models import (
     PricingOption,
     Principal,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.tool_context import ToolContext
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
 
 
-def _make_context(tenant_id: str, principal_id: str) -> ToolContext:
-    """Create a ToolContext for testing."""
-    return ToolContext(
-        context_id="test_ctx",
-        tenant_id=tenant_id,
+def _make_context(tenant_id: str, principal_id: str) -> ResolvedIdentity:
+    """Create a ResolvedIdentity for testing."""
+    return ResolvedIdentity(
         principal_id=principal_id,
-        tool_name="create_media_buy",
-        request_timestamp=datetime.now(UTC),
-        testing_context={"dry_run": True, "test_session_id": "test_session"},
+        tenant_id=tenant_id,
+        tenant={"tenant_id": tenant_id},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
     )
 
 
@@ -121,7 +121,7 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
             start_time=start_time,
             end_time=end_time,
         )
-        response, task_status = await _create_media_buy_impl(req=req, ctx=ctx)
+        response, task_status = await _create_media_buy_impl(req=req, identity=ctx)
 
         # Verify success
         assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
@@ -212,7 +212,7 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
                 start_time=start_time,
                 end_time=end_time,
             )
-            response, _ = await _create_media_buy_impl(req=req, ctx=ctx)
+            response, _ = await _create_media_buy_impl(req=req, identity=ctx)
             # Either succeeds or returns structured error - both are valid
             assert response is not None
         except ValueError:
@@ -302,7 +302,7 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
             start_time=start_time,
             end_time=end_time,
         )
-        response, _ = await _create_media_buy_impl(req=req, ctx=ctx)
+        response, _ = await _create_media_buy_impl(req=req, identity=ctx)
 
         assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
             f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
@@ -409,7 +409,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             start_time=start_time,
             end_time=end_time,
         )
-        response, _ = await _create_media_buy_impl(req=req, ctx=ctx)
+        response, _ = await _create_media_buy_impl(req=req, identity=ctx)
 
         assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
             f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
