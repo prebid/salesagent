@@ -1,7 +1,8 @@
 """REST API v1 endpoints.
 
-First REST transport for AdCP tools, proving the 3-transport pattern
-(MCP + A2A + REST) with get_products as the pilot.
+REST transport for AdCP tools, proving the 3-transport pattern
+(MCP + A2A + REST). Each endpoint calls the shared _impl/_raw function
+and applies version compat at the boundary.
 """
 
 import logging
@@ -14,7 +15,17 @@ from pydantic import BaseModel
 
 from src.core.auth import get_principal_from_token
 from src.core.config_loader import set_current_tenant
+from src.core.exceptions import AdCPAuthenticationError
+from src.core.tools import capabilities as capabilities_module
+from src.core.tools import creative_formats as creative_formats_module
+from src.core.tools import media_buy_create as media_buy_create_module
+from src.core.tools import media_buy_delivery as media_buy_delivery_module
+from src.core.tools import media_buy_update as media_buy_update_module
+from src.core.tools import performance as performance_module
 from src.core.tools import products as products_module
+from src.core.tools import properties as properties_module
+from src.core.tools.creatives import listing as creatives_listing_module
+from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.version_compat import apply_version_compat
 
 logger = logging.getLogger(__name__)
@@ -23,74 +34,319 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 
 # ---------------------------------------------------------------------------
-# Request / response models
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_auth(request: Request) -> tuple[str | None, Any]:
+    """Resolve authentication from request. Returns (principal_id, ctx) or (None, None)."""
+    from src.core.auth_context import AuthContext
+
+    auth_ctx: AuthContext = getattr(request.state, "auth_context", AuthContext.unauthenticated())
+
+    if not auth_ctx.auth_token:
+        return None, None
+
+    principal_id = get_principal_from_token(auth_ctx.auth_token)
+    if not principal_id:
+        return None, None
+
+    from datetime import UTC, datetime
+
+    from src.core.tool_context import ToolContext
+
+    ctx = ToolContext(
+        context_id="rest-api",
+        tenant_id=principal_id.split("_")[0] if "_admin" in principal_id else "default",
+        principal_id=principal_id,
+        tool_name="rest-api",
+        request_timestamp=datetime.now(UTC),
+    )
+    set_current_tenant({"tenant_id": ctx.tenant_id})
+    return principal_id, ctx
+
+
+def _require_auth(request: Request) -> tuple[str, Any]:
+    """Resolve auth or raise 401."""
+    principal_id, ctx = _resolve_auth(request)
+    if not principal_id:
+        raise AdCPAuthenticationError("Authentication required")
+    return principal_id, ctx
+
+
+def _handle_tool_error(e: ToolError) -> JSONResponse:
+    """Convert MCP ToolError to HTTP error response."""
+    return JSONResponse(
+        status_code=500,
+        content={"error_code": "INTERNAL_ERROR", "message": str(e), "details": None},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Request models
 # ---------------------------------------------------------------------------
 
 
 class GetProductsBody(BaseModel):
-    """REST request body for POST /api/v1/products."""
-
     brief: str = ""
     brand_manifest: dict[str, Any] | None = None
     filters: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
+class CreateMediaBuyBody(BaseModel):
+    buyer_ref: str
+    brand_manifest: dict[str, Any] | None = None
+    packages: list[dict[str, Any]] = []
+    start_time: str | None = None
+    end_time: str | None = None
+    budget: Any | None = None
+    po_number: str | None = None
+    product_ids: list[str] | None = None
+    total_budget: float | None = None
+    adcp_version: str = "1.0.0"
+
+
+class UpdateMediaBuyBody(BaseModel):
+    paused: bool | None = None
+    flight_start_date: str | None = None
+    flight_end_date: str | None = None
+    budget: float | None = None
+    currency: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    adcp_version: str = "1.0.0"
+
+
+class GetMediaBuyDeliveryBody(BaseModel):
+    media_buy_ids: list[str] | None = None
+    buyer_refs: list[str] | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    adcp_version: str = "1.0.0"
+
+
+class SyncCreativesBody(BaseModel):
+    creatives: list[dict[str, Any]] = []
+    assignments: dict[str, Any] | None = None
+    creative_ids: list[str] | None = None
+    delete_missing: bool = False
+    dry_run: bool = False
+    validation_mode: str = "strict"
+    adcp_version: str = "1.0.0"
+
+
+class ListCreativesBody(BaseModel):
+    media_buy_id: str | None = None
+    media_buy_ids: list[str] | None = None
+    buyer_ref: str | None = None
+    status: str | None = None
+    format: str | None = None
+    adcp_version: str = "1.0.0"
+
+
+class UpdatePerformanceIndexBody(BaseModel):
+    media_buy_id: str
+    performance_data: list[dict[str, Any]] = []
+    adcp_version: str = "1.0.0"
+
+
+class ListCreativeFormatsBody(BaseModel):
+    adcp_version: str = "1.0.0"
+
+
+class ListAuthorizedPropertiesBody(BaseModel):
+    adcp_version: str = "1.0.0"
+
+
 # ---------------------------------------------------------------------------
-# Endpoints
+# Discovery endpoints (auth-optional)
 # ---------------------------------------------------------------------------
 
 
 @router.post("/products")
 async def get_products(body: GetProductsBody, request: Request):
-    """Get available products matching the brief.
+    """Get available products matching the brief (auth-optional discovery skill)."""
+    _, ctx = _resolve_auth(request)
 
-    Auth-optional: get_products is a discovery skill that works without
-    authentication. When a token is present, products are scoped to the
-    authenticated tenant/principal.
-    """
-    from src.core.auth_context import AuthContext
-
-    # Read auth context populated by middleware
-    auth_ctx: AuthContext = getattr(request.state, "auth_context", AuthContext.unauthenticated())
-
-    # Resolve principal and tenant if token is present
-    ctx = None
-    if auth_ctx.auth_token:
-        principal_id = get_principal_from_token(auth_ctx.auth_token)
-        if principal_id:
-            from datetime import UTC, datetime
-
-            from src.core.tool_context import ToolContext
-
-            ctx = ToolContext(
-                context_id="rest-api",
-                tenant_id=principal_id.split("_")[0] if "_admin" in principal_id else "default",
-                principal_id=principal_id,
-                tool_name="get_products",
-                request_timestamp=datetime.now(UTC),
-            )
-            set_current_tenant({"tenant_id": ctx.tenant_id})
-
-    # Build validated request
     req = products_module.create_get_products_request(
         brief=body.brief,
         brand_manifest=body.brand_manifest,
         filters=body.filters,
     )
 
-    # Call shared implementation (accessed via module for testability)
     try:
         response = await products_module._get_products_impl(req, ctx)
     except ToolError as e:
-        # Translate MCP-specific ToolError to HTTP error
-        return JSONResponse(
-            status_code=500,
-            content={"error_code": "INTERNAL_ERROR", "message": str(e), "details": None},
-        )
+        return _handle_tool_error(e)
 
-    # Serialize and apply version compat via registry
     result = response.model_dump(mode="json")
-    result = apply_version_compat("get_products", result, body.adcp_version)
+    return apply_version_compat("get_products", result, body.adcp_version)
 
-    return result
+
+@router.get("/capabilities")
+async def get_capabilities(request: Request):
+    """Get AdCP capabilities (auth-optional discovery skill)."""
+    _, ctx = _resolve_auth(request)
+
+    try:
+        response = await capabilities_module.get_adcp_capabilities_raw(ctx=ctx)
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+@router.post("/creative-formats")
+async def list_creative_formats(body: ListCreativeFormatsBody, request: Request):
+    """List available creative formats (auth-optional discovery skill)."""
+    _, ctx = _resolve_auth(request)
+
+    try:
+        response = creative_formats_module.list_creative_formats_raw(ctx=ctx)
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+@router.post("/authorized-properties")
+async def list_authorized_properties(body: ListAuthorizedPropertiesBody, request: Request):
+    """List authorized properties (auth-optional discovery skill)."""
+    _, ctx = _resolve_auth(request)
+
+    try:
+        response = properties_module.list_authorized_properties_raw(ctx=ctx)
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# Auth-required endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.post("/media-buys")
+async def create_media_buy(body: CreateMediaBuyBody, request: Request):
+    """Create a new media buy (auth required)."""
+    _, ctx = _require_auth(request)
+
+    try:
+        response = await media_buy_create_module.create_media_buy_raw(
+            buyer_ref=body.buyer_ref,
+            brand_manifest=body.brand_manifest,
+            packages=body.packages,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            budget=body.budget,
+            po_number=body.po_number,
+            product_ids=body.product_ids,
+            total_budget=body.total_budget,
+            ctx=ctx,
+        )
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+@router.put("/media-buys/{media_buy_id}")
+async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, request: Request):
+    """Update an existing media buy (auth required)."""
+    _, ctx = _require_auth(request)
+
+    try:
+        response = media_buy_update_module.update_media_buy_raw(
+            media_buy_id=media_buy_id,
+            paused=body.paused,
+            flight_start_date=body.flight_start_date,
+            flight_end_date=body.flight_end_date,
+            budget=body.budget,
+            currency=body.currency,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            ctx=ctx,
+        )
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+@router.post("/media-buys/delivery")
+async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, request: Request):
+    """Get delivery metrics for media buys (auth required)."""
+    _, ctx = _require_auth(request)
+
+    try:
+        response = media_buy_delivery_module.get_media_buy_delivery_raw(
+            media_buy_ids=body.media_buy_ids,
+            buyer_refs=body.buyer_refs,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            ctx=ctx,
+        )
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+@router.post("/creatives/sync")
+async def sync_creatives(body: SyncCreativesBody, request: Request):
+    """Sync creatives (auth required)."""
+    _, ctx = _require_auth(request)
+
+    try:
+        response = creatives_sync_module.sync_creatives_raw(
+            creatives=body.creatives,
+            assignments=body.assignments,
+            creative_ids=body.creative_ids,
+            delete_missing=body.delete_missing,
+            dry_run=body.dry_run,
+            validation_mode=body.validation_mode,
+            ctx=ctx,
+        )
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+@router.post("/creatives")
+async def list_creatives(body: ListCreativesBody, request: Request):
+    """List creatives (auth required)."""
+    _, ctx = _require_auth(request)
+
+    try:
+        response = creatives_listing_module.list_creatives_raw(
+            media_buy_id=body.media_buy_id,
+            media_buy_ids=body.media_buy_ids,
+            buyer_ref=body.buyer_ref,
+            status=body.status,
+            format=body.format,
+            ctx=ctx,
+        )
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+@router.post("/performance-index")
+async def update_performance_index(body: UpdatePerformanceIndexBody, request: Request):
+    """Update performance index for a media buy (auth required)."""
+    _, ctx = _require_auth(request)
+
+    try:
+        response = performance_module.update_performance_index_raw(
+            media_buy_id=body.media_buy_id,
+            performance_data=body.performance_data,
+            ctx=ctx,
+        )
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
