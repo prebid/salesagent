@@ -11,13 +11,21 @@ Supports dict-like access for backward compatibility with existing code:
     tenant["tenant_id"]     # works (backward compat)
     tenant.get("field")     # works (backward compat)
     tenant.tenant_id        # preferred for new code
+
+Two variants:
+    TenantContext       — fully loaded (all fields populated from DB)
+    LazyTenantContext   — holds tenant_id immediately, defers DB load
+                          until a non-tenant_id field is accessed
 """
 
+import logging
 from typing import Any
 
 from pydantic import BaseModel
 
 from src.core.config_loader import safe_json_loads
+
+logger = logging.getLogger(__name__)
 
 
 class TenantContext(BaseModel):
@@ -125,3 +133,105 @@ class TenantContext(BaseModel):
         # Filter to only known fields
         known = cls.model_fields.keys()
         return cls(**{k: v for k, v in data.items() if k in known})
+
+
+class LazyTenantContext:
+    """Lazy-loading tenant context — defers DB query until needed.
+
+    Holds tenant_id immediately. The first access to any other field triggers
+    a DB load, producing a full TenantContext. Subsequent accesses use the
+    cached result.
+
+    Supports the same dict-like and attribute access as TenantContext:
+        tenant.tenant_id        # immediate (no DB)
+        tenant["tenant_id"]     # immediate (no DB)
+        tenant.approval_mode    # triggers DB load on first access
+        tenant["name"]          # triggers DB load on first access
+        "field" in tenant       # no DB (checks known field names)
+        bool(tenant)            # always True (no DB)
+
+    Also calls set_current_tenant() when the full tenant is resolved,
+    so legacy code using the ContextVar still works.
+    """
+
+    __slots__ = ("_tenant_id", "_resolved")
+
+    def __init__(self, tenant_id: str) -> None:
+        object.__setattr__(self, "_tenant_id", tenant_id)
+        object.__setattr__(self, "_resolved", None)
+
+    def _resolve(self) -> TenantContext:
+        """Load full tenant from DB on first access. Cache the result."""
+        resolved = self._resolved
+        if resolved is not None:
+            return resolved
+
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from src.core.config_loader import get_tenant_by_id, set_current_tenant
+
+        try:
+            tenant_dict = get_tenant_by_id(self._tenant_id)
+            if tenant_dict:
+                set_current_tenant(tenant_dict)
+                resolved = TenantContext.from_dict(tenant_dict)
+                object.__setattr__(self, "_resolved", resolved)
+                return resolved
+        except (SQLAlchemyError, RuntimeError) as e:
+            logger.debug(f"Could not load tenant from database: {e}")
+
+        # Fallback: minimal TenantContext (unit tests, DB unavailable)
+        resolved = TenantContext(tenant_id=self._tenant_id)
+        set_current_tenant(resolved)  # type: ignore[arg-type]
+        object.__setattr__(self, "_resolved", resolved)
+        return resolved
+
+    @property
+    def is_loaded(self) -> bool:
+        """Check if the full tenant has been loaded from DB."""
+        return self._resolved is not None
+
+    # --- tenant_id is always available without DB ---
+
+    @property
+    def tenant_id(self) -> str:
+        return self._tenant_id
+
+    # --- Attribute access: delegate to resolved TenantContext ---
+
+    def __getattr__(self, name: str) -> Any:
+        # __slots__ attrs (_tenant_id, _resolved) are handled by the descriptor
+        # protocol, so __getattr__ is only called for other attributes.
+        return getattr(self._resolve(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("LazyTenantContext is immutable")
+
+    # --- Dict-like access for backward compat ---
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "tenant_id":
+            return self._tenant_id
+        return self._resolve()[key]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key == "tenant_id":
+            return self._tenant_id
+        return self._resolve().get(key, default)
+
+    def keys(self) -> list[str]:
+        return list(TenantContext.model_fields.keys())
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and key in TenantContext.model_fields
+
+    def __iter__(self):
+        return iter(TenantContext.model_fields.keys())
+
+    def __bool__(self) -> bool:
+        return True  # A lazy tenant is always truthy (tenant_id exists)
+
+    def __repr__(self) -> str:
+        if self._resolved is not None:
+            return f"LazyTenantContext(tenant_id={self._tenant_id!r}, loaded=True)"
+        return f"LazyTenantContext(tenant_id={self._tenant_id!r}, loaded=False)"

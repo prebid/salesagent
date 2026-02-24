@@ -5,8 +5,8 @@ and passed through ResolvedIdentity — business logic (_impl functions)
 never resolve, load, or validate tenant themselves.
 
 These tests verify that resolve_identity_from_context() produces a
-ResolvedIdentity with a TenantContext Pydantic model (loaded from DB),
-not a raw dict or minimal stub.
+ResolvedIdentity with a lazy-loading tenant context that defers DB
+queries until non-tenant_id fields are accessed.
 """
 
 from unittest.mock import patch
@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tenant_context import TenantContext
+from src.core.tenant_context import LazyTenantContext, TenantContext
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
 
@@ -48,70 +48,155 @@ FULL_TENANT_DICT = {
 }
 
 
-class TestToolContextProducesFullTenant:
-    """ToolContext path must load full tenant from DB as TenantContext model."""
+class TestLazyTenantContext:
+    """LazyTenantContext must defer DB load and resolve on demand."""
 
-    def test_toolcontext_path_loads_full_tenant_from_db(self):
-        """When resolve_identity_from_context receives a ToolContext,
-        the resulting ResolvedIdentity.tenant must be a TenantContext model
-        with all fields loaded from the database."""
-        ctx = _make_tool_context()
+    def test_tenant_id_available_without_db(self):
+        """tenant_id is available immediately — no DB query."""
+        lazy = LazyTenantContext("test_tenant")
 
-        with patch(
-            "src.core.config_loader.get_tenant_by_id",
-            return_value=FULL_TENANT_DICT,
-        ) as mock_get_tenant, patch("src.core.config_loader.set_current_tenant"):
-            identity = resolve_identity_from_context(ctx)
+        assert lazy.tenant_id == "test_tenant"
+        assert lazy["tenant_id"] == "test_tenant"
+        assert lazy.get("tenant_id") == "test_tenant"
+        assert not lazy.is_loaded
 
-        assert identity is not None
-        assert identity.tenant is not None
-        # Must be a TenantContext model, not a raw dict
-        assert isinstance(identity.tenant, TenantContext)
-        # Verify fields loaded from DB
-        assert identity.tenant.tenant_id == "test_tenant"
-        assert identity.tenant.approval_mode == "require-human"
-        assert identity.tenant.human_review_required is True
-        assert identity.tenant.name == "Test Tenant"
-        # Dict-like access still works (backward compat)
-        assert identity.tenant["tenant_id"] == "test_tenant"
-        assert "approval_mode" in identity.tenant
-        # DB was queried
-        mock_get_tenant.assert_called_once_with("test_tenant")
-
-    def test_toolcontext_path_sets_current_tenant_contextvar(self):
-        """The transport boundary must call set_current_tenant() so that
-        downstream code using get_current_tenant() gets the full dict."""
-        ctx = _make_tool_context()
+    def test_non_tenant_id_field_triggers_db_load(self):
+        """Accessing a field other than tenant_id triggers the DB query."""
+        lazy = LazyTenantContext("test_tenant")
 
         with patch(
             "src.core.config_loader.get_tenant_by_id",
             return_value=FULL_TENANT_DICT,
-        ), patch("src.core.config_loader.set_current_tenant") as mock_set:
-            resolve_identity_from_context(ctx)
+        ) as mock_get, patch("src.core.config_loader.set_current_tenant"):
+            name = lazy.name
 
-        mock_set.assert_called_once()
-        tenant_arg = mock_set.call_args[0][0]
-        assert tenant_arg["tenant_id"] == "test_tenant"
-        assert "approval_mode" in tenant_arg
+        assert name == "Test Tenant"
+        assert lazy.is_loaded
+        mock_get.assert_called_once_with("test_tenant")
 
-    def test_toolcontext_path_falls_back_to_minimal_when_db_unavailable(self):
-        """When DB is unavailable, still create TenantContext with tenant_id."""
-        ctx = _make_tool_context()
+    def test_db_queried_only_once(self):
+        """Multiple field accesses should only trigger one DB query."""
+        lazy = LazyTenantContext("test_tenant")
+
+        with patch(
+            "src.core.config_loader.get_tenant_by_id",
+            return_value=FULL_TENANT_DICT,
+        ) as mock_get, patch("src.core.config_loader.set_current_tenant"):
+            _ = lazy.name
+            _ = lazy.approval_mode
+            _ = lazy["ad_server"]
+
+        mock_get.assert_called_once()
+
+    def test_dict_like_access_triggers_load(self):
+        """Dict-like access to non-tenant_id fields triggers load."""
+        lazy = LazyTenantContext("test_tenant")
+
+        with patch(
+            "src.core.config_loader.get_tenant_by_id",
+            return_value=FULL_TENANT_DICT,
+        ), patch("src.core.config_loader.set_current_tenant"):
+            assert lazy["name"] == "Test Tenant"
+            assert lazy.get("approval_mode") == "require-human"
+
+        assert lazy.is_loaded
+
+    def test_contains_does_not_trigger_load(self):
+        """'field in tenant' checks known fields without DB query."""
+        lazy = LazyTenantContext("test_tenant")
+
+        assert "tenant_id" in lazy
+        assert "approval_mode" in lazy
+        assert "nonexistent" not in lazy
+        assert not lazy.is_loaded
+
+    def test_bool_always_true_without_load(self):
+        """bool(lazy_tenant) is True without triggering DB load."""
+        lazy = LazyTenantContext("test_tenant")
+
+        assert bool(lazy)
+        assert not lazy.is_loaded
+
+    def test_fallback_when_db_unavailable(self):
+        """Returns minimal TenantContext with defaults when DB fails."""
+        lazy = LazyTenantContext("test_tenant")
 
         with patch(
             "src.core.config_loader.get_tenant_by_id",
             side_effect=RuntimeError("DB not available"),
         ), patch("src.core.config_loader.set_current_tenant"):
-            identity = resolve_identity_from_context(ctx)
+            # Access a non-tenant_id field to trigger resolution
+            mode = lazy.approval_mode
+
+        assert lazy.is_loaded
+        assert lazy.tenant_id == "test_tenant"
+        assert mode == "require-human"  # default
+
+    def test_sets_current_tenant_on_resolve(self):
+        """set_current_tenant() is called when full tenant is loaded."""
+        lazy = LazyTenantContext("test_tenant")
+
+        with patch(
+            "src.core.config_loader.get_tenant_by_id",
+            return_value=FULL_TENANT_DICT,
+        ), patch("src.core.config_loader.set_current_tenant") as mock_set:
+            _ = lazy.name  # trigger resolve
+
+        mock_set.assert_called_once()
+        assert mock_set.call_args[0][0]["tenant_id"] == "test_tenant"
+
+    def test_immutable(self):
+        """LazyTenantContext is immutable — setting attributes raises."""
+        lazy = LazyTenantContext("test_tenant")
+
+        with pytest.raises(AttributeError, match="immutable"):
+            lazy.name = "changed"
+
+
+class TestToolContextProducesLazyTenant:
+    """ToolContext path must produce a lazy tenant that defers DB load."""
+
+    def test_toolcontext_path_creates_lazy_tenant(self):
+        """resolve_identity_from_context creates a LazyTenantContext,
+        not an eagerly-loaded TenantContext."""
+        ctx = _make_tool_context()
+
+        identity = resolve_identity_from_context(ctx)
 
         assert identity is not None
-        assert identity.tenant_id == "test_tenant"
-        # Fallback must still be a TenantContext, not a raw dict
-        assert isinstance(identity.tenant, TenantContext)
+        assert identity.tenant is not None
+        assert isinstance(identity.tenant, LazyTenantContext)
+        # tenant_id available immediately
         assert identity.tenant.tenant_id == "test_tenant"
-        # Defaults should be applied
-        assert identity.tenant.human_review_required is True
-        assert identity.tenant.approval_mode == "require-human"
+
+    def test_toolcontext_lazy_tenant_no_db_for_tenant_id_only(self):
+        """If _impl only accesses tenant_id, no DB query is made."""
+        ctx = _make_tool_context()
+
+        with patch(
+            "src.core.config_loader.get_tenant_by_id",
+        ) as mock_get:
+            identity = resolve_identity_from_context(ctx)
+            # Only access tenant_id
+            _ = identity.tenant["tenant_id"]
+            _ = identity.tenant.tenant_id
+
+        mock_get.assert_not_called()
+
+    def test_toolcontext_lazy_tenant_loads_on_field_access(self):
+        """Accessing a real tenant field triggers DB load."""
+        ctx = _make_tool_context()
+
+        identity = resolve_identity_from_context(ctx)
+
+        with patch(
+            "src.core.config_loader.get_tenant_by_id",
+            return_value=FULL_TENANT_DICT,
+        ) as mock_get, patch("src.core.config_loader.set_current_tenant"):
+            name = identity.tenant.name
+
+        assert name == "Test Tenant"
+        mock_get.assert_called_once_with("test_tenant")
 
     def test_toolcontext_preserves_principal_and_testing_context(self):
         """ToolContext path must preserve principal_id and testing_context."""
@@ -124,11 +209,7 @@ class TestToolContextProducesFullTenant:
             testing_context=testing_ctx,
         )
 
-        with patch(
-            "src.core.config_loader.get_tenant_by_id",
-            return_value=FULL_TENANT_DICT,
-        ), patch("src.core.config_loader.set_current_tenant"):
-            identity = resolve_identity_from_context(ctx)
+        identity = resolve_identity_from_context(ctx)
 
         assert identity.principal_id == "test_advertiser"
         assert identity.testing_context is not None

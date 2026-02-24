@@ -18,29 +18,16 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 
 
-def _load_full_tenant(tenant_id: str) -> "TenantContext":
-    """Load tenant from DB and return as TenantContext model.
+def _make_lazy_tenant(tenant_id: str) -> "LazyTenantContext":
+    """Create a lazy-loading tenant context for the given tenant_id.
 
-    Falls back to minimal TenantContext if DB is unavailable (e.g., unit tests).
-    Also sets the ContextVar via set_current_tenant() for legacy code paths.
+    The DB query is deferred until a non-tenant_id field is first accessed.
+    This avoids hitting the database for requests that only need tenant_id
+    (the common case) or that fail auth before reaching tenant-dependent logic.
     """
-    from sqlalchemy.exc import SQLAlchemyError
+    from src.core.tenant_context import LazyTenantContext
 
-    from src.core.config_loader import get_tenant_by_id, set_current_tenant
-    from src.core.tenant_context import TenantContext
-
-    try:
-        tenant_dict = get_tenant_by_id(tenant_id)
-        if tenant_dict:
-            set_current_tenant(tenant_dict)
-            return TenantContext.from_dict(tenant_dict)
-    except (SQLAlchemyError, RuntimeError) as e:
-        logger.debug(f"Could not load tenant from database: {e}")
-
-    # Fallback: minimal TenantContext (unit tests, DB unavailable)
-    fallback = TenantContext(tenant_id=tenant_id)
-    set_current_tenant(fallback)  # type: ignore[arg-type]  # TenantContext supports dict protocol
-    return fallback
+    return LazyTenantContext(tenant_id)
 
 
 def resolve_identity_from_context(
@@ -62,9 +49,10 @@ def resolve_identity_from_context(
     """
     # Handle ToolContext directly (already has resolved identity info)
     if isinstance(ctx, ToolContext):
-        # Load FULL tenant from DB — mirrors the side effect of the old
-        # get_principal_id_from_context() that was lost in the #1050 migration.
-        tenant = _load_full_tenant(ctx.tenant_id)
+        # Create lazy tenant — DB query deferred until a field beyond
+        # tenant_id is accessed. Most _impl paths only need tenant_id
+        # for DB queries, so the full load often never happens.
+        tenant = _make_lazy_tenant(ctx.tenant_id)
         return ResolvedIdentity(
             principal_id=ctx.principal_id,
             tenant_id=ctx.tenant_id,
