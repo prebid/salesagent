@@ -6,24 +6,10 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 
 import contextvars
 import logging
-import os
-import sys
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
-# Fix import order to avoid local a2a directory conflict
-# Import official a2a-sdk first before adding local paths
-
-original_path = sys.path.copy()
-
-# Temporarily remove current directory to avoid local a2a conflict
-if "" in sys.path:
-    sys.path.remove("")
-if "." in sys.path:
-    sys.path.remove(".")
-
-# Official a2a-sdk imports (must be before adding local paths)
 from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import Event
 from a2a.server.request_handlers.request_handler import RequestHandler
@@ -49,11 +35,6 @@ from a2a.types import (
     UnsupportedOperationError,
 )
 from a2a.utils.errors import ServerError
-
-# Restore paths and add parent directories for local imports
-sys.path = original_path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
@@ -105,8 +86,6 @@ from src.core.tools import (
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # ADCP Discovery Skills: Skills that don't require authentication
@@ -962,7 +941,7 @@ class AdCPRequestHandler(RequestHandler):
                 else:
                     tenant_id = "unknown"
                     principal_id = "unknown"
-            except:
+            except Exception:
                 tenant_id = "unknown"
                 principal_id = "unknown"
 
