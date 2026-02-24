@@ -2,7 +2,6 @@ import logging
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from rich.console import Console
 from sqlalchemy import select
@@ -11,6 +10,7 @@ from src.adapters.mock_creative_engine import MockCreativeEngine
 from src.core.auth import (
     get_principal_from_context,
 )
+from src.core.exceptions import AdCPAuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +269,7 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
         tenant_config = get_current_tenant()
 
     if not tenant_config:
-        raise ToolError("No tenant configuration found")
+        raise AdCPAuthenticationError("No tenant configuration found")
 
     return StrategyManager(tenant_id=tenant_config.get("tenant_id"), principal_id=principal_id)
 

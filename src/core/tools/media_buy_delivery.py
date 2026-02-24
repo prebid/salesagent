@@ -14,13 +14,13 @@ from datetime import UTC, date, datetime, timedelta
 from math import floor
 from typing import Any, cast
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from rich.console import Console
 from sqlalchemy import select
 
+from src.core.exceptions import AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def _get_media_buy_delivery_impl(
 
     # Validate context is provided
     if ctx is None:
-        raise ToolError("Context is required")
+        raise AdCPValidationError("Context is required")
 
     # Extract testing context for time simulation and event jumping
     testing_ctx = get_testing_context(ctx)
@@ -468,7 +468,7 @@ def get_media_buy_delivery(
 
         return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="get_media_buy_delivery request"))
+        raise AdCPValidationError(format_validation_error(e, context="get_media_buy_delivery request"))
 
 
 def get_media_buy_delivery_raw(

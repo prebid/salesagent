@@ -27,8 +27,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
 from src.core.testing_hooks import AdCPTestContext
 
@@ -103,10 +103,10 @@ def _patch_impl_dependencies(
 
 
 class TestTenantErrorPath:
-    """When get_principal_from_context returns (None, None), ToolError('TENANT_ERROR') is raised."""
+    """When get_principal_from_context returns (None, None), AdCPAuthenticationError is raised."""
 
     def test_tenant_error_when_no_tenant_resolvable(self):
-        """H1: No tenant from context and no current tenant raises TENANT_ERROR."""
+        """H1: No tenant from context and no current tenant raises AdCPAuthenticationError."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
         ctx = MagicMock()
@@ -119,11 +119,11 @@ class TestTenantErrorPath:
             patch("src.core.tools.properties.set_current_tenant"),
             patch("src.core.tools.properties.get_current_tenant", return_value=None),
         ):
-            with pytest.raises(ToolError, match="TENANT_ERROR"):
+            with pytest.raises(AdCPAuthenticationError, match="Could not resolve tenant"):
                 _list_authorized_properties_impl(req=None, context=ctx)
 
     def test_tenant_error_message_is_descriptive(self):
-        """H1: TENANT_ERROR message mentions subdomain, virtual host, or header."""
+        """H1: Error message mentions subdomain, virtual host, or header."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
         ctx = MagicMock()
@@ -136,7 +136,7 @@ class TestTenantErrorPath:
             patch("src.core.tools.properties.set_current_tenant"),
             patch("src.core.tools.properties.get_current_tenant", return_value=None),
         ):
-            with pytest.raises(ToolError, match="subdomain|virtual host|x-adcp-tenant"):
+            with pytest.raises(AdCPAuthenticationError, match="subdomain|virtual host|x-adcp-tenant"):
                 _list_authorized_properties_impl(req=None, context=ctx)
 
 
@@ -146,7 +146,7 @@ class TestTenantErrorPath:
 
 
 class TestPropertiesErrorPath:
-    """When the database query raises an exception, ToolError('PROPERTIES_ERROR') is raised."""
+    """When the database query raises an exception, AdCPAdapterError is raised."""
 
     def test_properties_error_on_db_exception(self):
         """H2: Database exception in _impl raises PROPERTIES_ERROR."""
@@ -167,7 +167,7 @@ class TestPropertiesErrorPath:
             patches["audit"],
             patches["testing_ctx"],
         ):
-            with pytest.raises(ToolError, match="PROPERTIES_ERROR"):
+            with pytest.raises(AdCPAdapterError, match="Failed to list authorized properties"):
                 _list_authorized_properties_impl(req=None, context=ctx)
 
     def test_properties_error_calls_audit_with_failure(self):
@@ -192,7 +192,7 @@ class TestPropertiesErrorPath:
             mock_audit_instance = MagicMock()
             mock_get_audit.return_value = mock_audit_instance
 
-            with pytest.raises(ToolError, match="PROPERTIES_ERROR"):
+            with pytest.raises(AdCPAdapterError, match="Failed to list authorized properties"):
                 _list_authorized_properties_impl(req=None, context=ctx)
 
             mock_audit_instance.log_operation.assert_called_once()
@@ -865,7 +865,7 @@ class TestAuditLogFailure:
             mock_audit_instance = MagicMock()
             mock_get_audit.return_value = mock_audit_instance
 
-            with pytest.raises(ToolError, match="PROPERTIES_ERROR"):
+            with pytest.raises(AdCPAdapterError, match="Failed to list authorized properties"):
                 _list_authorized_properties_impl(req=None, context=ctx)
 
             mock_audit_instance.log_operation.assert_called_once()

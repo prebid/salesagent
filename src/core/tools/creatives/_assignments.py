@@ -5,10 +5,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastmcp.exceptions import ToolError
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
+from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def _process_assignments(
 
                         # Skip if in lenient mode, error if strict
                         if validation_mode == "strict":
-                            raise ToolError(error_msg)
+                            raise AdCPNotFoundError(error_msg)
                         else:
                             logger.warning(f"Package not found during assignment: {package_id}, skipping")
                             continue
@@ -157,7 +157,7 @@ def _process_assignments(
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
                                 if validation_mode == "strict":
-                                    raise ToolError(error_msg)
+                                    raise AdCPValidationError(error_msg)
                                 else:
                                     logger.warning(f"Creative format mismatch during assignment, skipping: {error_msg}")
                                     continue

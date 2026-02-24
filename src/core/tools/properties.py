@@ -12,7 +12,6 @@ import time
 from typing import Any, cast
 
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from sqlalchemy import select
@@ -22,6 +21,7 @@ from src.core.auth import get_principal_from_context
 from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
 from src.core.helpers import log_tool_activity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
 from src.core.testing_hooks import get_testing_context
@@ -67,9 +67,9 @@ def _list_authorized_properties_impl(
         tenant = get_current_tenant()
 
     if not tenant:
-        raise ToolError(
-            "TENANT_ERROR",
+        raise AdCPAuthenticationError(
             "Could not resolve tenant from request context (no subdomain, virtual host, or x-adcp-tenant header found)",
+            details={"error_code": "TENANT_ERROR"},
         )
 
     tenant_id = tenant["tenant_id"]
@@ -208,7 +208,10 @@ def _list_authorized_properties_impl(
             error=str(e),
         )
 
-        raise ToolError("PROPERTIES_ERROR", f"Failed to list authorized properties: {str(e)}")
+        raise AdCPAdapterError(
+            f"Failed to list authorized properties: {str(e)}",
+            details={"error_code": "PROPERTIES_ERROR"},
+        )
 
 
 def list_authorized_properties(

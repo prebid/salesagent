@@ -9,13 +9,13 @@ from adcp import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers import get_principal_id_from_context, log_tool_activity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.tool_context import ToolContext
@@ -84,7 +84,7 @@ def _sync_creatives_impl(
 
     # CRITICAL: principal_id is required for creative sync (NOT NULL in database)
     if not principal_id:
-        raise ToolError(
+        raise AdCPAuthenticationError(
             "Authentication required: Missing or invalid x-adcp-auth header. "
             "Creative sync requires authentication to associate creatives with an advertiser principal."
         )
@@ -106,7 +106,7 @@ def _sync_creatives_impl(
         tenant = get_current_tenant()
 
     if not tenant:
-        raise ToolError("No tenant context available")
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Track actions per creative for AdCP-compliant response
 

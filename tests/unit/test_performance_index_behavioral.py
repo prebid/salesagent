@@ -16,8 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas import PackagePerformance
 from src.core.tool_context import ToolContext
 
@@ -263,7 +263,7 @@ class TestHighRiskMCP:
 
     # H6 ---------------------------------------------------------------
     def test_validation_error_missing_performance_index(self):
-        """H6: ToolError raised when performance_data item missing performance_index.
+        """H6: AdCPValidationError raised when performance_data item missing performance_index.
 
         Covers: #28 T-UC-009-ext-b-mcp
         """
@@ -271,7 +271,7 @@ class TestHighRiskMCP:
 
         ctx = _make_tool_context()
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPValidationError) as exc_info:
             _update_performance_index_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1"}],  # missing performance_index

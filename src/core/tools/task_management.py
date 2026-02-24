@@ -11,7 +11,6 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from sqlalchemy import func, select
 
@@ -21,6 +20,7 @@ from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
+from src.core.exceptions import AdCPAuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def list_tasks(
     principal_id, tenant = get_principal_from_context(context, require_valid_token=True)
 
     if not tenant:
-        raise ToolError("No tenant context available. Check x-adcp-auth token and host headers.")
+        raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
 
     set_current_tenant(tenant)
 
@@ -130,7 +130,7 @@ def get_task(task_id: str, context: Context | None = None) -> dict[str, Any]:
     principal_id, tenant = get_principal_from_context(context, require_valid_token=True)
 
     if not tenant:
-        raise ToolError("No tenant context available. Check x-adcp-auth token and host headers.")
+        raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
 
     set_current_tenant(tenant)
 
@@ -200,7 +200,7 @@ def complete_task(
     principal_id, tenant = get_principal_from_context(context, require_valid_token=True)
 
     if not tenant:
-        raise ToolError("No tenant context available. Check x-adcp-auth token and host headers.")
+        raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
 
     set_current_tenant(tenant)
 

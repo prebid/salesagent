@@ -18,11 +18,11 @@ from adcp.utils.format_assets import get_format_assets
 
 # TypeVar for Format to preserve subclass type through backward compatibility function
 FormatT = TypeVar("FormatT", bound=AdcpFormat)
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def _list_creative_formats_impl(
     else:
         tenant = get_current_tenant()
     if not tenant:
-        raise ToolError("No tenant context available")
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Get formats from all registered creative agents via registry
     import asyncio
@@ -381,7 +381,7 @@ def list_creative_formats(
             context=context,
         )
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="list_creative_formats request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="list_creative_formats request")) from e
 
     response = _list_creative_formats_impl(req, ctx)
     return ToolResult(content=str(response), structured_content=response)

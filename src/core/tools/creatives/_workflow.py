@@ -5,11 +5,11 @@ from typing import Any
 
 from adcp import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 
@@ -37,7 +37,7 @@ def _create_sync_workflow_steps(
 
     # Ensure principal_id is available (should always be set by this point)
     if principal_id is None:
-        raise ToolError("Principal ID required for workflow creation")
+        raise AdCPAuthenticationError("Principal ID required for workflow creation")
 
     # Get or create persistent context for this operation
     # is_async=True because we're creating workflow steps that need tracking
@@ -46,7 +46,7 @@ def _create_sync_workflow_steps(
     )
 
     if persistent_ctx is None:
-        raise ToolError("Failed to create workflow context")
+        raise AdCPAdapterError("Failed to create workflow context")
 
     with get_db_session() as session:
         for creative_info in creatives_needing_approval:

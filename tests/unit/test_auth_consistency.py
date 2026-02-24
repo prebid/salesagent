@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPAuthenticationError
 from src.services.policy_check_service import PolicyStatus
 
 # --- Helpers ---
@@ -72,7 +73,7 @@ class TestMissingTokenConsistency:
         ctx = self._make_no_auth_context()
 
         with patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value=None):
-            with pytest.raises(ToolError, match="[Aa]uthentication required"):
+            with pytest.raises(AdCPAuthenticationError, match="[Aa]uthentication required"):
                 _sync_creatives_impl(creatives=[], ctx=ctx)
 
     def test_list_creatives_requires_auth(self):

@@ -19,6 +19,7 @@ from unittest.mock import Mock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 
@@ -49,8 +50,8 @@ class TestAuthenticationRequirements:
             }
         ]
 
-        # Call without context (no auth)
-        with pytest.raises(ToolError) as exc_info:
+        # Call without context (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _sync_creatives_impl(creatives=creatives, ctx=None)
 
         error_msg = str(exc_info.value)
@@ -75,7 +76,7 @@ class TestAuthenticationRequirements:
             }
         ]
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _sync_creatives_impl(creatives=creatives, ctx=invalid_context)
 
         assert "Authentication required" in str(exc_info.value)
@@ -166,12 +167,11 @@ class TestAuthenticationRequirements:
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["test_buy"])
 
-        # Call without context (no auth)
-        with pytest.raises((ToolError, ValueError)) as exc_info:
+        # Call without context (no auth) — _impl raises AdCPValidationError (transport-agnostic)
+        with pytest.raises((AdCPValidationError, AdCPAuthenticationError, ToolError, ValueError)) as exc_info:
             _get_media_buy_delivery_impl(req=req, ctx=None)
 
         error_msg = str(exc_info.value)
-        # May raise ToolError for missing auth or ValueError for missing context
         assert (
             "authentication required" in error_msg.lower()
             or "principal" in error_msg.lower()
@@ -186,8 +186,8 @@ class TestAuthenticationRequirements:
         """update_performance_index must reject requests without authentication."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        # Call without context (no auth) - function signature: media_buy_id, performance_data, context
-        with pytest.raises((ToolError, ValueError)) as exc_info:
+        # Call without context (no auth) — _impl raises AdCPValidationError or AdCPAuthenticationError (transport-agnostic)
+        with pytest.raises((AdCPValidationError, AdCPAuthenticationError, ToolError, ValueError)) as exc_info:
             _update_performance_index_impl(
                 media_buy_id="test_buy",
                 performance_data=[{"product_id": "prod1", "performance_index": 0.8}],
@@ -195,7 +195,6 @@ class TestAuthenticationRequirements:
             )
 
         error_msg = str(exc_info.value)
-        # Either raises ToolError for missing auth or ValueError for missing context
         assert (
             "Context is required" in error_msg
             or "Principal ID not found" in error_msg
@@ -212,12 +211,12 @@ class TestAuthenticationRequirements:
 
         from src.core.tools.signals import _activate_signal_impl
 
-        # Call without context (no auth) - function signature: signal_agent_segment_id, campaign_id, media_buy_id, ctx
-        with pytest.raises(ToolError) as exc_info:
+        # Call without context (no auth) — _impl raises AdCPAuthenticationError or AdCPValidationError (transport-agnostic)
+        with pytest.raises((AdCPAuthenticationError, AdCPValidationError)) as exc_info:
             asyncio.run(_activate_signal_impl(signal_agent_segment_id="test_signal", media_buy_id="test_buy", ctx=None))
 
         error_msg = str(exc_info.value)
-        assert "authentication required" in error_msg.lower() or "principal" in error_msg.lower()
+        assert "authentication required" in error_msg.lower() or "context" in error_msg.lower()
 
 
 class TestAuthenticationWithMockedContext:
@@ -234,7 +233,7 @@ class TestAuthenticationWithMockedContext:
 
         creatives = [{"creative_id": "test", "name": "Test", "assets": {}}]
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _sync_creatives_impl(creatives=creatives, ctx=ctx)
 
         assert "Authentication required" in str(exc_info.value)
@@ -250,7 +249,7 @@ class TestAuthenticationWithMockedContext:
 
         creatives = [{"creative_id": "test", "name": "Test", "assets": {}}]
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _sync_creatives_impl(creatives=creatives, ctx=ctx)
 
         assert "Authentication required" in str(exc_info.value)
@@ -263,7 +262,7 @@ class TestAuthenticationErrorMessages:
         """Error message should mention x-adcp-auth header."""
         from src.core.tools.creatives import _sync_creatives_impl
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _sync_creatives_impl(creatives=[], ctx=None)
 
         error_msg = str(exc_info.value)

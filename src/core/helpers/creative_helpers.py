@@ -532,8 +532,7 @@ def process_and_upload_package_creatives(
     import logging
 
     # Lazy import to avoid circular dependency
-    from fastmcp.exceptions import ToolError
-
+    from src.core.exceptions import AdCPAdapterError
     from src.core.tools.creatives import _sync_creatives_impl
 
     logger = logging.getLogger(__name__)
@@ -589,7 +588,7 @@ def process_and_upload_package_creatives(
             error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"
             logger.error(error_msg)
             # Re-raise as ToolError for consistent error handling
-            raise ToolError("CREATIVES_UPLOAD_FAILED", error_msg) from e
+            raise AdCPAdapterError(error_msg, details={"error_code": "CREATIVES_UPLOAD_FAILED"}) from e
 
     return updated_packages, uploaded_by_product
 

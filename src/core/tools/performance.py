@@ -8,12 +8,12 @@ import logging
 from typing import Any
 
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from rich.console import Console
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ def _update_performance_index_impl(
             media_buy_id=media_buy_id, performance_data=performance_objects, context=context
         )
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="update_performance_index request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
 
     if ctx is None:
         raise ValueError("Context is required for update_performance_index")
@@ -64,12 +64,12 @@ def _update_performance_index_impl(
     _verify_principal(req.media_buy_id, ctx)
     principal_id = _get_principal_id_from_context(ctx)  # Already verified by _verify_principal
     if principal_id is None:
-        raise ToolError("Principal ID not found in context - authentication required")
+        raise AdCPAuthenticationError("Principal ID not found in context - authentication required")
 
     # Get the Principal object
     principal = get_principal_object(principal_id)
     if not principal:
-        raise ToolError(f"Principal {principal_id} not found")
+        raise AdCPNotFoundError(f"Principal {principal_id} not found")
 
     # Get the appropriate adapter (no dry_run support for performance updates)
     adapter = get_adapter(principal, dry_run=False)

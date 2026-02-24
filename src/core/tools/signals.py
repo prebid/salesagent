@@ -8,10 +8,10 @@ import logging
 import time
 import uuid
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ async def _get_signals_impl(req: GetSignalsRequest, context: Context | ToolConte
     # Get tenant information
     tenant = get_current_tenant()
     if not tenant:
-        raise ToolError("No tenant context available")
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Mock implementation - in production, this would query from a signal provider
     # or the ad server's available audience segments
@@ -213,16 +213,16 @@ async def _activate_signal_impl(
     # Get tenant information
     tenant = get_current_tenant()
     if not tenant:
-        raise ToolError("No tenant context available")
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Get the Principal object with ad server mappings
     if not principal_id:
-        raise ToolError("Authentication required for signal activation")
+        raise AdCPAuthenticationError("Authentication required for signal activation")
     principal = get_principal_object(principal_id)
 
     # Apply testing hooks
     if not ctx:
-        raise ToolError("Context required for signal activation")
+        raise AdCPValidationError("Context required for signal activation")
     testing_ctx = get_testing_context(ctx)
     campaign_info = {"endpoint": "activate_signal", "signal_id": signal_agent_segment_id}
     # Note: apply_testing_hooks modifies response data dict, not called here as no response yet

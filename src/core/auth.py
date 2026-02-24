@@ -344,12 +344,12 @@ def get_principal_from_context(
     # This distinguishes between "no auth" (OK) and "bad auth" (error or warning)
     if principal_id is None:
         if require_valid_token:
-            from fastmcp.exceptions import ToolError
+            from src.core.exceptions import AdCPAuthenticationError
 
-            raise ToolError(
-                "INVALID_AUTH_TOKEN",
+            raise AdCPAuthenticationError(
                 f"Authentication token is invalid for tenant '{requested_tenant_id or 'any'}'. "
                 f"The token may be expired, revoked, or associated with a different tenant.",
+                details={"error_code": "INVALID_AUTH_TOKEN"},
             )
         else:
             # For discovery endpoints, treat invalid token like missing token

@@ -5,7 +5,7 @@ Tests organized by BR-RULE invariant, covering:
 - BR-RULE-040: Media buy status transitions (5 invariants, zero prior coverage)
 - BR-RULE-033 inv2/inv3: Strict/lenient assignment modes
 - BR-RULE-037 inv6: Slack notification guard
-- BR-RULE-033 inv4 / BR-RULE-038 inv4: ToolError propagation in strict mode
+- BR-RULE-033 inv4 / BR-RULE-038 inv4: AdCPError propagation in strict mode
 
 Reference: salesagent-1xsp design field.
 """
@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._assignments import _process_assignments
 from src.core.tools.creatives._workflow import _send_creative_notifications
@@ -233,10 +233,10 @@ class TestMediaBuyStatusTransitions:
 
 
 class TestStrictAssignmentAbort:
-    """BR-RULE-033 inv2: strict mode raises ToolError on invalid package."""
+    """BR-RULE-033 inv2: strict mode raises AdCPNotFoundError on invalid package."""
 
     def test_strict_mode_invalid_package_raises_tool_error(self, tenant):
-        """rule-033-inv2: When validation_mode=strict and package not found, ToolError raised."""
+        """rule-033-inv2: When validation_mode=strict and package not found, AdCPNotFoundError raised."""
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
         with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
@@ -246,7 +246,7 @@ class TestStrictAssignmentAbort:
             # Package not found
             mock_session.execute.return_value.first.return_value = None
 
-            with pytest.raises(ToolError, match="Package not found"):
+            with pytest.raises(AdCPNotFoundError, match="Package not found"):
                 _process_assignments(
                     assignments={"c1": ["nonexistent_pkg"]},
                     results=results,
@@ -380,33 +380,33 @@ class TestLenientAssignmentSkip:
 
 
 # ========================================================================
-# BR-RULE-033 inv4 / BR-RULE-038 inv4: ToolError propagation in strict mode
+# BR-RULE-033 inv4 / BR-RULE-038 inv4: AdCPError propagation in strict mode
 # ========================================================================
 
 
-class TestStrictModeToolErrorPropagation:
-    """BR-RULE-033 inv4 / BR-RULE-038 inv4: strict mode ToolError prevents result population.
+class TestStrictModeAdCPErrorPropagation:
+    """BR-RULE-033 inv4 / BR-RULE-038 inv4: strict mode AdCPError prevents result population.
 
     In strict mode, when a package is not found, the error IS recorded in the
-    local assignment_errors_by_creative dict *before* ToolError is raised.
-    However, the ToolError propagates out of _process_assignments before the
+    local assignment_errors_by_creative dict *before* AdCPError is raised.
+    However, the AdCPError propagates out of _process_assignments before the
     post-processing loop (lines 226-236) that writes assignment_errors to
     SyncCreativeResult. The BDD claim 'errors always recorded in response'
     does NOT hold in strict mode.
     """
 
     def test_strict_mode_error_not_written_to_result_on_toolerror(self, tenant):
-        """rule-033-inv4 / rule-038-inv4: ToolError prevents assignment_errors from reaching result."""
+        """rule-033-inv4 / rule-038-inv4: AdCPError prevents assignment_errors from reaching result."""
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
         with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
-            # Package not found -> triggers ToolError in strict mode
+            # Package not found -> triggers AdCPNotFoundError in strict mode
             mock_session.execute.return_value.first.return_value = None
 
-            with pytest.raises(ToolError):
+            with pytest.raises(AdCPNotFoundError):
                 _process_assignments(
                     assignments={"c1": ["bad_pkg"]},
                     results=results,
@@ -414,12 +414,12 @@ class TestStrictModeToolErrorPropagation:
                     validation_mode="strict",
                 )
 
-        # After ToolError, the post-processing loop never ran,
+        # After AdCPError, the post-processing loop never ran,
         # so assignment_errors is NOT populated on the result
         assert results[0].assignment_errors is None
 
     def test_strict_mode_format_mismatch_error_not_written_to_result(self, tenant, _make_db_package):
-        """rule-038-inv4: format mismatch ToolError also prevents result population."""
+        """rule-038-inv4: format mismatch AdCPValidationError also prevents result population."""
         db_package, db_media_buy = _make_db_package(product_id="product_1")
 
         db_creative = Mock()
@@ -446,7 +446,7 @@ class TestStrictModeToolErrorPropagation:
             # creative lookup, then product lookup
             mock_session.scalars.return_value.first.side_effect = [db_creative, mock_product]
 
-            with pytest.raises(ToolError, match="is not supported by product"):
+            with pytest.raises(AdCPValidationError, match="is not supported by product"):
                 _process_assignments(
                     assignments={"c1": ["pkg_1"]},
                     results=results,
@@ -454,7 +454,7 @@ class TestStrictModeToolErrorPropagation:
                     validation_mode="strict",
                 )
 
-        # ToolError prevented post-processing — assignment_errors not written to result
+        # AdCPError prevented post-processing — assignment_errors not written to result
         assert results[0].assignment_errors is None
 
 
