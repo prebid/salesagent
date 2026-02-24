@@ -8,7 +8,7 @@ import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 
@@ -25,13 +25,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def require_testing_mode() -> None:
+    """FastAPI dependency that restricts access to testing environments only."""
+    if os.environ.get("ADCP_TESTING") != "true":
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+debug_router = APIRouter(dependencies=[Depends(require_testing_mode)])
+
+
 @router.get("/health")
 async def health(request: Request):
     """Health check endpoint."""
     return JSONResponse({"status": "healthy", "service": "mcp"})
 
 
-@router.post("/admin/reset-db-pool")
+@router.post("/_internal/reset-db-pool")
 async def reset_db_pool(request: Request):
     """Reset database connection pool after external data changes.
 
@@ -70,12 +79,9 @@ async def reset_db_pool(request: Request):
         return JSONResponse({"error": f"Failed to reset: {str(e)}"}, status_code=500)
 
 
-@router.get("/debug/db-state")
+@debug_router.get("/debug/db-state")
 async def debug_db_state(request: Request):
     """Debug endpoint to show database state (testing only)."""
-    if os.getenv("ADCP_TESTING") != "true":
-        return JSONResponse({"error": "Only available in testing mode"}, status_code=403)
-
     try:
         with get_db_session() as session:
             product_stmt = select(ModelProduct)
@@ -120,7 +126,7 @@ async def debug_db_state(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@router.get("/debug/tenant")
+@debug_router.get("/debug/tenant")
 async def debug_tenant(request: Request):
     """Debug endpoint to check tenant detection from headers."""
     headers = dict(request.headers)
@@ -160,7 +166,7 @@ async def debug_tenant(request: Request):
     return response
 
 
-@router.get("/debug/root")
+@debug_router.get("/debug/root")
 async def debug_root(request: Request):
     """Debug endpoint to test root route logic without redirects."""
     headers = dict(request.headers)
@@ -194,7 +200,7 @@ async def debug_root(request: Request):
     return JSONResponse(debug_info)
 
 
-@router.get("/debug/landing")
+@debug_router.get("/debug/landing")
 async def debug_landing(request: Request):
     """Debug endpoint to test landing page generation directly."""
     headers = dict(request.headers)
@@ -215,7 +221,7 @@ async def debug_landing(request: Request):
     return JSONResponse({"error": "No tenant found"}, status_code=404)
 
 
-@router.get("/debug/root-logic")
+@debug_router.get("/debug/root-logic")
 async def debug_root_logic(request: Request):
     """Debug endpoint that exactly mimics the root route logic for testing."""
     headers = dict(request.headers)

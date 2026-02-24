@@ -5,8 +5,11 @@ Replaces the previous multi-process architecture where MCP, A2A, and Admin
 ran as separate processes behind nginx.
 """
 
+import asyncio
 import json
 import logging
+import os
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -93,6 +96,14 @@ def _get_header_case_insensitive(headers, header_name: str) -> str | None:
     return None
 
 
+_VALID_HOSTNAME_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*(\:\d{1,5})?$")
+
+
+def _is_valid_hostname(value: str) -> bool:
+    """Validate that a string is a safe hostname (with optional port). Rejects path traversal and injection chars."""
+    return bool(value) and len(value) <= 253 and _VALID_HOSTNAME_RE.match(value) is not None
+
+
 def _create_dynamic_agent_card(request: Request):
     """Create agent card with tenant-specific URL from request headers."""
 
@@ -100,6 +111,9 @@ def _create_dynamic_agent_card(request: Request):
         return "http" if hostname.startswith("localhost") or hostname.startswith("127.0.0.1") else "https"
 
     apx_incoming_host = _get_header_case_insensitive(request.headers, "Apx-Incoming-Host")
+    if apx_incoming_host and not _is_valid_hostname(apx_incoming_host):
+        logger.warning(f"Invalid Apx-Incoming-Host header value, ignoring: {apx_incoming_host!r}")
+        apx_incoming_host = None
     if apx_incoming_host:
         protocol = get_protocol(apx_incoming_host)
         server_url = f"{protocol}://{apx_incoming_host}/a2a"
@@ -130,31 +144,34 @@ def _replace_routes():
         card = _create_dynamic_agent_card(request)
         return JSONResponse(card.model_dump(mode="json"))
 
+    replaced_paths: set[str] = set()
     new_routes = []
     for route in app.routes:
         path = getattr(route, "path", None)
         if path in _AGENT_CARD_PATHS:
             new_routes.append(Route(path, dynamic_agent_card, methods=["GET", "OPTIONS"]))
+            replaced_paths.add(path)
         else:
             new_routes.append(route)
     app.router.routes = new_routes
 
+    missing = _AGENT_CARD_PATHS - replaced_paths
+    if missing:
+        logger.warning(f"_replace_routes: expected SDK routes not found for paths: {sorted(missing)}")
+
 
 _replace_routes()
 
-# Add /agent.json endpoint (used by some A2A clients for extended agent card)
-
-
-async def _agent_json_endpoint(request: Request):
-    card = _create_dynamic_agent_card(request)
-    return JSONResponse(card.model_dump(mode="json"))
-
-
-app.router.routes.append(Route("/agent.json", _agent_json_endpoint, methods=["GET", "OPTIONS"]))
-
-
 # ---------------------------------------------------------------------------
 # A2A Middleware — auth and messageId compatibility
+#
+# Middleware execution order (outermost first):
+#   1. CORSMiddleware  (via add_middleware — always outermost)
+#   2. a2a_messageid_compatibility_middleware  (registered second → runs first of the two)
+#   3. a2a_auth_middleware  (registered first → runs second, closest to handler)
+#
+# @app.middleware("http") runs in reverse registration order in Starlette,
+# so we register auth first and messageId second to get the correct order.
 # ---------------------------------------------------------------------------
 
 
@@ -166,7 +183,9 @@ async def a2a_auth_middleware(request: Request, call_next):
     - Authorization: Bearer <token> (standard A2A/HTTP)
     - x-adcp-auth: <token> (AdCP convention, for compatibility with MCP)
     """
-    if request.url.path in ["/a2a", "/a2a/"] and request.method == "POST":
+    is_a2a_request = request.url.path in ["/a2a", "/a2a/"] and request.method == "POST"
+
+    if is_a2a_request:
         token = None
         auth_source = None
 
@@ -184,7 +203,7 @@ async def a2a_auth_middleware(request: Request, call_next):
         if token:
             _request_auth_token.set(token)
             _request_headers.set(dict(request.headers))
-            logger.info(f"Extracted token from {auth_source} header for A2A request: {token[:10]}...")
+            logger.debug(f"Extracted token from {auth_source} header for A2A request: {token[:10]}...")
         else:
             logger.warning(
                 f"A2A request to {request.url.path} missing authentication "
@@ -195,9 +214,10 @@ async def a2a_auth_middleware(request: Request, call_next):
 
     response = await call_next(request)
 
-    # Clean up context variables
-    _request_auth_token.set(None)
-    _request_headers.set(None)
+    # Clean up context variables only for A2A routes where they were set
+    if is_a2a_request:
+        _request_auth_token.set(None)
+        _request_headers.set(None)
 
     return response
 
@@ -232,7 +252,10 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
         # Reconstruct request with potentially modified body
         from starlette.requests import Request as StarletteRequest
 
-        request = StarletteRequest(request.scope, receive=lambda: {"type": "http.request", "body": body})
+        async def _receive():
+            return {"type": "http.request", "body": body}
+
+        request = StarletteRequest(request.scope, receive=_receive)
 
     response = await call_next(request)
     return response
@@ -242,17 +265,22 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 # Health and debug routes
 # ---------------------------------------------------------------------------
 
+from src.routes.health import debug_router as health_debug_router  # noqa: E402
 from src.routes.health import router as health_router  # noqa: E402
 
 app.include_router(health_router)
+app.include_router(health_debug_router)
 
 # ---------------------------------------------------------------------------
-# CORS — allow all origins (nginx handles production restrictions)
+# CORS — use specific origins when credentials are needed.
+# CORS spec forbids allow_origins=["*"] with allow_credentials=True.
 # ---------------------------------------------------------------------------
+
+_cors_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in _cors_origins],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -266,7 +294,7 @@ from starlette.middleware.wsgi import WSGIMiddleware  # noqa: E402
 
 from src.admin.app import create_app  # noqa: E402
 
-flask_admin_app, _ = create_app()
+flask_admin_app = create_app()
 admin_wsgi = WSGIMiddleware(flask_admin_app)
 
 # Mount Flask admin at all paths it handles.
@@ -293,7 +321,7 @@ from src.landing.landing_page import generate_fallback_landing_page  # noqa: E40
 
 async def _handle_landing_page(request: Request):
     """Common landing page logic for root and /landing routes."""
-    result = route_landing_page(dict(request.headers))
+    result = await asyncio.to_thread(route_landing_page, dict(request.headers))
     logger.info(
         f"[LANDING] Routing decision: type={result.type}, host={result.effective_host}, "
         f"tenant={'yes' if result.tenant else 'no'}"
@@ -301,7 +329,7 @@ async def _handle_landing_page(request: Request):
 
     if result.type in ("custom_domain", "subdomain") and result.tenant:
         try:
-            html_content = generate_tenant_landing_page(result.tenant, result.effective_host)
+            html_content = await asyncio.to_thread(generate_tenant_landing_page, result.tenant, result.effective_host)
             return HTMLResponse(content=html_content)
         except Exception as e:
             logger.error(f"Error generating landing page: {e}", exc_info=True)
@@ -310,6 +338,10 @@ async def _handle_landing_page(request: Request):
                     f"Error generating landing page for {result.tenant.get('name', 'tenant')}"
                 )
             )
+
+    # Custom domain not configured for any tenant
+    if result.type == "custom_domain":
+        return HTMLResponse(content=generate_fallback_landing_page(f"Domain {result.effective_host} is not configured"))
 
     return HTMLResponse(content=generate_fallback_landing_page("No tenant found"))
 
