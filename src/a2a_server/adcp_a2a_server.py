@@ -8,6 +8,9 @@ import contextvars
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+
+# Import core functions for direct calls (raw functions without FastMCP decorators)
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from a2a.server.context import ServerCallContext
@@ -35,10 +38,6 @@ from a2a.types import (
     UnsupportedOperationError,
 )
 from a2a.utils.errors import ServerError
-
-# Import core functions for direct calls (raw functions without FastMCP decorators)
-from datetime import UTC, datetime
-
 from adcp import create_a2a_webhook_payload
 from adcp.types import GeneratedTaskStatus
 from adcp.types.generated_poc.core.context import ContextObject

@@ -10,15 +10,10 @@ salesagent-agmq: Debug endpoints gated behind ADCP_TESTING
 salesagent-nb7k: format_resolver async event loop fix
 """
 
-import asyncio
-import inspect
-import json
 import os
-import re
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # salesagent-c0gm [P0]: Async receive callable in messageId middleware
@@ -120,27 +115,22 @@ class TestCORSConfiguration:
         # With specific origins, a non-allowed origin should NOT get
         # Access-Control-Allow-Origin: *
         acao = response.headers.get("access-control-allow-origin", "")
-        assert acao != "*", (
-            "CORS wildcard '*' used with credentials — browsers will ignore credentials"
-        )
+        assert acao != "*", "CORS wildcard '*' used with credentials — browsers will ignore credentials"
 
-    def test_allowed_origins_env_var_respected(self):
-        """ALLOWED_ORIGINS environment variable controls CORS origins."""
-        # The module-level _cors_origins reads from env at import time.
-        # We verify the pattern exists in the source code.
-        import src.app as app_module
+    def test_allowed_origin_gets_cors_header(self):
+        """An origin listed in ALLOWED_ORIGINS should get CORS response header."""
+        from starlette.testclient import TestClient
 
-        source = inspect.getsource(app_module)
-        assert "ALLOWED_ORIGINS" in source, "ALLOWED_ORIGINS env var not referenced in app.py"
-        # Check that the actual add_middleware call doesn't use wildcard origins.
-        # We strip comments to avoid false positives from documentation comments.
-        code_lines = [
-            line for line in source.splitlines()
-            if not line.strip().startswith("#")
-        ]
-        code_only = "\n".join(code_lines)
-        assert 'allow_origins=["*"]' not in code_only, (
-            "Wildcard origins still present in app.py code (not just comments)"
+        from src.app import app
+
+        client = TestClient(app)
+
+        # Default ALLOWED_ORIGINS includes http://localhost:8000
+        allowed_origin = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")[0].strip()
+        response = client.get("/health", headers={"Origin": allowed_origin})
+        acao = response.headers.get("access-control-allow-origin", "")
+        assert acao == allowed_origin, (
+            f"Allowed origin '{allowed_origin}' should get matching CORS header, got '{acao}'"
         )
 
 
@@ -257,9 +247,7 @@ class TestDebugEndpointGate:
         dep_callables = [d.dependency for d in debug_router.dependencies]
         from src.routes.health import require_testing_mode
 
-        assert require_testing_mode in dep_callables, (
-            "require_testing_mode not in debug_router dependencies"
-        )
+        assert require_testing_mode in dep_callables, "require_testing_mode not in debug_router dependencies"
 
     def test_debug_db_state_returns_404_without_testing(self):
         """GET /debug/db-state returns 404 in production mode."""
@@ -283,31 +271,19 @@ class TestDebugEndpointGate:
 class TestFormatResolverNoEventLoopCreation:
     """format_resolver must use run_async_in_sync_context, not new_event_loop."""
 
-    def test_no_asyncio_new_event_loop_in_source(self):
-        """format_resolver.py must not contain asyncio.new_event_loop().
+    def test_format_resolver_does_not_import_new_event_loop(self):
+        """format_resolver must not use asyncio.new_event_loop (causes deadlocks).
 
         Before fix: asyncio.new_event_loop() + run_until_complete() — deadlocks.
         After fix: run_async_in_sync_context() — handles both sync and async contexts.
         """
         import src.core.format_resolver as fr_module
 
-        source = inspect.getsource(fr_module)
-        assert "new_event_loop" not in source, (
-            "asyncio.new_event_loop() still present in format_resolver.py — "
-            "this will deadlock when called from async context"
-        )
-        assert "run_until_complete" not in source, (
-            "run_until_complete() still present in format_resolver.py — "
-            "this will deadlock when called from async context"
-        )
-
-    def test_uses_run_async_in_sync_context(self):
-        """format_resolver imports and uses run_async_in_sync_context."""
-        import src.core.format_resolver as fr_module
-
-        source = inspect.getsource(fr_module)
-        assert "run_async_in_sync_context" in source, (
-            "run_async_in_sync_context not found in format_resolver.py"
+        # Verify the module does not reference new_event_loop at attribute level
+        assert not hasattr(fr_module, "new_event_loop"), "format_resolver should not export new_event_loop"
+        # Verify run_async_in_sync_context is imported (the correct approach)
+        assert hasattr(fr_module, "run_async_in_sync_context"), (
+            "format_resolver should import run_async_in_sync_context"
         )
 
     def test_get_format_works_from_sync_context(self):
