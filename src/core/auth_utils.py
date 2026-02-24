@@ -33,6 +33,15 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
             principal = session.scalars(stmt).first()
             if principal:
                 return principal.principal_id
+
+            # Check if it's the admin token for this specific tenant
+            tenant_stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
+            tenant_obj = session.scalars(tenant_stmt).first()
+            if tenant_obj and tenant_obj.admin_token == token:
+                logger.debug("Token matches admin token for tenant '%s'", tenant_id)
+                return f"{tenant_id}_admin"
+
+            return None
         else:
             # No tenant specified - search globally
             stmt = select(Principal).filter_by(access_token=token)
