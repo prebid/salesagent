@@ -162,7 +162,14 @@ class TestGetTaskTool:
         assert result["status"] == "requires_approval"
 
     def test_get_task_not_found_raises_error(self, mock_db_session, sample_tenant):
-        """Test that get_task raises error when task not found."""
+        """Test that get_task raises ToolError when task not found.
+
+        The MCP boundary (with_error_logging) translates ValueError to
+        ToolError with VALIDATION_ERROR code. This is correct: business
+        logic raises ValueError, the transport boundary translates it.
+        """
+        from fastmcp.exceptions import ToolError
+
         get_task_fn = self._get_get_task_fn()
 
         mock_db_session.scalars.return_value.first.return_value = None
@@ -174,7 +181,7 @@ class TestGetTaskTool:
         ):
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
-            with pytest.raises(ValueError, match="not found"):
+            with pytest.raises(ToolError, match="not found"):
                 get_task_fn(task_id="nonexistent", context=Mock())
 
 
@@ -239,7 +246,13 @@ class TestCompleteTaskTool:
         assert sample_pending_step.status == "completed"
 
     def test_complete_task_rejects_invalid_status(self, mock_db_session, sample_tenant):
-        """Test that complete_task rejects invalid status values."""
+        """Test that complete_task rejects invalid status values.
+
+        The MCP boundary (with_error_logging) translates ValueError to
+        ToolError with VALIDATION_ERROR code.
+        """
+        from fastmcp.exceptions import ToolError
+
         complete_task_fn = self._get_complete_task_fn()
 
         with (
@@ -248,5 +261,5 @@ class TestCompleteTaskTool:
         ):
             mock_get_principal.return_value = ("principal_123", sample_tenant)
 
-            with pytest.raises(ValueError, match="Invalid status"):
+            with pytest.raises(ToolError, match="Invalid status"):
                 complete_task_fn(task_id="step_123", status="invalid_status", context=Mock())

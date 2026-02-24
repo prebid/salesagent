@@ -49,6 +49,12 @@ from src.core.auth_utils import get_principal_from_token
 from src.core.config_loader import get_current_tenant
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.domain_config import get_a2a_server_url
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPError,
+    AdCPValidationError,
+)
 from src.core.schemas import CreativeStatusEnum
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
@@ -85,6 +91,17 @@ from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
+
+
+def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
+    """Translate AdCPError to an A2A SDK error type preserving semantics."""
+    if isinstance(exc, AdCPValidationError):
+        return InvalidParamsError(message=exc.message)
+    elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):
+        return InvalidRequestError(message=exc.message)
+    else:
+        return InternalError(message=exc.message)
+
 
 # ADCP Discovery Skills: Skills that don't require authentication
 # Per AdCP spec section 3.2, these endpoints allow optional authentication for public discovery.
@@ -1450,6 +1467,10 @@ class AdCPRequestHandler(RequestHandler):
         except ServerError:
             # Re-raise ServerError as-is (already properly formatted)
             raise
+        except AdCPError as e:
+            # Translate AdCPError to protocol-specific A2A error
+            logger.error(f"AdCPError in skill handler {skill_name}: {e.error_code} - {e.message}")
+            raise ServerError(_adcp_to_a2a_error(e))
         except Exception as e:
             logger.error(f"Error in skill handler {skill_name}: {e}")
             raise ServerError(InternalError(message=f"Skill {skill_name} failed: {str(e)}"))
