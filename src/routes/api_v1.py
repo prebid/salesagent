@@ -301,7 +301,7 @@ async def sync_creatives(body: SyncCreativesBody, request: Request):
 
     try:
         response = creatives_sync_module.sync_creatives_raw(
-            creatives=body.creatives,
+            creatives=body.creatives,  # type: ignore[arg-type]  # REST accepts dicts, _impl handles both
             assignments=body.assignments,
             creative_ids=body.creative_ids,
             delete_missing=body.delete_missing,

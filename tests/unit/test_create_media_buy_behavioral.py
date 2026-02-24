@@ -21,9 +21,9 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
+from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError, AdCPValidationError
 from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
@@ -462,10 +462,10 @@ class TestCreativeMissingUrl:
             # URL extraction returns None (missing)
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(ToolError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant")
 
-            assert "INVALID_CREATIVES" in str(exc_info.value)
+            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
         """When creative has URL but missing dimensions, raise INVALID_CREATIVES.
@@ -501,10 +501,10 @@ class TestCreativeMissingUrl:
             # Has URL but no dimensions
             mock_extract.return_value = ("https://example.com/ad.jpg", None, None)
 
-            with pytest.raises(ToolError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant")
 
-            assert "INVALID_CREATIVES" in str(exc_info.value)
+            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
 
 class TestCreativeUploadFailure:
@@ -617,10 +617,10 @@ class TestCreativeUploadFailure:
             ):
                 mock_upload.return_value = (req.packages, {})
 
-                with pytest.raises(ToolError) as exc_info:
+                with pytest.raises(AdCPAdapterError) as exc_info:
                     await _create_media_buy_impl(req=req, ctx=pc.ctx)
 
-                assert "CREATIVE_UPLOAD_FAILED" in str(exc_info.value)
+                assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
                 assert "creative_no_platform" in str(exc_info.value)
                 assert "Network timeout" in str(exc_info.value)
 
@@ -637,16 +637,16 @@ class TestCreativeUploadFailure:
         upload_error = ConnectionError("Network timeout during GAM upload")
         creative_id = "creative_abc"
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPAdapterError) as exc_info:
             try:
                 raise upload_error
             except Exception as e:
-                raise ToolError(
-                    "CREATIVE_UPLOAD_FAILED",
+                raise AdCPAdapterError(
                     f"Failed to upload creative {creative_id} to GAM: {e!s}",
+                    details={"error_code": "CREATIVE_UPLOAD_FAILED"},
                 ) from e
 
-        assert "CREATIVE_UPLOAD_FAILED" in str(exc_info.value)
+        assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
         assert creative_id in str(exc_info.value)
         assert "Network timeout" in str(exc_info.value)
 
@@ -769,11 +769,11 @@ class TestMultipleInvalidCreativesAccumulated:
             # All creatives missing URL and dimensions
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(ToolError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant")
 
             error_message = str(exc_info.value)
-            assert "INVALID_CREATIVES" in error_message
+            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
             # All three creative IDs should appear in the accumulated error
             assert "creative_1" in error_message
             assert "creative_2" in error_message
@@ -932,10 +932,10 @@ class TestCreativeIdsNotFound:
             ):
                 mock_upload.return_value = (req.packages, {})
 
-                with pytest.raises(ToolError) as exc_info:
+                with pytest.raises(AdCPNotFoundError) as exc_info:
                     await _create_media_buy_impl(req=req, ctx=pc.ctx)
 
-                assert "CREATIVES_NOT_FOUND" in str(exc_info.value)
+                assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
                 assert "creative_missing_1" in str(exc_info.value)
                 assert "creative_missing_2" in str(exc_info.value)
 
@@ -957,13 +957,13 @@ class TestCreativeIdsNotFound:
 
         assert missing_ids == {"creative_missing_1", "creative_missing_2"}
 
-        # Verify the ToolError would be raised with the correct error code
+        # Verify the AdCPNotFoundError would be raised with the correct error code
         if missing_ids:
             error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
-            with pytest.raises(ToolError) as exc_info:
-                raise ToolError("CREATIVES_NOT_FOUND", error_msg)
+            with pytest.raises(AdCPNotFoundError) as exc_info:
+                raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVES_NOT_FOUND"})
 
-            assert "CREATIVES_NOT_FOUND" in str(exc_info.value)
+            assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
 

@@ -19,39 +19,39 @@ from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
 
 
 class TestMCPErrorShapes:
     """Test that MCP tool errors have consistent structure."""
 
     @pytest.mark.asyncio
-    async def test_missing_required_field_raises_tool_error(self):
-        """MCP create_media_buy raises ToolError when required fields are missing."""
+    async def test_missing_required_field_raises_error(self):
+        """MCP create_media_buy raises AdCPValidationError when context is missing."""
         from src.core.tools.media_buy_create import create_media_buy
 
-        # Call with missing required fields (no packages, start_time, end_time)
-        with pytest.raises(ToolError) as exc_info:
+        # Call with missing context triggers AdCPValidationError (transport-agnostic)
+        with pytest.raises((AdCPValidationError, ToolError)) as exc_info:
             await create_media_buy(
                 buyer_ref="test_buyer",
                 brand_manifest={"name": "Test"},
                 packages=[],  # Empty but present; validation will catch the issue
                 start_time="2026-01-01T00:00:00Z",
                 end_time="2026-02-01T00:00:00Z",
-                ctx=None,  # Missing context triggers ToolError
+                ctx=None,  # Missing context triggers AdCPValidationError
             )
 
-        # ToolError should have a meaningful message string
+        # Error should have a meaningful message string
         error = exc_info.value
-        assert isinstance(error, ToolError)
-        assert len(str(error)) > 0, "ToolError message must not be empty"
+        assert len(str(error)) > 0, "Error message must not be empty"
 
     @pytest.mark.asyncio
-    async def test_validation_error_raises_tool_error_with_details(self):
-        """MCP create_media_buy raises ToolError for Pydantic validation failures."""
+    async def test_validation_error_raises_error_with_details(self):
+        """MCP create_media_buy raises error for Pydantic validation failures."""
         from src.core.tools.media_buy_create import create_media_buy
 
         # Provide invalid types that fail Pydantic validation
-        with pytest.raises((ToolError, ValidationError)):
+        with pytest.raises((AdCPValidationError, ToolError, ValidationError)):
             await create_media_buy(
                 buyer_ref="test_buyer",
                 brand_manifest=12345,  # Wrong type: should be dict or str
@@ -62,8 +62,8 @@ class TestMCPErrorShapes:
             )
 
     @pytest.mark.asyncio
-    async def test_auth_error_raises_tool_error(self):
-        """MCP _create_media_buy_impl raises ToolError when context is None."""
+    async def test_auth_error_raises_validation_error(self):
+        """MCP _create_media_buy_impl raises AdCPValidationError when context is None."""
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -76,8 +76,8 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        # _create_media_buy_impl requires context; passing None triggers ToolError
-        with pytest.raises(ToolError) as exc_info:
+        # _create_media_buy_impl requires context; passing None triggers AdCPValidationError
+        with pytest.raises(AdCPValidationError) as exc_info:
             await _create_media_buy_impl(req=req, ctx=None)
 
         assert "Context is required" in str(exc_info.value)
@@ -278,11 +278,11 @@ class TestListCreativesErrorShapes:
     """Test that list_creatives error paths produce consistent errors."""
 
     @pytest.mark.asyncio
-    async def test_missing_auth_raises_tool_error(self):
-        """list_creatives _impl raises ToolError when auth header is missing."""
+    async def test_missing_auth_raises_authentication_error(self):
+        """list_creatives _impl raises AdCPAuthenticationError when auth header is missing."""
         from src.core.tools.creatives.listing import _list_creatives_impl
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _list_creatives_impl(ctx=None)
 
         assert "x-adcp-auth" in str(exc_info.value).lower() or "Missing" in str(exc_info.value)
@@ -336,11 +336,11 @@ class TestCrossTransportErrorConsistency:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        # MCP path: missing context
+        # MCP path: missing context — raises AdCPValidationError (transport-agnostic)
         mcp_error = None
         try:
             await _create_media_buy_impl(req=req, ctx=None)
-        except ToolError as e:
+        except (ToolError, AdCPError) as e:
             mcp_error = e
 
         # A2A path: missing auth token
@@ -355,7 +355,7 @@ class TestCrossTransportErrorConsistency:
             a2a_error = e
 
         # Both must reject the request
-        assert mcp_error is not None, "MCP path must raise ToolError for missing context"
+        assert mcp_error is not None, "MCP path must raise error for missing context"
         assert a2a_error is not None, "A2A path must raise ServerError for missing auth"
 
         # Both errors indicate authentication/authorization failure

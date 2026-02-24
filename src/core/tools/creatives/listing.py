@@ -12,7 +12,6 @@ from adcp.types.generated_poc.media_buy.list_creatives_request import (
     Pagination,
     Sort,
 )
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
@@ -21,6 +20,7 @@ from sqlalchemy import select
 from src.core.audit_logger import get_audit_logger
 from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers import get_principal_id_from_context, log_tool_activity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
@@ -102,12 +102,12 @@ def _list_creatives_impl(
         try:
             created_after_dt = datetime.fromisoformat(created_after.replace("Z", "+00:00"))
         except ValueError:
-            raise ToolError(f"Invalid created_after date format: {created_after}")
+            raise AdCPValidationError(f"Invalid created_after date format: {created_after}")
     if created_before:
         try:
             created_before_dt = datetime.fromisoformat(created_before.replace("Z", "+00:00"))
         except ValueError:
-            raise ToolError(f"Invalid created_before date format: {created_before}")
+            raise AdCPValidationError(f"Invalid created_before date format: {created_before}")
 
     # Validate sort_order is valid Literal
     from typing import Literal
@@ -183,7 +183,7 @@ def _list_creatives_impl(
             context=context,
         )
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="list_creatives request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="list_creatives request")) from e
 
     start_time = time.time()
 
@@ -192,12 +192,12 @@ def _list_creatives_impl(
     # which are principal-specific and must be access-controlled
     principal_id = get_principal_id_from_context(ctx)
     if not principal_id:
-        raise ToolError("Missing x-adcp-auth header")
+        raise AdCPAuthenticationError("Missing x-adcp-auth header")
 
     # Get tenant information
     tenant = get_current_tenant()
     if not tenant:
-        raise ToolError("No tenant context available")
+        raise AdCPAuthenticationError("No tenant context available")
 
     creatives = []
     total_count = 0

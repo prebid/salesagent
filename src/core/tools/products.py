@@ -15,7 +15,6 @@ from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
@@ -28,6 +27,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_from_context, get_principal_object
 from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
     GetProductsResponse,
@@ -148,7 +148,7 @@ async def _get_products_impl(
     else:
         # Legacy path - extract from FastMCP Context
         if context is None:
-            raise ToolError("Context is required")
+            raise AdCPValidationError("Context is required")
         testing_ctx = get_testing_context(context)
         # For discovery endpoints, authentication is optional
         # require_valid_token=False means invalid tokens are treated like missing tokens (discovery endpoint behavior)
@@ -167,13 +167,13 @@ async def _get_products_impl(
         elif principal_id:
             # If we have principal but no tenant, something went wrong
             logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
-            raise ToolError(
+            raise AdCPValidationError(
                 f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}"
             )
         else:
             # No tenant context and no principal - cannot determine which tenant's products to return
             logger.error("[GET_PRODUCTS] No tenant context available - cannot determine which products to return")
-            raise ToolError(
+            raise AdCPAuthenticationError(
                 "Cannot determine tenant context. Please provide valid authentication or ensure tenant can be identified from request headers."
             )
 
@@ -203,9 +203,9 @@ async def _get_products_impl(
 
     # Enforce policy-based validation
     if brand_manifest_policy == "require_brand" and not offering:
-        raise ToolError("Brand manifest required by tenant policy")
+        raise AdCPAuthorizationError("Brand manifest required by tenant policy")
     elif brand_manifest_policy == "require_auth" and not principal_id:
-        raise ToolError("Authentication required by tenant policy")
+        raise AdCPAuthenticationError("Authentication required by tenant policy")
     # public policy allows all requests (no brand_manifest or auth required)
 
     # For non-public policies, we need offering for policy checks and product matching
@@ -302,7 +302,9 @@ async def _get_products_impl(
         # Always block if policy says blocked
         logger.warning(f"Brief blocked by policy: {policy_result.reason}")
         # Raise ToolError to properly signal failure to client
-        raise ToolError("POLICY_VIOLATION", policy_result.reason)
+        raise AdCPAuthorizationError(
+            policy_result.reason or "Blocked by policy", details={"error_code": "POLICY_VIOLATION"}
+        )
 
     # If restricted and manual review is required, create a task
     if (
@@ -334,9 +336,9 @@ async def _get_products_impl(
 
         # Raise error for policy violations - explicit failure, not silent return
         restrictions_list = policy_result.restrictions if policy_result.restrictions else []
-        raise ToolError(
-            "POLICY_VIOLATION",
+        raise AdCPAuthorizationError(
             f"Request violates content policy: {policy_result.reason}. Restrictions: {', '.join(restrictions_list)}",
+            details={"error_code": "POLICY_VIOLATION"},
         )
 
     # Query products directly from database
@@ -798,10 +800,10 @@ async def get_products(
         )
 
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="get_products request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
     except ValueError as e:
         # Convert ValueError from helper to ToolError with clear message
-        raise ToolError(f"Invalid get_products request: {e}") from e
+        raise AdCPValidationError(f"Invalid get_products request: {e}") from e
 
     # Call shared implementation
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly

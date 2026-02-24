@@ -4,8 +4,8 @@ from decimal import Decimal
 from unittest.mock import Mock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas import PricingModel
 from src.core.tools.media_buy_create import _validate_pricing_model_selection
 
@@ -30,7 +30,7 @@ class TestPricingValidation:
         package.bid_price = None
 
         # Should raise data integrity error
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPValidationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
         assert "has no pricing_options configured" in str(exc_info.value)
@@ -51,7 +51,7 @@ class TestPricingValidation:
         package.pricing_option_id = None
         package.bid_price = None
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPValidationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
         assert "has no pricing_options configured" in str(exc_info.value)
@@ -106,7 +106,7 @@ class TestPricingValidation:
         package.pricing_model = PricingModel.cpp
         package.bid_price = None
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPValidationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
         assert "does not offer pricing model" in str(exc_info.value)
@@ -131,7 +131,7 @@ class TestPricingValidation:
         package.pricing_model = PricingModel.cpm
         package.bid_price = None
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPValidationError) as exc_info:
             _validate_pricing_model_selection(package, product, "EUR")
 
         assert "does not offer pricing model" in str(exc_info.value)
@@ -157,10 +157,10 @@ class TestPricingValidation:
         package.pricing_model = PricingModel.cpm
         package.bid_price = None
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPValidationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
-        # ToolError message is in the second argument
+        # Error message is the first argument
         error_str = str(exc_info.value)
         assert "bid_price" in error_str and "requires" in error_str
 
@@ -184,7 +184,7 @@ class TestPricingValidation:
         package.pricing_model = PricingModel.cpm
         package.bid_price = 10.0
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPValidationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
         assert "below floor price" in str(exc_info.value)
@@ -209,7 +209,7 @@ class TestPricingValidation:
         package.pricing_model = PricingModel.cpm
         package.bid_price = None
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPValidationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
         assert "no rate specified" in str(exc_info.value)
@@ -235,7 +235,7 @@ class TestPricingValidation:
         package.pricing_model = PricingModel.cpcv
         package.bid_price = None
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPValidationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
         assert "below minimum spend" in str(exc_info.value)

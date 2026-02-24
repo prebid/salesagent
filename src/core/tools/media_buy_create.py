@@ -23,11 +23,19 @@ from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
 from adcp.types.generated_poc.core.targeting import TargetingOverlay
 from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, ValidationError
 from rich.console import Console
+
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPError,
+    AdCPNotFoundError,
+    AdCPValidationError,
+)
 
 
 class PackageAssignmentDict(TypedDict):
@@ -298,7 +306,9 @@ def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant
             + "Please ensure reference creatives are properly synced before creating media buys."
         )
         logger.error(f"[PRE-VALIDATION] {error_msg}")
-        raise ToolError("INVALID_CREATIVES", error_msg, {"creative_errors": validation_errors})
+        raise AdCPValidationError(
+            error_msg, details={"error_code": "INVALID_CREATIVES", "creative_errors": validation_errors}
+        )
 
 
 def _execute_adapter_media_buy_creation(
@@ -956,9 +966,9 @@ def _validate_pricing_model_selection(
 
     # All products must have pricing_options
     if not product.pricing_options or len(product.pricing_options) == 0:
-        raise ToolError(
-            "PRICING_ERROR",
+        raise AdCPValidationError(
             f"Product {product.product_id} has no pricing_options configured. This is a data integrity error.",
+            details={"error_code": "PRICING_ERROR"},
         )
 
     # Determine which pricing option to use
@@ -1017,15 +1027,15 @@ def _validate_pricing_model_selection(
             if campaign_currency:
                 error_msg += f" in currency {campaign_currency}"
         error_msg += f". Available options: {', '.join(available_options)}"
-        raise ToolError("PRICING_ERROR", error_msg)
+        raise AdCPValidationError(error_msg, details={"error_code": "PRICING_ERROR"})
 
     # Validate auction pricing
     if not selected_option.is_fixed:
         if not package.bid_price:
-            raise ToolError(
-                "PRICING_ERROR",
+            raise AdCPValidationError(
                 f"Package requires bid_price for auction-based {selected_option.pricing_model} pricing. "
                 f"Floor price: {selected_option.price_guidance.get('floor') if selected_option.price_guidance else 'N/A'}",
+                details={"error_code": "PRICING_ERROR"},
             )
 
         floor_price = (
@@ -1036,16 +1046,16 @@ def _validate_pricing_model_selection(
         bid_decimal = Decimal(str(package.bid_price))
 
         if bid_decimal < floor_price:
-            raise ToolError(
-                "PRICING_ERROR",
+            raise AdCPValidationError(
                 f"Bid price {package.bid_price} is below floor price {floor_price} for {selected_option.pricing_model} pricing",
+                details={"error_code": "PRICING_ERROR"},
             )
 
     # Validate fixed pricing has rate
     if selected_option.is_fixed and not selected_option.rate:
-        raise ToolError(
-            "PRICING_ERROR",
+        raise AdCPValidationError(
             f"Product {product.product_id} pricing option has is_fixed=true but no rate specified",
+            details={"error_code": "PRICING_ERROR"},
         )
 
     # Validate minimum spend per package
@@ -1056,10 +1066,10 @@ def _validate_pricing_model_selection(
             package_budget = Decimal(str(package.budget))
 
         if package_budget and package_budget < Decimal(str(selected_option.min_spend_per_package)):
-            raise ToolError(
-                "PRICING_ERROR",
+            raise AdCPValidationError(
                 f"Package budget {package_budget} {selected_option.currency} is below minimum spend "
                 f"{selected_option.min_spend_per_package} {selected_option.currency} for {selected_option.pricing_model}",
+                details={"error_code": "PRICING_ERROR"},
             )
 
     # Return validated pricing information
@@ -1114,12 +1124,12 @@ async def _validate_and_convert_format_ids(
     for idx, fmt_id in enumerate(format_ids):
         # STRICT ENFORCEMENT: Reject plain strings
         if isinstance(fmt_id, str):
-            raise ToolError(
-                "FORMAT_VALIDATION_ERROR",
+            raise AdCPValidationError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Plain string format IDs are not supported. "
                 f"Per AdCP spec, format_ids must be FormatId objects with {{agent_url, id}}. "
                 f'Example: {{"agent_url": "https://creative.adcontextprotocol.org", "id": "{fmt_id}"}}. '
                 f"Use list_creative_formats to discover available formats.",
+                details={"error_code": "FORMAT_VALIDATION_ERROR"},
             )
 
         # Extract agent_url and id from dict/object
@@ -1130,48 +1140,48 @@ async def _validate_and_convert_format_ids(
             agent_url = fmt_id.agent_url
             format_id = fmt_id.id
         else:
-            raise ToolError(
-                "FORMAT_VALIDATION_ERROR",
+            raise AdCPValidationError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure. "
                 f"Expected FormatId object with {{agent_url, id}}, got: {type(fmt_id).__name__}",
+                details={"error_code": "FORMAT_VALIDATION_ERROR"},
             )
 
         if not agent_url or not format_id:
-            raise ToolError(
-                "FORMAT_VALIDATION_ERROR",
+            raise AdCPValidationError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: FormatId object missing required fields. "
                 f"Both agent_url and id are required. Got: agent_url={agent_url!r}, id={format_id!r}",
+                details={"error_code": "FORMAT_VALIDATION_ERROR"},
             )
 
         # VALIDATION: Check agent is registered
         # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
         normalized_agent_url = normalize_agent_url(agent_url)
         if normalized_agent_url not in registered_agent_urls:
-            raise ToolError(
-                "FORMAT_VALIDATION_ERROR",
+            raise AdCPAuthorizationError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Creative agent not registered: {agent_url}. "
                 f"Registered agents: {', '.join(sorted(registered_agent_urls))}. "
                 f"Contact your administrator to register this creative agent.",
+                details={"error_code": "FORMAT_VALIDATION_ERROR"},
             )
 
         # VALIDATION: Verify format exists on agent
         try:
             format_obj = await registry.get_format(agent_url, format_id)
             if not format_obj:
-                raise ToolError(
-                    "FORMAT_VALIDATION_ERROR",
+                raise AdCPNotFoundError(
                     f"Package {package_idx + 1}, format_ids[{idx}]: Format not found on agent. "
                     f"agent_url={agent_url}, format_id={format_id!r}. "
                     f"Use list_creative_formats to discover available formats.",
+                    details={"error_code": "FORMAT_VALIDATION_ERROR"},
                 )
         except Exception as e:
-            if isinstance(e, ToolError):
+            if isinstance(e, AdCPError):
                 raise
             logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
-            raise ToolError(
-                "FORMAT_VALIDATION_ERROR",
+            raise AdCPAdapterError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Failed to verify format on agent. "
                 f"agent_url={agent_url}, format_id={format_id!r}. Error: {e}",
+                details={"error_code": "FORMAT_VALIDATION_ERROR"},
             )
 
         # Format validated - add to results
@@ -1220,14 +1230,14 @@ async def _create_media_buy_impl(
 
     # Extract testing context first
     if ctx is None:
-        raise ToolError("Context is required")
+        raise AdCPValidationError("Context is required")
 
     testing_ctx = get_testing_context(ctx)
 
     # Authentication and tenant setup
     principal_id = get_principal_id_from_context(ctx)
     if principal_id is None:
-        raise ToolError("Principal ID not found in context - authentication required")
+        raise AdCPAuthenticationError("Principal ID not found in context - authentication required")
 
     tenant = get_current_tenant()
 
@@ -1242,7 +1252,7 @@ async def _create_media_buy_impl(
                 f"Setup incomplete. Please complete the following required tasks:\n\n{task_list}\n\n"
                 f"Visit the setup checklist at /tenant/{tenant['tenant_id']}/setup-checklist for details."
             )
-            raise ToolError(error_msg)
+            raise AdCPValidationError(error_msg)
 
     # Validate principal exists BEFORE creating context (foreign key constraint)
     principal = get_principal_object(principal_id)
@@ -1603,7 +1613,7 @@ async def _create_media_buy_impl(
                                 )
                                 # Store by index (package IDs aren't generated yet)
                                 package_pricing_info_by_index[idx] = pricing_info
-                            except ToolError as e:
+                            except AdCPError as e:
                                 # Re-raise pricing validation errors
                                 raise ValueError(str(e))
 
@@ -1801,7 +1811,7 @@ async def _create_media_buy_impl(
                 logger.info("[INLINE_CREATIVE_DEBUG] Updated req.packages with creative_ids")
                 if uploaded_ids:
                     logger.info(f"Successfully uploaded creatives for {len(uploaded_ids)} packages: {uploaded_ids}")
-            except ToolError as e:
+            except AdCPError as e:
                 # Update workflow step on failure (only if step exists)
                 if step:
                     ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
@@ -2185,7 +2195,7 @@ async def _create_media_buy_impl(
                                                         "validation_error": format_error,
                                                     },
                                                 )
-                                                raise ToolError(format_error)
+                                                raise AdCPValidationError(format_error or "Format validation failed")
 
                                             logger.info(
                                                 f"[CREATIVE_ASSIGN_DEBUG] Creative {creative_id} format "
@@ -2710,7 +2720,7 @@ async def _create_media_buy_impl(
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
         try:
             _validate_creatives_before_adapter_call(packages, tenant["tenant_id"])
-        except ToolError:
+        except AdCPError:
             # Validation failed - creative validation errors already logged
             # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
             if step:
@@ -2957,7 +2967,7 @@ async def _create_media_buy_impl(
                         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
                         logger.error(error_msg)
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-                        raise ToolError("CREATIVES_NOT_FOUND", error_msg)
+                        raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVES_NOT_FOUND"})
 
                     # Validate creative formats against product formats BEFORE creating assignments
                     # This ensures creatives match the product's supported formats
@@ -3007,7 +3017,10 @@ async def _create_media_buy_impl(
                                             ctx_manager.update_workflow_step(
                                                 step.step_id, status="failed", error_message=format_error
                                             )
-                                            raise ToolError("CREATIVE_FORMAT_MISMATCH", format_error)
+                                            raise AdCPValidationError(
+                                                format_error or "Creative format mismatch",
+                                                details={"error_code": "CREATIVE_FORMAT_MISMATCH"},
+                                            )
 
                                         logger.info(
                                             f"Creative {creative_id} format validated against product {package.product_id}"
@@ -3119,8 +3132,12 @@ async def _create_media_buy_impl(
                                         )
                                         logger.error(f"[AUTO-APPROVAL] {error_msg}")
                                         # Raise exception for MCP - this will be caught and returned as error response
-                                        raise ToolError(
-                                            "INVALID_CREATIVES", error_msg, {"creative_errors": validation_errors}
+                                        raise AdCPValidationError(
+                                            error_msg,
+                                            details={
+                                                "error_code": "INVALID_CREATIVES",
+                                                "creative_errors": validation_errors,
+                                            },
                                         )
 
                                     # Upload to GAM using adapter's add_creative_assets method
@@ -3150,15 +3167,15 @@ async def _create_media_buy_impl(
                                                 f"for creative {creative_id}, not overwriting with upload result"
                                             )
                                             platform_creative_ids.append(creative.data["platform_creative_id"])
-                                except ToolError:
-                                    # Re-raise ToolError - validation failures should fail the entire operation
+                                except AdCPError:
+                                    # Re-raise AdCPError - validation failures should fail the entire operation
                                     raise
                                 except Exception as upload_error:
                                     # Other exceptions (network errors, etc.) - log and fail
                                     logger.error(f"Failed to upload creative {creative_id} to GAM: {upload_error}")
-                                    raise ToolError(
-                                        "CREATIVE_UPLOAD_FAILED",
+                                    raise AdCPAdapterError(
                                         f"Failed to upload creative {creative_id} to GAM: {str(upload_error)}",
+                                        details={"error_code": "CREATIVE_UPLOAD_FAILED"},
                                     ) from upload_error
 
                             # Create database assignment
@@ -3444,6 +3461,12 @@ async def _create_media_buy_impl(
 
         return CreateMediaBuyResult(response=modified_response, status=AdcpTaskStatus.completed.value)
 
+    except AdCPError as adcp_err:
+        # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping
+        if step:
+            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(adcp_err))
+        raise
+
     except Exception as e:
         # Update workflow step as failed on any error during execution
         if step:
@@ -3514,7 +3537,9 @@ async def _create_media_buy_impl(
             # Audit logging failure is non-critical, but we should log it
             logger.warning(f"Failed to log failed media buy creation to audit: {audit_error}")
 
-        raise ToolError("MEDIA_BUY_CREATION_ERROR", f"Failed to create media buy: {str(e)}")
+        raise AdCPAdapterError(
+            f"Failed to create media buy: {str(e)}", details={"error_code": "MEDIA_BUY_CREATION_ERROR"}
+        )
 
 
 async def create_media_buy(
@@ -3588,7 +3613,7 @@ async def create_media_buy(
             context=context,
         )
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="request")) from e
 
     result = await _create_media_buy_impl(req=req, ctx=ctx)
     return ToolResult(content=str(result), structured_content=result)
@@ -3662,7 +3687,7 @@ async def create_media_buy_raw(
             context=to_context_object(context),
         )
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="request")) from e
 
     return await _create_media_buy_impl(
         req=req,

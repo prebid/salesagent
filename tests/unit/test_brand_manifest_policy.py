@@ -12,8 +12,8 @@ import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
 from src.core.tools.products import _get_products_impl
 
 logger = logging.getLogger(__name__)
@@ -105,8 +105,8 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
         mock_get_principal_obj.return_value = None
         mock_get_testing.return_value = None
 
-        # Call implementation - should raise ToolError
-        with pytest.raises(ToolError) as exc_info:
+        # Call implementation - should raise AdCPAuthorizationError (transport-agnostic)
+        with pytest.raises(AdCPAuthorizationError) as exc_info:
             await _get_products_impl(mock_request, mock_context)
 
         # Verify error message
@@ -203,8 +203,8 @@ async def test_require_auth_policy_rejects_no_auth():
         mock_get_principal.return_value = (None, mock_tenant)  # Anonymous
         mock_get_testing.return_value = None
 
-        # Call implementation - should raise ToolError
-        with pytest.raises(ToolError) as exc_info:
+        # Call implementation - should raise AdCPAuthenticationError (transport-agnostic)
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             await _get_products_impl(mock_request, mock_context)
 
         # Verify error message

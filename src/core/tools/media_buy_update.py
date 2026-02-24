@@ -18,12 +18,12 @@ from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.targeting import TargetingOverlay
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from adcp.types.generated_poc.media_buy.package_update import PackageUpdate as UpdatePackage
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ def _verify_principal(media_buy_id: str, context: Context | ToolContext):
 
     # CRITICAL: principal_id is required for media buy updates
     if not principal_id:
-        raise ToolError(
+        raise AdCPAuthenticationError(
             "Authentication required: Missing or invalid x-adcp-auth header. Media buy updates require authentication."
         )
 
@@ -98,7 +98,7 @@ def _verify_principal(media_buy_id: str, context: Context | ToolContext):
             # CRITICAL: Verify principal_id is set (security check, not assertion)
             # Using explicit check instead of assert because asserts are removed with python -O
             if not principal_id:
-                raise ToolError("Authentication required: principal_id not found in context")
+                raise AdCPAuthenticationError("Authentication required: principal_id not found in context")
 
             # Log security violation
             security_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -704,7 +704,9 @@ def _update_media_buy_impl(
                             + "\n".join(f"  • {err}" for err in validation_errors)
                         )
                         logger.error(f"[UPDATE] {error_msg}")
-                        raise ToolError("INVALID_CREATIVES", error_msg, {"creative_errors": validation_errors})
+                        raise AdCPValidationError(
+                            error_msg, details={"error_code": "INVALID_CREATIVES", "creative_errors": validation_errors}
+                        )
 
                     # Get existing assignments for this package
                     assignment_stmt = select(DBAssignment).where(
@@ -1367,7 +1369,7 @@ def _build_update_request(
     try:
         return UpdateMediaBuyRequest(**request_params)
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="update_media_buy request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="update_media_buy request")) from e
 
 
 def update_media_buy(

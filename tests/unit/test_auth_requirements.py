@@ -85,8 +85,8 @@ class TestAuthenticationRequirements:
         """list_creatives must reject requests without authentication."""
         from src.core.tools.creatives import _list_creatives_impl
 
-        # Call without context (no auth)
-        with pytest.raises(ToolError) as exc_info:
+        # Call without context (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _list_creatives_impl(ctx=None)
 
         error_msg = str(exc_info.value)
@@ -122,8 +122,8 @@ class TestAuthenticationRequirements:
             end_time="2025-01-31T23:59:59Z",
         )
 
-        # Call without ctx (no auth)
-        with pytest.raises(ToolError) as exc_info:
+        # Call without ctx (no auth) — _impl raises AdCPValidationError or AdCPAuthenticationError (transport-agnostic)
+        with pytest.raises((AdCPValidationError, AdCPAuthenticationError)) as exc_info:
             asyncio.run(_create_media_buy_impl(req=req))
 
         error_msg = str(exc_info.value)
@@ -138,8 +138,8 @@ class TestAuthenticationRequirements:
         """update_media_buy must reject requests without authentication."""
         from src.core.tools.media_buy_update import _verify_principal
 
-        # Call without context (no auth)
-        with pytest.raises(ToolError) as exc_info:
+        # Call without context (no auth) — _verify_principal raises AdCPAuthenticationError (transport-agnostic)
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _verify_principal(media_buy_id="test_buy", context=None)
 
         error_msg = str(exc_info.value)
@@ -155,7 +155,7 @@ class TestAuthenticationRequirements:
         invalid_context.principal_id = None
         invalid_context.tenant_id = "test_tenant"
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _verify_principal(media_buy_id="test_buy", context=invalid_context)
 
         assert "Authentication required" in str(exc_info.value)
@@ -273,7 +273,7 @@ class TestAuthenticationErrorMessages:
         """Error message should be actionable for developers."""
         from src.core.tools.media_buy_update import _verify_principal
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _verify_principal(media_buy_id="test", context=None)
 
         error_msg = str(exc_info.value)

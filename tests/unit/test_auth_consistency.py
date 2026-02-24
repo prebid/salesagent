@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
 from src.services.policy_check_service import PolicyStatus
 
 # --- Helpers ---
@@ -51,7 +51,7 @@ class TestMissingTokenConsistency:
 
         # Mock get_principal_id_from_context to return None (no auth)
         with patch("src.core.tools.media_buy_create.get_principal_id_from_context", return_value=None):
-            with pytest.raises(ToolError, match="[Aa]uthentication required|[Pp]rincipal ID not found"):
+            with pytest.raises(AdCPAuthenticationError, match="[Aa]uthentication required|[Pp]rincipal ID not found"):
                 req = MagicMock()
                 await _create_media_buy_impl(req=req, ctx=ctx)
 
@@ -62,7 +62,7 @@ class TestMissingTokenConsistency:
         ctx = self._make_no_auth_context()
 
         with patch("src.core.tools.media_buy_update.get_principal_id_from_context", return_value=None):
-            with pytest.raises((ValueError, ToolError), match="required|[Aa]uthentication"):
+            with pytest.raises((ValueError, AdCPAuthenticationError), match="required|[Aa]uthentication"):
                 req = MagicMock()
                 _update_media_buy_impl(req=req, ctx=ctx)
 
@@ -83,7 +83,7 @@ class TestMissingTokenConsistency:
         ctx = self._make_no_auth_context()
 
         with patch("src.core.tools.creatives.listing.get_principal_id_from_context", return_value=None):
-            with pytest.raises(ToolError, match="[Mm]issing x-adcp-auth"):
+            with pytest.raises(AdCPAuthenticationError, match="[Mm]issing x-adcp-auth"):
                 _list_creatives_impl(ctx=ctx)
 
     def test_get_media_buy_delivery_missing_auth_returns_error_response(self):
@@ -113,12 +113,12 @@ class TestMissingTokenConsistency:
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        # create_media_buy raises ToolError with None context
-        with pytest.raises((ToolError, ValueError)):
+        # create_media_buy raises AdCPValidationError with None context
+        with pytest.raises((AdCPValidationError, ValueError)):
             await _create_media_buy_impl(req=MagicMock(), ctx=None)
 
         # update_media_buy raises ValueError with None context
-        with pytest.raises((ValueError, ToolError)):
+        with pytest.raises((ValueError, AdCPAuthenticationError)):
             _update_media_buy_impl(req=MagicMock(), ctx=None)
 
 
@@ -255,7 +255,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
             try:
                 result = await _get_products_impl(req, ctx)
                 # If it gets past auth, it succeeded (may fail later on business logic)
-            except ToolError as e:
+            except (ToolError, AdCPError) as e:
                 # Auth errors are failures; business logic errors are OK
                 assert "auth" not in str(e).lower(), f"Discovery endpoint should not require auth: {e}"
 
@@ -376,7 +376,7 @@ class TestDiscoveryEndpointsInvalidAuth:
 
             try:
                 await _get_products_impl(req, ctx)
-            except ToolError:
+            except (ToolError, AdCPError):
                 pass  # Business logic errors OK
 
             # Verify require_valid_token=False was passed
@@ -409,7 +409,7 @@ class TestDiscoveryEndpointsInvalidAuth:
 
             try:
                 _list_creative_formats_impl(None, ctx)
-            except ToolError:
+            except (ToolError, AdCPError):
                 pass  # Business logic errors OK
 
             mock_auth.assert_called_once_with(ctx, require_valid_token=False)
@@ -438,7 +438,7 @@ class TestDiscoveryEndpointsInvalidAuth:
 
             try:
                 _list_authorized_properties_impl(req=None, context=ctx)
-            except ToolError:
+            except (ToolError, AdCPError):
                 pass  # Business logic errors OK
 
             mock_auth.assert_called_once_with(ctx, require_valid_token=False)

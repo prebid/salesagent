@@ -10,8 +10,8 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPAuthorizationError, AdCPError
 from src.core.tools.products import _get_products_impl
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 from tests.helpers.adcp_factories import (
@@ -411,10 +411,10 @@ class TestPolicyBlockedPipelineRejection:
             mock_policy_inst.check_brief_compliance = AsyncMock(return_value=policy_result)
             mock_policy_cls.return_value = mock_policy_inst
 
-            with pytest.raises(ToolError) as exc_info:
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
                 await _get_products_impl(_make_mock_request(brief="Online gambling"), _make_mock_context())
 
-        assert "POLICY_VIOLATION" in str(exc_info.value)
+        assert exc_info.value.details.get("error_code") == "POLICY_VIOLATION"
         assert "gambling" in str(exc_info.value).lower()
 
 
@@ -458,10 +458,10 @@ class TestRestrictedBriefManualReviewRejection:
             # DB session for audit log in restricted+manual_review branch
             mock_db.return_value.__enter__.return_value = MagicMock()
 
-            with pytest.raises(ToolError) as exc_info:
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
                 await _get_products_impl(_make_mock_request(brief="Craft beer festival"), _make_mock_context())
 
-        assert "POLICY_VIOLATION" in str(exc_info.value)
+        assert exc_info.value.details.get("error_code") == "POLICY_VIOLATION"
         assert "alcohol" in str(exc_info.value).lower()
 
 
@@ -751,9 +751,11 @@ class TestBriefPolicyComplianceMatrix:
             mock_policy_cls.return_value = mock_policy_inst
 
             if expect_error:
-                with pytest.raises(ToolError) as exc_info:
+                with pytest.raises(AdCPError) as exc_info:
                     await _get_products_impl(_make_mock_request(brief="test"), _make_mock_context())
-                assert error_substring in str(exc_info.value)
+                error_str = str(exc_info.value)
+                details = getattr(exc_info.value, "details", {}) or {}
+                assert error_substring in error_str or details.get("error_code") == error_substring
             else:
                 response = await _get_products_impl(_make_mock_request(brief="test"), _make_mock_context())
                 assert response is not None
