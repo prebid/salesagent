@@ -14,8 +14,8 @@ from pydantic import BaseModel
 
 from src.core.auth import get_principal_from_token
 from src.core.config_loader import set_current_tenant
-from src.core.product_conversion import add_v2_compat_to_products, needs_v2_compat
 from src.core.tools import products as products_module
+from src.core.version_compat import apply_version_compat
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +89,8 @@ async def get_products(body: GetProductsBody, request: Request):
             content={"error_code": "INTERNAL_ERROR", "message": str(e), "details": None},
         )
 
-    # Serialize and apply version compat
+    # Serialize and apply version compat via registry
     result = response.model_dump(mode="json")
-    if needs_v2_compat(body.adcp_version) and "products" in result:
-        result["products"] = add_v2_compat_to_products(result["products"])
+    result = apply_version_compat("get_products", result, body.adcp_version)
 
     return result

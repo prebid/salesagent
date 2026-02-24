@@ -28,7 +28,6 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_from_context, get_principal_object
 from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
-from src.core.product_conversion import add_v2_compat_to_products, needs_v2_compat
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
     GetProductsResponse,
@@ -811,8 +810,9 @@ async def get_products(
     # Return ToolResult with human-readable text and structured data
     response_dict = response.model_dump(mode="json")
     # Apply v2.x backward-compat fields only for pre-3.0 clients
-    if needs_v2_compat(adcp_version) and "products" in response_dict:
-        response_dict["products"] = add_v2_compat_to_products(response_dict["products"])
+    from src.core.version_compat import apply_version_compat
+
+    response_dict = apply_version_compat("get_products", response_dict, adcp_version)
     return ToolResult(content=str(response), structured_content=response_dict)
 
 

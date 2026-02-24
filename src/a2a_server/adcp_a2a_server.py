@@ -49,7 +49,6 @@ from src.core.auth_utils import get_principal_from_token
 from src.core.config_loader import get_current_tenant
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.domain_config import get_a2a_server_url
-from src.core.product_conversion import add_v2_compat_to_products, needs_v2_compat
 from src.core.schemas import CreativeStatusEnum
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
@@ -1512,17 +1511,14 @@ class AdCPRequestHandler(RequestHandler):
             )
 
             # Apply v2 compat for pre-3.0 clients at the boundary
-            adcp_version = parameters.get("adcp_version")
-            if needs_v2_compat(adcp_version):
-                if isinstance(response, dict):
-                    response_data = response
-                else:
-                    response_data = response.model_dump(mode="json")
-                if "products" in response_data:
-                    response_data["products"] = add_v2_compat_to_products(response_data["products"])
-                return response_data
+            from src.core.version_compat import apply_version_compat
 
-            return response
+            adcp_version = parameters.get("adcp_version")
+            if isinstance(response, dict):
+                response_data = response
+            else:
+                response_data = response.model_dump(mode="json")
+            return apply_version_compat("get_products", response_data, adcp_version)
 
         except Exception as e:
             logger.error(f"Error in get_products skill: {e}")
@@ -2143,12 +2139,14 @@ class AdCPRequestHandler(RequestHandler):
             )
 
             # Convert to A2A response format with v2.x backward compatibility
+            from src.core.version_compat import apply_version_compat
+
             products = [product.model_dump(mode="json") for product in response.products]
-            products = add_v2_compat_to_products(products)
-            return {
+            response_data = {
                 "products": products,
                 "message": str(response),  # Use __str__ method for human-readable message
             }
+            return apply_version_compat("get_products", response_data, None)
 
         except Exception as e:
             logger.error(f"Error getting products: {e}")
