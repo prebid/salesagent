@@ -94,6 +94,7 @@ dev = [
     "types-requests>=2.32.4.20250913",
     "types-pytz>=2025.2.0.20250809",
     "types-waitress>=3.0.1.20250801",
+    "pytest-json-report>=1.5.0",
 ]
 
 [tool.black]
