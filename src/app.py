@@ -47,6 +47,22 @@ app.mount("/mcp", mcp_app)
 
 
 # ---------------------------------------------------------------------------
+# AdCP exception handlers — translate typed exceptions to HTTP responses.
+# ---------------------------------------------------------------------------
+
+from src.core.exceptions import AdCPError  # noqa: E402
+
+
+@app.exception_handler(AdCPError)
+async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
+    """Convert AdCP exceptions to structured JSON error responses."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.to_dict(),
+    )
+
+
+# ---------------------------------------------------------------------------
 # A2A Integration — add routes directly to the FastAPI app (not as sub-app)
 # so ContextVars propagate correctly within the same ASGI scope.
 # ---------------------------------------------------------------------------
