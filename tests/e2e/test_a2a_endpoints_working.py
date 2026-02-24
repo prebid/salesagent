@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 def _a2a_base_url() -> str:
     """Get A2A server base URL from environment (supports dynamic ports)."""
-    port = os.getenv("A2A_PORT", "8091")
+    port = os.getenv("ADCP_SALES_PORT", "8080")
     return f"http://localhost:{port}"
 
 

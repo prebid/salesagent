@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 def _a2a_base_url() -> str:
     """Get A2A server base URL from environment (supports dynamic ports)."""
-    port = os.getenv("A2A_PORT", "8091")
+    port = os.getenv("ADCP_SALES_PORT", "8080")
     return f"http://localhost:{port}"
 
 
@@ -225,8 +225,8 @@ class TestHTTPBehaviorRegression:
 
     def test_middleware_handles_both_a2a_paths(self):
         """Test that middleware handles both /a2a and /a2a/ paths."""
-        # Read the A2A server file to verify middleware logic
-        file_path = os.path.join(os.path.dirname(__file__), "..", "..", "src", "a2a_server", "adcp_a2a_server.py")
+        # Read the app file to verify middleware logic (migrated to FastAPI)
+        file_path = os.path.join(os.path.dirname(__file__), "..", "..", "src", "app.py")
 
         with open(file_path) as f:
             content = f.read()

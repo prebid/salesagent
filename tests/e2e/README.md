@@ -39,9 +39,7 @@ tests/e2e/
 3. **Environment variables** (.env file):
    ```bash
    GEMINI_API_KEY=your-key-here
-   ADCP_SALES_PORT=8012  # MCP server port
-   A2A_PORT=8091         # A2A server port
-   ADMIN_UI_PORT=8003    # Admin UI port
+   ADCP_SALES_PORT=8080  # Unified server port (MCP + A2A + Admin all on same port)
    ```
 
 ### Test Execution Modes

@@ -741,9 +741,7 @@ See `docs/development/schema-alignment.md` for detailed patterns.
 
 **Solution**: Update `.env` file:
 ```bash
-ADMIN_UI_PORT=8001  # Change from conflicting port
-ADCP_SALES_PORT=8080
-A2A_PORT=8091
+ADCP_SALES_PORT=8080  # Unified server port (MCP + A2A + Admin all on same port)
 ```
 
 ## Additional Resources

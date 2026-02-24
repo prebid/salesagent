@@ -239,7 +239,7 @@ def get_tenant_redirect_uri(tenant: Tenant) -> str:
         base = f"https://{fly_app}.fly.dev"
     else:
         # Local development fallback
-        port = os.environ.get("ADMIN_UI_PORT", "8001")
+        port = os.environ.get("ADCP_SALES_PORT", "8080")
         base = f"http://localhost:{port}"
 
     return f"{base}/auth/oidc/callback"

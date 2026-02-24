@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 import pytest
 import requests
 
-BASE_URL = f"http://localhost:{os.environ.get('ADMIN_UI_PORT', '8001')}"
+BASE_URL = f"http://localhost:{os.environ.get('ADCP_SALES_PORT', '8080')}"
 TENANT_ID = "default"
 
 # Track results

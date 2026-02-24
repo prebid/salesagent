@@ -27,7 +27,6 @@ import pytest
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
-DEFAULT_A2A_PORT = int(os.getenv("A2A_PORT", "8091"))
 DEFAULT_AUTH_TOKEN = os.getenv("ADCP_TEST_TOKEN", "ci-test-token")
 
 

@@ -22,8 +22,8 @@ class TestLandingPages:
     """Test landing page routing for different domain types."""
 
     def _get_base_url(self) -> str:
-        """Get base URL for tests (supports dynamic ports via ADMIN_UI_PORT env var)."""
-        port = os.getenv("ADMIN_UI_PORT", "8001")
+        """Get base URL for tests (supports dynamic ports via ADCP_SALES_PORT env var)."""
+        port = os.getenv("ADCP_SALES_PORT", "8080")
         return os.getenv("TEST_BASE_URL", f"http://localhost:{port}")
 
     @pytest.mark.integration
@@ -154,7 +154,7 @@ class TestLandingPages:
             response = requests.get(
                 f"{base_url}/",
                 headers={
-                    "Host": f"localhost:{os.getenv('ADMIN_UI_PORT', '8001')}",  # Backend host
+                    "Host": f"localhost:{os.getenv('ADCP_SALES_PORT', '8080')}",  # Backend host
                     "Apx-Incoming-Host": "admin.sales-agent.example.com",  # Proxied admin host
                 },
                 timeout=5,

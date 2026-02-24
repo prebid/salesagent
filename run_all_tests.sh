@@ -12,6 +12,14 @@ set -e  # Exit on first error
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
+# Source .env file if it exists (machine-specific settings like GAM_SERVICE_ACCOUNT_KEY_FILE)
+# docker-compose reads .env natively, but pytest needs these in os.environ
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+fi
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -73,9 +81,7 @@ def find_free_port_block(count=2, start=50000, end=60000):
 ports = find_free_port_block()
 print(' '.join(map(str, ports)))
 ")
-# A2A and Admin share the same port as MCP (unified FastAPI process)
-A2A_PORT=$MCP_PORT
-ADMIN_PORT=$MCP_PORT
+# All services (A2A, Admin) share the same port as MCP (unified FastAPI process)
 
 echo -e "${GREEN}✓ Using dynamic ports: PostgreSQL=$POSTGRES_PORT, Server=$MCP_PORT (MCP+A2A+Admin)${NC}"
 echo ""
@@ -125,16 +131,12 @@ def find_free_port_block(count=2, start=50000, end=60000):
 ports = find_free_port_block()
 print(' '.join(map(str, ports)))
 ")
-        A2A_PORT=$MCP_PORT
-        ADMIN_PORT=$MCP_PORT
         echo "Using new ports: PostgreSQL=${POSTGRES_PORT}, Server=${MCP_PORT} (MCP+A2A+Admin)"
     fi
 
     # Export environment for docker-compose.e2e.yml port mappings
     export POSTGRES_PORT
     export ADCP_SALES_PORT=$MCP_PORT
-    export A2A_PORT
-    export ADMIN_UI_PORT=$ADMIN_PORT
     # DATABASE_URL is used by both app code AND integration tests
     # Integration tests ignore the database name and create unique databases per test
     export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp_test"
@@ -349,7 +351,7 @@ if [ "$MODE" == "ci" ]; then
         # Pass flag to tell E2E tests to use existing services
         # conftest.py will start/stop services with --build flag to ensure fresh images
         # Explicitly set standard ports (overrides any workspace-specific CONDUCTOR_* vars)
-        if ! ADCP_SALES_PORT=$MCP_PORT A2A_PORT=$A2A_PORT ADMIN_UI_PORT=$ADMIN_PORT POSTGRES_PORT=$POSTGRES_PORT ADCP_TESTING=true GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}" uv run pytest tests/e2e/ -q --tb=line -q; then
+        if ! ADCP_SALES_PORT=$MCP_PORT POSTGRES_PORT=$POSTGRES_PORT ADCP_TESTING=true GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}" uv run pytest tests/e2e/ -q --tb=line -q; then
             echo -e "${RED}❌ E2E tests failed!${NC}"
             exit 1
         fi
