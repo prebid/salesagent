@@ -39,6 +39,9 @@ mcp_app = mcp.http_app(path="/")
 # future app-level startup/shutdown hooks fire correctly.
 app = FastAPI(
     title="AdCP Sales Agent",
+    description="Unified REST API for the AdCP Sales Agent. "
+    "Also serves MCP at /mcp and A2A at /a2a.",
+    version="1.0.0",
     lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
 )
 
