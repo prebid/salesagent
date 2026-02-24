@@ -32,6 +32,7 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
+from src.core.exceptions import AdCPAdapterError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
@@ -48,7 +49,7 @@ class TestMinimumSpendValidation:
     @pytest.fixture
     def setup_test_data(self, integration_db):
         """Set up test tenant with products and currency-specific limits."""
-        from src.core.config_loader import set_current_tenant
+        from src.core.config_loader import get_tenant_by_id, set_current_tenant
 
         with get_db_session() as session:
             now = datetime.now(UTC)
@@ -244,8 +245,8 @@ class TestMinimumSpendValidation:
 
             session.commit()
 
-            # Set current tenant
-            set_current_tenant("test_minspend_tenant")
+            # Set current tenant (must be a dict, not a string)
+            set_current_tenant(get_tenant_by_id("test_minspend_tenant"))
 
         # Return pricing_option_ids for tests (database-generated IDs as strings)
         # Eager-load pricing_options to avoid DetachedInstanceError
@@ -468,7 +469,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises((ToolError, AdCPAdapterError)) as exc_info:
             await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify the error message indicates adapter rejection

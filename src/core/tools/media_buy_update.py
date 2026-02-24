@@ -208,7 +208,7 @@ def _update_media_buy_impl(
             request_data=request_data_for_workflow,
         )
 
-    principal = get_principal_object(principal_id)  # Now guaranteed to be str
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)  # Now guaranteed to be str
     if not principal:
         error_msg = f"Principal {principal_id} not found"
         response_data = UpdateMediaBuyError(

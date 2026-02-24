@@ -209,7 +209,7 @@ console.print(f"[bold cyan]🔌 Using adapter: {SELECTED_ADAPTER.upper()}[/bold 
 # Dry run logs are now handled by the adapters themselves
 
 
-def get_product_catalog() -> list[Product]:
+def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
     """Get products for the current tenant.
 
     Uses shared convert_product_model_to_schema() to ensure consistent
@@ -219,12 +219,14 @@ def get_product_catalog() -> list[Product]:
 
     from src.core.product_conversion import convert_product_model_to_schema
 
-    tenant = get_current_tenant()
+    if tenant_id is None:
+        tenant = get_current_tenant()
+        tenant_id = tenant["tenant_id"]
 
     with get_db_session() as session:
         stmt = (
             select(ModelProduct)
-            .filter_by(tenant_id=tenant["tenant_id"])
+            .filter_by(tenant_id=tenant_id)
             .options(selectinload(ModelProduct.pricing_options))
         )
         products = session.scalars(stmt).all()

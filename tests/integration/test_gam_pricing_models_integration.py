@@ -14,6 +14,7 @@ from decimal import Decimal
 import pytest
 
 from src.core.database.database_session import get_db_session
+from src.core.exceptions import AdCPAdapterError
 from src.core.database.models import (
     AdapterConfig,
     CurrencyLimit,
@@ -675,7 +676,8 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
 
     # Auction CPC should be rejected because adcp library v2.5.0 doesn't support CpcAuctionPricingOption
     # Only CpcPricingOption exists, which requires is_fixed=true
-    with pytest.raises(ToolError) as exc_info:
+    # When calling _impl directly, AdCPAdapterError propagates (MCP wrapper converts to ToolError)
+    with pytest.raises((ToolError, AdCPAdapterError)) as exc_info:
         await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify error message explains the limitation

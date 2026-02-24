@@ -157,7 +157,7 @@ async def _get_products_impl(
         )
 
     # Get the Principal object with ad server mappings
-    principal = get_principal_object(principal_id) if principal_id else None
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
     # Unwrap BrandManifestReference (RootModel[BrandManifest | AnyUrl]) to inner value.
     # After unwrapping, brand_manifest_unwrapped is BrandManifest, AnyUrl, or None.

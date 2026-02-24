@@ -69,7 +69,7 @@ def _update_performance_index_impl(
         raise AdCPAuthenticationError("Principal ID not found in identity - authentication required")
 
     # Get the Principal object
-    principal = get_principal_object(principal_id)
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         raise AdCPNotFoundError(f"Principal {principal_id} not found")
 

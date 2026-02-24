@@ -387,7 +387,7 @@ async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
 
     with (
         patch(
-            "src.services.delivery_webhook_scheduler.ResolvedIdentity",
+            "src.core.resolved_identity.ResolvedIdentity",
             side_effect=create_test_identity,
         ),
         patch.object(scheduler.webhook_service, "send_notification", new_callable=AsyncMock) as mock_send,

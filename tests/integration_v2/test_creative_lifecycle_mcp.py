@@ -1043,16 +1043,19 @@ class TestCreativeLifecycleMCP:
         # Create media buy with creative_ids in packages
         creative_ids = [c["creative_id"] for c in sample_creatives]
 
+        # Build ResolvedIdentity instead of patching removed auth functions
+        from src.core.resolved_identity import ResolvedIdentity
+        from src.core.testing_hooks import AdCPTestContext
+
+        identity = ResolvedIdentity(
+            principal_id=self.test_principal_id,
+            tenant_id=self.test_tenant_id,
+            tenant={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="creative_lifecycle_test"),
+            protocol="mcp",
+        )
+
         with (
-            # Patch media_buy_create module's imports (separate from creatives module)
-            patch(
-                "src.core.tools.media_buy_create.get_principal_id_from_context",
-                return_value=self.test_principal_id,
-            ),
-            patch(
-                "src.core.helpers.context_helpers.ensure_tenant_context",
-                return_value={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
-            ),
             patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter,
             patch("src.core.main.get_product_catalog") as mock_catalog,
@@ -1147,7 +1150,7 @@ class TestCreativeLifecycleMCP:
                 start_time=datetime.now(UTC) + timedelta(days=1),
                 end_time=datetime.now(UTC) + timedelta(days=30),
                 po_number="PO-TEST-123",
-                ctx=mock_context,
+                identity=identity,
             )
 
             # Verify response -- create_media_buy_raw returns CreateMediaBuyResult

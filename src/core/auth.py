@@ -298,20 +298,24 @@ def get_principal_from_context(
     return (principal_id, tenant_context)
 
 
-def get_principal_adapter_mapping(principal_id: str) -> dict[str, Any]:
+def get_principal_adapter_mapping(principal_id: str, tenant_id: str | None = None) -> dict[str, Any]:
     """Get the platform mappings for a principal."""
-    tenant = get_current_tenant()
+    if tenant_id is None:
+        tenant = get_current_tenant()
+        tenant_id = tenant["tenant_id"]
     with get_db_session() as session:
-        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant["tenant_id"])
+        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant_id)
         principal = session.scalars(stmt).first()
         return principal.platform_mappings if principal else {}
 
 
-def get_principal_object(principal_id: str) -> Principal | None:
+def get_principal_object(principal_id: str, tenant_id: str | None = None) -> Principal | None:
     """Get a Principal object for the given principal_id."""
-    tenant = get_current_tenant()
+    if tenant_id is None:
+        tenant = get_current_tenant()
+        tenant_id = tenant["tenant_id"]
     with get_db_session() as session:
-        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant["tenant_id"])
+        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant_id)
         principal = session.scalars(stmt).first()
 
         if principal:
@@ -323,9 +327,9 @@ def get_principal_object(principal_id: str) -> Principal | None:
     return None
 
 
-def get_adapter_principal_id(principal_id: str, adapter: str) -> str | None:
+def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | None = None) -> str | None:
     """Get the adapter-specific ID for a principal."""
-    mappings = get_principal_adapter_mapping(principal_id)
+    mappings = get_principal_adapter_mapping(principal_id, tenant_id=tenant_id)
 
     # Map adapter names to their specific fields
     adapter_field_map = {

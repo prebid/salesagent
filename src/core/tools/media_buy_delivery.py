@@ -86,7 +86,7 @@ def _get_media_buy_delivery_impl(
         )
 
     # Get the Principal object
-    principal = get_principal_object(principal_id)
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         # Return AdCP-compliant error response
         # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??

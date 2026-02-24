@@ -102,7 +102,7 @@ def _get_adcp_capabilities_impl(
     adapter = None
     try:
         # Get the Principal object to pass to adapter
-        principal = get_principal_object(principal_id) if principal_id else None
+        principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
         if principal:
             adapter = get_adapter(principal, dry_run=True, tenant=tenant)

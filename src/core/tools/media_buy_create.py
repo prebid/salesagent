@@ -1261,7 +1261,7 @@ async def _create_media_buy_impl(
             raise AdCPValidationError(error_msg)
 
     # Validate principal exists BEFORE creating context (foreign key constraint)
-    principal = get_principal_object(principal_id)
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         error_msg = f"Principal {principal_id} not found"
         # Cannot create context or workflow step without valid principal
@@ -2264,7 +2264,7 @@ async def _create_media_buy_impl(
         # Lazy import to avoid circular dependency with main.py
         from src.core.main import get_product_catalog
 
-        catalog = get_product_catalog()
+        catalog = get_product_catalog(tenant_id=identity.tenant_id)
         product_ids = req.get_product_ids()
         products_in_buy = [p for p in catalog if p.product_id in product_ids]
 

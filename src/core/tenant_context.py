@@ -191,6 +191,14 @@ class LazyTenantContext:
         """Check if the full tenant has been loaded from DB."""
         return self._resolved is not None
 
+    def ensure_resolved(self) -> "TenantContext":
+        """Force DB load and ContextVar population.
+
+        Call at the transport boundary to guarantee that downstream code
+        reading from get_current_tenant() sees a valid tenant dict.
+        """
+        return self._resolve()
+
     # --- tenant_id is always available without DB ---
 
     @property

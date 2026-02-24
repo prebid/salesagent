@@ -209,7 +209,7 @@ async def _activate_signal_impl(
     # Get the Principal object with ad server mappings
     if not principal_id:
         raise AdCPAuthenticationError("Authentication required for signal activation")
-    principal = get_principal_object(principal_id)
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
 
     # Apply testing hooks
     if not identity:
