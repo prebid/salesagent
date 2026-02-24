@@ -73,7 +73,6 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     get_principal_object,
 )
-from src.core.config_loader import get_current_tenant
 from src.core.context_manager import get_context_manager
 from src.core.database.models import MediaBuy
 from src.core.database.models import Principal as ModelPrincipal
@@ -320,6 +319,7 @@ def _execute_adapter_media_buy_creation(
     package_pricing_info: dict[str, dict[str, Any]],
     principal: Principal,
     testing_ctx: TestingContext | None = None,
+    tenant: Any = None,
 ) -> schemas.CreateMediaBuyResponse:
     """Execute adapter's create_media_buy call.
 
@@ -341,9 +341,9 @@ def _execute_adapter_media_buy_creation(
     Raises:
         Exception: If adapter creation fails (with detailed logging)
     """
-    # Get adapter using helper (loads config from DB and respects tenant context)
+    # Get adapter using helper
     dry_run = testing_ctx.dry_run if testing_ctx else False
-    adapter = get_adapter(principal, dry_run=dry_run, testing_context=testing_ctx)
+    adapter = get_adapter(principal, dry_run=dry_run, testing_context=testing_ctx, tenant=tenant)
 
     # Call adapter with detailed error logging
     try:
@@ -728,6 +728,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             package_pricing_info,
             principal,
             testing_ctx,
+            tenant=tenant_dict,
         )
 
         # Check if adapter returned an error response
@@ -861,7 +862,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
 
                     # Get adapter and upload creatives
-                    adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx)
+                    adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_dict)
 
                     # Call adapter's add_creative_assets method
                     # For GAM, the media_buy_id is the GAM order ID
@@ -897,7 +898,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         # 2. Creatives may have been uploaded after the initial approval attempt
         logger.info(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM")
         try:
-            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx)
+            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_dict)
             if hasattr(adapter, "orders_manager") and adapter.orders_manager:
                 approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
                 if approval_success:
@@ -1823,7 +1824,7 @@ async def _create_media_buy_impl(
 
         # Get the appropriate adapter with testing context
         # Use dry_run from testing context (which comes from config or testing flags)
-        adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx)
+        adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
 
         # Check if manual approval is required
         # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback
@@ -2738,7 +2739,7 @@ async def _create_media_buy_impl(
         # This uses the same function as manual approval to ensure consistency across adapters
         try:
             response = _execute_adapter_media_buy_creation(
-                req, packages, start_time, end_time, package_pricing_info, principal, testing_ctx
+                req, packages, start_time, end_time, package_pricing_info, principal, testing_ctx, tenant=tenant
             )
         except Exception as adapter_error:
             raise
@@ -2803,7 +2804,6 @@ async def _create_media_buy_impl(
         )
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
-        tenant = get_current_tenant()
         with get_db_session() as session:
             new_media_buy = MediaBuy(
                 media_buy_id=response.media_buy_id,

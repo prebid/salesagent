@@ -15,7 +15,7 @@ from fastmcp.server.context import Context
 from sqlalchemy import func, select
 
 from src.core.audit_logger import get_audit_logger
-from src.core.config_loader import set_current_tenant
+
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
@@ -58,7 +58,6 @@ def list_tasks(
 
     principal_id = identity.principal_id
     tenant = identity.tenant
-    set_current_tenant(tenant)
 
     with get_db_session() as session:
         stmt = select(WorkflowStep).join(DBContext).filter(DBContext.tenant_id == tenant["tenant_id"])
@@ -144,7 +143,6 @@ def get_task(task_id: str, context: Context | None = None, identity: ResolvedIde
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
 
     tenant = identity.tenant
-    set_current_tenant(tenant)
 
     with get_db_session() as session:
         stmt = (
@@ -221,7 +219,6 @@ def complete_task(
 
     principal_id = identity.principal_id
     tenant = identity.tenant
-    set_current_tenant(tenant)
 
     if status not in ["completed", "failed"]:
         raise ValueError(f"Invalid status '{status}'. Must be 'completed' or 'failed'")

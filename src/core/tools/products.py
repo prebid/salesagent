@@ -25,7 +25,6 @@ from sqlalchemy.orm import joinedload
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
-from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
@@ -142,10 +141,8 @@ async def _get_products_impl(
     principal_id: str | None = identity.principal_id
     tenant: dict[str, Any] = identity.tenant if identity.tenant else {}
 
-    # Set tenant context for helpers that require it
     if tenant:
-        set_current_tenant(tenant)
-        logger.info(f"[GET_PRODUCTS] Set tenant context: {tenant['tenant_id']}")
+        logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
     elif principal_id:
         # If we have principal but no tenant, something went wrong
         logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
@@ -682,7 +679,7 @@ async def _get_products_impl(
             from src.core.helpers.adapter_helpers import get_adapter
 
             # Get adapter in dry-run mode (no actual ad server calls)
-            adapter = get_adapter(principal, dry_run=True)
+            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
 
             supported_models = adapter.get_supported_pricing_models()
 
@@ -853,11 +850,11 @@ async def get_products_raw(
     return await _get_products_impl(req, identity)
 
 
-def get_product_catalog() -> list[Product]:
-    """Get products for the current tenant.
+def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
+    """Get products for a tenant.
 
-    Helper function to retrieve all products for the current tenant with their
-    pricing options. Used by other tools that need product data.
+    Args:
+        tenant_id: Tenant ID to load products for. Falls back to ContextVar if not provided.
 
     Returns:
         List of Product objects with full pricing options
@@ -865,15 +862,17 @@ def get_product_catalog() -> list[Product]:
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
-    from src.core.config_loader import get_current_tenant
     from src.core.database.models import Product as ModelProduct
 
-    tenant = get_current_tenant()
+    if tenant_id is None:
+        from src.core.config_loader import get_current_tenant
+
+        tenant_id = get_current_tenant()["tenant_id"]
 
     with get_db_session() as session:
         stmt = (
             select(ModelProduct)
-            .filter_by(tenant_id=tenant["tenant_id"])
+            .filter_by(tenant_id=tenant_id)
             .options(
                 selectinload(ModelProduct.pricing_options),
                 selectinload(ModelProduct.inventory_profile),  # Avoid N+1 query

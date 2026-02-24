@@ -74,7 +74,7 @@ def _update_performance_index_impl(
         raise AdCPNotFoundError(f"Principal {principal_id} not found")
 
     # Get the appropriate adapter (no dry_run support for performance updates)
-    adapter = get_adapter(principal, dry_run=False)
+    adapter = get_adapter(principal, dry_run=False, tenant=tenant)
 
     # Convert ProductPerformance to PackagePerformance for the adapter
     package_performance = [

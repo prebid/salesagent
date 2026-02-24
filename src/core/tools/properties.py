@@ -17,7 +17,6 @@ from fastmcp.tools.tool import ToolResult
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
-from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
@@ -55,12 +54,6 @@ def _list_authorized_properties_impl(
     # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id if identity else None
     tenant = identity.tenant if identity else None
-
-    # Set tenant context if returned
-    if identity and identity.tenant:
-        set_current_tenant(identity.tenant)
-    else:
-        tenant = get_current_tenant()
 
     if not tenant:
         raise AdCPAuthenticationError(

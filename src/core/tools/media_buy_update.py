@@ -224,7 +224,7 @@ def _update_media_buy_impl(
             )
         return response_data
 
-    adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx)
+    adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
     today = req.today or date.today()
 
     # Dry-run mode: Return simulated response without any database writes

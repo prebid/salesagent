@@ -106,9 +106,14 @@ def _get_media_buy_delivery_impl(
             context=context_val,
         )
 
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
+
     # Get the appropriate adapter
     # Use testing_ctx.dry_run if in testing mode, otherwise False
-    adapter = get_adapter(principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx)
+    adapter = get_adapter(principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx, tenant=tenant)
 
     # Determine reporting period
     if req.start_date and req.end_date:
@@ -141,11 +146,6 @@ def _get_media_buy_delivery_impl(
 
     # Determine reference date for status calculations use end_date, it either will be today or the user provided end_date.
     reference_date = end_dt.date()
-
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
 
     # Determine which media buys to fetch from database
 

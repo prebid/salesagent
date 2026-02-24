@@ -29,7 +29,6 @@ from fastmcp.tools.tool import ToolResult
 from sqlalchemy import select
 
 from src.core.auth import get_principal_object
-from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner
 from src.core.helpers.activity_helpers import log_tool_activity
@@ -84,16 +83,6 @@ def _get_adcp_capabilities_impl(
     principal_id = identity.principal_id if identity else None
     tenant = identity.tenant if identity else None
 
-    # Set tenant context if available, or try to get existing context
-    if tenant:
-        set_current_tenant(tenant)
-    else:
-        try:
-            tenant = get_current_tenant()
-        except RuntimeError:
-            # No tenant context available - return minimal capabilities
-            tenant = None
-
     if not tenant:
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
@@ -116,7 +105,7 @@ def _get_adcp_capabilities_impl(
         principal = get_principal_object(principal_id) if principal_id else None
 
         if principal:
-            adapter = get_adapter(principal, dry_run=True)
+            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
             if adapter and hasattr(adapter, "default_channels"):
                 for channel_name in adapter.default_channels:
                     if channel_name.lower() in CHANNEL_MAPPING:

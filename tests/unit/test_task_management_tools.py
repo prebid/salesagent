@@ -78,7 +78,7 @@ class TestListTasksTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-            patch("src.core.tools.task_management.set_current_tenant"),
+
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             result = list_tasks_fn(identity=identity)
@@ -100,7 +100,7 @@ class TestListTasksTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-            patch("src.core.tools.task_management.set_current_tenant"),
+
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             result = list_tasks_fn(status="requires_approval", identity=identity)
@@ -169,7 +169,7 @@ class TestGetTaskTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-            patch("src.core.tools.task_management.set_current_tenant"),
+
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             result = get_task_fn(task_id="step_123", identity=identity)
@@ -193,7 +193,7 @@ class TestGetTaskTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-            patch("src.core.tools.task_management.set_current_tenant"),
+
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             with pytest.raises(ToolError, match="not found"):
@@ -259,7 +259,7 @@ class TestCompleteTaskTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-            patch("src.core.tools.task_management.set_current_tenant"),
+
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             result = complete_task_fn(task_id="step_123", status="completed", identity=identity)
@@ -280,8 +280,5 @@ class TestCompleteTaskTool:
 
         identity = self._make_identity(sample_tenant)
 
-        with (
-            patch("src.core.tools.task_management.set_current_tenant"),
-        ):
-            with pytest.raises(ToolError, match="Invalid status"):
-                complete_task_fn(task_id="step_123", status="invalid_status", identity=identity)
+        with pytest.raises(ToolError, match="Invalid status"):
+            complete_task_fn(task_id="step_123", status="invalid_status", identity=identity)

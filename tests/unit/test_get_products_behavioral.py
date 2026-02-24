@@ -169,7 +169,6 @@ class _PipelinePatches:
 
     TARGETS = {
         "get_principal_obj": "src.core.tools.products.get_principal_object",
-        "set_tenant": "src.core.tools.products.set_current_tenant",
         "generate_variants": "src.services.dynamic_products.generate_variants_for_brief",
         "pricing_service": "src.services.dynamic_pricing_service.DynamicPricingService",
         "db_session": "src.core.tools.products.get_db_session",
@@ -408,7 +407,7 @@ class TestPolicyBlockedPipelineRejection:
 
         with (
             patch("src.core.tools.products.get_principal_object"),
-            patch("src.core.tools.products.set_current_tenant"),
+
             patch("src.core.tools.products.PolicyCheckService") as mock_policy_cls,
             patch("src.core.tools.products.get_audit_logger") as mock_al,
         ):
@@ -449,7 +448,7 @@ class TestRestrictedBriefManualReviewRejection:
 
         with (
             patch("src.core.tools.products.get_principal_object"),
-            patch("src.core.tools.products.set_current_tenant"),
+
             patch("src.core.tools.products.PolicyCheckService") as mock_policy_cls,
             patch("src.core.tools.products.get_db_session") as mock_db,
             patch("src.core.tools.products.get_audit_logger") as mock_al,

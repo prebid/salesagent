@@ -69,11 +69,6 @@ def _call_impl(
     )
 
     with (
-        patch("src.core.tools.creative_formats.set_current_tenant"),
-        patch(
-            "src.core.tools.creative_formats.get_current_tenant",
-            return_value=MOCK_TENANT,
-        ),
         patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
         patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit,
     ):

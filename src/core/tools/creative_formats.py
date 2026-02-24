@@ -45,7 +45,7 @@ def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
 
 
 from src.core.audit_logger import get_audit_logger
-from src.core.config_loader import get_current_tenant, set_current_tenant
+
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
 from src.core.validation_helpers import format_validation_error
@@ -92,12 +92,6 @@ def _list_creative_formats_impl(
     # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id if identity else None
     tenant = identity.tenant if identity else None
-
-    # Set tenant context if returned
-    if identity and identity.tenant:
-        set_current_tenant(identity.tenant)
-    else:
-        tenant = get_current_tenant()
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
 

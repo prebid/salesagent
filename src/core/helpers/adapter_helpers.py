@@ -8,22 +8,32 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
-from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig
 from src.core.schemas import Principal
 
 
 def get_adapter(
-    principal: Principal, dry_run: bool = False, testing_context: Any = None
+    principal: Principal, dry_run: bool = False, testing_context: Any = None, tenant: Any = None
 ) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
-    """Get the appropriate adapter instance for the selected adapter type."""
+    """Get the appropriate adapter instance for the selected adapter type.
+
+    Args:
+        principal: The authenticated principal
+        dry_run: Whether to run in dry-run mode
+        testing_context: Optional test context for simulations
+        tenant: Tenant context (from identity.tenant). Falls back to ContextVar if not provided.
+    """
     import logging
 
     logger = logging.getLogger(__name__)
 
-    # Get tenant and adapter config from database
-    tenant = get_current_tenant()
+    if tenant is None:
+        # Fallback for callers that haven't been updated yet (e.g., async approval handlers)
+        from src.core.config_loader import get_current_tenant
+
+        tenant = get_current_tenant()
+
     selected_adapter = tenant.get("ad_server", "mock")
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 

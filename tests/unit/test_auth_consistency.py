@@ -211,7 +211,6 @@ class TestDiscoveryEndpointsAnonymousAccess:
         )
 
         with (
-            patch("src.core.tools.products.set_current_tenant"),
             patch("src.core.tools.products.get_db_session") as mock_db,
             patch("src.core.tools.products.PolicyCheckService") as mock_policy,
         ):
@@ -249,8 +248,6 @@ class TestDiscoveryEndpointsAnonymousAccess:
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
         with (
-            patch("src.core.tools.creative_formats.set_current_tenant"),
-            patch("src.core.tools.creative_formats.get_current_tenant", return_value=mock_tenant),
             # get_creative_agent_registry is imported inside the function from src.core.creative_agent_registry
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
         ):
@@ -289,8 +286,6 @@ class TestDiscoveryEndpointsAnonymousAccess:
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
         with (
-            patch("src.core.tools.properties.set_current_tenant"),
-            patch("src.core.tools.properties.get_current_tenant", return_value=mock_tenant),
             patch("src.core.tools.properties.get_db_session") as mock_db,
         ):
             mock_session = MagicMock()
@@ -334,7 +329,6 @@ class TestDiscoveryEndpointsInvalidAuth:
         )
 
         with (
-            patch("src.core.tools.products.set_current_tenant"),
             patch("src.core.tools.products.get_db_session") as mock_db,
         ):
             mock_session = MagicMock()
@@ -367,8 +361,6 @@ class TestDiscoveryEndpointsInvalidAuth:
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
         with (
-            patch("src.core.tools.creative_formats.set_current_tenant"),
-            patch("src.core.tools.creative_formats.get_current_tenant", return_value=mock_tenant),
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
         ):
             mock_reg = MagicMock()
@@ -395,8 +387,6 @@ class TestDiscoveryEndpointsInvalidAuth:
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
         with (
-            patch("src.core.tools.properties.set_current_tenant"),
-            patch("src.core.tools.properties.get_current_tenant", return_value=mock_tenant),
             patch("src.core.tools.properties.get_db_session") as mock_db,
         ):
             mock_session = MagicMock()

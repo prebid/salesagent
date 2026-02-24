@@ -218,10 +218,10 @@ class TestToolContextProducesLazyTenant:
 
 
 class TestImplFunctionsDoNotResolveTenant:
-    """No _impl function should import or call ensure_tenant_context.
+    """No _impl function should read tenant from ContextVars.
 
-    This is a structural test to enforce the invariant: tenant resolution
-    happens at the transport boundary, not in business logic.
+    This is a structural test to enforce the invariant: tenant data flows
+    through identity.tenant — business logic never reads from ContextVars.
     """
 
     IMPL_MODULES = [
@@ -232,6 +232,11 @@ class TestImplFunctionsDoNotResolveTenant:
         "src.core.tools.creatives.listing",
         "src.core.tools.signals",
         "src.core.tools.performance",
+        "src.core.tools.products",
+        "src.core.tools.properties",
+        "src.core.tools.creative_formats",
+        "src.core.tools.capabilities",
+        "src.core.tools.task_management",
     ]
 
     @pytest.mark.parametrize("module_path", IMPL_MODULES)
@@ -247,4 +252,88 @@ class TestImplFunctionsDoNotResolveTenant:
         assert "ensure_tenant_context" not in source, (
             f"{module_path} still references ensure_tenant_context. "
             f"Tenant resolution should happen at the transport boundary, not in _impl."
+        )
+
+    # Modules where ContextVar usage is ONLY in _impl functions (strict check)
+    STRICT_MODULES = [
+        "src.core.tools.media_buy_update",
+        "src.core.tools.media_buy_delivery",
+        "src.core.tools.creatives._sync",
+        "src.core.tools.creatives.listing",
+        "src.core.tools.signals",
+        "src.core.tools.performance",
+        "src.core.tools.properties",
+        "src.core.tools.creative_formats",
+        "src.core.tools.capabilities",
+        "src.core.tools.task_management",
+    ]
+
+    @pytest.mark.parametrize("module_path", STRICT_MODULES)
+    def test_strict_module_no_contextvar(self, module_path):
+        """These modules must not reference get_current_tenant or set_current_tenant at all."""
+        import importlib
+
+        mod = importlib.import_module(module_path)
+        with open(mod.__file__) as f:
+            source = f.read()
+
+        assert "get_current_tenant" not in source, (
+            f"{module_path} still calls get_current_tenant(). "
+            f"Use identity.tenant instead of reading from ContextVar."
+        )
+        assert "set_current_tenant" not in source, (
+            f"{module_path} still calls set_current_tenant(). "
+            f"Tenant ContextVar is managed by the transport boundary, not _impl."
+        )
+
+    def test_create_media_buy_impl_no_contextvar(self):
+        """_create_media_buy_impl must not use ContextVar for tenant.
+
+        Note: execute_approved_media_buy() in the same module is a transport-adjacent
+        async handler that legitimately uses set_current_tenant (no identity in scope).
+        """
+        import importlib
+        import re
+
+        mod = importlib.import_module("src.core.tools.media_buy_create")
+        with open(mod.__file__) as f:
+            source = f.read()
+
+        # Extract _create_media_buy_impl body
+        match = re.search(r"(async def _create_media_buy_impl\(.*?)(?=\nasync def |\ndef |\Z)", source, re.DOTALL)
+        assert match, "_create_media_buy_impl not found"
+        impl_body = match.group(1)
+
+        assert "get_current_tenant" not in impl_body, (
+            "_create_media_buy_impl still calls get_current_tenant(). Use identity.tenant."
+        )
+        assert "set_current_tenant" not in impl_body, (
+            "_create_media_buy_impl still calls set_current_tenant(). "
+            "Tenant ContextVar is managed by the transport boundary."
+        )
+
+    def test_get_products_impl_no_contextvar(self):
+        """_get_products_impl must not use ContextVar for tenant.
+
+        Note: get_product_catalog() in the same module is a standalone helper
+        with a ContextVar fallback for callers without identity.
+        """
+        import importlib
+        import re
+
+        mod = importlib.import_module("src.core.tools.products")
+        with open(mod.__file__) as f:
+            source = f.read()
+
+        # Extract _get_products_impl body
+        match = re.search(r"(async def _get_products_impl\(.*?)(?=\nasync def |\ndef |\Z)", source, re.DOTALL)
+        assert match, "_get_products_impl not found"
+        impl_body = match.group(1)
+
+        assert "get_current_tenant" not in impl_body, (
+            "_get_products_impl still calls get_current_tenant(). Use identity.tenant."
+        )
+        assert "set_current_tenant" not in impl_body, (
+            "_get_products_impl still calls set_current_tenant(). "
+            "Tenant ContextVar is managed by the transport boundary."
         )
