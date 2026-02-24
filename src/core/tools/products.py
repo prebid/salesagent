@@ -24,16 +24,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_from_context, get_principal_object
+from src.core.auth import get_principal_object
 from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
     GetProductsResponse,
     Product,  # Extends library Product
 )
-from src.core.testing_hooks import get_testing_context
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.validation_helpers import format_validation_error, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
@@ -117,7 +118,7 @@ from src.core.product_conversion import convert_product_model_to_schema
 
 
 async def _get_products_impl(
-    req: GetProductsRequestGenerated, context: Context | ToolContext | None
+    req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
 ) -> GetProductsResponse:
     """Shared implementation for get_products.
 
@@ -126,56 +127,37 @@ async def _get_products_impl(
 
     Args:
         req: GetProductsRequest from generated schemas
-        context: FastMCP Context for tenant/principal resolution
+        identity: Resolved identity from transport boundary
 
     Returns:
         GetProductsResponse containing matching products
     """
-    from src.core.tool_context import ToolContext
-
     start_time = time.time()
 
-    # Handle both old Context and new ToolContext
-    if isinstance(context, ToolContext):
-        # New context management - everything is already extracted
-        from src.core.testing_hooks import AdCPTestContext
+    # Extract identity fields
+    if identity is None:
+        raise AdCPValidationError("Identity is required")
 
-        testing_ctx: AdCPTestContext | None = context.testing_context or AdCPTestContext()
-        principal_id: str | None = context.principal_id
-        tenant: dict[str, Any] = {"tenant_id": context.tenant_id}  # Simplified tenant info
-        # Ensure ContextVar is populated for helpers that require tenant context
+    testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
+    principal_id: str | None = identity.principal_id
+    tenant: dict[str, Any] = identity.tenant if identity.tenant else {}
+
+    # Set tenant context for helpers that require it
+    if tenant:
         set_current_tenant(tenant)
+        logger.info(f"[GET_PRODUCTS] Set tenant context: {tenant['tenant_id']}")
+    elif principal_id:
+        # If we have principal but no tenant, something went wrong
+        logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
+        raise AdCPValidationError(
+            f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}"
+        )
     else:
-        # Legacy path - extract from FastMCP Context
-        if context is None:
-            raise AdCPValidationError("Context is required")
-        testing_ctx = get_testing_context(context)
-        # For discovery endpoints, authentication is optional
-        # require_valid_token=False means invalid tokens are treated like missing tokens (discovery endpoint behavior)
-        logger.info("[GET_PRODUCTS] About to call get_principal_from_context")
-        principal_id_temp, tenant_temp = get_principal_from_context(
-            context, require_valid_token=False
-        )  # Returns (None, tenant) if no/invalid auth
-        principal_id = principal_id_temp
-        tenant = tenant_temp if tenant_temp else {}
-        logger.info(f"[GET_PRODUCTS] principal_id returned: {principal_id}, tenant: {tenant}")
-
-        # Set tenant context explicitly in this async context (ContextVar propagation fix)
-        if tenant:
-            set_current_tenant(tenant)
-            logger.info(f"[GET_PRODUCTS] Set tenant context: {tenant['tenant_id']}")
-        elif principal_id:
-            # If we have principal but no tenant, something went wrong
-            logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
-            raise AdCPValidationError(
-                f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}"
-            )
-        else:
-            # No tenant context and no principal - cannot determine which tenant's products to return
-            logger.error("[GET_PRODUCTS] No tenant context available - cannot determine which products to return")
-            raise AdCPAuthenticationError(
-                "Cannot determine tenant context. Please provide valid authentication or ensure tenant can be identified from request headers."
-            )
+        # No tenant context and no principal - cannot determine which tenant's products to return
+        logger.error("[GET_PRODUCTS] No tenant context available - cannot determine which products to return")
+        raise AdCPAuthenticationError(
+            "Cannot determine tenant context. Please provide valid authentication or ensure tenant can be identified from request headers."
+        )
 
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id) if principal_id else None
@@ -805,9 +787,14 @@ async def get_products(
         # Convert ValueError from helper to ToolError with clear message
         raise AdCPValidationError(f"Invalid get_products request: {e}") from e
 
+    # Resolve identity from transport context
+    from src.core.transport_helpers import resolve_identity_from_context
+
+    identity = resolve_identity_from_context(ctx, require_valid_token=False)
+
     # Call shared implementation
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly
-    response = await _get_products_impl(req, ctx)
+    response = await _get_products_impl(req, identity)
 
     # Return ToolResult with human-readable text and structured data
     response_dict = response.model_dump(mode="json")
@@ -826,6 +813,7 @@ async def get_products_raw(
     strategy_id: str | None = None,
     context: dict | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> GetProductsResponse:
     """Get available products matching the brief.
 
@@ -842,10 +830,17 @@ async def get_products_raw(
         strategy_id: Optional strategy ID for linking operations (optional)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
+        identity: Resolved identity from transport boundary (preferred over ctx)
 
     Returns:
         GetProductsResponse containing matching products
     """
+    # Resolve identity from transport context if not provided
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+
     # Create request object - adcp library validates schema
     req = create_get_products_request(
         brief=brief or "",
@@ -855,7 +850,7 @@ async def get_products_raw(
     )
 
     # Call shared implementation
-    return await _get_products_impl(req, ctx)
+    return await _get_products_impl(req, identity)
 
 
 def get_product_catalog() -> list[Product]:

@@ -10,8 +10,8 @@ from sqlalchemy import select
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
-from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ def _create_sync_workflow_steps(
     approval_mode: str,
     push_notification_config: PushNotificationConfig | dict | None,
     context: ContextObject | dict | None,
-    ctx: Any,
+    identity: ResolvedIdentity | None = None,
 ) -> None:
     """Create workflow steps for creatives requiring approval.
 
@@ -82,8 +82,7 @@ def _create_sync_workflow_steps(
                 request_data_for_workflow["context"] = context
 
             # Store protocol type for webhook payload creation
-            # ToolContext = A2A, Context (FastMCP) = MCP
-            request_data_for_workflow["protocol"] = "a2a" if isinstance(ctx, ToolContext) else "mcp"
+            request_data_for_workflow["protocol"] = identity.protocol if identity else "mcp"
 
             step = ctx_manager.create_workflow_step(
                 context_id=persistent_ctx.context_id,

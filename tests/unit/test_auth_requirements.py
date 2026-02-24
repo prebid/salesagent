@@ -12,14 +12,21 @@ NOT NULL constraint violations on principal_id. Investigation revealed all integ
 tests provided mock auth, never testing the unauthenticated code path.
 
 This test file ensures all tools that require authentication properly enforce it.
+
+Migration note:
+--------------
+_impl functions now accept `identity: ResolvedIdentity | None` instead of
+transport-specific context objects. Tests pass identity=None for unauthenticated
+scenarios and ResolvedIdentity(principal_id=None) for invalid auth scenarios.
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 from fastmcp.exceptions import ToolError
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
 
@@ -50,9 +57,9 @@ class TestAuthenticationRequirements:
             }
         ]
 
-        # Call without context (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
+        # Call without identity (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=creatives, ctx=None)
+            _sync_creatives_impl(creatives=creatives, identity=None)
 
         error_msg = str(exc_info.value)
         assert "Authentication required" in error_msg
@@ -62,10 +69,8 @@ class TestAuthenticationRequirements:
         """sync_creatives must reject requests with invalid authentication."""
         from src.core.tools.creatives import _sync_creatives_impl
 
-        # Mock context with None principal_id (simulates invalid token)
-        invalid_context = Mock(spec=ToolContext)
-        invalid_context.principal_id = None
-        invalid_context.tenant_id = "test_tenant"
+        # ResolvedIdentity with None principal_id (simulates invalid token)
+        invalid_identity = ResolvedIdentity(principal_id=None, tenant_id="test_tenant")
 
         creatives = [
             {
@@ -77,7 +82,7 @@ class TestAuthenticationRequirements:
         ]
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=creatives, ctx=invalid_context)
+            _sync_creatives_impl(creatives=creatives, identity=invalid_identity)
 
         assert "Authentication required" in str(exc_info.value)
 
@@ -85,9 +90,9 @@ class TestAuthenticationRequirements:
         """list_creatives must reject requests without authentication."""
         from src.core.tools.creatives import _list_creatives_impl
 
-        # Call without context (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
+        # Call without identity (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _list_creatives_impl(ctx=None)
+            _list_creatives_impl(identity=None)
 
         error_msg = str(exc_info.value)
         assert "x-adcp-auth" in error_msg
@@ -96,15 +101,12 @@ class TestAuthenticationRequirements:
     # Media Buy Tools
     # =========================================================================
 
-    @patch("src.core.tools.media_buy_create.get_current_tenant")
-    def test_create_media_buy_requires_authentication(self, mock_tenant):
+    def test_create_media_buy_requires_authentication(self):
         """create_media_buy must reject requests without authentication."""
         import asyncio
 
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        mock_tenant.return_value = {"tenant_id": "test_tenant"}
 
         # Construct spec-compliant request at the test boundary (matches refactored _impl signature)
         req = CreateMediaBuyRequest(
@@ -122,16 +124,16 @@ class TestAuthenticationRequirements:
             end_time="2025-01-31T23:59:59Z",
         )
 
-        # Call without ctx (no auth) — _impl raises AdCPValidationError or AdCPAuthenticationError (transport-agnostic)
+        # Call without identity (no auth) — _impl raises AdCPValidationError (transport-agnostic)
         with pytest.raises((AdCPValidationError, AdCPAuthenticationError)) as exc_info:
-            asyncio.run(_create_media_buy_impl(req=req))
+            asyncio.run(_create_media_buy_impl(req=req, identity=None))
 
         error_msg = str(exc_info.value)
-        # create_media_buy validates context presence first, then auth
+        # create_media_buy validates identity presence first
         assert (
-            "Principal ID not found" in error_msg
+            "Identity is required" in error_msg
+            or "Principal ID not found" in error_msg
             or "authentication required" in error_msg.lower()
-            or "Context is required" in error_msg
         )
 
     def test_update_media_buy_requires_authentication(self):
@@ -167,9 +169,9 @@ class TestAuthenticationRequirements:
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["test_buy"])
 
-        # Call without context (no auth) — _impl raises AdCPValidationError (transport-agnostic)
+        # Call without identity (no auth) — _impl raises AdCPValidationError (transport-agnostic)
         with pytest.raises((AdCPValidationError, AdCPAuthenticationError, ToolError, ValueError)) as exc_info:
-            _get_media_buy_delivery_impl(req=req, ctx=None)
+            _get_media_buy_delivery_impl(req=req, identity=None)
 
         error_msg = str(exc_info.value)
         assert (
@@ -186,17 +188,17 @@ class TestAuthenticationRequirements:
         """update_performance_index must reject requests without authentication."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        # Call without context (no auth) — _impl raises AdCPValidationError or AdCPAuthenticationError (transport-agnostic)
+        # Call without identity (no auth) — _impl raises ValueError or AdCPAuthenticationError (transport-agnostic)
         with pytest.raises((AdCPValidationError, AdCPAuthenticationError, ToolError, ValueError)) as exc_info:
             _update_performance_index_impl(
                 media_buy_id="test_buy",
                 performance_data=[{"product_id": "prod1", "performance_index": 0.8}],
-                ctx=None,
+                identity=None,
             )
 
         error_msg = str(exc_info.value)
         assert (
-            "Context is required" in error_msg
+            "Identity is required" in error_msg
             or "Principal ID not found" in error_msg
             or "authentication required" in error_msg.lower()
         )
@@ -211,46 +213,44 @@ class TestAuthenticationRequirements:
 
         from src.core.tools.signals import _activate_signal_impl
 
-        # Call without context (no auth) — _impl raises AdCPAuthenticationError or AdCPValidationError (transport-agnostic)
+        # Call without identity (no auth) — _impl raises AdCPAuthenticationError or AdCPValidationError (transport-agnostic)
         with pytest.raises((AdCPAuthenticationError, AdCPValidationError)) as exc_info:
-            asyncio.run(_activate_signal_impl(signal_agent_segment_id="test_signal", media_buy_id="test_buy", ctx=None))
+            asyncio.run(
+                _activate_signal_impl(signal_agent_segment_id="test_signal", media_buy_id="test_buy", identity=None)
+            )
 
         error_msg = str(exc_info.value)
         assert "authentication required" in error_msg.lower() or "context" in error_msg.lower()
 
 
 class TestAuthenticationWithMockedContext:
-    """Test authentication behavior with various mocked context scenarios."""
+    """Test authentication behavior with various identity scenarios."""
 
-    def test_tool_context_with_none_principal_id(self):
-        """ToolContext with None principal_id should be rejected."""
+    def test_identity_with_none_principal_id(self):
+        """ResolvedIdentity with None principal_id should be rejected."""
         from src.core.tools.creatives import _sync_creatives_impl
 
-        # Create ToolContext with None principal_id (invalid token scenario)
-        ctx = Mock(spec=ToolContext)
-        ctx.principal_id = None
-        ctx.tenant_id = "test_tenant"
+        # ResolvedIdentity with None principal_id (invalid token scenario)
+        identity = ResolvedIdentity(principal_id=None, tenant_id="test_tenant")
 
         creatives = [{"creative_id": "test", "name": "Test", "assets": {}}]
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=creatives, ctx=ctx)
+            _sync_creatives_impl(creatives=creatives, identity=identity)
 
         assert "Authentication required" in str(exc_info.value)
 
-    def test_tool_context_with_empty_string_principal_id(self):
-        """ToolContext with empty string principal_id should be rejected."""
+    def test_identity_with_empty_string_principal_id(self):
+        """ResolvedIdentity with empty string principal_id should be rejected."""
         from src.core.tools.creatives import _sync_creatives_impl
 
-        # Create ToolContext with empty principal_id
-        ctx = Mock(spec=ToolContext)
-        ctx.principal_id = ""  # Empty string
-        ctx.tenant_id = "test_tenant"
+        # ResolvedIdentity with empty principal_id
+        identity = ResolvedIdentity(principal_id="", tenant_id="test_tenant")
 
         creatives = [{"creative_id": "test", "name": "Test", "assets": {}}]
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=creatives, ctx=ctx)
+            _sync_creatives_impl(creatives=creatives, identity=identity)
 
         assert "Authentication required" in str(exc_info.value)
 
@@ -263,7 +263,7 @@ class TestAuthenticationErrorMessages:
         from src.core.tools.creatives import _sync_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=[], ctx=None)
+            _sync_creatives_impl(creatives=[], identity=None)
 
         error_msg = str(exc_info.value)
         # Should mention the header name so users know what to fix

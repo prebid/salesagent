@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from src.core.database.models import WorkflowStep
+from src.core.resolved_identity import ResolvedIdentity
 
 
 class TestListTasksTool:
@@ -54,6 +55,15 @@ class TestListTasksTool:
         assert tool is not None, "list_tasks should be registered (unified mode is default)"
         return tool.fn
 
+    def _make_identity(self, sample_tenant):
+        """Create a ResolvedIdentity for testing."""
+        return ResolvedIdentity(
+            principal_id="principal_123",
+            tenant_id=sample_tenant["tenant_id"],
+            tenant=sample_tenant,
+            protocol="mcp",
+        )
+
     def test_list_tasks_returns_tasks(self, mock_db_session, sample_tenant, sample_workflow_step):
         """Test that list_tasks returns workflow steps correctly."""
         list_tasks_fn = self._get_list_tasks_fn()
@@ -65,14 +75,13 @@ class TestListTasksTool:
             [],  # Second call: object mappings
         ]
 
+        identity = self._make_identity(sample_tenant)
+
         with (
-            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
             patch("src.core.tools.task_management.set_current_tenant"),
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
-            mock_get_principal.return_value = ("principal_123", sample_tenant)
-
-            result = list_tasks_fn(context=Mock())
+            result = list_tasks_fn(identity=identity)
 
         assert "tasks" in result
         assert "total" in result
@@ -88,14 +97,13 @@ class TestListTasksTool:
             [],
         ]
 
+        identity = self._make_identity(sample_tenant)
+
         with (
-            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
             patch("src.core.tools.task_management.set_current_tenant"),
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
-            mock_get_principal.return_value = ("principal_123", sample_tenant)
-
-            result = list_tasks_fn(status="requires_approval", context=Mock())
+            result = list_tasks_fn(status="requires_approval", identity=identity)
 
         assert "tasks" in result
         # The query was executed - if there was an AttributeError it would have raised
@@ -142,6 +150,15 @@ class TestGetTaskTool:
         assert tool is not None, "get_task should be registered (unified mode is default)"
         return tool.fn
 
+    def _make_identity(self, sample_tenant):
+        """Create a ResolvedIdentity for testing."""
+        return ResolvedIdentity(
+            principal_id="principal_123",
+            tenant_id=sample_tenant["tenant_id"],
+            tenant=sample_tenant,
+            protocol="mcp",
+        )
+
     def test_get_task_returns_task_details(self, mock_db_session, sample_tenant, sample_workflow_step):
         """Test that get_task returns task details correctly."""
         get_task_fn = self._get_get_task_fn()
@@ -149,14 +166,13 @@ class TestGetTaskTool:
         mock_db_session.scalars.return_value.first.return_value = sample_workflow_step
         mock_db_session.scalars.return_value.all.return_value = []  # no mappings
 
+        identity = self._make_identity(sample_tenant)
+
         with (
-            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
             patch("src.core.tools.task_management.set_current_tenant"),
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
-            mock_get_principal.return_value = ("principal_123", sample_tenant)
-
-            result = get_task_fn(task_id="step_123", context=Mock())
+            result = get_task_fn(task_id="step_123", identity=identity)
 
         assert result["task_id"] == "step_123"
         assert result["status"] == "requires_approval"
@@ -174,15 +190,14 @@ class TestGetTaskTool:
 
         mock_db_session.scalars.return_value.first.return_value = None
 
+        identity = self._make_identity(sample_tenant)
+
         with (
-            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
             patch("src.core.tools.task_management.set_current_tenant"),
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
-            mock_get_principal.return_value = ("principal_123", sample_tenant)
-
             with pytest.raises(ToolError, match="not found"):
-                get_task_fn(task_id="nonexistent", context=Mock())
+                get_task_fn(task_id="nonexistent", identity=identity)
 
 
 class TestCompleteTaskTool:
@@ -226,20 +241,28 @@ class TestCompleteTaskTool:
         assert tool is not None, "complete_task should be registered (unified mode is default)"
         return tool.fn
 
+    def _make_identity(self, sample_tenant):
+        """Create a ResolvedIdentity for testing."""
+        return ResolvedIdentity(
+            principal_id="principal_123",
+            tenant_id=sample_tenant["tenant_id"],
+            tenant=sample_tenant,
+            protocol="mcp",
+        )
+
     def test_complete_task_updates_status(self, mock_db_session, sample_tenant, sample_pending_step):
         """Test that complete_task updates task status."""
         complete_task_fn = self._get_complete_task_fn()
 
         mock_db_session.scalars.return_value.first.return_value = sample_pending_step
 
+        identity = self._make_identity(sample_tenant)
+
         with (
-            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
             patch("src.core.tools.task_management.set_current_tenant"),
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
-            mock_get_principal.return_value = ("principal_123", sample_tenant)
-
-            result = complete_task_fn(task_id="step_123", status="completed", context=Mock())
+            result = complete_task_fn(task_id="step_123", status="completed", identity=identity)
 
         assert result["status"] == "completed"
         assert result["task_id"] == "step_123"
@@ -255,11 +278,10 @@ class TestCompleteTaskTool:
 
         complete_task_fn = self._get_complete_task_fn()
 
+        identity = self._make_identity(sample_tenant)
+
         with (
-            patch("src.core.tools.task_management.get_principal_from_context") as mock_get_principal,
             patch("src.core.tools.task_management.set_current_tenant"),
         ):
-            mock_get_principal.return_value = ("principal_123", sample_tenant)
-
             with pytest.raises(ToolError, match="Invalid status"):
-                complete_task_fn(task_id="step_123", status="invalid_status", context=Mock())
+                complete_task_fn(task_id="step_123", status="invalid_status", identity=identity)

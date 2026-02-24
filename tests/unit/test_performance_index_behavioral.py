@@ -18,6 +18,7 @@ import pytest
 from adcp.types.generated_poc.core.context import ContextObject
 
 from src.core.exceptions import AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance
 from src.core.tool_context import ToolContext
 
@@ -30,13 +31,26 @@ def _make_tool_context(
     principal_id: str = "principal_1",
     tenant_id: str = "tenant_1",
 ) -> ToolContext:
-    """Build a minimal ToolContext for testing."""
+    """Build a minimal ToolContext for A2A handler tests."""
     return ToolContext(
         context_id="ctx_test",
         tenant_id=tenant_id,
         principal_id=principal_id,
         tool_name="update_performance_index",
         request_timestamp=datetime.now(UTC),
+    )
+
+
+def _make_identity(
+    principal_id: str = "principal_1",
+    tenant_id: str = "tenant_1",
+) -> ResolvedIdentity:
+    """Build a minimal ResolvedIdentity for testing."""
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant={"tenant_id": tenant_id},
+        protocol="mcp",
     )
 
 
@@ -48,12 +62,11 @@ def _patch_happy_path(
 
     Patches (in order):
         1. _verify_principal  - noop
-        2. get_principal_id_from_context  - returns principal_id
-        3. get_principal_object  - returns a mock principal
-        4. get_adapter  - returns a mock adapter whose
+        2. get_principal_object  - returns a mock principal
+        3. get_adapter  - returns a mock adapter whose
            update_media_buy_performance_index returns *adapter_return*
-        5. get_current_tenant  - returns a minimal tenant dict
-        6. get_audit_logger  - returns a mock audit logger
+        4. get_current_tenant  - returns a minimal tenant dict
+        5. get_audit_logger  - returns a mock audit logger
 
     Returns a context-manager-like stack *and* exposes the mock adapter and
     audit logger for assertions.
@@ -78,12 +91,6 @@ def _patch_happy_path(
         patch(
             "src.core.tools.performance._verify_principal",
             return_value=None,
-        )
-    )
-    stack.enter_context(
-        patch(
-            "src.core.tools.performance._get_principal_id_from_context",
-            return_value=principal_id,
         )
     )
     stack.enter_context(
@@ -130,7 +137,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        ctx = _make_tool_context()
+        identity = _make_identity()
         stack, _mocks = _patch_happy_path()
 
         with stack:
@@ -138,7 +145,7 @@ class TestHighRiskMCP:
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.2}],
                 context=ContextObject(session_id="s1"),
-                ctx=ctx,
+                identity=identity,
             )
 
         assert response.status == "success"
@@ -154,14 +161,14 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        ctx = _make_tool_context()
+        identity = _make_identity()
         stack, mocks = _patch_happy_path()
 
         with stack:
             _update_performance_index_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "prod_abc", "performance_index": 0.9}],
-                ctx=ctx,
+                identity=identity,
             )
 
         adapter = mocks["adapter"]
@@ -183,7 +190,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        ctx = _make_tool_context()
+        identity = _make_identity()
         stack, mocks = _patch_happy_path()
 
         perf_data = [
@@ -196,7 +203,7 @@ class TestHighRiskMCP:
             response = _update_performance_index_impl(
                 media_buy_id="mb_1",
                 performance_data=perf_data,
-                ctx=ctx,
+                identity=identity,
             )
 
         # Adapter receives 3 PackagePerformance objects
@@ -225,7 +232,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        ctx = _make_tool_context()
+        identity = _make_identity()
         stack, _mocks = _patch_happy_path()
 
         with stack:
@@ -233,7 +240,7 @@ class TestHighRiskMCP:
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 context=ContextObject(session_id="sess_1", trace_id="tr_1"),
-                ctx=ctx,
+                identity=identity,
             )
 
         assert response.context is not None
@@ -248,7 +255,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        ctx = _make_tool_context()
+        identity = _make_identity()
 
         with patch(
             "src.core.tools.performance._verify_principal",
@@ -258,7 +265,7 @@ class TestHighRiskMCP:
                 _update_performance_index_impl(
                     media_buy_id="mb_999",
                     performance_data=[{"product_id": "p1", "performance_index": 1.0}],
-                    ctx=ctx,
+                    identity=identity,
                 )
 
     # H6 ---------------------------------------------------------------
@@ -269,13 +276,13 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        ctx = _make_tool_context()
+        identity = _make_identity()
 
         with pytest.raises(AdCPValidationError) as exc_info:
             _update_performance_index_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1"}],  # missing performance_index
-                ctx=ctx,
+                identity=identity,
             )
 
         assert "performance_index" in str(exc_info.value).lower()
@@ -289,7 +296,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        ctx = _make_tool_context()
+        identity = _make_identity()
         stack, _mocks = _patch_happy_path(adapter_return=False)
 
         with stack:
@@ -297,7 +304,7 @@ class TestHighRiskMCP:
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 context=ContextObject(session_id="sess_fail"),
-                ctx=ctx,
+                identity=identity,
             )
 
         assert response.status == "failed"

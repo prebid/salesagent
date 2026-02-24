@@ -63,7 +63,7 @@ class TestMCPErrorShapes:
 
     @pytest.mark.asyncio
     async def test_auth_error_raises_validation_error(self):
-        """MCP _create_media_buy_impl raises AdCPValidationError when context is None."""
+        """MCP _create_media_buy_impl raises AdCPValidationError when identity is None."""
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -76,16 +76,18 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        # _create_media_buy_impl requires context; passing None triggers AdCPValidationError
+        # _create_media_buy_impl requires identity; passing None triggers AdCPValidationError
         with pytest.raises(AdCPValidationError) as exc_info:
-            await _create_media_buy_impl(req=req, ctx=None)
+            await _create_media_buy_impl(req=req, identity=None)
 
-        assert "Context is required" in str(exc_info.value)
+        assert "Identity is required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_not_found_principal_returns_error_response(self):
         """MCP _create_media_buy_impl returns error response for non-existent principal."""
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
+        from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = CreateMediaBuyRequest(
@@ -96,19 +98,19 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        mock_ctx = MagicMock()
-        mock_ctx.headers = {}
+        identity = ResolvedIdentity(
+            principal_id="nonexistent",
+            tenant_id="test",
+            tenant={"tenant_id": "test"},
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="test"),
+        )
 
         with (
-            patch("src.core.tools.media_buy_create.get_testing_context") as mock_testing,
-            patch("src.core.tools.media_buy_create.get_principal_id_from_context", return_value="nonexistent"),
             patch("src.core.tools.media_buy_create.get_current_tenant", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
-            mock_testing.return_value = MagicMock(dry_run=False, test_session_id="test")
-
-            result = await _create_media_buy_impl(req=req, ctx=mock_ctx)
+            result = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should return a CreateMediaBuyResult with error response
         assert hasattr(result, "response")
@@ -244,7 +246,7 @@ class TestUpdateMediaBuyErrorShapes:
 
     @pytest.mark.asyncio
     async def test_missing_context_raises_value_error(self):
-        """update_media_buy _impl raises ValueError when context is None."""
+        """update_media_buy _impl raises ValueError when identity is None."""
         from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -253,9 +255,9 @@ class TestUpdateMediaBuyErrorShapes:
         )
 
         with pytest.raises(ValueError) as exc_info:
-            _update_media_buy_impl(req=req, ctx=None)
+            _update_media_buy_impl(req=req, identity=None)
 
-        assert "Context is required" in str(exc_info.value)
+        assert "Identity is required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_a2a_missing_auth_raises_server_error(self):
@@ -279,11 +281,11 @@ class TestListCreativesErrorShapes:
 
     @pytest.mark.asyncio
     async def test_missing_auth_raises_authentication_error(self):
-        """list_creatives _impl raises AdCPAuthenticationError when auth header is missing."""
+        """list_creatives _impl raises AdCPAuthenticationError when identity is None."""
         from src.core.tools.creatives.listing import _list_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _list_creatives_impl(ctx=None)
+            _list_creatives_impl(identity=None)
 
         assert "x-adcp-auth" in str(exc_info.value).lower() or "Missing" in str(exc_info.value)
 
@@ -318,9 +320,9 @@ class TestCrossTransportErrorConsistency:
 
     @pytest.mark.asyncio
     async def test_missing_context_error_consistent(self):
-        """Both transports produce consistent errors when context/auth is missing.
+        """Both transports produce consistent errors when identity/auth is missing.
 
-        MCP path: _create_media_buy_impl(ctx=None) -> ToolError("Context is required")
+        MCP path: _create_media_buy_impl(identity=None) -> AdCPValidationError("Identity is required")
         A2A path: _handle_explicit_skill(auth_token=None) -> ServerError("Authentication token required")
 
         Both paths reject the request before reaching business logic.
@@ -336,10 +338,10 @@ class TestCrossTransportErrorConsistency:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        # MCP path: missing context — raises AdCPValidationError (transport-agnostic)
+        # MCP path: missing identity — raises AdCPValidationError (transport-agnostic)
         mcp_error = None
         try:
-            await _create_media_buy_impl(req=req, ctx=None)
+            await _create_media_buy_impl(req=req, identity=None)
         except (ToolError, AdCPError) as e:
             mcp_error = e
 
@@ -355,11 +357,11 @@ class TestCrossTransportErrorConsistency:
             a2a_error = e
 
         # Both must reject the request
-        assert mcp_error is not None, "MCP path must raise error for missing context"
+        assert mcp_error is not None, "MCP path must raise error for missing identity"
         assert a2a_error is not None, "A2A path must raise ServerError for missing auth"
 
         # Both errors indicate authentication/authorization failure
-        assert "Context is required" in str(mcp_error) or "required" in str(mcp_error).lower()
+        assert "Identity is required" in str(mcp_error) or "required" in str(mcp_error).lower()
         assert "Authentication token required" in str(a2a_error) or "required" in str(a2a_error).lower()
 
     @pytest.mark.asyncio
@@ -418,7 +420,9 @@ class TestCrossTransportErrorConsistency:
         The _create_media_buy_impl function returns a CreateMediaBuyError when
         principal is not found. This result flows through both transports.
         """
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
+        from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = CreateMediaBuyRequest(
@@ -429,20 +433,20 @@ class TestCrossTransportErrorConsistency:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        mock_ctx = MagicMock()
-        mock_ctx.headers = {}
+        identity = ResolvedIdentity(
+            principal_id="ghost_principal",
+            tenant_id="test",
+            tenant={"tenant_id": "test"},
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="test"),
+        )
 
         with (
-            patch("src.core.tools.media_buy_create.get_testing_context") as mock_testing,
-            patch("src.core.tools.media_buy_create.get_principal_id_from_context", return_value="ghost_principal"),
             patch("src.core.tools.media_buy_create.get_current_tenant", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
-            mock_testing.return_value = MagicMock(dry_run=False, test_session_id="test")
-
             # Shared impl returns the same result regardless of transport
-            result = await _create_media_buy_impl(req=req, ctx=mock_ctx)
+            result = await _create_media_buy_impl(req=req, identity=identity)
 
         # The result contains an error response with authentication_error code
         response = result.response

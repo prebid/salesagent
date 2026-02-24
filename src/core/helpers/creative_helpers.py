@@ -7,12 +7,10 @@ from adcp import FormatId as LibraryFormatId
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from fastmcp import Context
-
     from src.core.database.models import Product as DBProduct
+    from src.core.resolved_identity import ResolvedIdentity
     from src.core.schemas import Creative, FormatId, PackageRequest, Product
     from src.core.testing_context import TestingContext
-    from src.core.tool_context import ToolContext
 
 from src.core.schemas import Creative
 
@@ -496,7 +494,7 @@ def validate_creative_format_against_product(
 
 def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
-    context: "Context | ToolContext",
+    context: "ResolvedIdentity | None" = None,
     testing_ctx: "TestingContext | None" = None,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
@@ -558,7 +556,7 @@ def process_and_upload_package_creatives(
                 dry_run=testing_ctx.dry_run if testing_ctx else False,
                 validation_mode="strict",
                 push_notification_config=None,
-                ctx=context,  # For principal_id extraction
+                identity=context,  # ResolvedIdentity for principal_id extraction
             )
 
             # Extract creative IDs from response

@@ -29,18 +29,30 @@ import pytest
 from adcp.types.generated_poc.core.context import ContextObject
 
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
-from src.core.testing_hooks import AdCPTestContext
 
 # --- Helpers ---
 
 
 def _make_mock_tenant(tenant_id="test-tenant", name="Test Tenant", advertising_policy=None):
-    """Build a tenant dict matching the shape returned by get_principal_from_context."""
+    """Build a tenant dict matching the shape used by ResolvedIdentity."""
     tenant = {"tenant_id": tenant_id, "name": name}
     if advertising_policy is not None:
         tenant["advertising_policy"] = advertising_policy
     return tenant
+
+
+def _make_identity(tenant, principal_id=None):
+    """Build a ResolvedIdentity from a tenant dict and optional principal_id."""
+    if tenant is None:
+        return ResolvedIdentity(principal_id=principal_id, tenant=None, protocol="mcp")
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant.get("tenant_id"),
+        tenant=tenant,
+        protocol="mcp",
+    )
 
 
 def _make_publisher(domain):
@@ -53,7 +65,6 @@ def _make_publisher(domain):
 def _patch_impl_dependencies(
     tenant,
     publishers=None,
-    principal_id=None,
     db_side_effect=None,
 ):
     """Return a dict of patches for _list_authorized_properties_impl dependencies.
@@ -61,21 +72,13 @@ def _patch_impl_dependencies(
     Args:
         tenant: The tenant dict (or None to simulate TENANT_ERROR).
         publishers: List of mock PublisherPartner objects.
-        principal_id: Principal ID returned by get_principal_from_context.
         db_side_effect: If set, get_db_session context manager body raises this.
     """
     patches = {
-        "auth": patch(
-            "src.core.tools.properties.get_principal_from_context",
-            return_value=(principal_id, tenant),
-        ),
         "set_tenant": patch("src.core.tools.properties.set_current_tenant"),
         "get_tenant": patch("src.core.tools.properties.get_current_tenant", return_value=tenant),
         "audit": patch("src.core.tools.properties.get_audit_logger"),
-        "testing_ctx": patch(
-            "src.core.tools.properties.get_testing_context",
-            return_value=AdCPTestContext(),
-        ),
+        "log_activity": patch("src.core.tools.properties.log_tool_activity"),
     }
 
     # Build mock DB session
@@ -103,41 +106,31 @@ def _patch_impl_dependencies(
 
 
 class TestTenantErrorPath:
-    """When get_principal_from_context returns (None, None), AdCPAuthenticationError is raised."""
+    """When identity has no tenant and no current tenant exists, AdCPAuthenticationError is raised."""
 
     def test_tenant_error_when_no_tenant_resolvable(self):
-        """H1: No tenant from context and no current tenant raises AdCPAuthenticationError."""
+        """H1: No tenant from identity and no current tenant raises AdCPAuthenticationError."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
-
         with (
-            patch(
-                "src.core.tools.properties.get_principal_from_context",
-                return_value=(None, None),
-            ),
             patch("src.core.tools.properties.set_current_tenant"),
             patch("src.core.tools.properties.get_current_tenant", return_value=None),
+            patch("src.core.tools.properties.log_tool_activity"),
         ):
             with pytest.raises(AdCPAuthenticationError, match="Could not resolve tenant"):
-                _list_authorized_properties_impl(req=None, context=ctx)
+                _list_authorized_properties_impl(req=None, identity=None)
 
     def test_tenant_error_message_is_descriptive(self):
         """H1: Error message mentions subdomain, virtual host, or header."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
-
         with (
-            patch(
-                "src.core.tools.properties.get_principal_from_context",
-                return_value=(None, None),
-            ),
             patch("src.core.tools.properties.set_current_tenant"),
             patch("src.core.tools.properties.get_current_tenant", return_value=None),
+            patch("src.core.tools.properties.log_tool_activity"),
         ):
             with pytest.raises(AdCPAuthenticationError, match="subdomain|virtual host|x-adcp-tenant"):
-                _list_authorized_properties_impl(req=None, context=ctx)
+                _list_authorized_properties_impl(req=None, identity=None)
 
 
 # ===========================================================================
@@ -152,48 +145,46 @@ class TestPropertiesErrorPath:
         """H2: Database exception in _impl raises PROPERTIES_ERROR."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant)
 
         patches = _patch_impl_dependencies(
             tenant=tenant,
             db_side_effect=RuntimeError("connection lost"),
         )
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
             with pytest.raises(AdCPAdapterError, match="Failed to list authorized properties"):
-                _list_authorized_properties_impl(req=None, context=ctx)
+                _list_authorized_properties_impl(req=None, identity=identity)
 
     def test_properties_error_calls_audit_with_failure(self):
         """H2: PROPERTIES_ERROR path logs audit with success=False."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant)
 
         patches = _patch_impl_dependencies(
             tenant=tenant,
             db_side_effect=RuntimeError("connection lost"),
         )
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"] as mock_get_audit,
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
             mock_audit_instance = MagicMock()
             mock_get_audit.return_value = mock_audit_instance
 
             with pytest.raises(AdCPAdapterError, match="Failed to list authorized properties"):
-                _list_authorized_properties_impl(req=None, context=ctx)
+                _list_authorized_properties_impl(req=None, identity=identity)
 
             mock_audit_instance.log_operation.assert_called_once()
             call_kwargs = mock_audit_instance.log_operation.call_args
@@ -228,20 +219,19 @@ class TestAdvertisingPolicyAssemblyFull:
         """H3: All 5 policy sections appear in advertising_policies text."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = self._make_full_policy_tenant()
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         policy = result.advertising_policies
         assert policy is not None
@@ -268,20 +258,19 @@ class TestAdvertisingPolicyAssemblyFull:
         """H3: Full policy text ends with enforcement footer."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = self._make_full_policy_tenant()
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         policy = result.advertising_policies
         assert policy is not None
@@ -303,25 +292,24 @@ class TestAdvertisingPolicyPartialSections:
         """H4 (scenario 29): Only default_prohibited_categories configured."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant(
             advertising_policy={
                 "enabled": True,
                 "default_prohibited_categories": ["Alcohol"],
             }
         )
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         policy = result.advertising_policies
         assert policy is not None
@@ -337,25 +325,24 @@ class TestAdvertisingPolicyPartialSections:
         """H4 (scenario 30): Only prohibited_advertisers configured."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant(
             advertising_policy={
                 "enabled": True,
                 "prohibited_advertisers": ["bad-actor.com"],
             }
         )
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("news.example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         policy = result.advertising_policies
         assert policy is not None
@@ -380,7 +367,6 @@ class TestAdvertisingPolicyEmptyArraysSuppressed:
         """H5: enabled=True with all empty arrays => advertising_policies is None."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant(
             advertising_policy={
                 "enabled": True,
@@ -391,18 +377,18 @@ class TestAdvertisingPolicyEmptyArraysSuppressed:
                 "prohibited_advertisers": [],
             }
         )
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         # advertising_policies should not be set (None or absent from dump)
         assert result.advertising_policies is None
@@ -413,24 +399,23 @@ class TestAdvertisingPolicyEmptyArraysSuppressed:
         """H5 variant: enabled=True but no policy keys present at all."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant(
             advertising_policy={
                 "enabled": True,
             }
         )
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         assert result.advertising_policies is None
 
@@ -464,25 +449,24 @@ class TestAdvertisingPolicyEnforcementFooter:
         """H6: Each individual section triggers the enforcement footer."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant(
             advertising_policy={
                 "enabled": True,
                 policy_key: policy_value,
             }
         )
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         policy = result.advertising_policies
         assert policy is not None
@@ -494,114 +478,82 @@ class TestAdvertisingPolicyEnforcementFooter:
 # ===========================================================================
 
 
-class TestMCPWrapperHeaderExtraction:
-    """The MCP wrapper list_authorized_properties extracts headers from FastMCP Context."""
+class TestMCPWrapperIdentityResolution:
+    """The MCP wrapper list_authorized_properties resolves identity via resolve_identity_from_context."""
 
     _stub_response = ListAuthorizedPropertiesResponse(publisher_domains=["stub.com"])
 
-    def test_creates_minimal_context_from_request_headers(self):
-        """H7: MCP wrapper creates MinimalContext with headers from request.
-
-        When ctx is a FastMCP Context with request_context.request.headers,
-        the wrapper builds a MinimalContext with those headers and passes it to _impl.
-        """
-        from fastmcp.server.context import Context
-
-        from src.core.tools.properties import list_authorized_properties
-
-        # Build a mock FastMCP Context that passes isinstance(ctx, Context)
-        mock_ctx = MagicMock(spec=Context)
-        mock_request = MagicMock()
-        mock_request.headers = {
-            "host": "tenant1.example.com",
-            "x-adcp-auth": "token-abc",
-            "apx-incoming-host": "tenant1.example.com",
-        }
-        mock_ctx.request_context = MagicMock()
-        mock_ctx.request_context.request = mock_request
-
-        with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
-            mock_impl.return_value = self._stub_response
-            list_authorized_properties(req=None, ctx=mock_ctx)
-
-            # Verify _impl was called with a context that has the extracted headers
-            mock_impl.assert_called_once()
-            passed_context = mock_impl.call_args[0][1]
-            assert hasattr(passed_context, "headers")
-            assert passed_context.headers["host"] == "tenant1.example.com"
-            assert passed_context.headers["x-adcp-auth"] == "token-abc"
-            assert passed_context.headers["apx-incoming-host"] == "tenant1.example.com"
-            # MinimalContext also has meta.headers
-            assert hasattr(passed_context, "meta")
-            assert passed_context.meta["headers"] == passed_context.headers
-
-    def test_falls_back_to_ctx_when_no_request_context(self):
-        """H7: When ctx is a Context but request_context is None, falls back to ctx."""
+    def test_resolves_identity_from_context(self):
+        """H7: MCP wrapper calls resolve_identity_from_context and passes identity to _impl."""
         from fastmcp.server.context import Context
 
         from src.core.tools.properties import list_authorized_properties
 
         mock_ctx = MagicMock(spec=Context)
-        mock_ctx.request_context = None  # No request context available
+        mock_identity = _make_identity(_make_mock_tenant(), principal_id="user-1")
 
-        with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
+        with (
+            patch(
+                "src.core.transport_helpers.resolve_identity_from_context",
+                return_value=mock_identity,
+            ) as mock_resolve,
+            patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl,
+        ):
             mock_impl.return_value = self._stub_response
             list_authorized_properties(req=None, ctx=mock_ctx)
 
+            # Verify resolve_identity_from_context was called with the ctx
+            mock_resolve.assert_called_once_with(mock_ctx, require_valid_token=False)
+            # Verify _impl received the resolved identity
             mock_impl.assert_called_once()
-            passed_context = mock_impl.call_args[0][1]
-            # Falls through to tool_context = ctx since request is None
-            assert passed_context is mock_ctx
+            # The wrapper passes identity as positional arg (2nd arg)
+            passed_identity = mock_impl.call_args[0][1]
+            assert passed_identity is mock_identity
 
-    def test_falls_back_to_ctx_when_not_context_instance(self):
-        """H7: When ctx is not a Context instance, falls through without header extraction."""
+    def test_passes_none_identity_when_no_ctx(self):
+        """H7: MCP wrapper handles ctx=None by resolving identity as None."""
         from src.core.tools.properties import list_authorized_properties
 
-        # A plain MagicMock is truthy but not isinstance(ctx, Context)
-        mock_ctx = MagicMock()
-
-        with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
-            mock_impl.return_value = self._stub_response
-            list_authorized_properties(req=None, ctx=mock_ctx)
-
-            mock_impl.assert_called_once()
-            # Because isinstance fails, request stays None, code falls to tool_context = ctx
-            passed_context = mock_impl.call_args[0][1]
-            assert passed_context is mock_ctx
-
-    def test_falls_back_on_exception_during_header_extraction(self):
-        """H7: When header extraction raises, wrapper catches and falls back to ctx."""
-        from fastmcp.server.context import Context
-
-        from src.core.tools.properties import list_authorized_properties
-
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.request_context = MagicMock()
-        # Make accessing request.headers raise an exception
-        mock_request = MagicMock()
-        type(mock_request).headers = property(lambda self: (_ for _ in ()).throw(RuntimeError("broken")))
-        mock_ctx.request_context.request = mock_request
-
-        with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
-            mock_impl.return_value = self._stub_response
-            list_authorized_properties(req=None, ctx=mock_ctx)
-
-            mock_impl.assert_called_once()
-            # On exception in the try block, falls back to tool_context = ctx
-            passed_context = mock_impl.call_args[0][1]
-            assert passed_context is mock_ctx
-
-    def test_no_context_provided(self):
-        """H7: MCP wrapper handles ctx=None gracefully."""
-        from src.core.tools.properties import list_authorized_properties
-
-        with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
+        with (
+            patch(
+                "src.core.transport_helpers.resolve_identity_from_context",
+                return_value=None,
+            ) as mock_resolve,
+            patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl,
+        ):
             mock_impl.return_value = self._stub_response
             list_authorized_properties(req=None, ctx=None)
 
+            mock_resolve.assert_called_once_with(None, require_valid_token=False)
             mock_impl.assert_called_once()
-            passed_context = mock_impl.call_args[0][1]
-            assert passed_context is None
+            passed_identity = mock_impl.call_args[0][1]
+            assert passed_identity is None
+
+    def test_wrapper_returns_tool_result(self):
+        """H7: MCP wrapper returns a ToolResult with structured_content."""
+        from fastmcp.tools.tool import ToolResult
+
+        from src.core.tools.properties import list_authorized_properties
+
+        mock_identity = _make_identity(_make_mock_tenant())
+
+        with (
+            patch(
+                "src.core.transport_helpers.resolve_identity_from_context",
+                return_value=mock_identity,
+            ),
+            patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl,
+        ):
+            mock_impl.return_value = self._stub_response
+            result = list_authorized_properties(req=None, ctx=None)
+
+            assert isinstance(result, ToolResult)
+            # structured_content may be the response object or its dict representation
+            sc = result.structured_content
+            if isinstance(sc, dict):
+                assert sc["publisher_domains"] == ["stub.com"]
+            else:
+                assert sc.publisher_domains == ["stub.com"]
 
 
 # ===========================================================================
@@ -616,8 +568,8 @@ class TestContextEchoWithValue:
         """M1: Context from request appears in response with non-empty portfolio."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com"), _make_publisher("news.com")]
 
         req_context = ContextObject(campaign_id="abc-123", session="sess-1")
@@ -625,14 +577,13 @@ class TestContextEchoWithValue:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=req, context=ctx)
+            result = _list_authorized_properties_impl(req=req, identity=identity)
 
         assert result.context is not None
         assert result.context == req_context
@@ -650,22 +601,21 @@ class TestContextEchoEmptyPortfolio:
         """M2: Empty portfolio response still echoes context."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant)
 
         req_context = ContextObject(session="xyz")
         req = ListAuthorizedPropertiesRequest(context=req_context)
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=[])
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=req, context=ctx)
+            result = _list_authorized_properties_impl(req=req, identity=identity)
 
         assert result.publisher_domains == []
         assert result.context is not None
@@ -684,22 +634,21 @@ class TestContextEchoNone:
         """M3: req.context=None => response.context is None."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         req = ListAuthorizedPropertiesRequest()  # context defaults to None
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=req, context=ctx)
+            result = _list_authorized_properties_impl(req=req, identity=identity)
 
         assert result.context is None
         data = result.model_dump()
@@ -709,20 +658,19 @@ class TestContextEchoNone:
         """M3: req=None => response.context is None."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         assert result.context is None
 
@@ -739,8 +687,8 @@ class TestContextEchoComplexNested:
         """M4: Nested dict with lists is echoed faithfully."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         nested_context = ContextObject(
@@ -752,14 +700,13 @@ class TestContextEchoComplexNested:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=req, context=ctx)
+            result = _list_authorized_properties_impl(req=req, identity=identity)
 
         assert result.context is not None
         # ContextObject preserves via reference assignment, so it should be identical
@@ -778,27 +725,26 @@ class TestAuditLogSuccess:
         """M5: audit_logger.log_operation called with success=True and publisher details."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant, principal_id="user-1")
         publishers = [
             _make_publisher("alpha.com"),
             _make_publisher("beta.com"),
             _make_publisher("gamma.com"),
         ]
 
-        patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers, principal_id="user-1")
+        patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"] as mock_get_audit,
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
             mock_audit_instance = MagicMock()
             mock_get_audit.return_value = mock_audit_instance
 
-            _list_authorized_properties_impl(req=None, context=ctx)
+            _list_authorized_properties_impl(req=None, identity=identity)
 
             mock_audit_instance.log_operation.assert_called_once()
             _, kwargs = mock_audit_instance.log_operation.call_args
@@ -812,23 +758,22 @@ class TestAuditLogSuccess:
         """M5: When principal_id is None, audit uses 'anonymous'."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant, principal_id=None)
         publishers = [_make_publisher("example.com")]
 
-        patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers, principal_id=None)
+        patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"] as mock_get_audit,
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
             mock_audit_instance = MagicMock()
             mock_get_audit.return_value = mock_audit_instance
 
-            _list_authorized_properties_impl(req=None, context=ctx)
+            _list_authorized_properties_impl(req=None, identity=identity)
 
             _, kwargs = mock_audit_instance.log_operation.call_args
             assert kwargs["principal_name"] == "anonymous"
@@ -847,26 +792,25 @@ class TestAuditLogFailure:
         """M6: audit_logger.log_operation called with success=False and error string."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()
+        identity = _make_identity(tenant)
 
         patches = _patch_impl_dependencies(
             tenant=tenant,
             db_side_effect=RuntimeError("disk full"),
         )
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"] as mock_get_audit,
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
             mock_audit_instance = MagicMock()
             mock_get_audit.return_value = mock_audit_instance
 
             with pytest.raises(AdCPAdapterError, match="Failed to list authorized properties"):
-                _list_authorized_properties_impl(req=None, context=ctx)
+                _list_authorized_properties_impl(req=None, identity=identity)
 
             mock_audit_instance.log_operation.assert_called_once()
             _, kwargs = mock_audit_instance.log_operation.call_args
@@ -886,25 +830,24 @@ class TestAdvertisingPolicyOmittedWhenDisabled:
         """M7: enabled=False => no advertising_policies in response."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant(
             advertising_policy={
                 "enabled": False,
                 "default_prohibited_categories": ["Alcohol"],
             }
         )
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         assert result.advertising_policies is None
         data = result.model_dump()
@@ -914,20 +857,19 @@ class TestAdvertisingPolicyOmittedWhenDisabled:
         """M7: No advertising_policy key in tenant => no advertising_policies in response."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant()  # No advertising_policy key
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         assert result.advertising_policies is None
 
@@ -935,19 +877,18 @@ class TestAdvertisingPolicyOmittedWhenDisabled:
         """M7: advertising_policy=None in tenant => no advertising_policies in response."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        ctx = MagicMock()
         tenant = _make_mock_tenant(advertising_policy=None)
+        identity = _make_identity(tenant)
         publishers = [_make_publisher("example.com")]
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-            patches["auth"],
             patches["set_tenant"],
             patches["get_tenant"],
             patches["db"],
             patches["audit"],
-            patches["testing_ctx"],
+            patches["log_activity"],
         ):
-            result = _list_authorized_properties_impl(req=None, context=ctx)
+            result = _list_authorized_properties_impl(req=None, identity=identity)
 
         assert result.advertising_policies is None

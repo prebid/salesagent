@@ -23,7 +23,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
 from src.core.config_loader import get_current_tenant
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.helpers.context_helpers import get_principal_id_from_context as _get_principal_id_from_context
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
 from src.core.tools.media_buy_update import _verify_principal
 from src.core.validation_helpers import format_validation_error
@@ -33,7 +33,7 @@ def _update_performance_index_impl(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
     context: ContextObject | None = None,
-    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> UpdatePerformanceIndexResponse:
     """Shared implementation for update_performance_index (used by both MCP and A2A).
 
@@ -41,7 +41,7 @@ def _update_performance_index_impl(
         media_buy_id: ID of the media buy to update
         performance_data: List of performance data objects
         context: Application level context per adcp spec
-        ctx: FastMCP context (automatically provided)
+        identity: Resolved identity for authentication
 
     Returns:
         UpdatePerformanceIndexResponse with update status
@@ -58,13 +58,13 @@ def _update_performance_index_impl(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
 
-    if ctx is None:
-        raise ValueError("Context is required for update_performance_index")
+    if identity is None:
+        raise ValueError("Identity is required for update_performance_index")
 
-    _verify_principal(req.media_buy_id, ctx)
-    principal_id = _get_principal_id_from_context(ctx)  # Already verified by _verify_principal
+    _verify_principal(req.media_buy_id, identity)
+    principal_id = identity.principal_id
     if principal_id is None:
-        raise AdCPAuthenticationError("Principal ID not found in context - authentication required")
+        raise AdCPAuthenticationError("Principal ID not found in identity - authentication required")
 
     # Get the Principal object
     principal = get_principal_object(principal_id)
@@ -143,7 +143,10 @@ def update_performance_index(
     Returns:
         ToolResult with UpdatePerformanceIndexResponse data
     """
-    response = _update_performance_index_impl(media_buy_id, performance_data, context, ctx)
+    from src.core.transport_helpers import resolve_identity_from_context
+
+    identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    response = _update_performance_index_impl(media_buy_id, performance_data, context, identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -152,6 +155,7 @@ def update_performance_index_raw(
     performance_data: list[dict[str, Any]],
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ):
     """Update performance data for a media buy (raw function for A2A server use).
 
@@ -161,11 +165,16 @@ def update_performance_index_raw(
         media_buy_id: The ID of the media buy to update performance for
         performance_data: List of performance data objects
         ctx: Context for authentication
+        identity: Pre-resolved identity (if available)
 
     Returns:
         UpdatePerformanceIndexResponse
     """
-    return _update_performance_index_impl(media_buy_id, performance_data, context, ctx)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    return _update_performance_index_impl(media_buy_id, performance_data, context, identity)
 
 
 # --- Human-in-the-Loop Task Queue Tools ---

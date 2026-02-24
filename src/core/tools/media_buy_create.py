@@ -78,7 +78,7 @@ from src.core.context_manager import get_context_manager
 from src.core.database.models import MediaBuy
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
-from src.core.helpers import get_principal_id_from_context, log_tool_activity
+from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
     _convert_creative_to_adapter_asset,
@@ -87,6 +87,7 @@ from src.core.helpers.creative_helpers import (
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object, to_reporting_webhook
 from src.core.schemas import (
     CreateMediaBuyError,
@@ -106,7 +107,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     url as make_url,
 )
-from src.core.testing_hooks import TestingContext, apply_testing_hooks, get_testing_context
+from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
 
 # Import get_product_catalog from main (after refactor)
@@ -1197,14 +1198,14 @@ from src.services.slack_notifier import get_slack_notifier
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | BaseModel | None = None,
-    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
     Args:
         req: Validated CreateMediaBuyRequest with all protocol fields
         push_notification_config: Push notification config for status updates (model or dict)
-        ctx: FastMCP context (automatically provided)
+        identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:
         CreateMediaBuyResult wrapping response and status
@@ -1229,15 +1230,15 @@ async def _create_media_buy_impl(
             )
 
     # Extract testing context first
-    if ctx is None:
-        raise AdCPValidationError("Context is required")
+    if identity is None:
+        raise AdCPValidationError("Identity is required")
 
-    testing_ctx = get_testing_context(ctx)
+    testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
     # Authentication and tenant setup
-    principal_id = get_principal_id_from_context(ctx)
+    principal_id = identity.principal_id
     if principal_id is None:
-        raise AdCPAuthenticationError("Principal ID not found in context - authentication required")
+        raise AdCPAuthenticationError("Principal ID not found in identity - authentication required")
 
     tenant = get_current_tenant()
 
@@ -1270,7 +1271,16 @@ async def _create_media_buy_impl(
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
     ctx_manager = get_context_manager()
-    ctx_id = ctx.headers.get("x-context-id") if ctx and hasattr(ctx, "headers") else None
+    # Extract x-context-id from HTTP headers (transport-agnostic)
+    ctx_id = None
+    try:
+        from fastmcp.server.dependencies import get_http_headers
+
+        http_headers = get_http_headers(include_all=True)
+        if http_headers:
+            ctx_id = http_headers.get("x-context-id")
+    except Exception:
+        pass
     persistent_ctx = None
     step = None
 
@@ -1290,8 +1300,7 @@ async def _create_media_buy_impl(
         request_data_for_workflow = req.model_dump(mode="json")
 
         # Store protocol type for webhook payload creation
-        # ToolContext = A2A, Context (FastMCP) = MCP
-        request_data_for_workflow["protocol"] = "a2a" if isinstance(ctx, ToolContext) else "mcp"
+        request_data_for_workflow["protocol"] = identity.protocol
 
         # Store push_notification_config in workflow step request_data (same pattern as sync_creatives)
         if push_notification_config:
@@ -1803,7 +1812,7 @@ async def _create_media_buy_impl(
                 # Cast packages to local PackageRequest type (runtime compatible, mypy list invariance)
                 updated_packages, uploaded_ids = process_and_upload_package_creatives(
                     packages=cast(list[PackageRequest], req.packages),
-                    context=ctx,
+                    context=identity,
                     testing_ctx=testing_ctx,
                 )
                 # Replace packages with updated versions (functional approach)
@@ -3344,7 +3353,7 @@ async def _create_media_buy_impl(
         # Log activity
         # Activity logging imported at module level
 
-        log_tool_activity(ctx, "create_media_buy", request_start_time)
+        log_tool_activity(identity, "create_media_buy", request_start_time)
 
         # Also log specific media buy activity
         try:
@@ -3615,7 +3624,10 @@ async def create_media_buy(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
 
-    result = await _create_media_buy_impl(req=req, ctx=ctx)
+    from src.core.transport_helpers import resolve_identity_from_context
+
+    identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    result = await _create_media_buy_impl(req=req, identity=identity)
     return ToolResult(content=str(result), structured_content=result)
 
 
@@ -3642,6 +3654,7 @@ async def create_media_buy_raw(
     push_notification_config: dict[str, Any] | None = None,
     context: dict[str, Any] | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 
@@ -3668,7 +3681,8 @@ async def create_media_buy_raw(
         enable_creative_macro: Enable creative macro
         strategy_id: Strategy ID
         push_notification_config: Push notification config for status updates
-        ctx:  FastMCP context (automatically provided) (automatically provided)
+        ctx: Context for authentication (deprecated, use identity)
+        identity: Pre-resolved identity (if available)
 
     Returns:
         Dict with status and CreateMediaBuyResponse data
@@ -3689,10 +3703,15 @@ async def create_media_buy_raw(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
 
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+
     return await _create_media_buy_impl(
         req=req,
         push_notification_config=push_notification_config,
-        ctx=ctx,
+        identity=identity,
     )
 
 

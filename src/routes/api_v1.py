@@ -176,7 +176,11 @@ async def get_products(body: GetProductsBody, request: Request):
     )
 
     try:
-        response = await products_module._get_products_impl(req, ctx)
+        # Convert ToolContext to ResolvedIdentity for _impl call
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+        response = await products_module._get_products_impl(req, identity)
     except ToolError as e:
         return _handle_tool_error(e)
 

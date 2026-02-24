@@ -191,29 +191,34 @@ class TestGetAdcpCapabilitiesWithTenant:
                 mock_db.return_value.__exit__ = MagicMock(return_value=False)
                 mock_session.scalars.return_value.all.return_value = []
 
-                # Mock get_principal_from_context to return tenant info
-                with patch("src.core.tools.capabilities.get_principal_from_context") as mock_auth:
-                    mock_auth.return_value = (None, mock_tenant)
+                # Pass identity with tenant info directly (no auth extraction in _impl)
+                from src.core.resolved_identity import ResolvedIdentity
 
-                    response = _get_adcp_capabilities_impl(None, None)
+                identity = ResolvedIdentity(
+                    principal_id=None,
+                    tenant_id="test-tenant-123",
+                    tenant=mock_tenant,
+                    protocol="mcp",
+                )
+                response = _get_adcp_capabilities_impl(None, identity)
 
-                    # Verify full response structure
-                    assert response.adcp is not None
-                    assert response.adcp.major_versions[0].root == 3
-                    assert SupportedProtocol.media_buy in response.supported_protocols
+                # Verify full response structure
+                assert response.adcp is not None
+                assert response.adcp.major_versions[0].root == 3
+                assert SupportedProtocol.media_buy in response.supported_protocols
 
-                    # Should have media_buy capabilities with portfolio
-                    assert response.media_buy is not None
-                    assert response.media_buy.portfolio is not None
-                    assert response.media_buy.portfolio.description == "Advertising inventory from Test Publisher"
+                # Should have media_buy capabilities with portfolio
+                assert response.media_buy is not None
+                assert response.media_buy.portfolio is not None
+                assert response.media_buy.portfolio.description == "Advertising inventory from Test Publisher"
 
-                    # Should have features
-                    assert response.media_buy.features is not None
-                    assert response.media_buy.features.inline_creative_management is True
+                # Should have features
+                assert response.media_buy.features is not None
+                assert response.media_buy.features.inline_creative_management is True
 
-                    # Should have execution with targeting
-                    assert response.media_buy.execution is not None
-                    assert response.media_buy.execution.targeting is not None
+                # Should have execution with targeting
+                assert response.media_buy.execution is not None
+                assert response.media_buy.execution.targeting is not None
         finally:
             # Reset tenant context
             current_tenant.set(None)
@@ -248,32 +253,38 @@ class TestGetAdcpCapabilitiesWithTenant:
                 mock_db.return_value.__exit__ = MagicMock(return_value=False)
                 mock_session.scalars.return_value.all.return_value = []
 
-                with patch("src.core.tools.capabilities.get_principal_from_context") as mock_auth:
-                    mock_auth.return_value = ("principal-123", mock_tenant)
+                from src.core.resolved_identity import ResolvedIdentity
 
-                    with patch("src.core.tools.capabilities.get_principal_object") as mock_principal:
-                        mock_principal.return_value = MagicMock()
+                identity = ResolvedIdentity(
+                    principal_id="principal-123",
+                    tenant_id="test-tenant-456",
+                    tenant=mock_tenant,
+                    protocol="mcp",
+                )
 
-                        with patch("src.core.tools.capabilities.get_adapter") as mock_get_adapter:
-                            mock_get_adapter.return_value = mock_adapter
+                with patch("src.core.tools.capabilities.get_principal_object") as mock_principal:
+                    mock_principal.return_value = MagicMock()
 
-                            response = _get_adcp_capabilities_impl(None, None)
+                    with patch("src.core.tools.capabilities.get_adapter") as mock_get_adapter:
+                        mock_get_adapter.return_value = mock_adapter
 
-                            # Verify targeting from adapter
-                            assert response.media_buy is not None
-                            assert response.media_buy.execution is not None
-                            targeting = response.media_buy.execution.targeting
-                            assert targeting is not None
-                            assert targeting.geo_countries is True
-                            assert targeting.geo_regions is True
+                        response = _get_adcp_capabilities_impl(None, identity)
 
-                            # Should have geo_metros with nielsen_dma
-                            assert targeting.geo_metros is not None
-                            assert targeting.geo_metros.nielsen_dma is True
+                        # Verify targeting from adapter
+                        assert response.media_buy is not None
+                        assert response.media_buy.execution is not None
+                        targeting = response.media_buy.execution.targeting
+                        assert targeting is not None
+                        assert targeting.geo_countries is True
+                        assert targeting.geo_regions is True
 
-                            # Should have geo_postal_areas with us_zip
-                            assert targeting.geo_postal_areas is not None
-                            assert targeting.geo_postal_areas.us_zip is True
+                        # Should have geo_metros with nielsen_dma
+                        assert targeting.geo_metros is not None
+                        assert targeting.geo_metros.nielsen_dma is True
+
+                        # Should have geo_postal_areas with us_zip
+                        assert targeting.geo_postal_areas is not None
+                        assert targeting.geo_postal_areas.us_zip is True
         finally:
             current_tenant.set(None)
 

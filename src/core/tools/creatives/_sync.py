@@ -9,16 +9,15 @@ from adcp import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
-from fastmcp.server.context import Context
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError
-from src.core.helpers import get_principal_id_from_context, log_tool_activity
+from src.core.helpers import log_tool_activity
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
-from src.core.tool_context import ToolContext
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 
 from ._assignments import _process_assignments
@@ -38,7 +37,7 @@ def _sync_creatives_impl(
     validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
-    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
 
@@ -60,7 +59,7 @@ def _sync_creatives_impl(
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for status updates (AdCP spec, optional)
         context: Application level context per adcp spec
-        ctx: FastMCP context (automatically provided)
+        identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:
         SyncCreativesResponse with synced creatives and assignments
@@ -80,7 +79,7 @@ def _sync_creatives_impl(
     start_time = time.time()
 
     # Authentication
-    principal_id = get_principal_id_from_context(ctx)
+    principal_id = identity.principal_id if identity else None
 
     # CRITICAL: principal_id is required for creative sync (NOT NULL in database)
     if not principal_id:
@@ -89,20 +88,18 @@ def _sync_creatives_impl(
             "Creative sync requires authentication to associate creatives with an advertiser principal."
         )
 
-    # Get tenant information
-    # If context is ToolContext (A2A), tenant is already set, but verify it matches
-    from src.core.tool_context import ToolContext
+    # Get tenant information from identity (transport-agnostic)
+    if identity and identity.tenant:
+        tenant = identity.tenant
+        # Verify tenant context is set in thread-local for downstream code
+        current = get_current_tenant()
+        if not current or current.get("tenant_id") != identity.tenant_id:
+            logger.warning(f"Warning: Tenant context mismatch, setting from identity: {identity.tenant_id}")
+            from src.core.config_loader import set_current_tenant
 
-    if isinstance(ctx, ToolContext):
-        # Tenant context should already be set by A2A handler, but verify
-        tenant = get_current_tenant()
-        if not tenant or tenant.get("tenant_id") != ctx.tenant_id:
-            # Tenant context wasn't set properly - this shouldn't happen but handle it
-            logger.warning(f"Warning: Tenant context mismatch, setting from ToolContext: {ctx.tenant_id}")
-            # We need to load the tenant properly - for now use the ID from context
-            tenant = {"tenant_id": ctx.tenant_id}
+            set_current_tenant(tenant)
     else:
-        # FastMCP path - tenant should be set by get_principal_from_context
+        # Fallback: tenant should be set by resolve_identity or upstream handler
         tenant = get_current_tenant()
 
     if not tenant:
@@ -350,7 +347,7 @@ def _sync_creatives_impl(
             approval_mode=approval_mode,
             push_notification_config=push_notification_config,
             context=context,
-            ctx=ctx,
+            identity=identity,
         )
         _send_creative_notifications(
             creatives_needing_approval=creatives_needing_approval,
@@ -376,8 +373,8 @@ def _sync_creatives_impl(
     )
 
     # Log activity
-    if ctx is not None:
-        log_tool_activity(ctx, "sync_creatives", start_time)
+    if identity is not None:
+        log_tool_activity(identity, "sync_creatives", start_time)
 
     # Build message
     message = f"Synced {created_count + updated_count} creatives"

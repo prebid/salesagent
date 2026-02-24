@@ -15,12 +15,12 @@ from fastmcp.server.context import Context
 from sqlalchemy import func, select
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_from_context
 from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
 from src.core.exceptions import AdCPAuthenticationError
+from src.core.resolved_identity import ResolvedIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ def list_tasks(
     limit: int = 20,
     offset: int = 0,
     context: Context | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> dict[str, Any]:
     """List workflow tasks with filtering options.
 
@@ -42,15 +43,21 @@ def list_tasks(
         limit: Maximum number of tasks to return (default: 20)
         offset: Number of tasks to skip (default: 0)
         context: MCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over context)
 
     Returns:
         Dict containing tasks list and pagination info
     """
-    principal_id, tenant = get_principal_from_context(context, require_valid_token=True)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
 
-    if not tenant:
+        identity = resolve_identity_from_context(context, require_valid_token=True)
+
+    if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
 
+    principal_id = identity.principal_id
+    tenant = identity.tenant
     set_current_tenant(tenant)
 
     with get_db_session() as session:
@@ -117,21 +124,26 @@ def list_tasks(
         }
 
 
-def get_task(task_id: str, context: Context | None = None) -> dict[str, Any]:
+def get_task(task_id: str, context: Context | None = None, identity: ResolvedIdentity | None = None) -> dict[str, Any]:
     """Get detailed information about a specific task.
 
     Args:
         task_id: The unique task/workflow step ID
         context: MCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over context)
 
     Returns:
         Dict containing complete task details
     """
-    principal_id, tenant = get_principal_from_context(context, require_valid_token=True)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
 
-    if not tenant:
+        identity = resolve_identity_from_context(context, require_valid_token=True)
+
+    if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
 
+    tenant = identity.tenant
     set_current_tenant(tenant)
 
     with get_db_session() as session:
@@ -184,6 +196,7 @@ def complete_task(
     response_data: dict[str, Any] | None = None,
     error_message: str | None = None,
     context: Context | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> dict[str, Any]:
     """Complete a pending task (simulates human approval or async completion).
 
@@ -193,15 +206,21 @@ def complete_task(
         response_data: Optional response data for completed tasks
         error_message: Error message if status is "failed"
         context: MCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over context)
 
     Returns:
         Dict containing task completion status
     """
-    principal_id, tenant = get_principal_from_context(context, require_valid_token=True)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
 
-    if not tenant:
+        identity = resolve_identity_from_context(context, require_valid_token=True)
+
+    if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
 
+    principal_id = identity.principal_id
+    tenant = identity.tenant
     set_current_tenant(tenant)
 
     if status not in ["completed", "failed"]:
