@@ -126,8 +126,7 @@ def test_add_product_json_encoding(client, test_tenant, integration_db):
             ("price_guidance_max", "15.0"),
             ("min_spend", "1000"),
             ("max_impressions", "1000000"),
-            ("property_mode", "tags"),
-            ("selected_property_tags", "all_inventory"),  # Required: at least one property tag
+            ("property_mode", "none"),  # Bypass property tag validation — this test is about JSON encoding
         ]
     )
 
@@ -323,8 +322,8 @@ def test_list_products_json_parsing(client, test_tenant, integration_db):
             rate="10.00",
             is_fixed=False,
             format_ids=[
-                {"format_id": "display_300x250", "name": "Display 300x250", "type": "display"},
-                {"format_id": "video_16x9", "name": "Video 16:9", "type": "video"},
+                {"id": "display_300x250", "agent_url": "https://test.example.com"},
+                {"id": "video_16x9", "agent_url": "https://test.example.com"},
             ],
             countries=["US", "CA"],
             price_guidance={"min": 10.0, "max": 20.0},

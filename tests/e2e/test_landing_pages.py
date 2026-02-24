@@ -176,6 +176,12 @@ class TestLandingPages:
 class TestAuthOptionalEndpoints:
     """Test auth-optional MCP endpoints (list_creative_formats, list_authorized_properties, get_products)."""
 
+    # MCP Streamable HTTP requires both Accept types
+    MCP_HEADERS = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+
     @pytest.mark.integration
     def test_list_creative_formats_without_auth(self, live_server):
         """list_creative_formats should work without authentication."""
@@ -190,10 +196,7 @@ class TestAuthOptionalEndpoints:
                     "method": "tools/call",
                     "params": {"name": "list_creative_formats", "arguments": {}},
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "Host": "test-custom-domain.example.com",
-                },
+                headers={**self.MCP_HEADERS, "Host": "test-custom-domain.example.com"},
                 timeout=5,
             )
 
@@ -219,10 +222,7 @@ class TestAuthOptionalEndpoints:
                     "method": "tools/call",
                     "params": {"name": "list_creative_formats", "arguments": {}},
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "x-adcp-auth": test_auth_token,
-                },
+                headers={**self.MCP_HEADERS, "x-adcp-auth": test_auth_token},
                 timeout=5,
             )
 
@@ -247,10 +247,7 @@ class TestAuthOptionalEndpoints:
                     "method": "tools/call",
                     "params": {"name": "list_authorized_properties", "arguments": {}},
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "Host": "test-custom-domain.example.com",
-                },
+                headers={**self.MCP_HEADERS, "Host": "test-custom-domain.example.com"},
                 timeout=5,
             )
 
@@ -276,10 +273,7 @@ class TestAuthOptionalEndpoints:
                     "method": "tools/call",
                     "params": {"name": "list_authorized_properties", "arguments": {}},
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "x-adcp-auth": test_auth_token,
-                },
+                headers={**self.MCP_HEADERS, "x-adcp-auth": test_auth_token},
                 timeout=5,
             )
 
@@ -307,10 +301,7 @@ class TestAuthOptionalEndpoints:
                         "arguments": {"brief": "test campaign"},
                     },
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "Host": "test-custom-domain.example.com",
-                },
+                headers={**self.MCP_HEADERS, "Host": "test-custom-domain.example.com"},
                 timeout=5,
             )
 
@@ -339,10 +330,7 @@ class TestAuthOptionalEndpoints:
                         "arguments": {"brief": "test campaign"},
                     },
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "x-adcp-auth": test_auth_token,
-                },
+                headers={**self.MCP_HEADERS, "x-adcp-auth": test_auth_token},
                 timeout=5,
             )
 
@@ -369,10 +357,7 @@ class TestAuthOptionalEndpoints:
                         "arguments": {"brief": "test campaign"},
                     },
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "Host": "test-custom-domain.example.com",
-                },
+                headers={**self.MCP_HEADERS, "Host": "test-custom-domain.example.com"},
                 timeout=5,
             )
 
