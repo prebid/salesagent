@@ -32,7 +32,6 @@ from src.core.database.models import (
 # Schema models (explicit imports to avoid collisions)
 # Schema adapters (wrapping generated schemas)
 from src.core.schemas import (
-    CreateMediaBuyRequest,
     Creative,
     CreativeAssignment,
     CreativeGroup,
@@ -47,23 +46,6 @@ console = Console()
 # Backward compatibility alias for deprecated Task model
 # The workflow system now uses WorkflowStep exclusively
 Task = WorkflowStep
-
-# Temporary placeholder classes for missing schemas
-# TODO: These should be properly defined in schemas.py
-from pydantic import BaseModel
-
-
-class ApproveAdaptationRequest(BaseModel):
-    creative_id: str
-    adaptation_id: str
-    approve: bool = True
-    modifications: dict[str, Any] | None = None
-
-
-class ApproveAdaptationResponse(BaseModel):
-    success: bool
-    message: str
-
 
 # --- Helper Functions ---
 
@@ -157,28 +139,10 @@ creative_engine_config: dict[str, Any] = {}
 creative_engine = MockCreativeEngine(creative_engine_config)
 
 
-def load_media_buys_from_db():
-    """Load existing media buys from database into memory on startup."""
-    try:
-        # We can't load tenant-specific media buys at startup since we don't have tenant context
-        # Media buys will be loaded on-demand when needed
-        console.print("[dim]Media buys will be loaded on-demand from database[/dim]")
-    except Exception as e:
-        console.print(f"[yellow]Warning: Could not initialize media buys from database: {e}[/yellow]")
-
-
-def load_tasks_from_db():
-    """[DEPRECATED] This function is no longer needed - tasks are queried directly from database."""
-    # This function is kept for backward compatibility but does nothing
-    # All task operations now use direct database queries
-    pass
-
-
 # Removed get_task_from_db - replaced by workflow-based system
 
 
 # --- In-Memory State ---
-media_buys: dict[str, tuple[CreateMediaBuyRequest, str]] = {}
 creative_assignments: dict[str, dict[str, list[str]]] = {}
 creative_statuses: dict[str, CreativeStatus] = {}
 product_catalog: list[Product] = []
@@ -186,8 +150,6 @@ creative_library: dict[str, Creative] = {}  # creative_id -> Creative
 creative_groups: dict[str, CreativeGroup] = {}  # group_id -> CreativeGroup
 creative_assignments_v2: dict[str, CreativeAssignment] = {}  # assignment_id -> CreativeAssignment
 # REMOVED: human_tasks dictionary - now using direct database queries only
-
-# Note: load_tasks_from_db() is no longer needed - tasks are queried directly from database
 
 # Authentication cache removed - FastMCP v2.11.0+ properly forwards headers
 

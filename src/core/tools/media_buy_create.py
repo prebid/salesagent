@@ -2758,12 +2758,6 @@ async def _create_media_buy_impl(
         assert step is not None, "step should be created when not in dry_run mode"
         assert persistent_ctx is not None, "persistent_ctx should be created when not in dry_run mode"
 
-        # Store the media buy in memory (for backward compatibility)
-        # Lazy import to avoid circular dependency
-        from src.core.main import media_buys
-
-        media_buys[response.media_buy_id] = (req, principal_id)
-
         # Determine initial status using centralized logic
         # Check if creatives are assigned and approved
         has_creatives = False
