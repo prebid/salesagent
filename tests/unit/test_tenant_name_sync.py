@@ -7,7 +7,7 @@ def test_context_processor_loads_fresh_tenant_data():
     """Test that context processor loads fresh tenant data from database."""
     from src.admin.app import create_app
 
-    app, _ = create_app()
+    app = create_app()
 
     with app.test_request_context():
         # Mock session with tenant_id only (no tenant_name - we don't use it anymore)
@@ -39,7 +39,7 @@ def test_context_processor_handles_missing_tenant():
     """Test that context processor handles missing tenant gracefully."""
     from src.admin.app import create_app
 
-    app, _ = create_app()
+    app = create_app()
 
     with app.test_request_context():
         # Mock session without tenant_id

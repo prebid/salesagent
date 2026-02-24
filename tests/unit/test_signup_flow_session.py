@@ -25,7 +25,7 @@ class TestSignupFlowSessionPreservation:
         ):
             from src.admin.app import create_app
 
-            app, _ = create_app()
+            app = create_app()
             app.config["TESTING"] = True
             app.config["SECRET_KEY"] = "test-secret"
 
@@ -60,7 +60,7 @@ class TestSignupFlowSessionPreservation:
         ):
             from src.admin.app import create_app
 
-            app, _ = create_app()
+            app = create_app()
             app.config["TESTING"] = True
             app.config["SECRET_KEY"] = "test-secret"
 
@@ -98,7 +98,7 @@ class TestSignupFlowSessionPreservation:
         ):
             from src.admin.app import create_app
 
-            app, _ = create_app()
+            app = create_app()
             app.config["TESTING"] = True
             app.config["SECRET_KEY"] = "test-secret"
 

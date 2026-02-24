@@ -12,7 +12,7 @@ class TestExternalDomainRouting:
         """Test tenant lookup via Apx-Incoming-Host header."""
         from src.admin.app import create_app
 
-        app, _ = create_app()
+        app = create_app()
 
         with app.test_request_context(
             "/",
@@ -50,7 +50,7 @@ class TestExternalDomainRouting:
         """Test that None is returned when no tenant is configured for external domain."""
         from src.admin.app import create_app
 
-        app, _ = create_app()
+        app = create_app()
 
         with app.test_request_context(
             "/",
@@ -79,7 +79,7 @@ class TestExternalDomainRouting:
         """Test that external domain with configured tenant shows agent landing page."""
         from src.admin.app import create_app
 
-        app, _ = create_app()
+        app = create_app()
 
         with app.test_client() as client:
             # Mock single-tenant mode to return False (we're testing multi-tenant routing)
@@ -125,7 +125,7 @@ class TestExternalDomainRouting:
         """Test that external domain without configured tenant shows signup landing page."""
         from src.admin.app import create_app
 
-        app, _ = create_app()
+        app = create_app()
 
         with app.test_client() as client:
             # Mock single-tenant mode to return False (we're testing multi-tenant routing)
@@ -154,7 +154,7 @@ class TestExternalDomainRouting:
         """Test that subdomain (*.sales-agent.example.com) with tenant shows agent landing page."""
         from src.admin.app import create_app
 
-        app, _ = create_app()
+        app = create_app()
 
         with app.test_client() as client:
             # Mock single-tenant mode to return False (we're testing multi-tenant routing)

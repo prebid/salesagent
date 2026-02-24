@@ -63,14 +63,7 @@ class ActivityFeed:
             self.recent_activities[tenant_id] = deque(maxlen=self.max_recent)
         self.recent_activities[tenant_id].append(activity)
 
-        # If we have a Flask-SocketIO callback, use it
-        if hasattr(self, "broadcast_to_websocket"):
-            try:
-                self.broadcast_to_websocket(tenant_id, activity)
-            except Exception as e:
-                logger.debug(f"Failed to broadcast via Socket.IO: {e}")
-
-        # Also broadcast to any raw WebSocket connections (backward compatibility)
+        # Broadcast to any raw WebSocket connections
         if tenant_id in self.connections:
             dead_refs = []
             for ref in self.connections[tenant_id]:

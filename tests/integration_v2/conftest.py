@@ -13,7 +13,7 @@ import pytest
 
 from src.admin.app import create_app
 
-admin_app, _ = create_app()
+admin_app = create_app()
 
 
 @pytest.fixture(scope="function")

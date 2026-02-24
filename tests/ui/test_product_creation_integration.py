@@ -5,7 +5,7 @@ from sqlalchemy import delete, select
 
 from src.admin.app import create_app
 
-app, _ = create_app()
+app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, Tenant
 from tests.integration_v2.conftest import (

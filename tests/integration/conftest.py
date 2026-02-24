@@ -12,7 +12,7 @@ import pytest
 
 from src.admin.app import create_app
 
-admin_app, _ = create_app()
+admin_app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from tests.fixtures import TenantFactory
@@ -780,7 +780,7 @@ def test_admin_app(integration_db):
     # integration_db ensures database tables are created
     from src.admin.app import create_app
 
-    app, _ = create_app()
+    app = create_app()
     app.config["TESTING"] = True
     app.config["SECRET_KEY"] = "test-secret-key"
     app.config["WTF_CSRF_ENABLED"] = False

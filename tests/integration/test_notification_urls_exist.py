@@ -24,7 +24,7 @@ class TestNotificationUrlsExist:
     @pytest.fixture
     def app(self):
         """Create Flask app for route inspection."""
-        app, _ = create_app()
+        app = create_app()
         return app
 
     @pytest.fixture

@@ -366,7 +366,7 @@ class TestSelfServiceSignupFlow:
         # Import the app to access oauth object
         from src.admin.app import create_app
 
-        app, _ = create_app({"TESTING": True, "SECRET_KEY": "test_key"})
+        app = create_app({"TESTING": True, "SECRET_KEY": "test_key"})
 
         # Mock OAuth at the app level (where it's actually used)
         with patch.object(app, "oauth", create=True) as mock_oauth:
@@ -445,6 +445,6 @@ def client():
     """Create Flask test client."""
     from src.admin.app import create_app
 
-    app, _ = create_app({"TESTING": True, "SECRET_KEY": "test_key"})
+    app = create_app({"TESTING": True, "SECRET_KEY": "test_key"})
     with app.test_client() as test_client:
         yield test_client

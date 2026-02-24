@@ -19,7 +19,7 @@ def test_health_routes_in_refactored_app(integration_db):
     # Reset engine to ensure it uses the test database (integration_db fixture sets DATABASE_URL)
     reset_engine()
 
-    app, socketio = create_app()
+    app = create_app()
     client = app.test_client()
 
     # Test simple health endpoint
@@ -45,7 +45,7 @@ def test_health_routes_in_original_app(integration_db):
     # Reset engine to ensure it uses the test database (integration_db fixture sets DATABASE_URL)
     reset_engine()
 
-    app, _ = create_app()
+    app = create_app()
     client = app.test_client()
 
     # Test simple health endpoint
