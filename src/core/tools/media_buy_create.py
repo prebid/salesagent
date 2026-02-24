@@ -1199,6 +1199,7 @@ async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | BaseModel | None = None,
     identity: ResolvedIdentity | None = None,
+    context_id: str | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -1271,16 +1272,7 @@ async def _create_media_buy_impl(
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
     ctx_manager = get_context_manager()
-    # Extract x-context-id from HTTP headers (transport-agnostic)
-    ctx_id = None
-    try:
-        from fastmcp.server.dependencies import get_http_headers
-
-        http_headers = get_http_headers(include_all=True)
-        if http_headers:
-            ctx_id = http_headers.get("x-context-id")
-    except Exception:
-        pass
+    ctx_id = context_id  # Extracted at transport boundary, passed in
     persistent_ctx = None
     step = None
 
@@ -3627,7 +3619,17 @@ async def create_media_buy(
     from src.core.transport_helpers import resolve_identity_from_context
 
     identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    result = await _create_media_buy_impl(req=req, identity=identity)
+    # Extract x-context-id at transport boundary
+    _ctx_id = None
+    try:
+        from fastmcp.server.dependencies import get_http_headers
+
+        http_headers = get_http_headers(include_all=True)
+        if http_headers:
+            _ctx_id = http_headers.get("x-context-id")
+    except Exception:
+        pass
+    result = await _create_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
     return ToolResult(content=str(result), structured_content=result)
 
 

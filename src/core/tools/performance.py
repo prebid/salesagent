@@ -11,13 +11,11 @@ from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
-from rich.console import Console
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
-console = Console()
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
@@ -84,16 +82,17 @@ def _update_performance_index_impl(
     success = adapter.update_media_buy_performance_index(req.media_buy_id, package_performance)
 
     # Log the performance update
-    console.print(f"[bold green]Performance Index Update for {req.media_buy_id}:[/bold green]")
+    logger.info("Performance Index Update for %s", req.media_buy_id)
     for perf in req.performance_data:
-        status_emoji = "📈" if perf.performance_index > 1.0 else "📉" if perf.performance_index < 1.0 else "➡️"
-        console.print(
-            f"  {status_emoji} {perf.product_id}: {perf.performance_index:.2f} (confidence: {perf.confidence_score or 'N/A'})"
+        logger.info(
+            "  %s: %.2f (confidence: %s)",
+            perf.product_id,
+            perf.performance_index,
+            perf.confidence_score or "N/A",
         )
 
-    # Simulate optimization based on performance
     if any(p.performance_index < 0.8 for p in req.performance_data):
-        console.print("  [yellow]⚠️  Low performance detected - optimization recommended[/yellow]")
+        logger.info("Low performance detected for %s - optimization recommended", req.media_buy_id)
 
     # Log the update_performance_index call
     tenant = get_current_tenant()

@@ -110,6 +110,7 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity"):
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
+    context_id: str | None = None,
 ) -> UpdateMediaBuySuccess | UpdateMediaBuyError:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
@@ -171,16 +172,7 @@ def _update_media_buy_impl(
     # Create or get persistent context and workflow step
     # Skip for dry_run mode (no side effects, no database writes)
     ctx_manager = get_context_manager()
-    # Extract x-context-id from HTTP headers (transport-agnostic)
-    ctx_id = None
-    try:
-        from fastmcp.server.dependencies import get_http_headers
-
-        http_headers = get_http_headers(include_all=True)
-        if http_headers:
-            ctx_id = http_headers.get("x-context-id")
-    except Exception:
-        pass
+    ctx_id = context_id  # Extracted at transport boundary, passed in
     persistent_ctx = None
     step = None
 
@@ -1442,7 +1434,17 @@ def update_media_buy(
     from src.core.transport_helpers import resolve_identity_from_context
 
     identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    response = _update_media_buy_impl(req=req, identity=identity)
+    # Extract x-context-id at transport boundary
+    _ctx_id = None
+    try:
+        from fastmcp.server.dependencies import get_http_headers
+
+        http_headers = get_http_headers(include_all=True)
+        if http_headers:
+            _ctx_id = http_headers.get("x-context-id")
+    except Exception:
+        pass
+    response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
     return ToolResult(content=str(response), structured_content=response)
 
 
