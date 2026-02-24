@@ -22,7 +22,7 @@ This runs:
 make quality-full
 ```
 
-Runs everything above plus `./run_all_tests.sh ci` (integration + e2e with PostgreSQL).
+Runs everything above plus `./run_all_tests.sh ci` (all 5 suites with Docker + PostgreSQL). JSON reports saved to `test-results/<timestamp>/`.
 
 ## Common Violations
 

@@ -123,6 +123,9 @@ test_*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/
 test_sync.py
 .env.bak*
 
+# Test results (JSON reports from ./run_all_tests.sh)
+test-results/
+
 # Agentic coding — local-only files
 .claude/research/
 .claude/settings.local.json

@@ -79,7 +79,7 @@ When adding routes:
 
 - Use `JSONType` for all JSON columns (not plain `JSON`)
 - Use SQLAlchemy 2.0 patterns: `select()` + `scalars()`, not `query()`
-- All tests require PostgreSQL: `./run_all_tests.sh ci`
+- All tests require PostgreSQL: `./run_all_tests.sh ci` (JSON reports in `test-results/`)
 
 ### 4. Pydantic: Explicit Nested Serialization
 Parent models must override `model_dump()` to serialize nested children:
@@ -220,8 +220,10 @@ uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
 
 ### Testing
 ```bash
-./run_all_tests.sh ci     # Full suite with PostgreSQL (matches CI)
-./run_all_tests.sh quick  # Fast iteration (skips database tests)
+./run_all_tests.sh ci     # Full suite with Docker + all 5 suites (DEFAULT)
+./run_all_tests.sh quick  # No Docker: unit + integration + integration_v2
+
+# Both modes produce JSON reports in test-results/<ddmmyy_HHmm>/
 
 # Manual pytest
 uv run pytest tests/unit/              # Unit tests only
