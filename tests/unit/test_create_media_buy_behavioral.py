@@ -101,7 +101,7 @@ def _mock_currency_limit(
 def _standard_patches():
     """Return a dict of common patch targets for _create_media_buy_impl."""
     return {
-        "src.core.tools.media_buy_create.get_current_tenant": "_tenant",
+        "src.core.helpers.context_helpers.ensure_tenant_context": "_tenant",
         "src.core.tools.media_buy_create.validate_setup_complete": "_setup",
         "src.core.tools.media_buy_create.get_principal_object": "_principal_obj",
         "src.core.tools.media_buy_create.get_context_manager": "_ctx_manager",
@@ -142,7 +142,7 @@ class _PatchContext:
         )
 
         # tenant
-        self._p_tenant = patch("src.core.tools.media_buy_create.get_current_tenant")
+        self._p_tenant = patch("src.core.helpers.context_helpers.ensure_tenant_context")
         self._p_tenant.start().return_value = {
             "tenant_id": "test_tenant",
             "human_review_required": False,

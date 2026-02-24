@@ -106,7 +106,7 @@ class TestMCPErrorShapes:
         )
 
         with (
-            patch("src.core.tools.media_buy_create.get_current_tenant", return_value={"tenant_id": "test"}),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
@@ -461,7 +461,7 @@ class TestCrossTransportErrorConsistency:
         )
 
         with (
-            patch("src.core.tools.media_buy_create.get_current_tenant", return_value={"tenant_id": "test"}),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):

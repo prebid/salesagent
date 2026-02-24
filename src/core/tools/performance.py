@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
-from src.core.config_loader import get_current_tenant
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
@@ -59,6 +58,11 @@ def _update_performance_index_impl(
     if identity is None:
         raise ValueError("Identity is required for update_performance_index")
 
+    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
+    from src.core.helpers.context_helpers import ensure_tenant_context
+
+    tenant = ensure_tenant_context(identity)
+
     _verify_principal(req.media_buy_id, identity)
     principal_id = identity.principal_id
     if principal_id is None:
@@ -95,7 +99,6 @@ def _update_performance_index_impl(
         logger.info("Low performance detected for %s - optimization recommended", req.media_buy_id)
 
     # Log the update_performance_index call
-    tenant = get_current_tenant()
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
     audit_logger.log_operation(
         operation="update_performance_index",

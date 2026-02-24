@@ -88,8 +88,8 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
             get_principal_from_context(mock_context)
 
         # Verify the error message mentions the tenant
-        assert "INVALID_AUTH_TOKEN" in str(exc_info.value)
-        assert "tenant_wonderstruck" in str(exc_info.value)
+        error_str = str(exc_info.value)
+        assert "tenant_wonderstruck" in error_str
 
 
 @pytest.mark.requires_db

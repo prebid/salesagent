@@ -30,7 +30,6 @@ from adcp.types import Error, MediaBuyStatus
 from adcp.types.generated_poc.core.context import ContextObject
 
 from src.core.auth import get_principal_object
-from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, PricingOption
 from src.core.helpers import get_principal_id_from_context
@@ -143,8 +142,12 @@ def _get_media_buy_delivery_impl(
     # Determine reference date for status calculations use end_date, it either will be today or the user provided end_date.
     reference_date = end_dt.date()
 
+    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
+    from src.core.helpers.context_helpers import ensure_tenant_context
+
+    tenant = ensure_tenant_context(identity)
+
     # Determine which media buys to fetch from database
-    tenant = get_current_tenant()
 
     target_media_buys = _get_target_media_buys(req, principal_id, tenant, reference_date)
     pricing_option_ids = [

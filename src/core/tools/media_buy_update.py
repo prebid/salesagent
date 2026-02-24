@@ -32,7 +32,6 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     get_principal_object,
 )
-from src.core.config_loader import get_current_tenant
 from src.core.context_manager import get_context_manager
 from src.core.database.database_session import get_db_session
 from src.core.helpers.adapter_helpers import get_adapter
@@ -71,7 +70,10 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity"):
             "Authentication required: Missing or invalid x-adcp-auth header. Media buy updates require authentication."
         )
 
-    tenant = get_current_tenant()
+    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
+    from src.core.helpers.context_helpers import ensure_tenant_context
+
+    tenant = ensure_tenant_context(context)
 
     # Query database for media buy (try media_buy_id first, then buyer_ref)
     with get_db_session() as session:
@@ -130,13 +132,15 @@ def _update_media_buy_impl(
     if identity is None:
         raise ValueError("Identity is required for update_media_buy")
 
-    # CRITICAL: Extract principal from identity (tenant already set at boundary)
+    # CRITICAL: Extract principal from identity
     principal_id = identity.principal_id
     if principal_id is None:
         raise ValueError("principal_id is required but was None - authentication required")
 
-    # Now tenant context is set, we can safely call get_current_tenant()
-    tenant = get_current_tenant()
+    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
+    from src.core.helpers.context_helpers import ensure_tenant_context
+
+    tenant = ensure_tenant_context(identity)
 
     # Resolve media_buy_id from buyer_ref if needed (AdCP oneOf constraint)
     media_buy_id_to_use = req.media_buy_id

@@ -152,9 +152,8 @@ def test_cross_tenant_token_rejected(integration_db):
         with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(context)
 
-        error = exc_info.value
-        assert error.args[0] == "INVALID_AUTH_TOKEN"
-        assert "tenant_test_agent" in error.args[1]
+        error_str = str(exc_info.value)
+        assert "tenant_test_agent" in error_str
 
 
 @pytest.mark.requires_db

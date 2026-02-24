@@ -107,7 +107,7 @@ def _patch_happy_path(
     )
     stack.enter_context(
         patch(
-            "src.core.tools.performance.get_current_tenant",
+            "src.core.helpers.context_helpers.ensure_tenant_context",
             return_value={"tenant_id": "tenant_1"},
         )
     )
@@ -258,6 +258,9 @@ class TestHighRiskMCP:
         identity = _make_identity()
 
         with patch(
+            "src.core.helpers.context_helpers.ensure_tenant_context",
+            return_value={"tenant_id": "tenant_1"},
+        ), patch(
             "src.core.tools.performance._verify_principal",
             side_effect=ValueError("Media buy 'mb_999' not found."),
         ):

@@ -95,7 +95,7 @@ class TestSyncCreativesErrorHandling:
             mock_get_db.return_value.__enter__.return_value = mock_session
             mock_get_db.return_value.__exit__.return_value = None
 
-            with patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant):
+            with patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant):
                 # Mock the Creative schema to raise ValidationError
                 with patch("src.core.schemas.Creative") as mock_creative_class:
                     from pydantic import ValidationError
@@ -155,7 +155,7 @@ class TestSyncCreativesErrorHandling:
             mock_get_db.return_value.__enter__.return_value = mock_session
             mock_get_db.return_value.__exit__.return_value = None
 
-            with patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant):
+            with patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant):
                 # Mock the creative agent registry to return no previews
                 with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
                     mock_reg_instance = MagicMock()
@@ -243,7 +243,7 @@ class TestSyncCreativesAsyncScenario:
             mock_get_db.return_value.__enter__.return_value = mock_session
             mock_get_db.return_value.__exit__.return_value = None
 
-            with patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant):
+            with patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant):
                 with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
                     mock_reg_instance = MagicMock()
                     mock_registry.return_value = mock_reg_instance

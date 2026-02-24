@@ -12,7 +12,6 @@ from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers import log_tool_activity
@@ -88,22 +87,10 @@ def _sync_creatives_impl(
             "Creative sync requires authentication to associate creatives with an advertiser principal."
         )
 
-    # Get tenant information from identity (transport-agnostic)
-    if identity and identity.tenant:
-        tenant = identity.tenant
-        # Verify tenant context is set in thread-local for downstream code
-        current = get_current_tenant()
-        if not current or current.get("tenant_id") != identity.tenant_id:
-            logger.warning(f"Warning: Tenant context mismatch, setting from identity: {identity.tenant_id}")
-            from src.core.config_loader import set_current_tenant
+    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
+    from src.core.helpers.context_helpers import ensure_tenant_context
 
-            set_current_tenant(tenant)
-    else:
-        # Fallback: tenant should be set by resolve_identity or upstream handler
-        tenant = get_current_tenant()
-
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = ensure_tenant_context(identity)
 
     # Track actions per creative for AdCP-compliant response
 

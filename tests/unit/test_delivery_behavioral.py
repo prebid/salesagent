@@ -156,7 +156,7 @@ def _standard_patches(
             return_value=adapter,
         ),
         "tenant": patch(
-            f"{_PATCH_PREFIX}.get_current_tenant",
+            "src.core.helpers.context_helpers.ensure_tenant_context",
             return_value={"tenant_id": "test_tenant", "name": "Test"},
         ),
         "target_buys": patch(
@@ -520,7 +520,7 @@ class TestDeliveryImplIdentificationModes:
         with (
             patch(f"{_PATCH_PREFIX}.get_principal_object", return_value=principal_obj),
             patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter),
-            patch(f"{_PATCH_PREFIX}.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test_tenant"}),
             patch(f"{_PATCH_PREFIX}._get_pricing_options", return_value={}),
             patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db,
         ):

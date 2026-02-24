@@ -18,7 +18,6 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
-from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers import log_tool_activity
@@ -195,10 +194,10 @@ def _list_creatives_impl(
     if not principal_id:
         raise AdCPAuthenticationError("Missing x-adcp-auth header")
 
-    # Get tenant information
-    tenant = get_current_tenant()
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    # Ensure tenant context is a proper dict (replaces old get_principal_id_from_context side effect)
+    from src.core.helpers.context_helpers import ensure_tenant_context
+
+    tenant = ensure_tenant_context(identity)
 
     creatives = []
     total_count = 0

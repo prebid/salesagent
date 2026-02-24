@@ -61,10 +61,10 @@ def test_get_current_tenant_succeeds_after_set_current_tenant():
 
 
 def test_update_media_buy_calls_auth_before_tenant():
-    """Regression test: update_media_buy must use identity.principal_id before get_current_tenant().
+    """Regression test: update_media_buy must use identity.principal_id before ensure_tenant_context().
 
     With the ResolvedIdentity migration, _impl receives an already-resolved identity.
-    This test verifies that identity.principal_id is accessed before get_current_tenant().
+    This test verifies that identity.principal_id is accessed before ensure_tenant_context().
     We inspect the source code to confirm the ordering, since the identity is now a parameter.
     """
     from pathlib import Path
@@ -81,19 +81,19 @@ def test_update_media_buy_calls_auth_before_tenant():
     impl_end = source.find("\ndef ", impl_start + 1)
     impl_source = source[impl_start:impl_end] if impl_end != -1 else source[impl_start:]
 
-    # Verify identity.principal_id is accessed before get_current_tenant()
+    # Verify identity.principal_id is accessed before ensure_tenant_context()
     auth_pos = impl_source.find("identity.principal_id")
-    tenant_pos = impl_source.find("get_current_tenant()")
+    tenant_pos = impl_source.find("ensure_tenant_context(")
 
     assert auth_pos != -1, "identity.principal_id not found in _update_media_buy_impl"
-    assert tenant_pos != -1, "get_current_tenant() not found in _update_media_buy_impl"
+    assert tenant_pos != -1, "ensure_tenant_context() not found in _update_media_buy_impl"
 
     # Auth (identity.principal_id) must come before tenant lookup
     assert auth_pos < tenant_pos, (
-        f"BUG: get_current_tenant() called before identity.principal_id in _update_media_buy_impl\n"
+        f"BUG: ensure_tenant_context() called before identity.principal_id in _update_media_buy_impl\n"
         f"  Auth access at position {auth_pos}\n"
         f"  Tenant call at position {tenant_pos}\n"
-        f"  identity.principal_id must be checked BEFORE get_current_tenant()!"
+        f"  identity.principal_id must be checked BEFORE ensure_tenant_context()!"
     )
 
 
@@ -101,7 +101,8 @@ def test_create_media_buy_has_correct_pattern_in_source():
     """Verify create_media_buy source code follows correct pattern.
 
     With the ResolvedIdentity migration, _impl functions now access
-    identity.principal_id instead of calling get_principal_id_from_context().
+    identity.principal_id instead of calling get_principal_id_from_context(),
+    and use ensure_tenant_context() instead of get_current_tenant().
     """
     from pathlib import Path
 
@@ -125,14 +126,14 @@ def test_create_media_buy_has_correct_pattern_in_source():
     # Both should be present
     assert auth_pos != -1, "identity.principal_id not found in _create_media_buy_impl"
 
-    # Check if get_current_tenant() is used; if so, identity access must come first
-    tenant_pos = impl_source.find("get_current_tenant()")
+    # Check if ensure_tenant_context() is used; if so, identity access must come first
+    tenant_pos = impl_source.find("ensure_tenant_context(")
     if tenant_pos != -1:
         assert auth_pos < tenant_pos, (
-            f"BUG: get_current_tenant() called before identity.principal_id in create_media_buy\n"
+            f"BUG: ensure_tenant_context() called before identity.principal_id in create_media_buy\n"
             f"  Auth access at position {auth_pos}\n"
             f"  Tenant call at position {tenant_pos}\n"
-            f"  identity.principal_id must be checked BEFORE get_current_tenant()!"
+            f"  identity.principal_id must be checked BEFORE ensure_tenant_context()!"
         )
 
     # Also verify the function accepts identity parameter
@@ -194,12 +195,12 @@ def test_all_tools_have_auth_before_tenant_pattern():
 
         has_auth = has_identity_auth or has_legacy_auth
 
-        # Check for tenant usage
-        has_tenant = "get_current_tenant" in content
+        # Check for tenant usage (either direct get_current_tenant or ensure_tenant_context)
+        has_tenant = "get_current_tenant" in content or "ensure_tenant_context" in content
 
         # If tool uses tenant context, it MUST have auth (identity or legacy)
         if has_tenant and not has_auth:
-            issues.append(f"{tool_file}: Uses get_current_tenant() but missing identity auth pattern")
+            issues.append(f"{tool_file}: Uses tenant context but missing identity auth pattern")
 
     if issues:
         pytest.fail("Tool files with tenant context issues:\n" + "\n".join(f"  - {issue}" for issue in issues))

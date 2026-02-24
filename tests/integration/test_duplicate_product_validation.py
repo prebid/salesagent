@@ -51,7 +51,7 @@ class TestDuplicateProductValidation:
         # Mock the dependencies that still exist on the module
         with (
             patch(
-                "src.core.tools.media_buy_create.get_current_tenant",
+                "src.core.helpers.context_helpers.ensure_tenant_context",
                 return_value=mock_tenant,
             ),
             patch(
@@ -123,7 +123,7 @@ class TestDuplicateProductValidation:
         # Mock the dependencies that still exist on the module
         with (
             patch(
-                "src.core.tools.media_buy_create.get_current_tenant",
+                "src.core.helpers.context_helpers.ensure_tenant_context",
                 return_value=mock_tenant,
             ),
             patch(
@@ -188,7 +188,7 @@ class TestDuplicateProductValidation:
         with (
             patch("src.core.database.database_session.get_db_session") as mock_session_context,
             patch(
-                "src.core.tools.media_buy_create.get_current_tenant",
+                "src.core.helpers.context_helpers.ensure_tenant_context",
                 return_value={"tenant_id": "test_tenant", "subdomain": "test", "ad_server": "mock"},
             ),
             patch("src.core.tools.media_buy_create.activity_feed") as mock_activity,

@@ -92,7 +92,7 @@ def standard_mocks():
     mock_session, mock_cm = _make_mock_db_session()
 
     with (
-        patch(f"{MODULE}.get_current_tenant") as m_tenant,
+        patch("src.core.helpers.context_helpers.ensure_tenant_context") as m_tenant,
         patch(f"{MODULE}.get_principal_object") as m_principal_obj,
         patch(f"{MODULE}._verify_principal") as m_verify,
         patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,

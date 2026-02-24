@@ -30,6 +30,7 @@ from src.core.database.models import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, SyncCreativesResponse
+from src.core.testing_hooks import AdCPTestContext
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -66,6 +67,7 @@ class TestCreativeLifecycleMCP:
             principal_id=pid,
             tenant_id=tid,
             tenant=tenant_dict,
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
 
@@ -1048,7 +1050,7 @@ class TestCreativeLifecycleMCP:
                 return_value=self.test_principal_id,
             ),
             patch(
-                "src.core.tools.media_buy_create.get_current_tenant",
+                "src.core.helpers.context_helpers.ensure_tenant_context",
                 return_value={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
             ),
             patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,

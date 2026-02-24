@@ -57,7 +57,7 @@ class TestSyncCreativesFormatValidation:
     def test_format_validation_success(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation succeeds when format exists."""
         with (
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -94,7 +94,7 @@ class TestSyncCreativesFormatValidation:
     def test_format_validation_unknown_format(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when format doesn't exist."""
         with (
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -133,7 +133,7 @@ class TestSyncCreativesFormatValidation:
     def test_format_validation_agent_unreachable(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when agent is unreachable."""
         with (
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -179,7 +179,7 @@ class TestSyncCreativesFormatValidation:
         }
 
         with (
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -237,7 +237,7 @@ class TestSyncCreativesFormatValidation:
         ]
 
         with (
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -292,7 +292,7 @@ class TestSyncCreativesFormatValidation:
         creative2["creative_id"] = "creative_2"
 
         with (
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -338,7 +338,7 @@ class TestSyncCreativesFormatValidation:
         }
 
         with (
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -384,7 +384,7 @@ class TestSyncCreativesFormatValidation:
         }
 
         with (
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
