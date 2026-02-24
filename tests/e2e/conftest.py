@@ -122,8 +122,6 @@ def docker_services_e2e(request):
         # 2. Tests that read ports via os.getenv() (e.g., test_a2a_endpoints_working.py,
         #    test_landing_pages.py) pick up the correct dynamic ports
         os.environ["ADCP_SALES_PORT"] = str(mcp_port)
-        os.environ["A2A_PORT"] = str(a2a_port)
-        os.environ["ADMIN_UI_PORT"] = str(admin_port)
         os.environ["POSTGRES_PORT"] = str(postgres_port)
 
         env = os.environ.copy()
@@ -240,7 +238,6 @@ def docker_services_e2e(request):
     init_env = os.environ.copy()
     init_env["ADCP_SALES_PORT"] = str(mcp_port)
     init_env["POSTGRES_PORT"] = str(postgres_port)
-    init_env["ADMIN_UI_PORT"] = str(admin_port)
 
     # Use docker-compose exec to run the script inside the container
     # This works for both self-managed (else block) and existing services (if block)
@@ -284,7 +281,7 @@ def docker_services_e2e(request):
     # After init_database_ci.py populates data, we need to flush those connections.
     print("🔄 Resetting MCP server database connection pool...")
     try:
-        reset_response = requests.post(f"http://localhost:{mcp_port}/admin/reset-db-pool", timeout=5)
+        reset_response = requests.post(f"http://localhost:{mcp_port}/_internal/reset-db-pool", timeout=5)
         if reset_response.status_code == 200:
             print("✓ Database connection pool reset successfully")
             print(f"  Response: {reset_response.json()}")
