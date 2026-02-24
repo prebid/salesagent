@@ -8,12 +8,11 @@ Regression test for: "unhashable type: 'FormatReference'" bug.
 MIGRATED: Uses new pricing_options model instead of legacy Product pricing fields.
 """
 
-from unittest.mock import Mock
-
 import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import FormatId, GetProductsRequest, ProductFilters
 from tests.integration_v2.conftest import create_test_product_with_pricing
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
@@ -22,11 +21,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
-def mock_context():
-    """Create mock context with auth token."""
-    context = Mock(spec=["meta"])
-    context.meta = {"headers": {"x-adcp-auth": "format_id_filter_token"}}
-    return context
+def identity():
+    """Create ResolvedIdentity for testing."""
+    return ResolvedIdentity(
+        principal_id="test_principal",
+        tenant_id="format_id_filter_test",
+        tenant={"tenant_id": "format_id_filter_test"},
+        protocol="mcp",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -106,7 +108,7 @@ def _import_get_products_impl():
 
 
 @pytest.mark.asyncio
-async def test_filter_by_format_ids_with_formatid_objects(mock_context):
+async def test_filter_by_format_ids_with_formatid_objects(identity):
     """Test that filtering by format_ids works with FormatId objects.
 
     This is the actual code path that was broken - when a client sends:
@@ -129,7 +131,7 @@ async def test_filter_by_format_ids_with_formatid_objects(mock_context):
     )
 
     # Call the implementation directly
-    result = await get_products_impl(request, mock_context)
+    result = await get_products_impl(request, identity)
 
     # Should return only the display_product (has display_300x250)
     assert len(result.products) == 1
@@ -149,7 +151,7 @@ async def test_filter_by_format_ids_with_formatid_objects(mock_context):
 
 
 @pytest.mark.asyncio
-async def test_filter_by_format_ids_no_matches(mock_context):
+async def test_filter_by_format_ids_no_matches(identity):
     """Test that filtering returns empty when no products match."""
     get_products_impl = _import_get_products_impl()
 
@@ -161,14 +163,14 @@ async def test_filter_by_format_ids_no_matches(mock_context):
         ),
     )
 
-    result = await get_products_impl(request, mock_context)
+    result = await get_products_impl(request, identity)
 
     # Should return empty - no products have audio formats
     assert len(result.products) == 0
 
 
 @pytest.mark.asyncio
-async def test_filter_by_format_ids_video_format(mock_context):
+async def test_filter_by_format_ids_video_format(identity):
     """Test filtering for video format returns correct product."""
     get_products_impl = _import_get_products_impl()
 
@@ -179,7 +181,7 @@ async def test_filter_by_format_ids_video_format(mock_context):
         ),
     )
 
-    result = await get_products_impl(request, mock_context)
+    result = await get_products_impl(request, identity)
 
     # Should return only video_product
     assert len(result.products) == 1
@@ -187,7 +189,7 @@ async def test_filter_by_format_ids_video_format(mock_context):
 
 
 @pytest.mark.asyncio
-async def test_filter_by_multiple_format_ids(mock_context):
+async def test_filter_by_multiple_format_ids(identity):
     """Test filtering with multiple format IDs returns products matching any."""
     get_products_impl = _import_get_products_impl()
 
@@ -201,7 +203,7 @@ async def test_filter_by_multiple_format_ids(mock_context):
         ),
     )
 
-    result = await get_products_impl(request, mock_context)
+    result = await get_products_impl(request, identity)
 
     # Should return both products (OR logic)
     assert len(result.products) == 2
