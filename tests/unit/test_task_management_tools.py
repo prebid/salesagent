@@ -51,7 +51,11 @@ class TestListTasksTool:
 
         from src.core.main import mcp
 
-        tool = asyncio.new_event_loop().run_until_complete(mcp.get_tool("list_tasks"))
+        loop = asyncio.new_event_loop()
+        try:
+            tool = loop.run_until_complete(mcp.get_tool("list_tasks"))
+        finally:
+            loop.close()
         assert tool is not None, "list_tasks should be registered (unified mode is default)"
         return tool.fn
 
@@ -78,7 +82,6 @@ class TestListTasksTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             result = list_tasks_fn(identity=identity)
@@ -100,7 +103,6 @@ class TestListTasksTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             result = list_tasks_fn(status="requires_approval", identity=identity)
@@ -146,7 +148,11 @@ class TestGetTaskTool:
 
         from src.core.main import mcp
 
-        tool = asyncio.new_event_loop().run_until_complete(mcp.get_tool("get_task"))
+        loop = asyncio.new_event_loop()
+        try:
+            tool = loop.run_until_complete(mcp.get_tool("get_task"))
+        finally:
+            loop.close()
         assert tool is not None, "get_task should be registered (unified mode is default)"
         return tool.fn
 
@@ -169,7 +175,6 @@ class TestGetTaskTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             result = get_task_fn(task_id="step_123", identity=identity)
@@ -193,7 +198,6 @@ class TestGetTaskTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             with pytest.raises(ToolError, match="not found"):
@@ -237,7 +241,11 @@ class TestCompleteTaskTool:
 
         from src.core.main import mcp
 
-        tool = asyncio.new_event_loop().run_until_complete(mcp.get_tool("complete_task"))
+        loop = asyncio.new_event_loop()
+        try:
+            tool = loop.run_until_complete(mcp.get_tool("complete_task"))
+        finally:
+            loop.close()
         assert tool is not None, "complete_task should be registered (unified mode is default)"
         return tool.fn
 
@@ -259,7 +267,6 @@ class TestCompleteTaskTool:
         identity = self._make_identity(sample_tenant)
 
         with (
-
             patch("src.core.tools.task_management.get_db_session", return_value=mock_db_session),
         ):
             result = complete_task_fn(task_id="step_123", status="completed", identity=identity)

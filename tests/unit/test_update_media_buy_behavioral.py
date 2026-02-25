@@ -622,3 +622,96 @@ def test_package_not_found_returns_error(standard_mocks):
     assert len(result.errors) == 1
     assert result.errors[0].code == "package_not_found"
     assert "pkg_nonexistent" in result.errors[0].message
+
+
+# ---------------------------------------------------------------------------
+# BUG: Campaign-level pause skips workflow step completion (#1041 Bug 2)
+# ---------------------------------------------------------------------------
+
+
+def test_pause_completes_workflow_step(standard_mocks):
+    """Campaign-level pause must call update_workflow_step(status='completed').
+
+    Bug #1041: The pause early-return path (line 441) returns
+    UpdateMediaBuySuccess without updating the workflow step, leaving it
+    in 'in_progress' forever.
+    """
+    # Configure adapter to return success for pause
+    mock_result = UpdateMediaBuySuccess(
+        media_buy_id="mb_pause",
+        buyer_ref="buyer_pause",
+        affected_packages=[],
+    )
+    standard_mocks["adapter_instance"].update_media_buy.return_value = mock_result
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        media_buy_id="mb_pause",
+        buyer_ref="buyer_pause",
+        paused=True,
+    )
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    # Should succeed
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert result.media_buy_id == "mb_pause"
+
+    # BUG: Workflow step must be marked 'completed' after successful pause
+    update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
+    assert len(update_calls) >= 1, (
+        "update_workflow_step never called — workflow step left in 'in_progress' state. "
+        "The pause early-return path must complete the workflow step."
+    )
+    final_call_kwargs = update_calls[-1][1]
+    assert final_call_kwargs["status"] == "completed", (
+        f"Workflow step status is '{final_call_kwargs['status']}', expected 'completed'. "
+        "The pause path returns without completing the workflow step."
+    )
+
+
+# ---------------------------------------------------------------------------
+# BUG: Manual approval gate stores no request data (#1041 Bug 1)
+# ---------------------------------------------------------------------------
+
+
+def test_manual_approval_stores_raw_request(standard_mocks):
+    """When manual approval is required, the workflow step must store the
+    original request data so approval can execute the update later.
+
+    Bug #1041: The approval gate returns UpdateMediaBuySuccess with
+    affected_packages=[] and never stores the request. After approval,
+    there is nothing to execute.
+    """
+    standard_mocks["adapter_instance"].manual_approval_required = True
+    standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        media_buy_id="mb_approval",
+        buyer_ref="buyer_approval",
+        paused=True,
+    )
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+
+    # The workflow step's response_data must contain enough information
+    # to execute the update after approval. At minimum, the request data
+    # should be stored (similar to create_media_buy's raw_request pattern).
+    update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
+    assert len(update_calls) >= 1
+    call_kwargs = update_calls[-1][1]
+
+    # The response_data stored in the workflow step
+    response_data = call_kwargs.get("response_data", {})
+
+    # BUG: response_data contains affected_packages=[] and nothing about
+    # the actual update request. After approval, there's nothing to execute.
+    # It should contain the original request (paused=True, etc.)
+    assert (
+        "request_data" in response_data or "raw_request" in response_data or response_data.get("paused") is not None
+    ), (
+        f"Workflow step response_data contains no request information: {response_data}. "
+        "After approval, the system has no data to execute the update. "
+        "The approval gate must store the original request (like create_media_buy stores raw_request)."
+    )

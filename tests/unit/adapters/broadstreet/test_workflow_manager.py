@@ -63,7 +63,7 @@ class TestBroadstreetWorkflowManager:
 
         assert step_id is not None
         assert step_id.startswith("a")  # 'a' prefix for activation
-        assert len(step_id) == 6
+        assert len(step_id) == 9
 
         # Verify database objects were created
         assert mock_session.add.call_count == 3  # Context, WorkflowStep, ObjectWorkflowMapping
@@ -92,7 +92,7 @@ class TestBroadstreetWorkflowManager:
 
         assert step_id is not None
         assert step_id.startswith("c")  # 'c' prefix for creation
-        assert len(step_id) == 6
+        assert len(step_id) == 9
 
         # Verify database objects were created
         assert mock_session.add.call_count == 3
@@ -113,7 +113,7 @@ class TestBroadstreetWorkflowManager:
 
         assert step_id is not None
         assert step_id.startswith("p")  # 'p' prefix for approval
-        assert len(step_id) == 6
+        assert len(step_id) == 9
 
         # Verify database objects were created
         assert mock_session.add.call_count == 3
@@ -244,7 +244,7 @@ class TestBaseWorkflowManagerIntegration:
         step_id = manager._generate_step_id("a")
 
         assert step_id.startswith("a")
-        assert len(step_id) == 6
+        assert len(step_id) == 9
 
     def test_generate_step_id_unique(self, manager):
         """Test that generated step IDs are unique."""

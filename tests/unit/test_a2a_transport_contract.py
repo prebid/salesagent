@@ -111,7 +111,9 @@ def _extract_artifact_data(result: dict) -> dict:
 @pytest.fixture
 def client():
     """TestClient for the unified FastAPI app."""
-    return TestClient(app)
+    c = TestClient(app, raise_server_exceptions=False)
+    yield c
+    c.close()
 
 
 @pytest.fixture

@@ -81,6 +81,7 @@ def webhook_server():
 
     # Cleanup
     server.shutdown()
+    server.server_close()
     WebhookReceiver.received_webhooks.clear()
 
 

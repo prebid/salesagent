@@ -265,18 +265,21 @@ def _update_media_buy_impl(
     manual_approval_operations = adapter.manual_approval_operations
 
     if manual_approval_required and "update_media_buy" in manual_approval_operations:
-        # Build response first, then persist on workflow step, then return
-        # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields (workflow_step_id, affected_packages)
+        # Store the original request alongside the response so the approval
+        # execution path can re-execute the update after human approval.
+        # This mirrors create_media_buy's raw_request pattern.
         approval_response = UpdateMediaBuySuccess(
             media_buy_id=req.media_buy_id or "",
             buyer_ref=req.buyer_ref or "",
-            affected_packages=[],  # Internal field for tracking changes
+            affected_packages=[],  # Not yet applied — pending approval
             context=req.context,
         )
+        approval_data = approval_response.model_dump(mode="json")
+        approval_data["request_data"] = req.model_dump(mode="json")
         ctx_manager.update_workflow_step(
             step.step_id,
             status="requires_approval",
-            response_data=approval_response.model_dump(mode="json"),
+            response_data=approval_data,
             add_comment={"user": "system", "comment": "Publisher requires manual approval for all media buy updates"},
         )
         return approval_response
@@ -410,7 +413,14 @@ def _update_media_buy_impl(
         # Manual approval case - convert adapter result to appropriate Success/Error
         # adcp v1.2.1 oneOf pattern: Check if result is Error variant (has errors field)
         if isinstance(result, UpdateMediaBuyError) and result.errors:
-            return UpdateMediaBuyError(errors=result.errors)
+            error_response = UpdateMediaBuyError(errors=result.errors)
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="failed",
+                response_data=error_response.model_dump(mode="json"),
+                error_message=result.errors[0].message if result.errors else "Pause/resume failed",
+            )
+            return error_response
         else:
             # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields
             # Use getattr to safely access discriminated union fields
@@ -437,6 +447,11 @@ def _update_media_buy_impl(
                     "action": action,
                     "affected_packages_count": len(affected_pkgs),
                 },
+            )
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="completed",
+                response_data=success_response.model_dump(mode="json"),
             )
             return success_response
 

@@ -20,18 +20,17 @@ def test_health_routes_in_refactored_app(integration_db):
     reset_engine()
 
     app = create_app()
-    client = app.test_client()
+    with app.test_client() as client:
+        # Test simple health endpoint
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.data == b"OK"
 
-    # Test simple health endpoint
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.data == b"OK"
-
-    # Test API health endpoint
-    response = client.get("/api/health")
-    assert response.status_code == 200
-    data = json.loads(response.data)
-    assert data["status"] == "healthy"
+        # Test API health endpoint
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["status"] == "healthy"
 
     print("✅ Both health routes work in refactored app!")
 
@@ -46,18 +45,17 @@ def test_health_routes_in_original_app(integration_db):
     reset_engine()
 
     app = create_app()
-    client = app.test_client()
+    with app.test_client() as client:
+        # Test simple health endpoint
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.data == b"OK"
 
-    # Test simple health endpoint
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.data == b"OK"
-
-    # Test API health endpoint
-    response = client.get("/api/health")
-    assert response.status_code == 200
-    data = json.loads(response.data)
-    assert data["status"] == "healthy"
+        # Test API health endpoint
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["status"] == "healthy"
 
     print("✅ Both health routes work in original app!")
 

@@ -113,7 +113,9 @@ def _get_media_buy_delivery_impl(
 
     # Get the appropriate adapter
     # Use testing_ctx.dry_run if in testing mode, otherwise False
-    adapter = get_adapter(principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx, tenant=tenant)
+    adapter = get_adapter(
+        principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx, tenant=tenant
+    )
 
     # Determine reporting period
     if req.start_date and req.end_date:

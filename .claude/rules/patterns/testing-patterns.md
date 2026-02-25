@@ -2,11 +2,38 @@
 
 Reference patterns for writing tests. Read this when adding or modifying tests.
 
+## Test Runner: tox + tox-uv
+
+All test execution goes through **tox** for parallel execution and combined coverage.
+Install: `uv tool install tox --with tox-uv`
+
+```bash
+# Quick
+make quality                           # Format + lint + typecheck + unit tests
+tox -e unit                            # Unit tests only (no Docker)
+
+# Full suite (Docker + all 5 suites in parallel)
+./run_all_tests.sh                     # One command: Docker up → tox -p → Docker down
+
+# Manual Docker lifecycle (for iterating)
+make test-stack-up                     # Start Docker, write .test-stack.env
+source .test-stack.env && tox -p       # All suites in parallel
+make test-stack-down                   # Tear down
+
+# Targeted
+tox -e integration -- -k test_name     # Pass pytest args after --
+./run_all_tests.sh ci tests/integration/test_file.py -k test_name
+
+# Coverage
+make test-cov                          # Open htmlcov/index.html
+```
+
 ## Test Organization
-- **tests/unit/**: Fast, isolated (mock external deps only)
-- **tests/integration/**: Real PostgreSQL database
-- **tests/e2e/**: Full system tests
-- **tests/ui/**: Admin UI tests
+- **tests/unit/**: Fast, isolated (mock external deps only) — `tox -e unit`
+- **tests/integration/**: Real PostgreSQL database — `tox -e integration`
+- **tests/integration_v2/**: Real PostgreSQL database — `tox -e integration_v2`
+- **tests/e2e/**: Full system tests (Docker stack) — `tox -e e2e`
+- **tests/ui/**: Admin UI tests (Docker stack) — `tox -e ui`
 
 ## Database Fixtures
 ```python
@@ -37,10 +64,10 @@ def test_something():
 make quality
 
 # Refactorings (shared impl, moving code, imports)
-uv run pytest tests/integration/ -x
+tox -e integration
 
 # Critical changes (protocol, schema updates)
-uv run pytest tests/ -x
+./run_all_tests.sh
 ```
 
 **Pre-commit hooks can't catch import errors** - You must run tests for refactorings!

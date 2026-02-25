@@ -207,7 +207,7 @@ def resolve_identity(
         from src.core.tenant_context import TenantContext
 
         try:
-            tenant_model = TenantContext.from_dict(tenant_context)
+            tenant_model = TenantContext.from_dict(tenant_context)  # type: ignore[assignment]  # TenantContext is a dict-compatible proxy
         except Exception:
             tenant_model = tenant_context  # Keep dict if model construction fails
 

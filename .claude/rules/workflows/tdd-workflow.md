@@ -13,10 +13,10 @@ Before writing implementation code:
 uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
 ```
 
-**Test organization:**
-- `tests/unit/` — Fast, isolated (mock external deps only)
-- `tests/integration/` — Real PostgreSQL database
-- `tests/e2e/` — Full system tests
+**Test organization** (each maps to a tox env):
+- `tests/unit/` — Fast, isolated (mock external deps only) — `tox -e unit`
+- `tests/integration/` — Real PostgreSQL database — `tox -e integration`
+- `tests/e2e/` — Full system tests (Docker stack) — `tox -e e2e`
 
 ### 2. Green — Make It Pass
 

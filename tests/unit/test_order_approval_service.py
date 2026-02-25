@@ -230,7 +230,8 @@ def test_webhook_notification_sent_on_success():
         assert headers["Authorization"] == "Bearer test_token"
 
 
-def test_webhook_retries_on_failure():
+@patch("src.services.order_approval_service.time.sleep")
+def test_webhook_retries_on_failure(mock_sleep):
     """Test webhook retries on HTTP failure."""
     import src.services.order_approval_service as service_module
 

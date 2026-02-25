@@ -25,7 +25,7 @@ class TestTimeoutDecorator:
 
         @timeout(seconds=1)
         def slow_function():
-            time.sleep(10)
+            time.sleep(2)  # Just enough to exceed 1s timeout (was 10s)
             return "should not reach"
 
         with pytest.raises(TimeoutError) as exc_info:

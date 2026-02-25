@@ -10,8 +10,9 @@ import json
 import os
 from typing import Any
 
-import google.generativeai as genai
 from fastmcp import FastMCP
+from google import genai
+from google.genai import types
 
 # Initialize MCP server
 mcp = FastMCP(name="ProductCatalogAgent", description="Intelligent product catalog matching for advertising")
@@ -115,8 +116,8 @@ class ProductMatcher:
         self.ai_enabled = False
         api_key = os.environ.get("GEMINI_API_KEY")
         if api_key:
-            genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel("gemini-flash-latest")
+            self.client = genai.Client(api_key=api_key)
+            self.model_name = "gemini-2.0-flash"
             self.ai_enabled = True
 
     def analyze_brief(self, brief: str) -> dict[str, Any]:
@@ -191,9 +192,10 @@ Select the most relevant products (up to 3) and return as JSON:
   }}
 }}"""
 
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(temperature=0.3, response_mime_type="application/json"),
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.3, response_mime_type="application/json"),
             )
 
             result = json.loads(response.text)

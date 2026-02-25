@@ -529,6 +529,84 @@ class TestMCPWrapperIdentityResolution:
 
 
 # ===========================================================================
+# BUG: MCP wrapper drops context parameter (salesagent-pdnu)
+# ===========================================================================
+
+
+class TestMCPWrapperContextEcho:
+    """Bug: The MCP wrapper receives context as a separate param but never injects it into the request.
+
+    When an MCP client sends context as a top-level param, the wrapper receives it as `context`
+    but passes `req` (which may be None or lack context) to _impl. The _impl echoes req.context,
+    which is None, violating the AdCP spec requirement to echo context back.
+    """
+
+    def test_mcp_wrapper_propagates_context_to_impl(self):
+        """Bug salesagent-pdnu: context passed to MCP wrapper must appear in response.
+
+        This is the actual bug path: MCP client sends context={...} as a top-level
+        parameter. The wrapper receives it but does not inject it into req before
+        calling _impl. Result: response.context is None instead of the caller's context.
+        """
+        from src.core.tools.properties import list_authorized_properties
+
+        test_context = ContextObject(e2e="list_authorized_properties", session="test-456")
+        mock_identity = _make_identity(_make_mock_tenant(), principal_id="user-1")
+        tenant = _make_mock_tenant()
+        publishers = [_make_publisher("example.com")]
+
+        patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
+        with (
+            patches["db"],
+            patches["audit"],
+            patches["log_activity"],
+            patch(
+                "src.core.transport_helpers.resolve_identity_from_context",
+                return_value=mock_identity,
+            ),
+        ):
+            result = list_authorized_properties(req=None, context=test_context, ctx=None)
+
+            # The structured_content in the ToolResult should contain the echoed context
+            sc = result.structured_content
+            if isinstance(sc, dict):
+                assert sc.get("context") is not None, "Context should be echoed back in response. Got context=None"
+            else:
+                assert sc.context is not None, "Context should be echoed back in response. Got context=None"
+                assert sc.context == test_context
+
+    def test_mcp_wrapper_context_with_existing_req(self):
+        """When both req and context are provided, context should override req.context."""
+        from src.core.tools.properties import list_authorized_properties
+
+        # req has no context, but wrapper receives context as separate param
+        req = ListAuthorizedPropertiesRequest()
+        test_context = ContextObject(session="override-test")
+        mock_identity = _make_identity(_make_mock_tenant(), principal_id="user-1")
+        tenant = _make_mock_tenant()
+        publishers = [_make_publisher("example.com")]
+
+        patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
+        with (
+            patches["db"],
+            patches["audit"],
+            patches["log_activity"],
+            patch(
+                "src.core.transport_helpers.resolve_identity_from_context",
+                return_value=mock_identity,
+            ),
+        ):
+            result = list_authorized_properties(req=req, context=test_context, ctx=None)
+
+            sc = result.structured_content
+            if isinstance(sc, dict):
+                assert sc.get("context") is not None, "Context should be echoed"
+            else:
+                assert sc.context is not None, "Context should be echoed"
+                assert sc.context == test_context
+
+
+# ===========================================================================
 # MEDIUM_RISK: M1 — Context echo with value (scenario 21)
 # ===========================================================================
 

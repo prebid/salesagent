@@ -29,12 +29,11 @@ def mock_all_external_dependencies():
         mock_db.return_value = mock_session
 
         # Mock external services
-        with patch("google.generativeai.configure"):
-            with patch("requests.post") as mock_post:
-                mock_post.return_value.status_code = 200
-                mock_post.return_value.json.return_value = {}
+        with patch("requests.post") as mock_post:
+            mock_post.return_value.status_code = 200
+            mock_post.return_value.json.return_value = {}
 
-                yield
+            yield
 
 
 @pytest.fixture
