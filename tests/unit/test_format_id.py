@@ -30,6 +30,7 @@ def test_creative_upgrades_string_format():
     """Test Creative automatically upgrades legacy string format_id."""
     creative = Creative(
         creative_id="c1",
+        variants=[],
         name="Test Creative",
         format_id="display_300x250",  # Legacy string - auto-upgraded
         assets={
@@ -58,6 +59,7 @@ def test_creative_accepts_format_id_object():
     format_id = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")
     creative = Creative(
         creative_id="c1",
+        variants=[],
         name="Test Creative",
         format_id=format_id,
         assets={
@@ -84,6 +86,7 @@ def test_creative_from_dict_with_format_id_object():
     """Test Creative can be created from dict with format_id as object."""
     data = {
         "creative_id": "c1",
+        "variants": [],
         "name": "Test Creative",
         "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         "assets": {
@@ -109,6 +112,7 @@ def test_creative_upgrades_dict_without_agent_url():
     """Test Creative auto-upgrades format_id dict missing agent_url."""
     creative = Creative(
         creative_id="c1",
+        variants=[],
         name="Test Creative",
         format_id={"id": "display_300x250"},  # Missing agent_url - auto-upgraded
         assets={

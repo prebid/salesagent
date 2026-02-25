@@ -108,14 +108,18 @@ def _handle_tool_error(e: ToolError) -> JSONResponse:
 
 class GetProductsBody(BaseModel):
     brief: str = ""
-    brand_manifest: dict[str, Any] | None = None
+    # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
+    brand: dict[str, Any] | None = None
+    brand_manifest: dict[str, Any] | None = None  # Kept for backward compat (legacy clients)
     filters: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
 class CreateMediaBuyBody(BaseModel):
     buyer_ref: str
-    brand_manifest: dict[str, Any] | None = None
+    # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
+    brand: dict[str, Any] | None = None
+    brand_manifest: dict[str, Any] | None = None  # Kept for backward compat (legacy clients)
     packages: list[dict[str, Any]] = []
     start_time: str | None = None
     end_time: str | None = None
@@ -190,7 +194,8 @@ async def get_products(body: GetProductsBody, request: Request):
 
     req = products_module.create_get_products_request(
         brief=body.brief,
-        brand_manifest=body.brand_manifest,
+        brand_manifest=body.brand_manifest,  # Legacy; converted to brand internally
+        brand=body.brand,
         filters=body.filters,
     )
 
@@ -255,7 +260,7 @@ async def create_media_buy(body: CreateMediaBuyBody, request: Request):
     try:
         response = await media_buy_create_module.create_media_buy_raw(
             buyer_ref=body.buyer_ref,
-            brand_manifest=body.brand_manifest,
+            brand=body.brand or body.brand_manifest,  # adcp 3.6.0: brand replaces brand_manifest
             packages=body.packages,
             start_time=body.start_time,
             end_time=body.end_time,

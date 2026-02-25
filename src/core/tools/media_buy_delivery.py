@@ -29,6 +29,9 @@ console = Console()
 from adcp.types import Error, MediaBuyStatus
 from adcp.types.generated_poc.core.context import ContextObject
 
+# adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
+# The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
+# Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 from src.core.auth import get_principal_object
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, PricingOption
@@ -43,7 +46,9 @@ from src.core.schemas import (
     MediaBuyDeliveryData,
     PackageDelivery,
     PricingModel,
-    ReportingPeriod,
+)
+from src.core.schemas import (
+    ReportingPeriod as MediaBuyReportingPeriod,
 )
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.validation_helpers import format_validation_error
@@ -71,7 +76,7 @@ def _get_media_buy_delivery_impl(
         # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??
         context_val = req.context
         return GetMediaBuyDeliveryResponse(
-            reporting_period=ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC)),
+            reporting_period={"start": datetime.now(UTC), "end": datetime.now(UTC)},
             currency="USD",
             aggregated_totals=AggregatedTotals(
                 impressions=0.0,
@@ -92,7 +97,7 @@ def _get_media_buy_delivery_impl(
         # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??
         context_val = req.context
         return GetMediaBuyDeliveryResponse(
-            reporting_period=ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC)),
+            reporting_period={"start": datetime.now(UTC), "end": datetime.now(UTC)},
             currency="USD",
             aggregated_totals=AggregatedTotals(
                 impressions=0.0,
@@ -126,7 +131,7 @@ def _get_media_buy_delivery_impl(
         if start_dt >= end_dt:
             context_val = req.context
             return GetMediaBuyDeliveryResponse(
-                reporting_period=ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC)),
+                reporting_period={"start": datetime.now(UTC), "end": datetime.now(UTC)},
                 currency="USD",
                 aggregated_totals=AggregatedTotals(
                     impressions=0.0,
@@ -144,7 +149,7 @@ def _get_media_buy_delivery_impl(
         end_dt = datetime.now(UTC)
         start_dt = end_dt - timedelta(days=30)
 
-    reporting_period = ReportingPeriod(start=start_dt, end=end_dt)
+    reporting_period = MediaBuyReportingPeriod(start=start_dt, end=end_dt)
 
     # Determine reference date for status calculations use end_date, it either will be today or the user provided end_date.
     reference_date = end_dt.date()
@@ -239,7 +244,7 @@ def _get_media_buy_delivery_impl(
                     logger.error(f"Error getting delivery for {media_buy_id}: {e}")
                     context_val = req.context
                     return GetMediaBuyDeliveryResponse(
-                        reporting_period=reporting_period,
+                        reporting_period={"start": reporting_period.start, "end": reporting_period.end},
                         currency=buy.currency,
                         aggregated_totals=AggregatedTotals(
                             impressions=0.0,
@@ -391,7 +396,7 @@ def _get_media_buy_delivery_impl(
     # Create AdCP-compliant response
     context_val = req.context
     response = GetMediaBuyDeliveryResponse(
-        reporting_period=reporting_period,
+        reporting_period={"start": reporting_period.start, "end": reporting_period.end},
         currency="USD",  # TODO: @yusuf - This is wrong. Currency should be at the media buy delivery level, not on aggregated totals.
         aggregated_totals=AggregatedTotals(
             impressions=float(total_impressions),

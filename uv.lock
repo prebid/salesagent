@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -71,7 +71,7 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "3.2.0"
+version = "3.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
@@ -81,9 +81,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/08/9b/283f9efa8d904d8edb111a922ad2c415ee50134f4f5b3a6db3049c8e9b66/adcp-3.2.0.tar.gz", hash = "sha256:2113bfda4f4dd1fe690ed698ed0ec5b30447be3a5328a4ad5ab5a02c308f6083", size = 245028, upload-time = "2026-02-04T02:06:07.139Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/b6/02936b3dce48487e15d3c04dad32956c03e2cdc5859ac850ffd20cda5fdb/adcp-3.6.0.tar.gz", hash = "sha256:a3661bb7ac1d22c6d3ca8a478332290e8c77e33c3f4f9aea3090bbd7ecb8db8c", size = 316043, upload-time = "2026-02-23T02:15:16.432Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f4/b7/4f0eaad37a01aab12fef1a09900a7ca0ae947c2cc9f7964c208c689d054c/adcp-3.2.0-py3-none-any.whl", hash = "sha256:e3ed195ad9bce525e976d148d9d092ce705f7246ef54f1cc3e7aea30186dd483", size = 308217, upload-time = "2026-02-04T02:06:05.531Z" },
+    { url = "https://files.pythonhosted.org/packages/56/fa/43033ab3183916a75696583196b3a817fc521caaea75daab1cf519f7cb97/adcp-3.6.0-py3-none-any.whl", hash = "sha256:882c3fe670fd3e692451f4a6e633913a6ab03a93280bf2c12758fc28945ca92d", size = 425556, upload-time = "2026-02-23T02:15:14.719Z" },
 ]
 
 [[package]]
@@ -186,7 +186,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=0.3.19" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", specifier = ">=3.2.0" },
+    { name = "adcp", specifier = ">=3.6.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.13.5" },

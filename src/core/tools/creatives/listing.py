@@ -7,9 +7,9 @@ from typing import Any, cast
 
 from adcp import CreativeFilters
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.core.pagination_request import PaginationRequest
 from adcp.types.generated_poc.media_buy.list_creatives_request import (
     FieldModel,
-    Pagination,
     Sort,
 )
 from fastmcp.server.context import Context
@@ -89,9 +89,7 @@ def _list_creatives_impl(
     """
     from adcp.types import CreativeFilters as LibraryCreativeFilters
     from adcp.types import Sort as LibrarySort
-
-    # V3: Request Pagination uses limit/offset, Response Pagination uses batch_number/total_batches
-    from adcp.types.generated_poc.media_buy.list_creatives_request import Pagination as LibraryPagination
+    from adcp.types.generated_poc.core.pagination_request import PaginationRequest as LibraryPagination
 
     from src.core.schemas import ListCreativesRequest
 
@@ -157,7 +155,8 @@ def _list_creatives_impl(
 
     # Build pagination
     offset = (page - 1) * effective_limit
-    structured_pagination = LibraryPagination(offset=offset, limit=effective_limit)
+    # 3.6.0: PaginationRequest is cursor-based (max_results, cursor). DB query uses offset/limit internally.
+    structured_pagination = LibraryPagination(max_results=effective_limit)
 
     # Build sort
     field_mapping = {
@@ -363,6 +362,9 @@ def _list_creatives_impl(
                 format_id=format_obj,
                 assets=assets_dict,
                 tags=db_creative.data.get("tags") if db_creative.data else None,
+                # adcp 3.6.0: variants is required (list of CreativeVariant).
+                # New/listing creatives have no variants yet (empty list).
+                variants=[],
                 # AdCP spec fields (library Creative)
                 status=status_enum,
                 created_date=created_at_dt,
@@ -441,11 +443,8 @@ def _list_creatives_impl(
             sort_applied=sort_applied,
         ),
         pagination=SchemaPagination(
-            limit=limit,
-            offset=offset_calc,
             has_more=has_more,
-            total_pages=total_pages,
-            current_page=page,
+            total_count=total_count,
         ),
         creatives=creatives,
         format_summary=None,
@@ -467,7 +466,7 @@ async def list_creatives(
     search: str = None,
     filters: CreativeFilters | None = None,
     sort: Sort | None = None,
-    pagination: Pagination | None = None,
+    pagination: PaginationRequest | None = None,
     fields: list[FieldModel | str] | None = None,
     include_performance: bool = False,
     include_assignments: bool = False,

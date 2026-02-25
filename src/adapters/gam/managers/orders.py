@@ -509,7 +509,11 @@ class GAMOrdersManager:
                     # Check if format type is supported by product
                     # Convert enum to string for comparison (adcp 2.5.0 uses Type enum)
                     format_type_str = (
-                        format_obj.type.value if hasattr(format_obj.type, "value") else str(format_obj.type)
+                        format_obj.type.value
+                        if format_obj.type is not None and hasattr(format_obj.type, "value")
+                        else str(format_obj.type)
+                        if format_obj.type is not None
+                        else ""
                     )
                     if format_type_str not in supported_format_types:
                         error_msg = (

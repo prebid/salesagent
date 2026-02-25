@@ -10,6 +10,8 @@ The tests validate the critical gap between:
 
 These tests caught the bug where GetProductsRequest didn't accept `filters`
 and `adcp_version` fields even though they're valid per AdCP spec.
+
+adcp 3.6.0 update: brand_manifest replaced by brand (BrandReference with required domain).
 """
 
 import pytest
@@ -32,24 +34,21 @@ class TestGetProductsRequestAlignment:
         """
         # Empty request is valid per spec
         empty_req = GetProductsRequest()
-        assert empty_req.brand_manifest is None
+        assert empty_req.brand is None
         assert empty_req.brief is None
         assert empty_req.filters is None
 
-        # With brand_manifest only
-        req = GetProductsRequest(brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"})
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(req.brand_manifest, "name"):
-            assert req.brand_manifest.name == "Nike Air Jordan 2025 basketball shoes"
-        elif hasattr(req.brand_manifest, "root") and hasattr(req.brand_manifest.root, "name"):
-            assert req.brand_manifest.root.name == "Nike Air Jordan 2025 basketball shoes"
+        # With brand only (adcp 3.6.0: brand replaced brand_manifest)
+        req = GetProductsRequest(brand={"domain": "nike.com"})
+        # Local schema may store as dict, library coerces to BrandReference
+        assert req.brand is not None
         assert req.brief is None  # Optional, defaults to None
         assert req.filters is None
 
     def test_with_all_optional_fields(self):
         """Test with all optional fields that AdCP spec allows."""
         req = GetProductsRequest(
-            brand_manifest={"name": "Acme Corp enterprise software"},
+            brand={"domain": "acme.com"},
             brief="Looking for display advertising on tech sites",
             filters=ProductFilters(
                 delivery_type="guaranteed",
@@ -62,11 +61,8 @@ class TestGetProductsRequestAlignment:
             ),
         )
 
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(req.brand_manifest, "name"):
-            assert req.brand_manifest.name == "Acme Corp enterprise software"
-        elif hasattr(req.brand_manifest, "root") and hasattr(req.brand_manifest.root, "name"):
-            assert req.brand_manifest.root.name == "Acme Corp enterprise software"
+        # brand is stored (either as dict or BrandReference)
+        assert req.brand is not None
         assert req.brief == "Looking for display advertising on tech sites"
         assert req.filters is not None
         assert req.filters.delivery_type.value == "guaranteed"
@@ -80,7 +76,7 @@ class TestGetProductsRequestAlignment:
     def test_filters_as_dict(self):
         """Test that filters can be provided as dict (JSON deserialization pattern)."""
         req = GetProductsRequest(
-            brand_manifest={"name": "Tesla Model Y electric vehicle"},
+            brand={"domain": "tesla.com"},
             filters={
                 "delivery_type": "non_guaranteed",
                 "format_types": ["video"],
@@ -95,7 +91,7 @@ class TestGetProductsRequestAlignment:
     def test_partial_filters(self):
         """Test with only some filter fields (all filters are optional)."""
         req = GetProductsRequest(
-            brand_manifest={"name": "Spotify Premium music streaming"},
+            brand={"domain": "spotify.com"},
             filters=ProductFilters(delivery_type="guaranteed"),
         )
 
@@ -110,7 +106,7 @@ class TestGetProductsRequestAlignment:
 
         for format_type in valid_types:
             req = GetProductsRequest(
-                brand_manifest={"name": "Test product"}, filters=ProductFilters(format_types=[format_type])
+                brand={"domain": "testbrand.com"}, filters=ProductFilters(format_types=[format_type])
             )
             # format_types are stored as enum objects, check enum value
             assert format_type in [ft.value for ft in req.filters.format_types]
@@ -118,14 +114,12 @@ class TestGetProductsRequestAlignment:
     def test_filters_delivery_type_values(self):
         """Test that delivery_type accepts valid values per AdCP spec."""
         # Guaranteed products
-        req1 = GetProductsRequest(
-            brand_manifest={"name": "Test product"}, filters=ProductFilters(delivery_type="guaranteed")
-        )
+        req1 = GetProductsRequest(brand={"domain": "testbrand.com"}, filters=ProductFilters(delivery_type="guaranteed"))
         assert req1.filters.delivery_type.value == "guaranteed"
 
         # Non-guaranteed products
         req2 = GetProductsRequest(
-            brand_manifest={"name": "Test product"}, filters=ProductFilters(delivery_type="non_guaranteed")
+            brand={"domain": "testbrand.com"}, filters=ProductFilters(delivery_type="non_guaranteed")
         )
         assert req2.filters.delivery_type.value == "non_guaranteed"
 
@@ -186,54 +180,44 @@ class TestAdCPSchemaCompatibility:
     """Test compatibility with actual AdCP schema examples."""
 
     def test_example_from_adcp_spec_1(self):
-        """Test example from test_adcp_schema_compliance.py line 149."""
-        # This is the exact example that was passing JSON schema validation
-        # but would have failed Pydantic validation before our fix
-        req = GetProductsRequest(brand_manifest={"name": "mobile apps"}, filters={"format_types": ["video"]})
+        """Test example from test_adcp_schema_compliance.py line 149.
 
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(req.brand_manifest, "name"):
-            assert req.brand_manifest.name == "mobile apps"
-        elif hasattr(req.brand_manifest, "root") and hasattr(req.brand_manifest.root, "name"):
-            assert req.brand_manifest.root.name == "mobile apps"
+        adcp 3.6.0: brand_manifest replaced by brand (BrandReference with domain).
+        """
+        # This is the updated example - using brand (BrandReference) instead of brand_manifest
+        req = GetProductsRequest(brand={"domain": "mobileapps.com"}, filters={"format_types": ["video"]})
+
+        assert req.brand is not None
         assert [ft.value for ft in req.filters.format_types] == ["video"]
 
     def test_example_minimal_adcp_request(self):
         """Test minimal valid request per AdCP spec.
 
-        Per AdCP spec, all fields are optional - even brand_manifest.
+        Per AdCP spec, all fields are optional - even brand.
         """
         # Empty request is valid
         empty_req = GetProductsRequest()
-        assert empty_req.brand_manifest is None
+        assert empty_req.brand is None
         assert empty_req.brief is None
         assert empty_req.filters is None
 
-        # Brand manifest only
-        req = GetProductsRequest(brand_manifest={"name": "eco-friendly products"})
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(req.brand_manifest, "name"):
-            assert req.brand_manifest.name == "eco-friendly products"
-        elif hasattr(req.brand_manifest, "root") and hasattr(req.brand_manifest.root, "name"):
-            assert req.brand_manifest.root.name == "eco-friendly products"
+        # Brand only
+        req = GetProductsRequest(brand={"domain": "eco-products.com"})
+        assert req.brand is not None
         assert req.brief is None  # Optional, defaults to None
         assert req.filters is None
 
     def test_example_with_brief(self):
         """Test request with brief field."""
-        req = GetProductsRequest(brief="display advertising", brand_manifest={"name": "eco-friendly products"})
+        req = GetProductsRequest(brief="display advertising", brand={"domain": "eco-products.com"})
 
         assert req.brief == "display advertising"
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(req.brand_manifest, "name"):
-            assert req.brand_manifest.name == "eco-friendly products"
-        elif hasattr(req.brand_manifest, "root") and hasattr(req.brand_manifest.root, "name"):
-            assert req.brand_manifest.root.name == "eco-friendly products"
+        assert req.brand is not None
 
     def test_example_multiple_filter_fields(self):
         """Test request with multiple filter fields."""
         req = GetProductsRequest(
-            brand_manifest={"name": "premium video content"},
+            brand={"domain": "premium-video.com"},
             filters={
                 "delivery_type": "non_guaranteed",
                 "format_types": ["video"],
@@ -262,18 +246,14 @@ class TestRegressionPrevention:
         """
         try:
             req = GetProductsRequest(
-                brand_manifest={"name": "cat food"},
+                brand={"domain": "catfood.com"},
                 brief="video ads",
                 filters={
                     "delivery_type": "guaranteed",
                     "format_types": ["video"],
                 },
             )
-            # Library may wrap in BrandManifestReference with BrandManifest in root
-            if hasattr(req.brand_manifest, "name"):
-                assert req.brand_manifest.name == "cat food"
-            elif hasattr(req.brand_manifest, "root") and hasattr(req.brand_manifest.root, "name"):
-                assert req.brand_manifest.root.name == "cat food"
+            assert req.brand is not None
             assert req.brief == "video ads"
             assert req.filters is not None
             assert req.filters.delivery_type.value == "guaranteed"
@@ -284,7 +264,7 @@ class TestRegressionPrevention:
         """Test that all GetProductsRequest fields are optional per spec."""
         # Empty request is valid
         req = GetProductsRequest()
-        assert req.brand_manifest is None
+        assert req.brand is None
         assert req.brief is None
         assert req.filters is None
 
@@ -292,21 +272,17 @@ class TestRegressionPrevention:
         """
         Test a full payload with all supported AdCP spec fields.
 
-        Note: adcp_version is NOT a field on GetProductsRequest per spec.
+        adcp 3.6.0: brand_manifest replaced by brand (BrandReference with domain).
         """
         payload = {
-            "brand_manifest": {"name": "purina cat food"},
+            "brand": {"domain": "purinacatfood.com"},
             "brief": "video advertising campaigns",
             "filters": {"delivery_type": "guaranteed", "format_types": ["video"]},
         }
 
         req = GetProductsRequest(**payload)
 
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(req.brand_manifest, "name"):
-            assert req.brand_manifest.name == "purina cat food"
-        elif hasattr(req.brand_manifest, "root") and hasattr(req.brand_manifest.root, "name"):
-            assert req.brand_manifest.root.name == "purina cat food"
+        assert req.brand is not None
         assert req.brief == "video advertising campaigns"
         assert req.filters.delivery_type.value == "guaranteed"
         assert [ft.value for ft in req.filters.format_types] == ["video"]

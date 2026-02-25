@@ -107,9 +107,9 @@ class PolicyCheckService:
         brand_info = None
         if brand_manifest:
             if isinstance(brand_manifest, BrandManifest):
-                # Extract name and tagline from typed model
-                brand_name = brand_manifest.name
-                brand_tagline = brand_manifest.tagline or ""
+                # Extract name and tagline from typed model (adcp 3.6.0: extra="allow" fields)
+                brand_name = getattr(brand_manifest, "name", None)
+                brand_tagline = getattr(brand_manifest, "tagline", None) or ""
                 brand_info = f"{brand_name} - {brand_tagline}" if brand_tagline else brand_name
             elif isinstance(brand_manifest, str):
                 # URL string - use as-is

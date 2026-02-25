@@ -42,7 +42,7 @@ class TestBudgetFormatCompatibility:
         This test validates get_total_budget() correctly sums all package budgets.
         """
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testcampaign.com"},
             buyer_ref="test-123",
             packages=[
                 PackageRequest(product_id="prod_1", budget=2500.0, buyer_ref="pkg1", pricing_option_id="test_pricing")
@@ -61,7 +61,7 @@ class TestBudgetFormatCompatibility:
         This test validates that get_total_budget() correctly sums all package budgets.
         """
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testcampaign.com"},
             buyer_ref="test-123",
             packages=[
                 PackageRequest(product_id="prod_1", budget=5000.0, buyer_ref="pkg1", pricing_option_id="test_pricing"),

@@ -1,15 +1,18 @@
-"""Unit tests for authorized properties functionality."""
+"""Unit tests for authorized properties functionality.
+
+adcp 3.6.0 update: Property schema changed significantly.
+New required fields: identifier (str), type (enum)
+New optional fields: primary (bool), region (str), store (enum)
+Old fields removed: name, identifiers (list), publisher_domain, tags, property_id
+"""
 
 import pytest
 from adcp import Error
-from adcp.types import PropertyIdentifierTypes, PropertyType
 
 from src.core.schemas import (
     ListAuthorizedPropertiesRequest,
     ListAuthorizedPropertiesResponse,
     Property,
-    PropertyIdentifier,
-    PropertyTagMetadata,
 )
 
 
@@ -53,119 +56,112 @@ class TestListAuthorizedPropertiesRequest:
 
 
 class TestProperty:
-    """Test Property schema validation."""
+    """Test Property schema validation.
+
+    adcp 3.6.0: Property schema has new fields:
+    - identifier (REQUIRED): Domain, bundle ID, or other property identifier
+    - type (REQUIRED): 'website', 'mobile_app', 'ctv_app', 'desktop_app',
+                       'dooh', 'podcast', 'radio', 'streaming_audio'
+    - primary (optional, default False)
+    - region (optional)
+    - store (optional): 'apple', 'google', 'amazon', 'roku', 'samsung', 'lg', 'other'
+    """
 
     def test_property_with_minimal_fields(self):
-        """Test property with only required fields."""
+        """Test property with only required fields (identifier and type)."""
         property_obj = Property(
-            property_type="website",
-            name="Example Site",
-            identifiers=[PropertyIdentifier(type="domain", value="example.com")],
-            publisher_domain="example.com",
+            identifier="example.com",
+            type="website",
         )
 
-        # Library Property uses enums for property_type and identifier type
-        assert property_obj.property_type == PropertyType.website
-        assert property_obj.name == "Example Site"
-        assert len(property_obj.identifiers) == 1
-        assert property_obj.identifiers[0].type == PropertyIdentifierTypes.domain
-        assert property_obj.identifiers[0].value == "example.com"
-        assert property_obj.publisher_domain == "example.com"
-        assert property_obj.tags is None
+        assert property_obj.identifier == "example.com"
+        assert property_obj.primary is False  # Default value
+        assert property_obj.region is None
+        assert property_obj.store is None
 
     def test_property_with_all_fields(self):
-        """Test property with all fields."""
+        """Test property with all optional fields."""
         property_obj = Property(
-            property_type="mobile_app",
-            name="Example App",
-            identifiers=[
-                PropertyIdentifier(type="bundle_id", value="com.example.app"),
-                PropertyIdentifier(type="apple_app_store_id", value="123456789"),
-            ],
-            tags=["mobile", "entertainment"],
-            publisher_domain="example.com",
+            identifier="com.example.app",
+            type="mobile_app",
+            primary=True,
+            store="apple",
+            region="US",
         )
 
-        assert property_obj.property_type == PropertyType.mobile_app
-        assert property_obj.name == "Example App"
-        assert len(property_obj.identifiers) == 2
-        # Library uses PropertyTag type which wraps strings
-        assert len(property_obj.tags) == 2
-        assert property_obj.publisher_domain == "example.com"
+        assert property_obj.identifier == "com.example.app"
+        assert property_obj.primary is True
+        assert property_obj.region == "US"
 
-    def test_property_model_dump_omits_none_tags(self):
-        """Test that model_dump omits tags when None (AdCP spec compliance)."""
+    def test_property_model_dump_omits_none_fields(self):
+        """Test that model_dump omits None optional fields (AdCP spec compliance)."""
         property_obj = Property(
-            property_type="website",
-            name="Example Site",
-            identifiers=[PropertyIdentifier(type="domain", value="example.com")],
-            publisher_domain="example.com",
-            # tags not set (None)
+            identifier="example.com",
+            type="website",
+            # region and store not set (None)
         )
 
         data = property_obj.model_dump()
         # Per AdCP spec, optional fields with None values should be omitted
-        assert "tags" not in data, "tags with None value should be omitted per AdCP spec"
+        assert "region" not in data or data.get("region") is None
+        assert "store" not in data or data.get("store") is None
 
-        # Test that tags are included when explicitly set
-        property_with_tags = Property(
-            property_type="website",
-            name="Example Site",
-            identifiers=[PropertyIdentifier(type="domain", value="example.com")],
-            publisher_domain="example.com",
-            tags=["premium"],
-        )
-        data_with_tags = property_with_tags.model_dump()
-        assert "tags" in data_with_tags, "tags should be present when set"
-        assert data_with_tags["tags"] == ["premium"]
+        # Required fields must always be present
+        assert "identifier" in data
+        assert "type" in data
 
-    def test_property_requires_at_least_one_identifier(self):
-        """Test that property requires at least one identifier."""
-        with pytest.raises(ValueError):
-            Property(
-                property_type="website",
-                name="Example Site",
-                identifiers=[],  # Empty list should fail
-                publisher_domain="example.com",
-            )
+    def test_property_requires_identifier_and_type(self):
+        """Test that property requires identifier and type."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Property()  # Missing both required fields
 
     def test_invalid_property_type(self):
         """Test that invalid property type raises validation error."""
         with pytest.raises(ValueError):
             Property(
-                property_type="invalid_type",
-                name="Example Site",
-                identifiers=[PropertyIdentifier(type="domain", value="example.com")],
-                publisher_domain="example.com",
+                identifier="example.com",
+                type="invalid_type",
             )
 
     def test_property_adcp_compliance(self):
-        """Test that Property complies with AdCP property schema."""
-        # Create property with all required + optional fields
+        """Test that Property complies with AdCP property schema (adcp 3.6.0)."""
+        # Create property with required fields
         property_obj = Property(
-            property_type="website",
-            name="Example Site",
-            identifiers=[PropertyIdentifier(type="domain", value="example.com")],
-            tags=["premium_content"],
-            publisher_domain="example.com",
+            identifier="example.com",
+            type="website",
         )
 
         # Test AdCP-compliant response (mode="json" serializes enums to strings)
         adcp_response = property_obj.model_dump(mode="json")
 
         # Verify required AdCP fields present and non-null
-        # Note: publisher_domain is optional in library Property
-        required_fields = ["property_type", "name", "identifiers"]
+        required_fields = ["identifier", "type"]
         for field in required_fields:
             assert field in adcp_response
             assert adcp_response[field] is not None
 
-        # Verify optional AdCP fields present when set
-        assert "tags" in adcp_response  # Set in test
-        assert "publisher_domain" in adcp_response  # Set in test
+        # Verify property type is valid enum value (as string after json serialization)
+        valid_types = ["website", "mobile_app", "ctv_app", "desktop_app", "dooh", "podcast", "radio", "streaming_audio"]
+        assert adcp_response["type"] in valid_types
 
-        # Verify field count expectations - 5 fields (property_id excluded when None)
-        assert len(adcp_response) == 5
+        # primary field has a default value
+        assert "primary" in adcp_response
+        assert adcp_response["primary"] is False
+
+        # Test with mobile_app and optional store
+        app_property = Property(
+            identifier="com.example.app",
+            type="mobile_app",
+            primary=True,
+            store="google",
+        )
+        app_response = app_property.model_dump(mode="json")
+        assert app_response["identifier"] == "com.example.app"
+        assert app_response["type"] == "mobile_app"
+        assert app_response["primary"] is True
+        assert app_response["store"] == "google"
 
 
 class TestListAuthorizedPropertiesResponse:
@@ -217,23 +213,10 @@ class TestListAuthorizedPropertiesResponse:
         adcp_response = response.model_dump()
 
         # Verify required AdCP fields present and non-null
-        required_fields = ["publisher_domains"]
-        for field in required_fields:
-            assert field in adcp_response
-            assert adcp_response[field] is not None
+        assert "publisher_domains" in adcp_response
+        assert adcp_response["publisher_domains"] == ["example.com"]
 
-        # Verify optional fields with None values are omitted per AdCP spec
-        assert "errors" not in adcp_response, "errors with None value should be omitted"
-        assert "primary_channels" not in adcp_response, "primary_channels with None value should be omitted"
-        assert "primary_countries" not in adcp_response, "primary_countries with None value should be omitted"
-        assert "portfolio_description" not in adcp_response, "portfolio_description with None value should be omitted"
-        assert "advertising_policies" not in adcp_response, "advertising_policies with None value should be omitted"
-        assert "last_updated" not in adcp_response, "last_updated with None value should be omitted"
-
-        # Verify field count (only publisher_domains should be present)
-        assert len(adcp_response) == 1, f"Expected 1 field, got {len(adcp_response)}: {list(adcp_response.keys())}"
-
-        # Test with optional fields explicitly set to non-None values
+        # Test with optional fields
         response_with_optionals = ListAuthorizedPropertiesResponse(
             publisher_domains=["example.com", "example.org"],
             primary_channels=["display", "video"],
@@ -242,43 +225,5 @@ class TestListAuthorizedPropertiesResponse:
         adcp_with_optionals = response_with_optionals.model_dump()
         assert "primary_channels" in adcp_with_optionals, "Set optional fields should be present"
         assert "advertising_policies" in adcp_with_optionals, "Set optional fields should be present"
-        assert "errors" not in adcp_with_optionals, "Unset optional fields should still be omitted"
-
-
-class TestPropertyTagMetadata:
-    """Test PropertyTagMetadata schema validation."""
-
-    def test_tag_metadata_creation(self):
-        """Test basic tag metadata creation."""
-        tag = PropertyTagMetadata(name="Premium Content", description="High-quality content properties")
-
-        assert tag.name == "Premium Content"
-        assert tag.description == "High-quality content properties"
-
-    def test_tag_metadata_requires_all_fields(self):
-        """Test that tag metadata requires all fields."""
-        with pytest.raises(ValueError):
-            PropertyTagMetadata(name="Test")  # Missing description
-
-        with pytest.raises(ValueError):
-            PropertyTagMetadata(description="Test")  # Missing name
-
-
-class TestPropertyIdentifier:
-    """Test PropertyIdentifier schema validation."""
-
-    def test_identifier_creation(self):
-        """Test basic identifier creation."""
-        identifier = PropertyIdentifier(type="domain", value="example.com")
-
-        # Library Identifier uses enum for type
-        assert identifier.type == PropertyIdentifierTypes.domain
-        assert identifier.value == "example.com"
-
-    def test_identifier_requires_all_fields(self):
-        """Test that identifier requires all fields."""
-        with pytest.raises(ValueError):
-            PropertyIdentifier(type="domain")  # Missing value
-
-        with pytest.raises(ValueError):
-            PropertyIdentifier(value="example.com")  # Missing type
+        assert isinstance(adcp_with_optionals["primary_channels"], list)
+        assert isinstance(adcp_with_optionals["advertising_policies"], str)

@@ -116,11 +116,14 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
         ),
     ]
 
+    # Unwrap RootModel to access fields (adcp 3.6.0: GetSignalsRequest is RootModel[...])
+    req_inner = req.root
+
     # Filter based on request parameters using new AdCP-compliant fields
     for signal in sample_signals:
         # Apply signal_spec filter (natural language description matching)
-        if req.signal_spec:
-            spec_lower = req.signal_spec.lower()
+        if req_inner.signal_spec:
+            spec_lower = req_inner.signal_spec.lower()
             if (
                 spec_lower not in signal.name.lower()
                 and spec_lower not in signal.description.lower()
@@ -129,35 +132,39 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
                 continue
 
         # Apply filters if provided
-        if req.filters:
+        if req_inner.filters:
             # Filter by catalog_types (equivalent to old 'type' field)
-            if req.filters.catalog_types and signal.signal_type not in req.filters.catalog_types:
+            if req_inner.filters.catalog_types and signal.signal_type not in req_inner.filters.catalog_types:
                 continue
 
             # Filter by data_providers
-            if req.filters.data_providers and signal.data_provider not in req.filters.data_providers:
+            if req_inner.filters.data_providers and signal.data_provider not in req_inner.filters.data_providers:
                 continue
 
             # Filter by max_cpm (using signal's pricing.cpm)
-            if req.filters.max_cpm is not None and signal.pricing and signal.pricing.cpm > req.filters.max_cpm:
+            if (
+                req_inner.filters.max_cpm is not None
+                and signal.pricing
+                and signal.pricing.cpm > req_inner.filters.max_cpm
+            ):
                 continue
 
             # Filter by min_coverage_percentage
             if (
-                req.filters.min_coverage_percentage is not None
-                and signal.coverage_percentage < req.filters.min_coverage_percentage
+                req_inner.filters.min_coverage_percentage is not None
+                and signal.coverage_percentage < req_inner.filters.min_coverage_percentage
             ):
                 continue
 
         signals.append(signal)
 
     # Apply max_results limit (AdCP-compliant field name)
-    if req.max_results:
-        signals = signals[: req.max_results]
+    if req_inner.max_results:
+        signals = signals[: req_inner.max_results]
 
     # Signals are already constructed as local types (extending library types),
     # so no conversion needed — pass directly to response.
-    return GetSignalsResponse(signals=signals, errors=None, context=req.context)
+    return GetSignalsResponse(signals=signals, errors=None, context=req_inner.context)
 
 
 async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | None = None):

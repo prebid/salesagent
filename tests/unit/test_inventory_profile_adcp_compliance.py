@@ -59,8 +59,13 @@ def test_profile_formats_match_adcp_format_id_schema():
 
 
 def test_profile_publisher_properties_match_adcp_property_schema():
-    """Test that profile publisher_properties match AdCP Property schema."""
-    # Create profile with various property configurations
+    """Test that profile publisher_properties match AdCP Property schema.
+
+    adcp 3.6.0: Property schema changed:
+    - New required fields: identifier (str), type (enum)
+    - Old fields removed: property_type, name, identifiers, publisher_domain, tags
+    """
+    # Create profile with various property configurations using new schema
     profile = InventoryProfile(
         tenant_id="test_tenant",
         profile_id="test_profile_property_schema",
@@ -76,25 +81,18 @@ def test_profile_publisher_properties_match_adcp_property_schema():
         ],
         publisher_properties=[
             {
-                "property_type": "website",
-                "name": "Example Website",
-                "identifiers": [{"type": "domain", "value": "example.com"}],
-                "publisher_domain": "example.com",
-                "tags": ["premium"],
+                "identifier": "example.com",
+                "type": "website",
             },
             {
-                "property_type": "mobile_app",
-                "name": "Another App",
-                "identifiers": [{"type": "bundle_id", "value": "com.another.app"}],
-                "publisher_domain": "another.com",
-                "tags": ["premium", "news"],
+                "identifier": "com.another.app",
+                "type": "mobile_app",
+                "store": "google",
             },
             {
-                "property_type": "ctv_app",
-                "name": "Mixed CTV",
-                "identifiers": [{"type": "roku_store_id", "value": "roku123"}],
-                "publisher_domain": "mixed.com",
-                "tags": ["featured"],
+                "identifier": "roku123",
+                "type": "ctv_app",
+                "store": "roku",
             },
         ],
     )
@@ -103,28 +101,15 @@ def test_profile_publisher_properties_match_adcp_property_schema():
     assert len(profile.publisher_properties) == 3
 
     for prop_dict in profile.publisher_properties:
-        # Validate structure matches AdCP Property schema
-        assert "publisher_domain" in prop_dict, "Property must have publisher_domain"
-        assert "property_type" in prop_dict, "Property must have property_type"
-        assert "name" in prop_dict, "Property must have name"
-        assert "identifiers" in prop_dict, "Property must have identifiers"
-        assert isinstance(prop_dict["publisher_domain"], str), "publisher_domain must be string"
-        assert isinstance(prop_dict["name"], str), "name must be string"
-        assert isinstance(prop_dict["identifiers"], list), "identifiers must be list"
+        # adcp 3.6.0: required fields are identifier and type
+        assert "identifier" in prop_dict, "Property must have identifier"
+        assert "type" in prop_dict, "Property must have type"
+        assert isinstance(prop_dict["identifier"], str), "identifier must be string"
+        assert isinstance(prop_dict["type"], str), "type must be string"
 
         # Validate using Pydantic schema
         property_obj = Property(**prop_dict)
-        assert property_obj.publisher_domain == prop_dict["publisher_domain"]
-        # Library Property uses enum for property_type - compare .value
-        assert property_obj.property_type.value == prop_dict["property_type"]
-        assert property_obj.name == prop_dict["name"]
-        assert len(property_obj.identifiers) > 0
-
-        if "tags" in prop_dict:
-            assert isinstance(prop_dict["tags"], list), "tags must be list"
-            assert all(isinstance(tag, str) for tag in prop_dict["tags"]), "tags must be strings"
-            # Library Property uses PropertyTag type which wraps strings
-            assert len(property_obj.tags) == len(prop_dict["tags"])
+        assert property_obj.identifier == prop_dict["identifier"]
 
 
 def test_product_with_profile_passes_adcp_validation():
@@ -151,11 +136,8 @@ def test_product_with_profile_passes_adcp_validation():
         ],
         publisher_properties=[
             {
-                "property_type": "website",
-                "name": "Example Website",
-                "identifiers": [{"type": "domain", "value": "example.com"}],
-                "publisher_domain": "example.com",
-                "tags": ["premium"],
+                "identifier": "example.com",
+                "type": "website",
             }
         ],
     )
@@ -191,13 +173,9 @@ def test_product_with_profile_passes_adcp_validation():
     # Validate effective_properties match AdCP Property schema
     assert len(effective_properties) == 1
     for prop_dict in effective_properties:
-        # Validate using Pydantic Property schema
+        # adcp 3.6.0: validate using new Pydantic Property schema
         property_obj = Property(**prop_dict)
-        assert property_obj.publisher_domain == "example.com"
-        # Library Property uses enum for property_type - compare .value
-        assert property_obj.property_type.value == "website"
-        assert property_obj.name == "Example Website"
-        assert len(property_obj.identifiers) > 0
+        assert property_obj.identifier == "example.com"
 
     # Create ProductSchema from product data
     # This simulates what happens when product is serialized for AdCP API

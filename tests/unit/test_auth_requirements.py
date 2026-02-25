@@ -108,7 +108,7 @@ class TestAuthenticationRequirements:
         # Construct spec-compliant request at the test boundary (matches refactored _impl signature)
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer",
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 {
                     "buyer_ref": "pkg1",

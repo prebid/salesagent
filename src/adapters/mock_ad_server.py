@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
-from adcp.types import BrandManifest
+# adcp 3.6.0: BrandManifest removed from CreateMediaBuyRequest; now uses BrandReference (brand field)
 from adcp.types.aliases import Package as ResponsePackage
 from pydantic import Field
 
@@ -456,18 +456,14 @@ class MockAdServer(AdServerAdapter):
                     f"({pricing['currency']}, {'fixed' if pricing['is_fixed'] else 'auction'})"
                 )
 
-        # Keyword-based test orchestration (check brand_manifest.name for test instructions)
+        # Keyword-based test orchestration (check brand.domain for test instructions)
         # Keywords: [REJECT:reason], [DELAY:N], [ASYNC], [HITL:Nm:outcome], [ERROR:msg], [QUESTION:text]
+        # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
         scenario = None
         test_message = None
-        if request.brand_manifest:
-            # BrandManifestReference.root is BrandManifest | AnyUrl
-            inner = request.brand_manifest.root
-            if isinstance(inner, BrandManifest):
-                test_message = inner.name
-            else:
-                # AnyUrl — use the URL string as test message
-                test_message = str(inner)
+        if request.brand:
+            # BrandReference.domain is a str
+            test_message = str(request.brand.domain) if request.brand.domain else None
 
         if test_message and isinstance(test_message, str) and has_test_keywords(test_message):
             scenario = parse_test_scenario(test_message, "create_media_buy")

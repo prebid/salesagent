@@ -159,23 +159,14 @@ async def _get_products_impl(
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
-    # Unwrap BrandManifestReference (RootModel[BrandManifest | AnyUrl]) to inner value.
-    # After unwrapping, brand_manifest_unwrapped is BrandManifest, AnyUrl, or None.
-    brand_manifest_unwrapped: Any = None
-    if req.brand_manifest:
-        brand_manifest_unwrapped = req.brand_manifest.root
-
-    # Extract offering text from brand_manifest (BrandManifest | AnyUrl)
+    # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
+    # req.brand is dict[str, Any] | None (our schema override accepts flexible input).
     offering = None
-    if brand_manifest_unwrapped:
-        if isinstance(brand_manifest_unwrapped, BrandManifest):
-            if brand_manifest_unwrapped.name:
-                offering = brand_manifest_unwrapped.name
-            elif brand_manifest_unwrapped.url:
-                offering = f"Brand at {brand_manifest_unwrapped.url}"
-        else:
-            # AnyUrl — use the URL string
-            offering = f"Brand at {brand_manifest_unwrapped}"
+    if req.brand:
+        brand_dict: dict[str, Any] = req.brand if isinstance(req.brand, dict) else {}
+        domain = brand_dict.get("domain")
+        if domain:
+            offering = f"Brand at {domain}"
 
     # Check brand_manifest_policy from tenant settings
     brand_manifest_policy = tenant.get("brand_manifest_policy", "require_auth")
@@ -232,8 +223,8 @@ async def _get_products_impl(
             try:
                 policy_result = await policy_service.check_brief_compliance(
                     brief=brief_text,
-                    promoted_offering=offering,  # Use extracted offering from brand_manifest
-                    brand_manifest=brand_manifest_unwrapped,
+                    promoted_offering=offering,  # Use extracted offering from brand
+                    brand_manifest=None,  # adcp 3.6.0: brand_manifest replaced by brand; policy service still accepts None
                     tenant_policies=tenant_policies if tenant_policies else None,
                 )
 
@@ -736,7 +727,7 @@ async def _get_products_impl(
             "product_count": len(eligible_products),
             "brief_length": len(brief_text),
             "has_filters": req.filters is not None,
-            "has_brand_manifest": brand_manifest_unwrapped is not None,
+            "has_brand_manifest": req.brand is not None,
             "elapsed_ms": elapsed_ms,
         },
     )

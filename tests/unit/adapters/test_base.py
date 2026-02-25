@@ -69,7 +69,7 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
     ]
 
     request = CreateMediaBuyRequest(
-        brand_manifest={"name": "Premium basketball shoes for sports enthusiasts"},
+        brand={"domain": "sports.example.com"},
         buyer_ref="ref_12345",  # Required per AdCP spec
         packages=packages,  # AdCP v2.2.0: packages required
         start_time=start_time,

@@ -297,6 +297,7 @@ class TestAdapterAssetConversion:
         """Display creative gets width/height from format_id parameters."""
         creative = Creative(
             creative_id="cr_123",
+            variants=[],
             name="Test Banner",
             format_id=FormatId(
                 agent_url="https://creative.example.com",
@@ -322,6 +323,7 @@ class TestAdapterAssetConversion:
         """Video creative gets duration_ms from format_id parameters."""
         creative = Creative(
             creative_id="cr_456",
+            variants=[],
             name="Test Video",
             format_id=FormatId(
                 agent_url="https://creative.example.com",
@@ -348,6 +350,7 @@ class TestAdapterAssetConversion:
         """Template format without parameters doesn't add dimensions."""
         creative = Creative(
             creative_id="cr_789",
+            variants=[],
             name="Test Creative",
             format_id=FormatId(
                 agent_url="https://creative.example.com",
@@ -370,6 +373,7 @@ class TestAdapterAssetConversion:
         """Leaderboard (728x90) dimensions are extracted correctly."""
         creative = Creative(
             creative_id="cr_leaderboard",
+            variants=[],
             name="Leaderboard Ad",
             format_id=FormatId(
                 agent_url="https://creative.example.com",

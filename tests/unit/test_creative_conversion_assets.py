@@ -16,6 +16,7 @@ def test_convert_image_creative_from_assets():
     """
     creative = Creative(
         creative_id="test_123",
+        variants=[],
         name="Test Banner",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
         assets={
@@ -55,6 +56,7 @@ def test_convert_video_creative_from_assets():
     """
     creative = Creative(
         creative_id="video_456",
+        variants=[],
         name="Test Video",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
         assets={
@@ -89,6 +91,7 @@ def test_convert_html_creative_from_assets():
     """
     creative = Creative(
         creative_id="html_789",
+        variants=[],
         name="HTML Ad",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="html_300x250"),
         assets={
@@ -117,6 +120,7 @@ def test_convert_creative_with_tracking_urls():
     """
     creative = Creative(
         creative_id="tracked_123",
+        variants=[],
         name="Tracked Creative",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
         assets={
@@ -154,6 +158,7 @@ def test_convert_javascript_creative_from_assets():
     """
     creative = Creative(
         creative_id="js_101",
+        variants=[],
         name="JavaScript Ad",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="js_widget"),
         assets={
@@ -183,6 +188,7 @@ def test_convert_vast_url_creative():
     """
     creative = Creative(
         creative_id="vast_202",
+        variants=[],
         name="VAST Video Ad",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_vast"),
         assets={
@@ -215,6 +221,7 @@ def test_convert_vast_xml_creative():
     vast_xml = '<?xml version="1.0"?><VAST version="4.0">...</VAST>'
     creative = Creative(
         creative_id="vast_303",
+        variants=[],
         name="VAST XML Ad",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_vast"),
         assets={
@@ -242,6 +249,7 @@ def test_convert_creative_without_url_type_fallback():
     """
     creative = Creative(
         creative_id="fallback_404",
+        variants=[],
         name="Legacy Click URL Format",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_468x60"),
         assets={

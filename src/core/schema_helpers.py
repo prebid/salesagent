@@ -13,7 +13,7 @@ Philosophy:
 from typing import Any
 
 from adcp import GetProductsRequest, GetProductsResponse, Product
-from adcp.types.generated_poc.core.brand_manifest import BrandManifest
+from adcp.types import BrandManifest
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.product_filters import ProductFilters
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
@@ -58,16 +58,18 @@ def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> R
 def create_get_products_request(
     brief: str = "",
     brand_manifest: dict[str, Any] | BrandManifest | None = None,
+    brand: dict[str, Any] | None = None,
     filters: dict[str, Any] | ProductFilters | None = None,
     context: dict[str, Any] | ContextObject | None = None,
 ) -> GetProductsRequest:
-    """Create GetProductsRequest aligned with adcp v1.2.1 spec.
+    """Create GetProductsRequest aligned with adcp v3.6.0 spec.
 
     Args:
         brief: Natural language description of campaign requirements
-        brand_manifest: Brand information as dict or BrandManifest. Must follow AdCP BrandManifest schema.
+        brand_manifest: (Legacy) Brand information - converted to brand.domain for backward compat.
                        Example: {"name": "Acme", "url": "https://acme.com"}
-                       Or: {"url": "https://acme.com"}
+        brand: Brand reference with domain field per adcp 3.6.0.
+               Example: {"domain": "acme.com"}
         filters: Structured filters for product discovery (dict or ProductFilters)
         context: Application-level context (dict or ContextObject)
 
@@ -76,30 +78,39 @@ def create_get_products_request(
 
     Examples:
         >>> req = create_get_products_request(
-        ...     brand_manifest={"name": "Acme", "url": "https://acme.com"},
+        ...     brand={"domain": "acme.com"},
         ...     brief="Display ads"
         ... )
     """
-    # Handle brand_manifest - can be dict, BrandManifest, or None
-    brand_manifest_obj: BrandManifest | None = None
-    if brand_manifest is not None:
+    # Handle brand / brand_manifest -> brand (adcp 3.6.0: brand replaced brand_manifest)
+    # brand takes precedence; brand_manifest is a legacy backward-compat input
+    brand_dict: dict[str, Any] | None = brand
+    if brand_dict is None and brand_manifest is not None:
+        # Convert legacy brand_manifest to brand dict
         if isinstance(brand_manifest, BrandManifest):
-            brand_manifest_obj = brand_manifest
-        elif isinstance(brand_manifest, dict):
-            # Adapt brand_manifest to ensure 'name' field exists (adcp 2.5.0 requirement)
-            brand_manifest_adapted = brand_manifest
-            if "name" not in brand_manifest:
-                # If only 'url' provided, use domain as name
-                if "url" in brand_manifest:
-                    from urllib.parse import urlparse
+            # Extract domain from url field if available
+            url = getattr(brand_manifest, "url", None)
+            if url:
+                from urllib.parse import urlparse
 
-                    url_str = brand_manifest["url"]
-                    domain = urlparse(url_str).netloc or url_str
-                    brand_manifest_adapted = {**brand_manifest, "name": domain}
-                else:
-                    # Fallback: use a placeholder name
-                    brand_manifest_adapted = {**brand_manifest, "name": "Brand"}
-            brand_manifest_obj = BrandManifest(**brand_manifest_adapted)
+                domain = urlparse(str(url)).netloc or str(url)
+                brand_dict = {"domain": domain}
+            else:
+                name = getattr(brand_manifest, "name", None)
+                if name:
+                    brand_dict = {"domain": name}
+        elif isinstance(brand_manifest, dict):
+            # Extract domain from url or name fields
+            if "domain" in brand_manifest:
+                brand_dict = {"domain": brand_manifest["domain"]}
+            elif "url" in brand_manifest:
+                from urllib.parse import urlparse
+
+                url_str = brand_manifest["url"]
+                domain = urlparse(url_str).netloc or url_str
+                brand_dict = {"domain": domain}
+            elif "name" in brand_manifest:
+                brand_dict = {"domain": brand_manifest["name"]}
 
     # Handle filters - can be dict, ProductFilters, or None
     filters_obj: ProductFilters | None = None
@@ -110,7 +121,7 @@ def create_get_products_request(
             filters_obj = ProductFilters(**filters)
 
     return GetProductsRequest(
-        brand_manifest=brand_manifest_obj,
+        brand=brand_dict,
         brief=brief or None,
         filters=filters_obj,
         context=to_context_object(context),

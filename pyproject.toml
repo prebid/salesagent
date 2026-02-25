@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     "a2wsgi>=1.10.0",
-    "adcp>=3.2.0",
+    "adcp>=3.6.0",
     "fastmcp>=3.0.2", # v3 for combine_lifespans, better FastAPI integration
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",

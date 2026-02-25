@@ -1,101 +1,83 @@
-"""Test that brand_manifest RootModel wrappers are correctly unwrapped.
+"""Test that brand field is correctly handled in GetProductsRequest.
 
-This tests the fix for GitHub issue #932 where MCP get_products fails
-because brand_manifest is wrapped in a BrandManifestReference RootModel,
-but the code was checking for .name and .url on the wrapper instead of
-the inner BrandManifest object.
+adcp 3.6.0: brand_manifest replaced by brand (BrandReference with domain field).
+This tests the create_get_products_request helper and its backward compat handling.
 """
 
-from adcp.types.generated_poc.core.brand_manifest import BrandManifest
+from adcp.types import BrandManifest
 
 from src.core.schema_helpers import create_get_products_request
 
 
 def test_brand_manifest_rootmodel_unwrapping():
-    """Test that BrandManifest in GetProductsRequest is correctly accessed.
+    """Test that legacy brand_manifest input is converted to brand field.
 
-    The adcp library wraps BrandManifest in BrandManifestReference (a RootModel).
-    The extraction code must unwrap via .root to access .name and .url.
+    adcp 3.6.0: GetProductsRequest uses brand (BrandReference) not brand_manifest.
+    The helper function converts legacy brand_manifest input to brand.domain.
     """
     manifest = BrandManifest(name="Test Brand", url="https://test.example.com")
     req = create_get_products_request(brief="test", brand_manifest=manifest)
 
-    # req.brand_manifest is a BrandManifestReference wrapper
-    assert hasattr(req.brand_manifest, "root"), "brand_manifest should have .root attribute"
+    # adcp 3.6.0: brand_manifest is converted to brand.domain (BrandReference)
+    assert req.brand is not None, "brand should be set from legacy brand_manifest"
 
-    # The wrapper does NOT have .name directly
-    assert not hasattr(req.brand_manifest, "name") or req.brand_manifest.name is None, (
-        "brand_manifest wrapper should not have .name directly accessible"
-    )
-
-    # But .root does have .name
-    assert req.brand_manifest.root.name == "Test Brand"
-    assert str(req.brand_manifest.root.url).rstrip("/") == "https://test.example.com"
+    # The domain should be extracted from the URL
+    domain = req.brand.domain if hasattr(req.brand, "domain") else req.brand.get("domain")
+    assert domain == "test.example.com"
 
 
 def test_brand_manifest_extraction_logic():
-    """Test the actual extraction logic used in _get_products_impl."""
+    """Test the extraction logic from legacy brand_manifest to brand.domain."""
     manifest = BrandManifest(name="Test Brand", url="https://test.example.com")
     req = create_get_products_request(brief="test", brand_manifest=manifest)
 
-    # This is the extraction logic from products.py
-    offering = None
-    if req.brand_manifest:
-        # Handle RootModel wrappers
-        brand_manifest = req.brand_manifest
-        if hasattr(brand_manifest, "root"):
-            brand_manifest = brand_manifest.root
-
-        if isinstance(brand_manifest, str):
-            offering = f"Brand at {brand_manifest}"
-        elif hasattr(brand_manifest, "__str__") and str(brand_manifest).startswith("http"):
-            offering = f"Brand at {brand_manifest}"
-        elif hasattr(brand_manifest, "name") and brand_manifest.name:
-            offering = brand_manifest.name
-        elif hasattr(brand_manifest, "url") and brand_manifest.url:
-            offering = f"Brand at {brand_manifest.url}"
-        elif isinstance(brand_manifest, dict):
-            offering = brand_manifest.get("name") or brand_manifest.get("url", "")
-
-    assert offering == "Test Brand", f"Expected 'Test Brand', got '{offering}'"
+    # brand.domain should be the domain extracted from the manifest URL
+    assert req.brand is not None
+    domain = req.brand.domain if hasattr(req.brand, "domain") else req.brand.get("domain")
+    assert "test.example.com" in domain
 
 
 def test_brand_manifest_url_only_via_dict():
     """Test extraction when only URL is provided via dict.
 
-    Note: BrandManifest requires 'name' directly, but create_get_products_request
-    handles dicts with only 'url' by auto-generating a name from the domain.
+    adcp 3.6.0: domain is extracted from URL and stored in brand.domain.
     """
-    # Pass as dict so create_get_products_request can add the name
     req = create_get_products_request(brief="test", brand_manifest={"url": "https://example.com"})
 
-    brand_manifest = req.brand_manifest
-    if hasattr(brand_manifest, "root"):
-        brand_manifest = brand_manifest.root
-
-    # Should have the domain as name (from create_get_products_request adaptation)
-    assert brand_manifest.name is not None
-    assert brand_manifest.name == "example.com"  # Domain extracted from URL
-    # URL should be preserved
-    assert "example.com" in str(brand_manifest.url)
+    # Should extract domain from URL
+    assert req.brand is not None
+    domain = req.brand.domain if hasattr(req.brand, "domain") else req.brand.get("domain")
+    assert domain == "example.com"
 
 
 def test_brand_manifest_dict_input():
-    """Test that dict input is converted to BrandManifest and wrapped."""
+    """Test that dict brand_manifest input is converted to brand.domain."""
     req = create_get_products_request(
         brief="test", brand_manifest={"name": "Dict Brand", "url": "https://dict.example.com"}
     )
 
-    # Should be wrapped in RootModel
-    assert hasattr(req.brand_manifest, "root")
-
-    # Inner object should have correct values
-    assert req.brand_manifest.root.name == "Dict Brand"
-    assert "dict.example.com" in str(req.brand_manifest.root.url)
+    # Should extract domain from URL
+    assert req.brand is not None
+    domain = req.brand.domain if hasattr(req.brand, "domain") else req.brand.get("domain")
+    assert "dict.example.com" in domain
 
 
 def test_brand_manifest_none():
     """Test that None brand_manifest is handled correctly."""
     req = create_get_products_request(brief="test", brand_manifest=None)
 
-    assert req.brand_manifest is None
+    assert req.brand is None
+
+
+def test_brand_takes_precedence_over_brand_manifest():
+    """Test that brand parameter takes precedence over brand_manifest."""
+    req = create_get_products_request(
+        brief="test",
+        brand={"domain": "brand-param.com"},
+        brand_manifest={"name": "Dict Brand", "url": "https://dict.example.com"},
+    )
+
+    # brand parameter should take precedence
+    assert req.brand is not None
+    domain = req.brand.domain if hasattr(req.brand, "domain") else req.brand.get("domain")
+    assert domain == "brand-param.com"

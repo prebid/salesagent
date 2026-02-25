@@ -52,7 +52,7 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
     """
     defaults = {
         "buyer_ref": "test-buyer",
-        "brand_manifest": {"name": "Test Brand"},
+        "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
         "packages": [
@@ -675,9 +675,11 @@ class TestInlineCreativesProcessedBeforeApproval:
                             "creative_id": "inline_creative_1",
                             "name": "Test Ad",
                             "format_id": {
-                                "agent_url": "https://creative.example.com",
+                                "agent_url": "https://creative.example.com/",
                                 "id": "display_300x250_image",
                             },
+                            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
+                            "variants": [],  # Required in adcp 3.6.0
                         }
                     ],
                 },

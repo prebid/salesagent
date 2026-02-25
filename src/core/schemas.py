@@ -1,5 +1,5 @@
 import warnings
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
@@ -56,10 +56,10 @@ from adcp.types.aliases import (
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
-# V3: Two Pagination types - batch-based for delivery, page-based for list responses
-from adcp.types.generated_poc.media_buy.list_creatives_response import Pagination as LibraryResponsePagination
+# V3: Page-based pagination for list responses (cursor-based in adcp 3.6.0)
+from adcp.types.generated_poc.core.pagination_response import PaginationResponse as LibraryResponsePagination
+from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from adcp.types.generated_poc.media_buy.package_update import PackageUpdate1 as LibraryPackageUpdate1
 from adcp.types.generated_poc.media_buy.update_media_buy_request import (
     UpdateMediaBuyRequest1 as LibraryUpdateMediaBuyRequest1,
@@ -885,10 +885,10 @@ class Targeting(TargetingOverlay):
     frequency_cap: FrequencyCap | None = None
 
     # --- Geo exclusion extensions (not in library) ---
-    geo_countries_exclude: list[GeoCountry] | None = None
-    geo_regions_exclude: list[GeoRegion] | None = None
-    geo_metros_exclude: list[GeoMetro] | None = None
-    geo_postal_areas_exclude: list[GeoPostalArea] | None = None
+    geo_countries_exclude: list[GeoCountry] | None = None  # type: ignore[assignment]
+    geo_regions_exclude: list[GeoRegion] | None = None  # type: ignore[assignment]
+    geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]
+    geo_postal_areas_exclude: list[GeoPostalArea] | None = None  # type: ignore[assignment]
 
     # --- Internal dimensions (unchanged) ---
 
@@ -1185,7 +1185,7 @@ class Product(LibraryProduct):
         description="Internal: Country codes (ISO 3166-1 alpha-2) where this product is available",
         exclude=True,  # Exclude from serialization by default
     )
-    channels: list[str] | None = Field(
+    channels: list[str] | None = Field(  # type: ignore[assignment]
         default=None,
         description="Internal: Advertising channels (display, video, audio, native, dooh, ctv, podcast, retail, social)",
         exclude=True,  # Exclude from serialization by default
@@ -1483,11 +1483,11 @@ class GetProductsRequest(LibraryGetProductsRequest):
         None,
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
     )
-    brand: dict[str, Any] | None = Field(
+    brand: dict[str, Any] | None = Field(  # type: ignore[assignment]
         None,
         description="Brand reference for product discovery context (spec: brand-ref.json)",
     )
-    catalog: dict[str, Any] | None = Field(
+    catalog: dict[str, Any] | None = Field(  # type: ignore[assignment]
         None,
         description="Catalog of items the buyer wants to promote (spec: catalog.json)",
     )
@@ -1495,7 +1495,7 @@ class GetProductsRequest(LibraryGetProductsRequest):
         None,
         description="Buyer's campaign reference label for CRM and ad server correlation",
     )
-    pagination: dict[str, Any] | None = Field(
+    pagination: dict[str, Any] | None = Field(  # type: ignore[assignment]
         None,
         description="Cursor-based pagination parameters (max_results, cursor)",
     )
@@ -1655,52 +1655,45 @@ class FormatId(LibraryFormatId):
 
 
 class Creative(LibraryCreative):
-    """Individual creative asset - extends library Creative with customizations for our workflow.
+    """Individual creative asset - extends library Creative with internal workflow fields.
 
-    Extends the official AdCP library Creative type with:
-    1. Simplified assets field (dict[str, Any] instead of strict typed unions)
-    2. Internal-only principal_id for workflow tracking
-    3. Backward-compatible defaults for created_date/updated_date/status
+    adcp 3.6.0 library fields:
+    - Required: creative_id, variants (list[CreativeVariant])
+    - Optional: format_id, media_buy_id, totals, variant_count
 
-    **Library Fields (from adcp.types.stable.Creative):**
-    - Required: creative_id, name, format_id, created_date, updated_date, status
-    - Optional: assets, click_url, media_url, width, height, duration, tags, performance,
-                assignments, sub_assets
-
-    **Our Customizations:**
-    - assets: Simplified to dict[str, Any] (instead of strict typed asset unions)
-    - created_date/updated_date: Made optional with datetime.now(UTC) defaults
-    - status: Made optional with "pending_review" default
-    - principal_id: Internal field for workflow tracking (excluded from responses)
-
-    **Notes:**
-    - Supports both modern (assets + format_id) and legacy (media_url/width/height) patterns
-    - Library's status is CreativeStatus enum: processing, approved, rejected, pending_review
-    - Backward compatible with existing test suite and database schemas
+    Internal fields (excluded from AdCP responses, used for workflow/DB):
+    - assets: legacy asset storage from pre-3.6 schema (dict[str, Any])
+    - status: workflow approval status (processing/approved/rejected/pending_review)
+    - principal_id: associates creative with advertiser principal
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Override assets to accept simple dicts (instead of strict typed asset unions)
-    assets: dict[str, Any] | None = Field(default=None, description="Assets for this creative, keyed by asset_role")
-
-    # Make dates optional with defaults for backward compatibility
-    created_date: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), description="When the creative was uploaded to the library"
+    # === Internal Fields (excluded from AdCP responses) ===
+    # assets: legacy field, library removed it in 3.6.0 but our DB and workflow still use it
+    assets: dict[str, Any] | None = Field(
+        default=None, exclude=True, description="Legacy asset storage (internal, not in AdCP 3.6.0 response)"
     )
-    updated_date: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), description="When the creative was last modified"
-    )
-
-    # Make status optional with default (using library enum type)
+    # status: workflow state, library removed it in 3.6.0 but our workflow still uses it
     status: CreativeStatus = Field(
         default=CreativeStatus.pending_review,
-        description="Current approval status: processing, approved, rejected, pending_review",
+        exclude=True,
+        description="Workflow approval status (internal, not in AdCP 3.6.0 response)",
     )
-
-    # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(
         default=None, exclude=True, description="Associates creative with advertiser (workflow tracking)"
+    )
+    # Fields removed from library in 3.6.0 — kept as internal for Wave 0 compatibility.
+    # Wave 1 (Creative domain) will refactor these into DB-layer-only fields.
+    name: str | None = Field(default=None, exclude=True, description="Creative name (internal, DB storage)")
+    created_date: datetime | None = Field(
+        default=None, exclude=True, description="Creation timestamp (internal, was library field in 3.2.0)"
+    )
+    updated_date: datetime | None = Field(
+        default=None, exclude=True, description="Update timestamp (internal, was library field in 3.2.0)"
+    )
+    tags: list[str] | None = Field(
+        default=None, exclude=True, description="Tags (internal, was library field in 3.2.0)"
     )
 
     @model_validator(mode="before")
@@ -1721,51 +1714,34 @@ class Creative(LibraryCreative):
                 raise ValueError(f"Invalid format_id: {e}")
         return values
 
-    # Helper properties for backward compatibility
+    # Helper properties for format_id (still present in 3.6.0)
     @property
-    def format(self) -> LibraryFormatId:
-        """Alias for format_id (backward compatibility with old code that used .format)."""
+    def format(self) -> LibraryFormatId | None:
+        """Alias for format_id."""
         return self.format_id
 
     @property
-    def format_id_str(self) -> str:
-        """Get format ID string from FormatId object.
-
-        For backward compatibility with code expecting format_id to be a string.
-        Library's format_id is a FormatId object; this returns the string ID.
-        """
-        return self.format_id.id
+    def format_id_str(self) -> str | None:
+        """Get format ID string from FormatId object."""
+        return self.format_id.id if self.format_id else None
 
     @property
-    def format_agent_url(self) -> str:
+    def format_agent_url(self) -> str | None:
         """Get agent URL string from FormatId object."""
-        return str(self.format_id.agent_url)
-
-    # Compatibility alias for old tests that used 'created_at'
-    @property
-    def created_at(self) -> datetime:
-        """Alias for created_date (backward compatibility)."""
-        return self.created_date
-
-    # Compatibility alias for old tests that used 'updated_at'
-    @property
-    def updated_at(self) -> datetime:
-        """Alias for updated_date (backward compatibility)."""
-        return self.updated_date
+        return str(self.format_id.agent_url) if self.format_id else None
 
     def model_dump_internal(self, **kwargs):
         """Dump including internal fields for database storage.
 
         Pydantic v2's Field(exclude=True) cannot be overridden via model_dump parameters.
-        We manually include principal_id by accessing the attribute directly.
+        We manually include internal fields by accessing attributes directly.
         """
-        # Get base serialization
         data = super().model_dump(exclude=set(), **kwargs)
-
-        # Manually add excluded fields
         if self.principal_id is not None:
             data["principal_id"] = self.principal_id
-
+        if self.assets is not None:
+            data["assets"] = self.assets
+        data["status"] = self.status.value if isinstance(self.status, CreativeStatus) else self.status
         return data
 
 
@@ -3266,19 +3242,9 @@ class Signal(LibrarySignal):
     metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
 
     # Backward compatibility properties (deprecated)
-    @property
-    def signal_id(self) -> str:
-        """Backward compatibility for signal_id.
-
-        DEPRECATED: Use signal_agent_segment_id instead.
-        This property will be removed in a future version.
-        """
-        warnings.warn(
-            "signal_id is deprecated and will be removed in a future version. Use signal_agent_segment_id instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.signal_agent_segment_id
+    # Note: signal_id is now a library field in adcp 3.6.0 (SignalId | None)
+    # The old @property signal_id that mapped to signal_agent_segment_id is removed
+    # to avoid conflict with the new library field.
 
     @property
     def type(self) -> str:
@@ -3320,35 +3286,11 @@ class SignalFilters(LibrarySignalFilters):
     pass  # All fields inherited from library
 
 
-class GetSignalsRequest(LibraryGetSignalsRequest):
-    """Extends library GetSignalsRequest with environment-aware validation."""
-
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    # Fields in AdCP spec but not yet in adcp library v3.2.0 (spec leads library)
-    signal_ids: list[dict[str, Any]] | None = Field(
-        None,
-        description="Specific signals to look up by data provider and ID. "
-        "Each item is a SignalId object with 'source' discriminator ('catalog' or 'agent').",
-    )
-    pagination: dict[str, Any] | None = Field(
-        None,
-        description="Cursor-based pagination parameters (max_results, cursor).",
-    )
-
-    # Backward compatibility properties (deprecated)
-    @property
-    def query(self) -> str:
-        """DEPRECATED: Use signal_spec instead. Backward compatibility only."""
-        warnings.warn("query is deprecated. Use signal_spec instead.", DeprecationWarning, stacklevel=2)
-        return self.signal_spec
-
-    @property
-    def limit(self) -> int | None:
-        """DEPRECATED: Use max_results instead. Backward compatibility only."""
-        if self.max_results:
-            warnings.warn("limit is deprecated. Use max_results instead.", DeprecationWarning, stacklevel=2)
-        return self.max_results
+# GetSignalsRequest — library changed to RootModel[GetSignalsRequest1 | GetSignalsRequest2] in 3.6.0.
+# RootModel does not support model_config['extra'] or property overrides.
+# Library now includes signal_ids, pagination, signal_spec, max_results directly.
+# Re-export the library type; callers use .signal_spec and .max_results directly.
+GetSignalsRequest = LibraryGetSignalsRequest
 
 
 class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):

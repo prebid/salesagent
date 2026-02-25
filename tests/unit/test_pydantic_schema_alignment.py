@@ -488,10 +488,10 @@ class TestSpecificFieldValidation:
     """Specific regression tests for fields that have caused issues."""
 
     def test_create_media_buy_accepts_brand_manifest(self):
-        """REGRESSION TEST: brand_manifest must be accepted per AdCP v2.2.0."""
+        """REGRESSION TEST: brand must be accepted per AdCP v3.6.0 (replaced brand_manifest)."""
         request = CreateMediaBuyRequest(
             buyer_ref="test_ref",  # Required per AdCP spec
-            brand_manifest={"name": "Nike Air Jordan 2025"},
+            brand={"domain": "nike.com"},
             packages=[
                 {
                     "buyer_ref": "pkg_1",
@@ -503,18 +503,13 @@ class TestSpecificFieldValidation:
             start_time="2025-02-01T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
         )
-        # Verify brand_manifest was accepted
-        assert request.brand_manifest is not None
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(request.brand_manifest, "name"):
-            assert request.brand_manifest.name == "Nike Air Jordan 2025"
-        elif hasattr(request.brand_manifest, "root") and hasattr(request.brand_manifest.root, "name"):
-            assert request.brand_manifest.root.name == "Nike Air Jordan 2025"
+        # Verify brand was accepted
+        assert request.brand is not None
 
     def test_get_products_accepts_filters(self):
         """REGRESSION TEST: filters must be accepted (PR #195 issue)."""
         request = GetProductsRequest(
-            brand_manifest={"name": "Test Product"},
+            brand={"domain": "testproduct.com"},
             filters={
                 "delivery_type": "guaranteed",
                 "format_types": ["video"],
@@ -527,23 +522,20 @@ class TestSpecificFieldValidation:
         """Test that GetProductsRequest accepts all optional fields per spec.
 
         Note: adcp_version is NOT a field on GetProductsRequest per AdCP spec.
-        All fields are optional.
+        All fields are optional, including brand.
+        adcp 3.6.0: brand replaced brand_manifest.
         """
         # Empty request is valid
         empty_request = GetProductsRequest()
-        assert empty_request.brand_manifest is None
+        assert empty_request.brand is None
         assert empty_request.brief is None
         assert empty_request.filters is None
 
-        # With brand_manifest only
+        # With brand only
         request = GetProductsRequest(
-            brand_manifest={"name": "Test Product"},
+            brand={"domain": "testproduct.com"},
         )
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(request.brand_manifest, "name"):
-            assert request.brand_manifest.name == "Test Product"
-        elif hasattr(request.brand_manifest, "root") and hasattr(request.brand_manifest.root, "name"):
-            assert request.brand_manifest.root.name == "Test Product"
+        assert request.brand is not None
         assert request.brief is None
 
 

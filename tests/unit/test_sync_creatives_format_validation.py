@@ -43,6 +43,7 @@ class TestSyncCreativesFormatValidation:
             "name": "Test Banner",
             "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
             "assets": {"banner_image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
+            "variants": [],  # Required in adcp 3.6.0
         }
 
     @pytest.fixture
@@ -176,6 +177,7 @@ class TestSyncCreativesFormatValidation:
             "name": "Legacy Creative",
             "format_id": "display_300x250_image",  # String instead of FormatId object
             "assets": {"banner_image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
+            "variants": [],  # Required in adcp 3.6.0
         }
 
         with (
@@ -221,18 +223,21 @@ class TestSyncCreativesFormatValidation:
                 "name": "Valid Creative",
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
                 "assets": {"banner_image": {"url": "https://example.com/1.png"}},
+                "variants": [],
             },
             {
                 "creative_id": "creative_2",
                 "name": "Invalid Format",
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "unknown_format"},
                 "assets": {"banner_image": {"url": "https://example.com/2.png"}},
+                "variants": [],
             },
             {
                 "creative_id": "creative_3",
                 "name": "Valid Creative 2",
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
                 "assets": {"banner_image": {"url": "https://example.com/3.png"}},
+                "variants": [],
             },
         ]
 

@@ -315,14 +315,15 @@ class TestGetMediaBuyDeliveryResponseShape:
             MediaBuyDeliveryData,
             PackageDelivery,
             PricingModel,
-            ReportingPeriod,
         )
 
         now = datetime.now(UTC)
         start = now - timedelta(days=7)
 
+        # adcp 3.6.0: GetMediaBuyDeliveryResponse uses a media-buy specific ReportingPeriod
+        # that differs from the creative delivery ReportingPeriod. Pass as dict for Pydantic coercion.
         return GetMediaBuyDeliveryResponse(
-            reporting_period=ReportingPeriod(start=start, end=now),
+            reporting_period={"start": start, "end": now},
             currency="USD",
             aggregated_totals=AggregatedTotals(
                 impressions=50000.0,
@@ -418,12 +419,12 @@ class TestGetMediaBuyDeliveryResponseShape:
         from src.core.schemas import (
             AggregatedTotals,
             GetMediaBuyDeliveryResponse,
-            ReportingPeriod,
         )
 
         now = datetime.now(UTC)
+        # adcp 3.6.0: use dict for reporting_period (media-buy specific type differs from schemas.ReportingPeriod)
         resp = GetMediaBuyDeliveryResponse(
-            reporting_period=ReportingPeriod(start=now - timedelta(days=1), end=now),
+            reporting_period={"start": now - timedelta(days=1), "end": now},
             currency="USD",
             aggregated_totals=AggregatedTotals(
                 impressions=0.0,
@@ -661,7 +662,7 @@ class TestListCreativesResponseShape:
         resp = ListCreativesResponse(
             creatives=[],
             query_summary=QuerySummary(returned=0, total_matching=0, filters_applied=[]),
-            pagination=Pagination(limit=10, offset=0, total_pages=0, current_page=1, has_more=False),
+            pagination=Pagination(has_more=False),
         )
         data = resp.model_dump(mode="json")
 
@@ -676,13 +677,14 @@ class TestListCreativesResponseShape:
 
         creative = Creative(
             creative_id="creative_001",
+            variants=[],
             name="Premium Banner",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         )
         resp = ListCreativesResponse(
             creatives=[creative],
             query_summary=QuerySummary(returned=1, total_matching=1, filters_applied=[]),
-            pagination=Pagination(limit=10, offset=0, total_pages=1, current_page=1, has_more=False),
+            pagination=Pagination(has_more=False),
         )
         data = resp.model_dump(mode="json")
 
@@ -691,14 +693,11 @@ class TestListCreativesResponseShape:
 
         c = data["creatives"][0]
         assert_field_type(c, "creative_id", str)
-        assert_field_type(c, "name", str)
+        # In adcp 3.6.0, name/status/created_date/updated_date are internal-only
+        # and excluded from model_dump (they appear in model_dump_internal)
         assert_field_type(c, "format_id", dict)
-        assert_field_type(c, "status", str)
-        assert_field_type(c, "created_date", str)
-        assert_field_type(c, "updated_date", str)
 
         assert c["creative_id"] == "creative_001"
-        assert c["name"] == "Premium Banner"
 
     def test_query_summary_shape(self):
         """Query summary has expected fields."""
@@ -707,7 +706,7 @@ class TestListCreativesResponseShape:
         resp = ListCreativesResponse(
             creatives=[],
             query_summary=QuerySummary(returned=5, total_matching=42, filters_applied=["status"]),
-            pagination=Pagination(limit=10, offset=0, total_pages=5, current_page=1, has_more=True),
+            pagination=Pagination(has_more=True),
         )
         data = resp.model_dump(mode="json")
 
@@ -720,18 +719,15 @@ class TestListCreativesResponseShape:
         """Pagination has expected fields."""
         from src.core.schemas import ListCreativesResponse, Pagination, QuerySummary
 
+        # In adcp 3.6.0, Pagination only has: has_more (required), cursor (optional), total_count (optional)
         resp = ListCreativesResponse(
             creatives=[],
             query_summary=QuerySummary(returned=0, total_matching=0, filters_applied=[]),
-            pagination=Pagination(limit=25, offset=50, total_pages=4, current_page=3, has_more=True),
+            pagination=Pagination(has_more=True, total_count=100),
         )
         data = resp.model_dump(mode="json")
 
         pg = data["pagination"]
-        assert_field_type(pg, "limit", int)
-        assert_field_type(pg, "offset", int)
-        assert_field_type(pg, "total_pages", int)
-        assert_field_type(pg, "current_page", int)
         assert_field_type(pg, "has_more", bool)
 
     def test_internal_fields_excluded(self):
@@ -740,6 +736,7 @@ class TestListCreativesResponseShape:
 
         creative = Creative(
             creative_id="creative_002",
+            variants=[],
             name="Confidential Ad",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
             principal_id="principal_secret_123",
@@ -747,7 +744,7 @@ class TestListCreativesResponseShape:
         resp = ListCreativesResponse(
             creatives=[creative],
             query_summary=QuerySummary(returned=1, total_matching=1, filters_applied=[]),
-            pagination=Pagination(limit=10, offset=0, total_pages=1, current_page=1, has_more=False),
+            pagination=Pagination(has_more=False),
         )
         data = resp.model_dump(mode="json")
 
@@ -760,13 +757,14 @@ class TestListCreativesResponseShape:
 
         creative = Creative(
             creative_id="creative_003",
+            variants=[],
             name="Video Ad",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "video_1920x1080"},
         )
         resp = ListCreativesResponse(
             creatives=[creative],
             query_summary=QuerySummary(returned=1, total_matching=1, filters_applied=[]),
-            pagination=Pagination(limit=10, offset=0, total_pages=1, current_page=1, has_more=False),
+            pagination=Pagination(has_more=False),
         )
         data = resp.model_dump(mode="json")
 
@@ -823,9 +821,7 @@ class TestSerializationConsistency:
                     query_summary=__import__("src.core.schemas", fromlist=["QuerySummary"]).QuerySummary(
                         returned=0, total_matching=0, filters_applied=[]
                     ),
-                    pagination=__import__("src.core.schemas", fromlist=["Pagination"]).Pagination(
-                        limit=10, offset=0, total_pages=0, current_page=1, has_more=False
-                    ),
+                    pagination=__import__("src.core.schemas", fromlist=["Pagination"]).Pagination(has_more=False),
                 ),
                 id="list_creatives",
             ),
@@ -857,12 +853,12 @@ class TestSerializationConsistency:
             MediaBuyDeliveryData,
             PackageDelivery,
             PricingModel,
-            ReportingPeriod,
         )
 
         now = datetime.now(UTC)
+        # adcp 3.6.0: use dict for reporting_period (media-buy specific type differs from schemas.ReportingPeriod)
         resp = GetMediaBuyDeliveryResponse(
-            reporting_period=ReportingPeriod(start=now - timedelta(days=1), end=now),
+            reporting_period={"start": now - timedelta(days=1), "end": now},
             currency="USD",
             aggregated_totals=AggregatedTotals(impressions=1000.0, spend=10.0, media_buy_count=1),
             media_buy_deliveries=[

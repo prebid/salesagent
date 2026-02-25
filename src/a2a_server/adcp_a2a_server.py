@@ -1608,8 +1608,9 @@ class AdCPRequestHandler(RequestHandler):
                 }
 
             # Call core function with validated parameters and identity
+            # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
             response = await core_create_media_buy_tool(
-                brand_manifest=params.get("brand_manifest"),
+                brand=params.get("brand") or params.get("brand_manifest"),  # Support both
                 po_number=req.po_number,
                 buyer_ref=req.buyer_ref,
                 packages=params["packages"],  # Required — validated above

@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
-from adcp import BrandManifest, PushNotificationConfig
+from adcp import PushNotificationConfig
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from adcp.types.generated_poc.core.context import ContextObject
@@ -3548,10 +3548,10 @@ async def _create_media_buy_impl(
 
 async def create_media_buy(
     buyer_ref: str,
-    brand_manifest: BrandManifest | str,  # BrandManifest or URL string - REQUIRED per AdCP v2.2.0 spec
-    packages: list[PackageRequest],  # REQUIRED per AdCP spec - Package objects with all fields
-    start_time: str,  # datetime ISO 8601 or 'asap' - REQUIRED per AdCP spec
-    end_time: str,  # datetime ISO 8601 - REQUIRED per AdCP spec
+    brand: Any | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
+    packages: list[PackageRequest] | None = None,  # REQUIRED per AdCP spec - Package objects with all fields
+    start_time: str | None = None,  # datetime ISO 8601 or 'asap' - REQUIRED per AdCP spec
+    end_time: str | None = None,  # datetime ISO 8601 - REQUIRED per AdCP spec
     budget: Any | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
     po_number: str | None = None,
     product_ids: list[str] | None = None,  # Legacy format conversion
@@ -3578,7 +3578,7 @@ async def create_media_buy(
 
     Args:
         buyer_ref: Buyer reference for tracking (REQUIRED per AdCP spec)
-        brand_manifest: Brand information manifest - inline object or URL string (REQUIRED per AdCP v2.2.0 spec)
+        brand: Brand reference with domain field - per AdCP v3.6.0 spec
         packages: Array of packages with products and budgets (REQUIRED - budgets are at package level per AdCP v2.2.0)
         start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)
         end_time: Campaign end time ISO 8601 (REQUIRED)
@@ -3608,7 +3608,7 @@ async def create_media_buy(
     try:
         req = CreateMediaBuyRequest(
             buyer_ref=buyer_ref,
-            brand_manifest=brand_manifest,
+            brand=brand,
             packages=packages,
             start_time=start_time,
             end_time=end_time,
@@ -3638,10 +3638,10 @@ async def create_media_buy(
 
 async def create_media_buy_raw(
     buyer_ref: str,
-    brand_manifest: Any,  # BrandManifest | str - REQUIRED per AdCP v2.2.0 spec
-    packages: list[Any],  # REQUIRED per AdCP spec
-    start_time: Any,  # datetime | Literal["asap"] | str - REQUIRED per AdCP spec
-    end_time: Any,  # datetime | str - REQUIRED per AdCP spec
+    brand: Any | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
+    packages: list[Any] | None = None,  # REQUIRED per AdCP spec
+    start_time: Any | None = None,  # datetime | Literal["asap"] | str - REQUIRED per AdCP spec
+    end_time: Any | None = None,  # datetime | str - REQUIRED per AdCP spec
     budget: Any | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
     po_number: str | None = None,
     product_ids: list[str] | None = None,  # Legacy format conversion
@@ -3667,7 +3667,7 @@ async def create_media_buy_raw(
 
     Args:
         buyer_ref: Buyer reference identifier (REQUIRED per AdCP spec)
-        brand_manifest: Brand information manifest - inline object or URL string (REQUIRED per AdCP v2.2.0 spec)
+        brand: Brand reference with domain field - per AdCP v3.6.0 spec
         packages: List of media packages (REQUIRED)
         start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)
         end_time: Campaign end time ISO 8601 (REQUIRED)
@@ -3697,7 +3697,7 @@ async def create_media_buy_raw(
     try:
         req = CreateMediaBuyRequest(
             buyer_ref=buyer_ref,
-            brand_manifest=brand_manifest,
+            brand=brand,
             packages=packages,
             start_time=start_time,
             end_time=end_time,

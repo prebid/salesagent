@@ -176,9 +176,11 @@ class TestEdgeCases:
         assert violations == []
 
     def test_empty_lists_no_overlap(self):
+        # geo_countries/geo_countries_exclude have MinLen(1) constraint
+        # So "empty" means None (not []) in adcp 3.6.0
         targeting = Targeting(
-            geo_countries=[],
-            geo_countries_exclude=[],
+            geo_countries=None,
+            geo_countries_exclude=None,
         )
         violations = validate_geo_overlap(targeting)
         assert violations == []

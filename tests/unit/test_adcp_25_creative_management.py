@@ -22,6 +22,7 @@ class TestSyncCreativesCreativeIdsFilter:
         """Test SyncCreativesRequest schema accepts creative_ids field."""
         creative = Creative(
             creative_id="creative_1",
+            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display_300x250"),
             assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
@@ -41,6 +42,7 @@ class TestSyncCreativesCreativeIdsFilter:
         """Test SyncCreativesRequest rejects deprecated patch parameter."""
         creative = Creative(
             creative_id="creative_1",
+            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display_300x250"),
             assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
@@ -338,6 +340,7 @@ class TestSyncCreativesErrorCases:
 
         creative = Creative(
             creative_id="creative_1",
+            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
@@ -365,12 +368,14 @@ class TestSyncCreativesErrorCases:
         creatives = [
             Creative(
                 creative_id="creative_1",
+                variants=[],
                 name="Creative 1",
                 format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
                 assets={"banner": {"url": "https://example.com/1.png", "asset_type": "image"}},
             ),
             Creative(
                 creative_id="creative_2",
+                variants=[],
                 name="Creative 2",
                 format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
                 assets={"banner": {"url": "https://example.com/2.png", "asset_type": "image"}},
@@ -388,16 +393,20 @@ class TestSyncCreativesErrorCases:
         assert set(request.creative_ids) == {"creative_1", "nonexistent"}
 
     def test_empty_creative_ids_filter_vs_none(self):
-        """Empty creative_ids array vs None have different semantics.
+        """creative_ids=None vs creative_ids with values have different semantics.
 
+        adcp 3.6.0: creative_ids=[] (empty array) is no longer valid (MinLen(1)).
         Spec behavior:
         - creative_ids=None (omitted): Process all creatives in payload
-        - creative_ids=[] (empty array): Process no creatives (filter matches nothing)
+        - creative_ids=[id, ...]: Process only creatives matching the provided IDs
         """
+        from pydantic import ValidationError
+
         from src.core.schemas import Creative, FormatId, SyncCreativesRequest
 
         creative = Creative(
             creative_id="creative_1",
+            variants=[],
             name="Test",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
@@ -407,13 +416,21 @@ class TestSyncCreativesErrorCases:
         request_no_filter = SyncCreativesRequest(creatives=[creative], dry_run=True)
         assert request_no_filter.creative_ids is None
 
-        # Empty array = filter matches nothing
-        request_empty_filter = SyncCreativesRequest(
+        # adcp 3.6.0: empty list is rejected (MinLen(1) constraint)
+        with pytest.raises(ValidationError, match="at least 1"):
+            SyncCreativesRequest(
+                creatives=[creative],
+                creative_ids=[],
+                dry_run=True,
+            )
+
+        # List with IDs = filter to specific creatives
+        request_with_filter = SyncCreativesRequest(
             creatives=[creative],
-            creative_ids=[],
+            creative_ids=["creative_1"],
             dry_run=True,
         )
-        assert request_empty_filter.creative_ids == []
+        assert request_with_filter.creative_ids == ["creative_1"]
 
     def test_sync_creatives_request_validates_creative_structure(self):
         """Creatives must have required fields per AdCP spec.
@@ -439,12 +456,14 @@ class TestListCreativesErrorCases:
     """Error case tests for list_creatives plural filters."""
 
     def test_empty_media_buy_ids_vs_none(self):
-        """Empty media_buy_ids array vs None have different semantics.
+        """media_buy_ids=None vs media_buy_ids with values have different semantics.
 
+        adcp 3.6.0: media_buy_ids=[] (empty array) is no longer valid (MinLen(1)).
         - media_buy_ids=None: No filter on media_buy_ids
-        - media_buy_ids=[]: Empty filter (no matches)
+        - media_buy_ids=[id, ...]: Filter to specific media buy IDs
         """
         from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from pydantic import ValidationError
 
         from src.core.schemas import ListCreativesRequest
 
@@ -452,12 +471,14 @@ class TestListCreativesErrorCases:
         request_no_filter = ListCreativesRequest()
         assert request_no_filter.filters is None
 
-        # Empty array - filter is set but empty
-        filters_empty = LibraryCreativeFilters(media_buy_ids=[])
-        request_empty = ListCreativesRequest(filters=filters_empty)
-        assert request_empty is not None
-        assert request_empty.filters is not None
-        assert request_empty.filters.media_buy_ids == []
+        # adcp 3.6.0: empty array is rejected (MinLen(1) constraint)
+        with pytest.raises(ValidationError, match="at least 1"):
+            LibraryCreativeFilters(media_buy_ids=[])
+
+        # Filter with actual IDs works
+        filters_with_ids = LibraryCreativeFilters(media_buy_ids=["mb_1", "mb_2"])
+        request_with_filter = ListCreativesRequest(filters=filters_with_ids)
+        assert request_with_filter.filters.media_buy_ids == ["mb_1", "mb_2"]
 
     def test_no_filters_is_valid(self):
         """Request with no filters is valid.
@@ -592,7 +613,7 @@ class TestListCreativesResponseFormat:
         """Response with all required fields should be valid."""
         from src.core.schemas import ListCreativesResponse, Pagination, QuerySummary
 
-        # Response Pagination uses page-based fields (limit, offset, total_pages, current_page, has_more)
+        # Response Pagination in adcp 3.6.0 uses: has_more (required), cursor (optional), total_count (optional)
         response = ListCreativesResponse(
             creatives=[],
             query_summary=QuerySummary(
@@ -601,10 +622,6 @@ class TestListCreativesResponseFormat:
                 filters_applied=[],
             ),
             pagination=Pagination(
-                limit=50,
-                offset=0,
-                total_pages=1,
-                current_page=1,
                 has_more=False,
             ),
         )
@@ -630,6 +647,7 @@ class TestDeleteMissingWithCreativeIdsFilter:
 
         creative = Creative(
             creative_id="creative_1",
+            variants=[],
             name="Test",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
@@ -662,6 +680,7 @@ class TestDeleteMissingWithCreativeIdsFilter:
         # Implementation should handle this consistently
         creative = Creative(
             creative_id="c1",
+            variants=[],
             name="Creative 1",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
@@ -718,12 +737,14 @@ class TestUpsertSemantics:
 
         c1 = Creative(
             creative_id="c1",
+            variants=[],
             name="Creative 1 Updated",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets={"banner": {"url": "https://example.com/new.png", "asset_type": "image"}},
         )
         c2 = Creative(
             creative_id="c2",
+            variants=[],
             name="Creative 2 Updated",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets={"banner": {"url": "https://example.com/new2.png", "asset_type": "image"}},

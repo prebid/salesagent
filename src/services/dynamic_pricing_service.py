@@ -248,10 +248,10 @@ class DynamicPricingService:
             if updated_floor is not None or updated_p75 is not None:
                 # V3: Set floor_price at option level, price_guidance only for percentiles
                 if updated_floor is not None:
-                    cpm_option.floor_price = updated_floor
+                    cpm_option.floor_price = updated_floor  # type: ignore[union-attr]
                 if updated_p75 is not None:
                     new_guidance = PriceGuidance(p25=None, p50=None, p75=updated_p75, p90=None)
-                    cpm_option.price_guidance = new_guidance
+                    cpm_option.price_guidance = new_guidance  # type: ignore[union-attr]
                 logger.debug(f"Updated existing CPM pricing option for {product.product_id}")
         # Create new CPM pricing option with price_guidance
         # V3: floor_price at top level, price_guidance only for percentiles

@@ -112,14 +112,10 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
 
 @pytest.mark.asyncio
 async def test_require_brand_policy_accepts_with_brand_manifest():
-    """Test that require_brand policy accepts requests with brand_manifest."""
-    # Create mock request WITH brand_manifest
-    mock_brand_manifest = MagicMock()
-    mock_brand_manifest.name = "Nike"
-    mock_brand_manifest.url = "https://nike.com"
-
+    """Test that require_brand policy accepts requests with brand (adcp 3.6.0: brand replaces brand_manifest)."""
     mock_request = MagicMock()
-    mock_request.brand_manifest = mock_brand_manifest
+    # adcp 3.6.0: brand replaces brand_manifest; use dict with domain field
+    mock_request.brand = {"domain": "nike.com"}
     mock_request.brief = "Athletic footwear"
     mock_request.filters = None
     mock_request.context = None

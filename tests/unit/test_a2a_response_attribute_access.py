@@ -22,30 +22,34 @@ class TestA2AResponseAttributeAccess:
     def test_list_creatives_response_attribute_access(self):
         """Verify A2A handler accesses ListCreativesResponse attributes correctly.
 
+        adcp 3.6.0: Pagination schema changed to cursor-based:
+        - has_more (required)
+        - cursor (optional)
+        - total_count (optional)
+        Old fields removed: limit, offset, total_pages, current_page.
+
         This test prevents regression of the bug where A2A handler tried to access:
-        - response.total_count (doesn't exist)
+        - response.total_count (doesn't exist on response, only on pagination)
         - response.page (doesn't exist)
         - response.limit (doesn't exist)
         - response.has_more (doesn't exist)
 
         Instead it should access:
         - response.query_summary.total_matching
-        - response.pagination.current_page
-        - response.pagination.limit
         - response.pagination.has_more
+        - response.pagination.total_count
         """
-        # Create a minimal ListCreativesResponse with page-based pagination
+        # adcp 3.6.0: Pagination uses cursor-based pagination
         response = ListCreativesResponse(
             query_summary=QuerySummary(total_matching=10, returned=2, filters_applied=[], sort_applied=None),
-            pagination=Pagination(limit=50, offset=0, has_more=True, total_pages=2, current_page=1),
+            pagination=Pagination(has_more=True, total_count=10),
             creatives=[],
         )
 
         # Verify correct attribute paths exist
         assert response.query_summary.total_matching == 10
-        assert response.pagination.current_page == 1
-        assert response.pagination.limit == 50
         assert response.pagination.has_more is True
+        assert response.pagination.total_count == 10
 
         # Verify incorrect attribute paths don't exist (would cause AttributeError)
         with pytest.raises(AttributeError):
@@ -95,35 +99,32 @@ class TestA2AResponseAttributeAccess:
 
         This simulates what the A2A handler does with the response.
         Tests the FIXED version that accesses nested attributes correctly.
+
+        adcp 3.6.0: Pagination changed to cursor-based (has_more, total_count, cursor).
         """
-        # Create minimal response with page-based pagination
+        # adcp 3.6.0: Pagination uses cursor-based pagination
         response = ListCreativesResponse(
             query_summary=QuerySummary(total_matching=5, returned=0, filters_applied=[], sort_applied=None),
-            pagination=Pagination(limit=50, offset=0, has_more=False, total_pages=1, current_page=1),
+            pagination=Pagination(has_more=False, total_count=5),
             creatives=[],
         )
 
         # Simulate what A2A handler does (the fixed version)
         creatives_list = [creative.model_dump() for creative in response.creatives]
         total_count = response.query_summary.total_matching
-        page = response.pagination.current_page
-        limit = response.pagination.limit
         has_more = response.pagination.has_more
 
         # Verify extraction worked
         assert creatives_list == []
         assert total_count == 5
-        assert page == 1
-        assert limit == 50
         assert has_more is False
 
         # Build A2A response format (what the handler returns)
+        # adcp 3.6.0: pagination no longer has page/limit; use has_more and total_count
         a2a_response = {
             "success": True,
             "creatives": creatives_list,
             "total_count": total_count,
-            "page": page,
-            "limit": limit,
             "has_more": has_more,
             "message": str(response),
         }
@@ -131,6 +132,4 @@ class TestA2AResponseAttributeAccess:
         # Verify A2A response has expected structure
         assert a2a_response["success"] is True
         assert a2a_response["total_count"] == 5
-        assert a2a_response["page"] == 1
-        assert a2a_response["limit"] == 50
         assert a2a_response["has_more"] is False

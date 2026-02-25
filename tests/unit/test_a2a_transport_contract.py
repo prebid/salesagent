@@ -361,9 +361,10 @@ class TestA2AResponseShape:
         """list_creatives response must contain 'creatives' list."""
         from src.core.schemas import ListCreativesResponse
 
+        # adcp 3.6.0: Pagination uses cursor-based pagination (has_more, total_count, cursor)
         mock_impl.return_value = ListCreativesResponse(
             creatives=[],
-            pagination={"page": 1, "limit": 50, "total": 0, "has_more": False, "offset": 0},
+            pagination={"has_more": False, "total_count": 0},
             query_summary={"filters_applied": [], "returned": 0, "total_matching": 0},
         )
 
