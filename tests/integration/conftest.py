@@ -6,7 +6,6 @@ These fixtures are for tests that require database and service integration.
 
 import os
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -630,22 +629,6 @@ def sample_products(integration_db, sample_tenant):
         session.commit()
 
         return [p.product_id for p in products]
-
-
-@pytest.fixture
-def mock_external_apis():
-    """Mock external APIs but allow database access."""
-    with patch("requests.post") as mock_post:
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"status": "ok"}
-
-        with patch("google.generativeai.configure"):
-            with patch("google.generativeai.GenerativeModel") as mock_model:
-                mock_instance = MagicMock()
-                mock_instance.generate_content.return_value.text = "AI generated content"
-                mock_model.return_value = mock_instance
-
-                yield {"requests": mock_post, "gemini": mock_instance}
 
 
 @pytest.fixture(scope="function")
