@@ -56,6 +56,7 @@ from adcp.types.aliases import (
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
 # V3: Two Pagination types - batch-based for delivery, page-based for list responses
 from adcp.types.generated_poc.media_buy.list_creatives_response import Pagination as LibraryResponsePagination
@@ -1061,7 +1062,7 @@ def extract_budget_amount(budget: "Budget | float | dict | None", default_curren
         return (0.0, default_currency)
     elif isinstance(budget, dict):
         return (budget.get("total", 0.0), budget.get("currency", default_currency))
-    elif isinstance(budget, (int, float)):
+    elif isinstance(budget, int | float):
         return (float(budget), default_currency)
     else:
         # Budget object with .total and .currency attributes
@@ -3588,3 +3589,135 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
             return "Found 1 authorized publisher domain."
         else:
             return f"Found {count} authorized publisher domains."
+
+
+# --- Get Media Buys Types ---
+# These types match the adcp 3.6.0 spec for get_media_buys.
+# When the project migrates to adcp >=3.6.0, these can be replaced with library imports.
+
+
+class DeliveryStatus(str, Enum):
+    """Operational delivery state of a package."""
+
+    delivering = "delivering"
+    not_delivering = "not_delivering"
+    completed = "completed"
+    budget_exhausted = "budget_exhausted"
+
+
+class SnapshotUnavailableReason(str, Enum):
+    """Reason why a delivery snapshot is not available."""
+
+    SNAPSHOT_UNSUPPORTED = "SNAPSHOT_UNSUPPORTED"
+    SNAPSHOT_TEMPORARILY_UNAVAILABLE = "SNAPSHOT_TEMPORARILY_UNAVAILABLE"
+
+
+class ApprovalStatus(str, Enum):
+    """Approval status value for a creative assignment in a get_media_buys response."""
+
+    pending_review = "pending_review"
+    approved = "approved"
+    rejected = "rejected"
+
+
+class Snapshot(SalesAgentBaseModel):
+    """Near-real-time delivery snapshot for a package.
+
+    Matches the adcp 3.6.0 Snapshot type spec.
+    as_of is required so consumers know the data freshness.
+    """
+
+    as_of: datetime = Field(..., description="ISO 8601 timestamp when this snapshot was captured by the platform")
+    impressions: float = Field(..., ge=0.0, description="Total impressions delivered since package start")
+    spend: float = Field(..., ge=0.0, description="Total spend since package start")
+    staleness_seconds: int = Field(..., ge=0, description="Maximum age of this data in seconds")
+    clicks: float | None = Field(default=None, ge=0.0, description="Total clicks since package start (when available)")
+    pacing_index: float | None = Field(
+        default=None, ge=0.0, description="Current delivery pace relative to expected (1.0 = on track)"
+    )
+    delivery_status: DeliveryStatus | None = Field(
+        default=None, description="Operational delivery state of this package"
+    )
+    currency: str | None = Field(default=None, description="ISO 4217 currency code for spend in this snapshot")
+
+
+class CreativeApproval(SalesAgentBaseModel):
+    """Creative approval record for a package."""
+
+    creative_id: str = Field(..., description="Creative identifier")
+    approval_status: ApprovalStatus = Field(..., description="Current approval status")
+    rejection_reason: str | None = Field(default=None, description="Reason for rejection (when rejected)")
+
+
+class GetMediaBuysPackage(SalesAgentBaseModel):
+    """Package details within a GetMediaBuys response."""
+
+    package_id: str = Field(..., description="Package identifier")
+    buyer_ref: str | None = Field(default=None, description="Buyer reference for this package")
+    budget: float | None = Field(default=None, description="Package budget allocation")
+    bid_price: float | None = Field(default=None, description="Bid price for auction-based pricing")
+    product_id: str | None = Field(default=None, description="Product identifier for this package")
+    start_time: str | None = Field(default=None, description="Package start time (ISO 8601)")
+    end_time: str | None = Field(default=None, description="Package end time (ISO 8601)")
+    paused: bool | None = Field(default=None, description="Whether this package is paused")
+    creative_approvals: list[CreativeApproval] | None = Field(
+        default=None, description="Creative approval state for creatives assigned to this package"
+    )
+    snapshot: Snapshot | None = Field(
+        default=None, description="Near-real-time delivery snapshot (present when include_snapshot=true)"
+    )
+    snapshot_unavailable_reason: SnapshotUnavailableReason | None = Field(
+        default=None, description="Reason snapshot is unavailable (present when include_snapshot=true but no snapshot)"
+    )
+
+
+class GetMediaBuysMediaBuy(SalesAgentBaseModel):
+    """Media buy details in a GetMediaBuys response."""
+
+    media_buy_id: str = Field(..., description="Publisher media buy identifier")
+    buyer_ref: str | None = Field(default=None, description="Buyer reference identifier")
+    buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
+    status: MediaBuyStatus = Field(..., description="Current media buy status")
+    currency: str = Field(..., description="ISO 4217 currency code")
+    total_budget: float = Field(..., description="Total budget across all packages")
+    packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
+    created_at: datetime | None = Field(default=None, description="When this media buy was created")
+    updated_at: datetime | None = Field(default=None, description="When this media buy was last updated")
+
+    def model_dump(self, **kwargs):
+        result = super().model_dump(**kwargs)
+        if "packages" in result and self.packages:
+            result["packages"] = [pkg.model_dump(**kwargs) for pkg in self.packages]
+        return result
+
+
+class GetMediaBuysRequest(SalesAgentBaseModel):
+    """Request to retrieve media buys.
+
+    Matches the adcp 3.6.0 GetMediaBuysRequest spec.
+    Defined locally because adcp 3.6.0 is not yet required.
+    """
+
+    media_buy_ids: list[str] | None = Field(default=None, description="Specific media buy IDs to retrieve")
+    buyer_refs: list[str] | None = Field(default=None, description="Buyer references to filter by")
+    status_filter: Any | None = Field(default=None, description="Filter by status (MediaBuyStatus or list)")
+    include_snapshot: bool = Field(default=False, description="Include near-real-time delivery snapshot per package")
+    account_id: str | None = Field(default=None, description="Account to filter to")
+    context: ContextObject | None = Field(default=None, description="Application-level context")
+
+
+class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
+    """Response from get_media_buys.
+
+    Matches the adcp 3.6.0 GetMediaBuysResponse spec.
+    """
+
+    media_buys: list[GetMediaBuysMediaBuy] = Field(..., description="List of matching media buys")
+    errors: list[Any] | None = Field(default=None, description="Errors encountered during retrieval")
+    context: ContextObject | None = Field(default=None, description="Application-level context from the request")
+
+    def model_dump(self, **kwargs):
+        result = super().model_dump(**kwargs)
+        if "media_buys" in result and self.media_buys:
+            result["media_buys"] = [mb.model_dump(**kwargs) for mb in self.media_buys]
+        return result

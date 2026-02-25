@@ -15,12 +15,15 @@ __all__ = [
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+if TYPE_CHECKING:
+    from src.core.schemas import Snapshot
 
 from adcp.types.aliases import Package as ResponsePackage
 from flask import Flask
 
-from src.adapters.base import AdServerAdapter, TargetingCapabilities
+from src.adapters.base import AdapterCapabilities, AdServerAdapter, TargetingCapabilities
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager
@@ -67,6 +70,10 @@ class GoogleAdManager(AdServerAdapter):
     """Google Ad Manager adapter using modular architecture."""
 
     adapter_name = "google_ad_manager"
+
+    capabilities = AdapterCapabilities(
+        supports_realtime_reporting=True,  # Snapshots via cached GAM line item stats
+    )
 
     # GAM supports display, olv (online video), and social advertising
     # V3 channel names: video → olv, native → social
@@ -1267,6 +1274,88 @@ class GoogleAdManager(AdServerAdapter):
             currency=str(media_buy.currency or "USD"),
             daily_breakdown=daily_breakdown if daily_breakdown else None,
         )
+
+    def get_packages_snapshot(
+        self, package_refs: list[tuple[str, str, str | None]]
+    ) -> dict[str, dict[str, "Snapshot | None"]]:
+        """Return near-real-time delivery snapshots using cached GAM line item stats.
+
+        Uses stats stored in the GAMLineItem table (synced every ~15 minutes by the
+        background sync job). The staleness is derived from the last_synced timestamp.
+        """
+        from datetime import UTC, datetime
+
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import GAMLineItem
+        from src.core.schemas import DeliveryStatus, Snapshot
+
+        result: dict[str, dict[str, Snapshot | None]] = {}
+        now = datetime.now(UTC)
+
+        # Collect all line item IDs we need to look up
+        line_item_ids = [ref[2] for ref in package_refs if ref[2] is not None]
+
+        if not line_item_ids:
+            for media_buy_id, package_id, _ in package_refs:
+                result.setdefault(media_buy_id, {})[package_id] = None
+            return result
+
+        with get_db_session() as session:
+            stmt = select(GAMLineItem).where(
+                GAMLineItem.tenant_id == self.tenant_id,
+                GAMLineItem.line_item_id.in_(line_item_ids),
+            )
+            line_items = {li.line_item_id: li for li in session.scalars(stmt).all()}
+
+            for media_buy_id, package_id, line_item_id in package_refs:
+                if line_item_id is None or line_item_id not in line_items:
+                    result.setdefault(media_buy_id, {})[package_id] = None
+                    continue
+
+                li = line_items[line_item_id]
+                impressions = float(li.stats_impressions or 0)
+                clicks = float(li.stats_clicks or 0) if li.stats_clicks else None
+
+                # Compute spend from impressions and cost_per_unit.
+                # TODO: add CPC (clicks * cost_per_unit) and flat-rate spend calculation.
+                if li.cost_per_unit and li.cost_type in ("CPM", "VCPM"):
+                    spend = impressions / 1000.0 * float(li.cost_per_unit)
+                else:
+                    spend = 0.0
+
+                # Staleness from last_synced timestamp
+                last_synced = li.last_synced
+                if last_synced.tzinfo is None:
+                    last_synced = last_synced.replace(tzinfo=UTC)
+                staleness_seconds = max(0, int((now - last_synced).total_seconds()))
+
+                # Delivery status from GAM line item status
+                gam_status = (li.status or "").upper()
+                if gam_status in ("DELIVERING", "READY"):
+                    if impressions == 0 and staleness_seconds > 900:
+                        delivery_status = DeliveryStatus.not_delivering
+                    else:
+                        delivery_status = DeliveryStatus.delivering
+                elif gam_status in ("COMPLETED",):
+                    delivery_status = DeliveryStatus.completed
+                elif gam_status in ("EXHAUSTED",):
+                    delivery_status = DeliveryStatus.budget_exhausted
+                else:
+                    delivery_status = None
+
+                snapshot = Snapshot(
+                    as_of=last_synced,
+                    impressions=impressions,
+                    spend=spend,
+                    clicks=clicks,
+                    delivery_status=delivery_status,
+                    staleness_seconds=staleness_seconds,
+                )
+                result.setdefault(media_buy_id, {})[package_id] = snapshot
+
+        return result
 
     def update_media_buy(
         self,
