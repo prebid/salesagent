@@ -21,6 +21,9 @@ PYTEST_ARGS="${@:3}"
 RESULTS_DIR="test-results/$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
+# Keep only the last 10 result directories
+ls -dt test-results/*/ 2>/dev/null | tail -n +11 | xargs rm -rf
+
 echo "Mode: $MODE | Reports: $RESULTS_DIR/"
 
 # --- Helpers ---
