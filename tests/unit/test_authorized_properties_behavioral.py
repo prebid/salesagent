@@ -110,9 +110,7 @@ class TestTenantErrorPath:
         """H1: No tenant from identity and no current tenant raises AdCPAuthenticationError."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        with (
-            patch("src.core.tools.properties.log_tool_activity"),
-        ):
+        with (patch("src.core.tools.properties.log_tool_activity"),):
             with pytest.raises(AdCPAuthenticationError, match="Could not resolve tenant"):
                 _list_authorized_properties_impl(req=None, identity=None)
 
@@ -120,9 +118,7 @@ class TestTenantErrorPath:
         """H1: Error message mentions subdomain, virtual host, or header."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        with (
-            patch("src.core.tools.properties.log_tool_activity"),
-        ):
+        with (patch("src.core.tools.properties.log_tool_activity"),):
             with pytest.raises(AdCPAuthenticationError, match="subdomain|virtual host|x-adcp-tenant"):
                 _list_authorized_properties_impl(req=None, identity=None)
 
@@ -147,8 +143,6 @@ class TestPropertiesErrorPath:
             db_side_effect=RuntimeError("connection lost"),
         )
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -168,8 +162,6 @@ class TestPropertiesErrorPath:
             db_side_effect=RuntimeError("connection lost"),
         )
         with (
-
-
             patches["db"],
             patches["audit"] as mock_get_audit,
             patches["log_activity"],
@@ -219,8 +211,6 @@ class TestAdvertisingPolicyAssemblyFull:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -258,8 +248,6 @@ class TestAdvertisingPolicyAssemblyFull:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -297,8 +285,6 @@ class TestAdvertisingPolicyPartialSections:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -330,8 +316,6 @@ class TestAdvertisingPolicyPartialSections:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -376,8 +360,6 @@ class TestAdvertisingPolicyEmptyArraysSuppressed:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -403,8 +385,6 @@ class TestAdvertisingPolicyEmptyArraysSuppressed:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -454,8 +434,6 @@ class TestAdvertisingPolicyEnforcementFooter:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -571,8 +549,6 @@ class TestContextEchoWithValue:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -603,8 +579,6 @@ class TestContextEchoEmptyPortfolio:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=[])
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -636,8 +610,6 @@ class TestContextEchoNone:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -658,8 +630,6 @@ class TestContextEchoNone:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -694,8 +664,6 @@ class TestContextEchoComplexNested:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -729,8 +697,6 @@ class TestAuditLogSuccess:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"] as mock_get_audit,
             patches["log_activity"],
@@ -758,8 +724,6 @@ class TestAuditLogSuccess:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"] as mock_get_audit,
             patches["log_activity"],
@@ -794,8 +758,6 @@ class TestAuditLogFailure:
             db_side_effect=RuntimeError("disk full"),
         )
         with (
-
-
             patches["db"],
             patches["audit"] as mock_get_audit,
             patches["log_activity"],
@@ -835,8 +797,6 @@ class TestAdvertisingPolicyOmittedWhenDisabled:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -857,8 +817,6 @@ class TestAdvertisingPolicyOmittedWhenDisabled:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],
@@ -877,8 +835,6 @@ class TestAdvertisingPolicyOmittedWhenDisabled:
 
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
-
-
             patches["db"],
             patches["audit"],
             patches["log_activity"],

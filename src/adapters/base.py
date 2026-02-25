@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
-    from src.core.schemas import Targeting
+    from src.core.schemas import Snapshot, Targeting
 
 from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
@@ -304,6 +304,21 @@ class AdServerAdapter(ABC):
     ) -> AdapterGetMediaBuyDeliveryResponse:
         """Gets delivery data for a media buy."""
         pass
+
+    def get_packages_snapshot(
+        self, package_refs: list[tuple[str, str, str | None]]
+    ) -> dict[str, dict[str, Snapshot | None]]:
+        """Get near-real-time delivery snapshots for packages.
+
+        Args:
+            package_refs: List of (media_buy_id, package_id, platform_line_item_id) tuples.
+                platform_line_item_id may be None if the package was not yet pushed to the platform.
+
+        Returns:
+            Nested dict: media_buy_id -> package_id -> Snapshot (or None if unavailable).
+            Adapters that do not support snapshots should not override this method.
+        """
+        raise NotImplementedError("Snapshots not supported by this adapter")
 
     @abstractmethod
     def update_media_buy_performance_index(

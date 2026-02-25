@@ -224,11 +224,7 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
         tenant_id = tenant["tenant_id"]
 
     with get_db_session() as session:
-        stmt = (
-            select(ModelProduct)
-            .filter_by(tenant_id=tenant_id)
-            .options(selectinload(ModelProduct.pricing_options))
-        )
+        stmt = select(ModelProduct).filter_by(tenant_id=tenant_id).options(selectinload(ModelProduct.pricing_options))
         products = session.scalars(stmt).all()
 
         # Use shared conversion function - handles all required fields,
@@ -290,6 +286,7 @@ from src.core.tools.creative_formats import list_creative_formats
 from src.core.tools.creatives import list_creatives, sync_creatives
 from src.core.tools.media_buy_create import create_media_buy
 from src.core.tools.media_buy_delivery import get_media_buy_delivery
+from src.core.tools.media_buy_list import get_media_buys
 from src.core.tools.media_buy_update import update_media_buy
 from src.core.tools.performance import update_performance_index
 from src.core.tools.products import get_products
@@ -308,6 +305,7 @@ mcp.tool()(with_error_logging(list_authorized_properties))
 mcp.tool()(with_error_logging(create_media_buy))
 mcp.tool()(with_error_logging(update_media_buy))
 mcp.tool()(with_error_logging(get_media_buy_delivery))
+mcp.tool()(with_error_logging(get_media_buys))
 mcp.tool()(with_error_logging(update_performance_index))
 mcp.tool()(with_error_logging(list_tasks))
 mcp.tool()(with_error_logging(get_task))

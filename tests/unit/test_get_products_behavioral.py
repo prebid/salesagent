@@ -344,9 +344,9 @@ class TestRankingThresholdBehavior:
 
         # brief_relevance is NOT_IMPLEMENTED -- _get_products_impl never assigns it
         for p in response.products:
-            assert getattr(p, "brief_relevance", None) is None, (
-                "brief_relevance should NOT be set by _get_products_impl (NOT_IMPLEMENTED)"
-            )
+            assert (
+                getattr(p, "brief_relevance", None) is None
+            ), "brief_relevance should NOT be set by _get_products_impl (NOT_IMPLEMENTED)"
 
 
 class TestRankingFailureFailopen:
@@ -407,7 +407,6 @@ class TestPolicyBlockedPipelineRejection:
 
         with (
             patch("src.core.tools.products.get_principal_object"),
-
             patch("src.core.tools.products.PolicyCheckService") as mock_policy_cls,
             patch("src.core.tools.products.get_audit_logger") as mock_al,
         ):
@@ -448,7 +447,6 @@ class TestRestrictedBriefManualReviewRejection:
 
         with (
             patch("src.core.tools.products.get_principal_object"),
-
             patch("src.core.tools.products.PolicyCheckService") as mock_policy_cls,
             patch("src.core.tools.products.get_db_session") as mock_db,
             patch("src.core.tools.products.get_audit_logger") as mock_al,

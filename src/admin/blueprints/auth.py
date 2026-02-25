@@ -296,7 +296,7 @@ def login():
             return redirect(url_for("oidc.login", tenant_id=tenant_context))
 
         # Fall back to global OAuth for this tenant
-        if oauth_configured and not just_logged_out:
+        if oauth_configured and not test_mode and not just_logged_out:
             return redirect(url_for("auth.tenant_google_auth", tenant_id=tenant_context))
 
     elif is_single_tenant_mode():
@@ -317,7 +317,7 @@ def login():
             return redirect(url_for("oidc.login", tenant_id="default"))
 
     # Fall back to global OAuth if configured (for admin domain or unknown tenants)
-    if oauth_configured and not just_logged_out:
+    if oauth_configured and not test_mode and not just_logged_out:
         return redirect(url_for("auth.google_auth"))
 
     # Show login page (test mode or OAuth not configured)
@@ -378,7 +378,7 @@ def tenant_login(tenant_id):
 
     # If OAuth is configured and not just logged out, redirect directly to OAuth
     # (global OAuth is the fallback for tenants without their own OIDC)
-    if oauth_configured and not just_logged_out:
+    if oauth_configured and not test_mode and not just_logged_out:
         return redirect(url_for("auth.tenant_google_auth", tenant_id=tenant_id))
 
     from src.core.config_loader import is_single_tenant_mode

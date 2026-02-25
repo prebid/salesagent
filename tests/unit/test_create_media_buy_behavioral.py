@@ -334,9 +334,9 @@ class TestMaxDailySpendExceeded:
         # If we got a result, it should NOT be a daily-spend validation error
         if result is not None and isinstance(result.response, CreateMediaBuyError):
             for err in result.response.errors:
-                assert "daily" not in err.message.lower() or "exceeds" not in err.message.lower(), (
-                    f"Daily spend validation should have passed but got: {err.message}"
-                )
+                assert (
+                    "daily" not in err.message.lower() or "exceeds" not in err.message.lower()
+                ), f"Daily spend validation should have passed but got: {err.message}"
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_same_day_flight_uses_min_one_day(self):
@@ -717,9 +717,9 @@ class TestInlineCreativesProcessedBeforeApproval:
 
         # Verify creatives were processed before the adapter (approval check) was accessed
         assert "creatives_processed" in call_order, "process_and_upload_package_creatives was not called"
-        assert call_order.index("creatives_processed") < call_order.index("approval_check"), (
-            f"Creatives must be processed before approval check. Order: {call_order}"
-        )
+        assert call_order.index("creatives_processed") < call_order.index(
+            "approval_check"
+        ), f"Creatives must be processed before approval check. Order: {call_order}"
 
 
 class TestMultipleInvalidCreativesAccumulated:

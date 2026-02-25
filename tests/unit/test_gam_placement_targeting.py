@@ -132,7 +132,10 @@ class TestPlacementIdsValidation:
         mock_cm.__exit__ = Mock(return_value=False)
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "t1", "name": "Test"}),
+            patch(
+                "src.core.helpers.context_helpers.ensure_tenant_context",
+                return_value={"tenant_id": "t1", "name": "Test"},
+            ),
             patch(f"{MODULE}.get_principal_object") as m_principal_obj,
             patch(f"{MODULE}._verify_principal"),
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
@@ -224,7 +227,10 @@ class TestPlacementIdsValidation:
         mock_cm.__exit__ = Mock(return_value=False)
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "t1", "name": "Test"}),
+            patch(
+                "src.core.helpers.context_helpers.ensure_tenant_context",
+                return_value={"tenant_id": "t1", "name": "Test"},
+            ),
             patch(f"{MODULE}.get_principal_object") as m_principal_obj,
             patch(f"{MODULE}._verify_principal"),
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
