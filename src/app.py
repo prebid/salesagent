@@ -343,7 +343,7 @@ app.add_middleware(
 # Admin UI — mount Flask admin via WSGIMiddleware
 # ---------------------------------------------------------------------------
 
-from starlette.middleware.wsgi import WSGIMiddleware  # noqa: E402
+from a2wsgi import WSGIMiddleware  # noqa: E402
 
 from src.admin.app import create_app  # noqa: E402
 
