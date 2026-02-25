@@ -19,9 +19,8 @@ from src.app import app
 
 @pytest.fixture(scope="module")
 def client():
-    """Module-scoped TestClient — MCP lifespan can only start once per process."""
-    with TestClient(app, raise_server_exceptions=False) as c:
-        yield c
+    """Module-scoped TestClient without lifespan — route registration tests don't need MCP startup."""
+    yield TestClient(app, raise_server_exceptions=False)
 
 
 # All 50 expected paths — explicit list so accidental removal is a test failure.

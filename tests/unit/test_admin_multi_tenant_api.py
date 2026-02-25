@@ -131,6 +131,35 @@ class TestCreateTenant:
             )
             assert response.status_code != 422, f"Valid ad_server '{ad_server}' was rejected with 422"
 
+    @patch("src.routes.admin_multi_tenant._tenant_svc")
+    def test_create_tenant_response_contains_no_credentials(self, mock_svc, client, api_key_header):
+        """CreateTenant response must not leak adapter credential values."""
+        mock_svc.create_tenant.return_value = {
+            "tenant_id": "tenant_gam",
+            "name": "GAM Corp",
+            "subdomain": "gamcorp",
+            "admin_token": "at_gam",
+            "default_principal_token": "tok_gam",
+        }
+        response = client.post(
+            "/api/v1/platform/tenants",
+            json={
+                "name": "GAM Corp",
+                "subdomain": "gamcorp",
+                "ad_server": "google_ad_manager",
+                "gam_refresh_token": "secret-refresh-token",
+                "gam_network_code": "12345",
+                "kevel_api_key": "secret-kevel-key",
+                "triton_api_key": "secret-triton-key",
+            },
+            headers=api_key_header,
+        )
+        assert response.status_code == 201
+        body_text = response.text
+        assert "secret-refresh-token" not in body_text
+        assert "secret-kevel-key" not in body_text
+        assert "secret-triton-key" not in body_text
+
 
 class TestGetTenant:
     @patch("src.routes.admin_multi_tenant._tenant_svc")
@@ -153,6 +182,36 @@ class TestGetTenant:
         mock_svc.get_tenant.side_effect = AdCPNotFoundError("Not found")
         response = client.get("/api/v1/platform/tenants/nonexistent", headers=api_key_header)
         assert response.status_code == 404
+
+    @patch("src.routes.admin_multi_tenant._tenant_svc")
+    def test_get_tenant_adapter_config_contains_no_raw_credentials(self, mock_svc, client, api_key_header):
+        """GetTenant detail response must not leak raw adapter credential values.
+
+        The service returns has_refresh_token: bool(), not the actual token.
+        This test guards against regressions where the actual value is exposed.
+        """
+        mock_svc.get_tenant.return_value = {
+            "tenant_id": "t1",
+            "name": "Test",
+            "subdomain": "test",
+            "is_active": True,
+            "settings": {},
+            "adapter_config": {
+                "adapter_type": "google_ad_manager",
+                "has_refresh_token": True,
+                "network_code": "12345",
+            },
+        }
+        response = client.get("/api/v1/platform/tenants/t1", headers=api_key_header)
+        assert response.status_code == 200
+        body = response.json()
+        adapter_cfg = body.get("adapter_config", {})
+        # has_refresh_token must be a bool, not the actual token string
+        assert adapter_cfg.get("has_refresh_token") is True
+        # Credential field names must not appear as non-boolean values
+        assert "gam_refresh_token" not in adapter_cfg
+        assert "kevel_api_key" not in adapter_cfg
+        assert "triton_api_key" not in adapter_cfg
 
 
 class TestUpdateTenant:
