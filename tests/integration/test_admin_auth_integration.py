@@ -23,13 +23,19 @@ PLATFORM_KEY = "sk-test-platform-key-for-auth-integration"
 
 @pytest.fixture(scope="module")
 def client():
-    """Shared TestClient for the full ASGI app.
+    """Shared TestClient for the full ASGI app without lifespan.
 
     Module-scoped to avoid the StreamableHTTPSessionManager 'can only be called
     once per instance' error — the MCP lifespan cannot restart within a process.
+
+    No lifespan context (`with` block) intentionally: starting the lifespan
+    launches MCP background schedulers (media_buy_status_scheduler,
+    delivery_webhook_scheduler) that call get_db_session() periodically.
+    Those background tasks race with the function-scoped integration_db fixture's
+    reset_engine() calls, causing OperationalError → circuit-breaker → cascading
+    connection failures across the rest of the integration suite.
     """
-    with TestClient(app, raise_server_exceptions=False) as c:
-        yield c
+    yield TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture
