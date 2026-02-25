@@ -45,7 +45,6 @@ def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
 
 
 from src.core.audit_logger import get_audit_logger
-
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
 from src.core.validation_helpers import format_validation_error

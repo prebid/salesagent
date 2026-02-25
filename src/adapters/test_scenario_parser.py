@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class TestScenario:
+class ScenarioSpec:
     """Parsed test scenario from keyword parsing."""
 
     # Timing control
@@ -57,7 +57,7 @@ class TestScenario:
             self.creative_actions = []
 
 
-def parse_test_scenario(message: str | None, operation: str = "create_media_buy") -> TestScenario:
+def parse_test_scenario(message: str | None, operation: str = "create_media_buy") -> ScenarioSpec:
     """Parse test keywords from message string.
 
     Args:
@@ -65,12 +65,12 @@ def parse_test_scenario(message: str | None, operation: str = "create_media_buy"
         operation: Operation type for context-specific parsing
 
     Returns:
-        TestScenario with parsed instructions
+        ScenarioSpec with parsed instructions
     """
     if not message or not message.strip():
-        return TestScenario()
+        return ScenarioSpec()
 
-    scenario = TestScenario()
+    scenario = ScenarioSpec()
     text = message.strip()
 
     # Parse [REJECT:reason] or [REJECT]

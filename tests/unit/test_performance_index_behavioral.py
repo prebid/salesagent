@@ -17,9 +17,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types.generated_poc.core.context import ContextObject
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import PackagePerformance
+from src.core.schemas import PackagePerformance, UpdatePerformanceIndexResponse
 from src.core.tool_context import ToolContext
 
 # ---------------------------------------------------------------------------
@@ -394,3 +394,251 @@ class TestHighRiskA2A:
         mock_core_tool.assert_called_once()
         # Result should be the response object (not just routing metadata)
         assert result is mock_response
+
+
+# ===========================================================================
+# Error path and edge case tests (E1-E8)
+# Reference: beads salesagent-7xc7
+# ===========================================================================
+
+
+class TestErrorPaths:
+    """Error path tests for _update_performance_index_impl."""
+
+    # E1 ---------------------------------------------------------------
+    def test_identity_none_raises_value_error(self):
+        """E1: identity=None raises ValueError (not AdCPAuthenticationError).
+
+        The impl checks identity before tenant, so ValueError fires first.
+        """
+        from src.core.tools.performance import _update_performance_index_impl
+
+        with pytest.raises(ValueError, match="Identity is required"):
+            _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[{"product_id": "p1", "performance_index": 1.0}],
+                identity=None,
+            )
+
+    # E2 ---------------------------------------------------------------
+    def test_identity_no_tenant_raises_auth_error(self):
+        """E2: identity with no tenant raises AdCPAuthenticationError."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = ResolvedIdentity(
+            principal_id="principal_1",
+            tenant_id="tenant_1",
+            tenant=None,
+            protocol="mcp",
+        )
+
+        with pytest.raises(AdCPAuthenticationError, match="No tenant context"):
+            _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[{"product_id": "p1", "performance_index": 1.0}],
+                identity=identity,
+            )
+
+    # E3 ---------------------------------------------------------------
+    def test_identity_no_principal_id_raises_auth_error(self):
+        """E3: identity with principal_id=None raises AdCPAuthenticationError after _verify_principal."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = ResolvedIdentity(
+            principal_id=None,
+            tenant_id="tenant_1",
+            tenant={"tenant_id": "tenant_1"},
+            protocol="mcp",
+        )
+
+        # _verify_principal will raise AdCPAuthenticationError for None principal_id
+        with pytest.raises(AdCPAuthenticationError):
+            _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[{"product_id": "p1", "performance_index": 1.0}],
+                identity=identity,
+            )
+
+    # E4 ---------------------------------------------------------------
+    def test_principal_not_found_raises_not_found_error(self):
+        """E4: get_principal_object returns None raises AdCPNotFoundError."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = _make_identity()
+
+        with (
+            patch("src.core.tools.performance._verify_principal", return_value=None),
+            patch("src.core.tools.performance.get_principal_object", return_value=None),
+        ):
+            with pytest.raises(AdCPNotFoundError, match="not found"):
+                _update_performance_index_impl(
+                    media_buy_id="mb_1",
+                    performance_data=[{"product_id": "p1", "performance_index": 1.0}],
+                    identity=identity,
+                )
+
+    # E5 ---------------------------------------------------------------
+    def test_validation_error_missing_product_id(self):
+        """E5: performance_data item missing product_id raises AdCPValidationError."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = _make_identity()
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[{"performance_index": 1.0}],  # missing product_id
+                identity=identity,
+            )
+
+        assert "product_id" in str(exc_info.value).lower()
+
+    # E6 ---------------------------------------------------------------
+    def test_validation_error_non_numeric_performance_index(self):
+        """E6: Non-numeric performance_index raises AdCPValidationError."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = _make_identity()
+
+        with pytest.raises(AdCPValidationError):
+            _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[{"product_id": "p1", "performance_index": "not_a_number"}],
+                identity=identity,
+            )
+
+
+# ===========================================================================
+# Response shape and serialization tests (S1-S4)
+# Reference: beads salesagent-7xc7
+# ===========================================================================
+
+
+class TestResponseShape:
+    """Response shape and serialization tests for update_performance_index."""
+
+    # S1 ---------------------------------------------------------------
+    def test_response_model_dump_json_shape(self):
+        """S1: Response model_dump(mode='json') has correct top-level keys."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = _make_identity()
+        stack, _mocks = _patch_happy_path()
+
+        with stack:
+            response = _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[{"product_id": "p1", "performance_index": 1.0}],
+                context=ContextObject(session_id="s1"),
+                identity=identity,
+            )
+
+        data = response.model_dump(mode="json")
+        assert "status" in data
+        assert "detail" in data
+        assert "context" in data
+        assert data["status"] == "success"
+        assert data["context"]["session_id"] == "s1"
+
+    # S2 ---------------------------------------------------------------
+    def test_response_is_update_performance_index_response(self):
+        """S2: Response is an instance of UpdatePerformanceIndexResponse."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = _make_identity()
+        stack, _mocks = _patch_happy_path()
+
+        with stack:
+            response = _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[{"product_id": "p1", "performance_index": 1.0}],
+                identity=identity,
+            )
+
+        assert isinstance(response, UpdatePerformanceIndexResponse)
+
+    # S3 ---------------------------------------------------------------
+    def test_response_str_returns_detail(self):
+        """S3: Response __str__ returns the detail message (for MCP ToolResult content)."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = _make_identity()
+        stack, _mocks = _patch_happy_path()
+
+        with stack:
+            response = _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[{"product_id": "p1", "performance_index": 1.0}],
+                identity=identity,
+            )
+
+        assert str(response) == response.detail
+
+    # S4 ---------------------------------------------------------------
+    def test_response_context_none_when_not_provided(self):
+        """S4: When context is not provided, response.context is None."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = _make_identity()
+        stack, _mocks = _patch_happy_path()
+
+        with stack:
+            response = _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[{"product_id": "p1", "performance_index": 1.0}],
+                identity=identity,
+            )
+
+        assert response.context is None
+
+
+# ===========================================================================
+# Confidence score and edge case tests (C1-C2)
+# Reference: beads salesagent-7xc7
+# ===========================================================================
+
+
+class TestConfidenceScoreAndEdgeCases:
+    """Tests for confidence_score pass-through and edge cases."""
+
+    # C1 ---------------------------------------------------------------
+    def test_confidence_score_passed_through(self):
+        """C1: confidence_score is accepted in performance_data and doesn't affect status."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = _make_identity()
+        stack, _mocks = _patch_happy_path()
+
+        with stack:
+            response = _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[
+                    {"product_id": "p1", "performance_index": 0.95, "confidence_score": 0.87},
+                ],
+                identity=identity,
+            )
+
+        assert response.status == "success"
+
+    # C2 ---------------------------------------------------------------
+    def test_empty_performance_data_succeeds(self):
+        """C2: Empty performance_data list does not raise and returns success."""
+        from src.core.tools.performance import _update_performance_index_impl
+
+        identity = _make_identity()
+        stack, mocks = _patch_happy_path()
+
+        with stack:
+            response = _update_performance_index_impl(
+                media_buy_id="mb_1",
+                performance_data=[],
+                identity=identity,
+            )
+
+        # Adapter is called with empty list
+        mocks["adapter"].update_media_buy_performance_index.assert_called_once()
+        call_args = mocks["adapter"].update_media_buy_performance_index.call_args
+        assert call_args[0][1] == []
+
+        assert response.status == "success"
+        assert "0 products" in response.detail

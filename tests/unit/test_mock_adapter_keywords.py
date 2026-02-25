@@ -1,13 +1,13 @@
 """Tests for mock adapter keyword-based test scenario parser."""
 
 from src.adapters.test_scenario_parser import (
-    TestScenario,
+    ScenarioSpec,
     has_test_keywords,
     parse_test_scenario,
 )
 
 
-class TestParseTestScenario:
+class TestParseScenarioSpec:
     """Tests for parse_test_scenario function."""
 
     def test_empty_message_returns_default(self):
@@ -155,12 +155,12 @@ class TestHasTestKeywords:
         assert has_test_keywords("[delay:5]") is True
 
 
-class TestTestScenario:
-    """Tests for TestScenario dataclass."""
+class TestScenarioSpecDataclass:
+    """Tests for ScenarioSpec dataclass."""
 
     def test_default_values(self):
         """Default scenario is acceptance."""
-        scenario = TestScenario()
+        scenario = ScenarioSpec()
         assert scenario.should_accept is True
         assert scenario.should_reject is False
         assert scenario.delay_seconds is None
@@ -168,8 +168,8 @@ class TestTestScenario:
 
     def test_creative_actions_default(self):
         """creative_actions defaults to empty list."""
-        scenario = TestScenario()
+        scenario = ScenarioSpec()
         assert scenario.creative_actions == []
 
-        scenario2 = TestScenario(creative_actions=None)
+        scenario2 = ScenarioSpec(creative_actions=None)
         assert scenario2.creative_actions == []

@@ -285,7 +285,9 @@ class TestDiscoveryEndpointsAnonymousAccess:
         mock_tenant = {"tenant_id": "test-tenant", "name": "Test"}
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
-        with (patch("src.core.tools.properties.get_db_session") as mock_db,):
+        with (
+            patch("src.core.tools.properties.get_db_session") as mock_db,
+        ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
@@ -326,7 +328,9 @@ class TestDiscoveryEndpointsInvalidAuth:
             tenant=mock_tenant,
         )
 
-        with (patch("src.core.tools.products.get_db_session") as mock_db,):
+        with (
+            patch("src.core.tools.products.get_db_session") as mock_db,
+        ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
@@ -356,7 +360,9 @@ class TestDiscoveryEndpointsInvalidAuth:
         mock_tenant = {"tenant_id": "test-tenant"}
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
-        with (patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,):
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
+        ):
             mock_reg = MagicMock()
 
             async def mock_list_formats(**kwargs):
@@ -380,7 +386,9 @@ class TestDiscoveryEndpointsInvalidAuth:
         mock_tenant = {"tenant_id": "test-tenant"}
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
-        with (patch("src.core.tools.properties.get_db_session") as mock_db,):
+        with (
+            patch("src.core.tools.properties.get_db_session") as mock_db,
+        ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)

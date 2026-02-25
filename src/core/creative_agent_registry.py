@@ -75,6 +75,7 @@ def _get_mock_formats() -> list[Format]:
         _create_mock_format("display_160x600_image", "Wide Skyscraper", FormatType.display, "image"),
         _create_mock_format("display_320x50_image", "Mobile Leaderboard", FormatType.display, "image"),
         _create_mock_format("video_standard", "Standard Video", FormatType.video, "video"),
+        _create_mock_format("video_standard_30s", "Standard Video 30s", FormatType.video, "video"),
         _create_mock_format("video_vast", "VAST Video", FormatType.video, "video"),
         _create_mock_format("display_image", "Display Image", FormatType.display, "image"),
         _create_mock_format("display_html", "Display HTML", FormatType.display, "image"),

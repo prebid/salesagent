@@ -501,7 +501,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         # Legacy dict format (Budget object) - extract total
                         total_budget = float(budget_data.get("total", 0.0))
                         budget = total_budget  # MediaPackage expects float
-                    elif isinstance(budget_data, int | float):
+                    elif isinstance(budget_data, (int, float)):
                         # AdCP 2.5.0 format - flat number
                         total_budget = float(budget_data)
                         budget = total_budget  # MediaPackage expects float
@@ -2056,7 +2056,7 @@ async def _create_media_buy_impl(
                             # ADCP 2.5.0 sends flat numbers, but we normalize to object with currency for DB
                             budget_value: dict[str, Any] | None = None
                             if req_pkg.budget is not None:
-                                if isinstance(req_pkg.budget, int | float):
+                                if isinstance(req_pkg.budget, (int, float)):
                                     # ADCP 2.5.0 flat format: normalize to object with currency from pricing
                                     package_currency = request_currency  # Use request-level currency
                                     if pricing_info_for_package:
@@ -2093,7 +2093,7 @@ async def _create_media_buy_impl(
                     if budget_value:
                         if isinstance(budget_value, dict):
                             budget_total = budget_value.get("total")
-                        elif isinstance(budget_value, int | float):
+                        elif isinstance(budget_value, (int, float)):
                             budget_total = float(budget_value)
 
                     bid_price_value = None
@@ -2467,8 +2467,10 @@ async def _create_media_buy_impl(
                 product_format_keys: set[tuple[str | None, str]] = set()
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
-                        normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
-                        product_format_keys.add((normalized_url, fmt.id))
+                        # pkg_product.format_ids are dicts from database JSONB (type annotation says FormatId but runtime is dict)
+                        agent_url = fmt["agent_url"]  # type: ignore[index]
+                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
+                        product_format_keys.add((normalized_url, fmt["id"]))  # type: ignore[index]
 
                 # Build set of requested format keys for comparison
                 requested_format_keys: set[tuple[str | None, str]] = set()
@@ -2536,9 +2538,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         # pkg_product.format_ids are dicts from database JSONB
@@ -2651,7 +2653,7 @@ async def _create_media_buy_impl(
                     raw_budget = matching_package.budget
                     # Normalize budget: MediaPackage expects float | None (ADCP 2.5.0)
                     if raw_budget is not None:
-                        if isinstance(raw_budget, int | float):
+                        if isinstance(raw_budget, (int, float)):
                             # ADCP 2.5.0 flat format: use as-is (float)
                             package_budget_value = float(raw_budget)
                         elif isinstance(raw_budget, dict):
@@ -2878,7 +2880,7 @@ async def _create_media_buy_impl(
                     if budget_data:
                         if isinstance(budget_data, dict):
                             budget_total = budget_data.get("total")
-                        elif isinstance(budget_data, int | float):
+                        elif isinstance(budget_data, (int, float)):
                             budget_total = float(budget_data)
 
                     bid_price_value = None

@@ -54,9 +54,9 @@ class BaseWorkflowManager:
             prefix: Single character prefix for the step ID
 
         Returns:
-            6-character step ID (prefix + 5 hex chars)
+            9-character step ID (prefix + 8 hex chars)
         """
-        return f"{prefix}{uuid.uuid4().hex[:5]}"
+        return f"{prefix}{uuid.uuid4().hex[:8]}"
 
     def _create_context(self, db_session) -> str:
         """Create a workflow context.

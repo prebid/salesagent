@@ -149,8 +149,7 @@ class TestTenantManagementAPIIntegration:
         assert "admin_ui_url" in data
         assert "default_principal_token" in data
 
-        # Store tenant_id for later tests
-        return data["tenant_id"]
+        assert data["tenant_id"], "tenant_id should be a non-empty string"
 
     def test_create_full_gam_tenant(self, client, mock_api_key_auth):
         """Test creating a GAM tenant with all fields."""

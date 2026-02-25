@@ -105,6 +105,7 @@ def webhook_capture_server():
     }
 
     server.shutdown()
+    server.server_close()
     WebhookPayloadCapture.received_payloads.clear()
 
 

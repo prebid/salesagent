@@ -26,9 +26,10 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-import jsonschema
 import pytest
+import referencing
 from jsonschema.validators import Draft7Validator
+from referencing.jsonschema import DRAFT7
 
 
 class SchemaError(Exception):
@@ -342,16 +343,25 @@ class AdCPSchemaValidator:
         schema_hash = hashlib.md5(json.dumps(schema, sort_keys=True).encode()).hexdigest()
 
         if schema_hash not in self._compiled_validators:
-            # Create a custom resolver that can handle AdCP schema references
-            resolver = jsonschema.RefResolver.from_schema(
-                schema,
-                handlers={
-                    "": self._resolve_adcp_schema_ref,
-                    "https": self._resolve_http_schema_ref,
-                    "http": self._resolve_http_schema_ref,
-                },
-            )
-            self._compiled_validators[schema_hash] = Draft7Validator(schema, resolver=resolver)
+
+            def _retrieve(uri: str) -> referencing.Resource:
+                """Retrieve a schema by URI for the referencing registry."""
+                if "adcontextprotocol.org" in uri:
+                    resolved = self._resolve_http_schema_ref(uri)
+                elif uri.startswith(("http://", "https://")):
+                    resolved = self._resolve_http_schema_ref(uri)
+                else:
+                    resolved = self._resolve_adcp_schema_ref(uri)
+                return DRAFT7.create_resource(resolved)
+
+            registry = referencing.Registry(retrieve=_retrieve)
+            # Seed the registry with the root schema
+            root_resource = DRAFT7.create_resource(schema)
+            root_id = schema.get("$id", "")
+            if root_id:
+                registry = registry.with_resource(root_id, root_resource)
+
+            self._compiled_validators[schema_hash] = Draft7Validator(schema, registry=registry)
 
         return self._compiled_validators[schema_hash]
 

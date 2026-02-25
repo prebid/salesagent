@@ -13,20 +13,19 @@ from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_http_headers
 
 from src.core.resolved_identity import ResolvedIdentity, resolve_identity
+from src.core.tenant_context import LazyTenantContext
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
 
-def _make_lazy_tenant(tenant_id: str) -> "LazyTenantContext":
+def _make_lazy_tenant(tenant_id: str) -> LazyTenantContext:
     """Create a lazy-loading tenant context for the given tenant_id.
 
     The DB query is deferred until a non-tenant_id field is first accessed.
     This avoids hitting the database for requests that only need tenant_id
     (the common case) or that fail auth before reaching tenant-dependent logic.
     """
-    from src.core.tenant_context import LazyTenantContext
-
     return LazyTenantContext(tenant_id)
 
 

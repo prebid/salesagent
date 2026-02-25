@@ -13,8 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.tenant_context import LazyTenantContext, TenantContext
+from src.core.tenant_context import LazyTenantContext
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
 
@@ -64,10 +63,13 @@ class TestLazyTenantContext:
         """Accessing a field other than tenant_id triggers the DB query."""
         lazy = LazyTenantContext("test_tenant")
 
-        with patch(
-            "src.core.config_loader.get_tenant_by_id",
-            return_value=FULL_TENANT_DICT,
-        ) as mock_get, patch("src.core.config_loader.set_current_tenant"):
+        with (
+            patch(
+                "src.core.config_loader.get_tenant_by_id",
+                return_value=FULL_TENANT_DICT,
+            ) as mock_get,
+            patch("src.core.config_loader.set_current_tenant"),
+        ):
             name = lazy.name
 
         assert name == "Test Tenant"
@@ -78,10 +80,13 @@ class TestLazyTenantContext:
         """Multiple field accesses should only trigger one DB query."""
         lazy = LazyTenantContext("test_tenant")
 
-        with patch(
-            "src.core.config_loader.get_tenant_by_id",
-            return_value=FULL_TENANT_DICT,
-        ) as mock_get, patch("src.core.config_loader.set_current_tenant"):
+        with (
+            patch(
+                "src.core.config_loader.get_tenant_by_id",
+                return_value=FULL_TENANT_DICT,
+            ) as mock_get,
+            patch("src.core.config_loader.set_current_tenant"),
+        ):
             _ = lazy.name
             _ = lazy.approval_mode
             _ = lazy["ad_server"]
@@ -92,10 +97,13 @@ class TestLazyTenantContext:
         """Dict-like access to non-tenant_id fields triggers load."""
         lazy = LazyTenantContext("test_tenant")
 
-        with patch(
-            "src.core.config_loader.get_tenant_by_id",
-            return_value=FULL_TENANT_DICT,
-        ), patch("src.core.config_loader.set_current_tenant"):
+        with (
+            patch(
+                "src.core.config_loader.get_tenant_by_id",
+                return_value=FULL_TENANT_DICT,
+            ),
+            patch("src.core.config_loader.set_current_tenant"),
+        ):
             assert lazy["name"] == "Test Tenant"
             assert lazy.get("approval_mode") == "require-human"
 
@@ -121,10 +129,13 @@ class TestLazyTenantContext:
         """Returns minimal TenantContext with defaults when DB fails."""
         lazy = LazyTenantContext("test_tenant")
 
-        with patch(
-            "src.core.config_loader.get_tenant_by_id",
-            side_effect=RuntimeError("DB not available"),
-        ), patch("src.core.config_loader.set_current_tenant"):
+        with (
+            patch(
+                "src.core.config_loader.get_tenant_by_id",
+                side_effect=RuntimeError("DB not available"),
+            ),
+            patch("src.core.config_loader.set_current_tenant"),
+        ):
             # Access a non-tenant_id field to trigger resolution
             mode = lazy.approval_mode
 
@@ -136,10 +147,13 @@ class TestLazyTenantContext:
         """set_current_tenant() is called when full tenant is loaded."""
         lazy = LazyTenantContext("test_tenant")
 
-        with patch(
-            "src.core.config_loader.get_tenant_by_id",
-            return_value=FULL_TENANT_DICT,
-        ), patch("src.core.config_loader.set_current_tenant") as mock_set:
+        with (
+            patch(
+                "src.core.config_loader.get_tenant_by_id",
+                return_value=FULL_TENANT_DICT,
+            ),
+            patch("src.core.config_loader.set_current_tenant") as mock_set,
+        ):
             _ = lazy.name  # trigger resolve
 
         mock_set.assert_called_once()
@@ -189,10 +203,13 @@ class TestToolContextProducesLazyTenant:
 
         identity = resolve_identity_from_context(ctx)
 
-        with patch(
-            "src.core.config_loader.get_tenant_by_id",
-            return_value=FULL_TENANT_DICT,
-        ) as mock_get, patch("src.core.config_loader.set_current_tenant"):
+        with (
+            patch(
+                "src.core.config_loader.get_tenant_by_id",
+                return_value=FULL_TENANT_DICT,
+            ) as mock_get,
+            patch("src.core.config_loader.set_current_tenant"),
+        ):
             name = identity.tenant.name
 
         assert name == "Test Tenant"
@@ -278,8 +295,7 @@ class TestImplFunctionsDoNotResolveTenant:
             source = f.read()
 
         assert "get_current_tenant" not in source, (
-            f"{module_path} still calls get_current_tenant(). "
-            f"Use identity.tenant instead of reading from ContextVar."
+            f"{module_path} still calls get_current_tenant(). Use identity.tenant instead of reading from ContextVar."
         )
         assert "set_current_tenant" not in source, (
             f"{module_path} still calls set_current_tenant(). "

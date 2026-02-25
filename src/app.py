@@ -347,7 +347,7 @@ app.add_middleware(
 # Admin UI — mount Flask admin via WSGIMiddleware
 # ---------------------------------------------------------------------------
 
-from starlette.middleware.wsgi import WSGIMiddleware  # noqa: E402
+from a2wsgi import WSGIMiddleware  # noqa: E402
 
 from src.admin.app import create_app  # noqa: E402
 
@@ -359,17 +359,17 @@ admin_wsgi = WSGIMiddleware(flask_admin_app)
 _ADMIN_PATHS = ["/admin", "/static", "/auth", "/api", "/callback", "/logout", "/login", "/signup", "/test"]
 
 for _path in _ADMIN_PATHS:
-    app.mount(_path, admin_wsgi)
+    app.mount(_path, admin_wsgi)  # type: ignore[arg-type]  # WSGIMiddleware is a valid ASGI app; starlette/a2wsgi typing mismatch
 
 # Tenant-specific admin: /tenant/{tenant_id}/admin/...
-app.mount("/tenant", admin_wsgi)
+app.mount("/tenant", admin_wsgi)  # type: ignore[arg-type]  # WSGIMiddleware is a valid ASGI app; starlette/a2wsgi typing mismatch
 
 
 # ---------------------------------------------------------------------------
 # Landing page routes
 # ---------------------------------------------------------------------------
 
-from fastapi.responses import HTMLResponse  # noqa: E402
+from fastapi.responses import HTMLResponse, RedirectResponse  # noqa: E402
 
 from src.core.domain_routing import route_landing_page  # noqa: E402
 from src.landing import generate_tenant_landing_page  # noqa: E402
@@ -383,6 +383,9 @@ async def _handle_landing_page(request: Request):
         f"[LANDING] Routing decision: type={result.type}, host={result.effective_host}, "
         f"tenant={'yes' if result.tenant else 'no'}"
     )
+
+    if result.type == "admin":
+        return RedirectResponse(url="/login", status_code=302)
 
     if result.type in ("custom_domain", "subdomain") and result.tenant:
         try:

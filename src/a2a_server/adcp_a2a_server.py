@@ -66,9 +66,6 @@ from src.core.tools import (
     get_media_buy_delivery_raw as core_get_media_buy_delivery_tool,
 )
 from src.core.tools import (
-    get_media_buys_raw as core_get_media_buys_tool,
-)
-from src.core.tools import (
     get_products_raw as core_get_products_tool,
 )
 
@@ -448,7 +445,6 @@ class AdCPRequestHandler(RequestHandler):
                 CreateMediaBuyError,
                 CreateMediaBuySuccess,
                 GetMediaBuyDeliveryResponse,
-                GetMediaBuysResponse,
                 GetProductsResponse,
                 ListAuthorizedPropertiesResponse,
                 ListCreativeFormatsResponse,
@@ -476,7 +472,6 @@ class AdCPRequestHandler(RequestHandler):
             # Non-union response types - use the concrete class directly
             response_map: dict[str, type] = {
                 "get_media_buy_delivery": GetMediaBuyDeliveryResponse,
-                "get_media_buys": GetMediaBuysResponse,
                 "get_products": GetProductsResponse,
                 "list_authorized_properties": ListAuthorizedPropertiesResponse,
                 "list_creative_formats": ListCreativeFormatsResponse,
@@ -1440,7 +1435,6 @@ class AdCPRequestHandler(RequestHandler):
             # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
             "update_media_buy": self._handle_update_media_buy_skill,
             "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
-            "get_media_buys": self._handle_get_media_buys_skill,
             "update_performance_index": self._handle_update_performance_index_skill,
             # AdCP Spec Creative Management (centralized library approach)
             "sync_creatives": self._handle_sync_creatives_skill,
@@ -2085,30 +2079,6 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in get_media_buy_delivery skill: {e}")
             raise ServerError(InternalError(message=f"Unable to get media buy delivery: {str(e)}"))
 
-    async def _handle_get_media_buys_skill(self, parameters: dict, auth_token: str) -> dict:
-        """Handle get_media_buys skill invocation."""
-        try:
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="get_media_buys",
-            )
-
-            response = core_get_media_buys_tool(
-                media_buy_ids=parameters.get("media_buy_ids"),
-                buyer_refs=parameters.get("buyer_refs"),
-                status_filter=parameters.get("status_filter"),
-                include_snapshot=parameters.get("include_snapshot", False),
-                account_id=parameters.get("account_id"),
-                context=parameters.get("context"),
-                ctx=self._tool_context_to_mcp_context(tool_context),
-            )
-
-            return response
-
-        except Exception as e:
-            logger.error(f"Error in get_media_buys skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to get media buys: {str(e)}"))
-
     async def _handle_update_performance_index_skill(self, parameters: dict, auth_token: str) -> dict:
         """Handle explicit update_performance_index skill invocation (CRITICAL for optimization)."""
         try:
@@ -2361,12 +2331,6 @@ def create_agent_card() -> AgentCard:
                 name="get_media_buy_delivery",
                 description="Get delivery metrics and performance data for media buys",
                 tags=["delivery", "metrics", "performance", "monitoring", "adcp"],
-            ),
-            AgentSkill(
-                id="get_media_buys",
-                name="get_media_buys",
-                description="Get media buy status, creative approval state, and optional near-real-time delivery snapshots",
-                tags=["media_buy", "status", "creative", "snapshot", "monitoring", "adcp"],
             ),
             AgentSkill(
                 id="update_performance_index",

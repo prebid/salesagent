@@ -24,9 +24,8 @@ def find_free_port(start_port: int = 10000, end_port: int = 60000) -> int:
     """Find an available port in the given range."""
     for port in range(start_port, end_port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
             try:
-                s.bind(("0.0.0.0", port))  # Match Docker's binding interface
+                s.bind(("127.0.0.1", port))
                 return port
             except OSError:
                 continue
@@ -76,14 +75,22 @@ def docker_services_e2e(request):
 
         print(f"✓ Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 
-        # Quick health check
-        try:
-            response = requests.get(f"http://localhost:{mcp_port}/.well-known/agent.json", timeout=2)
-            if response.status_code == 200:
-                print("✓ Server is healthy (A2A agent card OK)")
-        except Exception as e:
-            print(f"⚠️  Warning: Could not verify server: {e}")
-            print("   Services may still be starting up")
+        # Wait for server to be ready. /health is proxied to the upstream
+        # (not returned by nginx directly), so this confirms the app is serving.
+        max_wait = 60
+        start_time = time.time()
+        for _ in range(max_wait // 2):
+            try:
+                response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
+                if response.status_code == 200:
+                    elapsed = int(time.time() - start_time)
+                    print(f"✓ Server is healthy ({elapsed}s)")
+                    break
+            except requests.RequestException:
+                pass
+            time.sleep(2)
+        else:
+            pytest.fail(f"Server not ready after {max_wait}s (port {mcp_port})")
 
     else:
         # Check if Docker is available
@@ -123,8 +130,6 @@ def docker_services_e2e(request):
         # 2. Tests that read ports via os.getenv() (e.g., test_a2a_endpoints_working.py,
         #    test_landing_pages.py) pick up the correct dynamic ports
         os.environ["ADCP_SALES_PORT"] = str(mcp_port)
-        os.environ["A2A_PORT"] = str(a2a_port)
-        os.environ["ADMIN_UI_PORT"] = str(admin_port)
         os.environ["POSTGRES_PORT"] = str(postgres_port)
 
         env = os.environ.copy()
@@ -185,7 +190,8 @@ def docker_services_e2e(request):
                 except:
                     pass
 
-            # Check server health (unified: MCP + A2A + Admin)
+            # Check server health. /health is proxied to upstream, so it
+            # confirms the FastAPI app is actually serving (not just nginx).
             if not server_ready:
                 try:
                     response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
@@ -205,7 +211,7 @@ def docker_services_e2e(request):
             print("\n❌ Health check timeout. Attempting to get container logs...")
 
             # Get logs from all services
-            for service in ["adcp-server", "postgres"]:
+            for service in ["proxy", "adcp-server", "postgres"]:
                 try:
                     print(f"\n📋 {service} logs (last 100 lines):")
                     result = subprocess.run(

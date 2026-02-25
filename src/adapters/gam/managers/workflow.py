@@ -50,7 +50,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
         Returns:
             str: The workflow step ID if created successfully, None otherwise
         """
-        step_id = f"a{uuid.uuid4().hex[:5]}"  # 6 chars total
+        step_id = f"a{uuid.uuid4().hex[:8]}"  # 9 chars total
 
         # Build detailed action list for humans
         action_details = {
@@ -143,7 +143,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
         Returns:
             str: The workflow step ID if created successfully, None otherwise
         """
-        step_id = f"c{uuid.uuid4().hex[:5]}"  # 6 chars total
+        step_id = f"c{uuid.uuid4().hex[:8]}"  # 9 chars total
 
         # Use naming template from adapter config, or fallback to default
         from sqlalchemy import select
@@ -271,7 +271,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
         Returns:
             str: The workflow step ID if created successfully, None otherwise
         """
-        step_id = f"p{uuid.uuid4().hex[:5]}"  # 6 chars total
+        step_id = f"p{uuid.uuid4().hex[:8]}"  # 9 chars total
 
         action_details = {
             "action_type": approval_type,
@@ -355,7 +355,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
         Returns:
             str: The workflow step ID if created successfully, None otherwise
         """
-        step_id = f"b{uuid.uuid4().hex[:5]}"  # 6 chars total, 'b' prefix for background
+        step_id = f"b{uuid.uuid4().hex[:8]}"  # 9 chars total, 'b' prefix for background
 
         # Build detailed action for background polling
         action_details = {

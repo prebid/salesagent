@@ -89,6 +89,7 @@ def _sync_creatives_impl(
 
     # Tenant context is resolved at the transport boundary (resolve_identity_from_context).
     # By the time we reach _impl, identity.tenant is a fully-populated TenantContext.
+    assert identity is not None, "identity is required for creative sync"
     tenant = identity.tenant
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
