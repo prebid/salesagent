@@ -165,7 +165,7 @@ async def initialize_api_key(request: Request) -> dict[str, Any]:
     bootstrap_secret = os.environ.get("BOOTSTRAP_SECRET")
     if not bootstrap_secret:
         raise AdCPAuthenticationError(
-            "BOOTSTRAP_SECRET environment variable not configured. " "Set it to enable API key initialization."
+            "BOOTSTRAP_SECRET environment variable not configured. Set it to enable API key initialization."
         )
     provided = request.headers.get("x-bootstrap-secret", "")
     if not provided or not hmac.compare_digest(provided, bootstrap_secret):

@@ -248,9 +248,9 @@ class TestA2AErrorShapes:
                     auth_token=None,
                 )
             except ServerError as e:
-                assert "Authentication token required" not in str(
-                    e
-                ), "Discovery skills should not require authentication"
+                assert "Authentication token required" not in str(e), (
+                    "Discovery skills should not require authentication"
+                )
 
 
 class TestUpdateMediaBuyErrorShapes:

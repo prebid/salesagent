@@ -110,7 +110,9 @@ class TestTenantErrorPath:
         """H1: No tenant from identity and no current tenant raises AdCPAuthenticationError."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        with (patch("src.core.tools.properties.log_tool_activity"),):
+        with (
+            patch("src.core.tools.properties.log_tool_activity"),
+        ):
             with pytest.raises(AdCPAuthenticationError, match="Could not resolve tenant"):
                 _list_authorized_properties_impl(req=None, identity=None)
 
@@ -118,7 +120,9 @@ class TestTenantErrorPath:
         """H1: Error message mentions subdomain, virtual host, or header."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        with (patch("src.core.tools.properties.log_tool_activity"),):
+        with (
+            patch("src.core.tools.properties.log_tool_activity"),
+        ):
             with pytest.raises(AdCPAuthenticationError, match="subdomain|virtual host|x-adcp-tenant"):
                 _list_authorized_properties_impl(req=None, identity=None)
 
@@ -526,7 +530,6 @@ class TestMCPWrapperIdentityResolution:
                 assert sc["publisher_domains"] == ["stub.com"]
             else:
                 assert sc.publisher_domains == ["stub.com"]
-
 
 
 # ===========================================================================

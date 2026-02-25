@@ -344,9 +344,9 @@ class TestRankingThresholdBehavior:
 
         # brief_relevance is NOT_IMPLEMENTED -- _get_products_impl never assigns it
         for p in response.products:
-            assert (
-                getattr(p, "brief_relevance", None) is None
-            ), "brief_relevance should NOT be set by _get_products_impl (NOT_IMPLEMENTED)"
+            assert getattr(p, "brief_relevance", None) is None, (
+                "brief_relevance should NOT be set by _get_products_impl (NOT_IMPLEMENTED)"
+            )
 
 
 class TestRankingFailureFailopen:

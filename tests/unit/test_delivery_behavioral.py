@@ -938,7 +938,9 @@ class TestDeliveryImplPrincipalNotFound:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
         identity = _make_identity(principal_id="ghost_principal")
 
-        with (patch(f"{_PATCH_PREFIX}.get_principal_object", return_value=None),):
+        with (
+            patch(f"{_PATCH_PREFIX}.get_principal_object", return_value=None),
+        ):
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert response.errors is not None

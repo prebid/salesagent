@@ -104,9 +104,9 @@ class TestMissingTokenConsistency:
         assert len(result.errors) > 0
         # Check that the error message mentions the missing principal
         error_messages = [str(e.message).lower() for e in result.errors]
-        assert any(
-            "principal" in msg for msg in error_messages
-        ), f"Expected error about missing principal, got: {error_messages}"
+        assert any("principal" in msg for msg in error_messages), (
+            f"Expected error about missing principal, got: {error_messages}"
+        )
 
     @pytest.mark.asyncio
     async def test_all_authenticated_tools_reject_none_identity(self):
