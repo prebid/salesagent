@@ -485,6 +485,175 @@ def init_db_ci():
             print(f"   - Products created: {len(products_data)}")
             print(f"   - Products verified: {len(saved_products)}")
 
+        # ==================================================================
+        # Create isolation test tenant (iso-test) for multi-tenant e2e tests
+        # ==================================================================
+        print("\n" + "=" * 60)
+        print("Creating isolation test tenant (iso-test) for e2e tests...")
+        print("=" * 60)
+
+        with get_db_session() as iso_session:
+            stmt_iso = select(Tenant).filter_by(subdomain="iso-test")
+            existing_iso = iso_session.scalars(stmt_iso).first()
+
+            if existing_iso:
+                iso_tenant_id = existing_iso.tenant_id
+                print(f"Isolation tenant already exists (ID: {iso_tenant_id})")
+            else:
+                iso_tenant_id = str(uuid.uuid4())
+                now_iso = datetime.now(UTC)
+                iso_tenant = Tenant(
+                    tenant_id=iso_tenant_id,
+                    name="Isolation Test Tenant",
+                    subdomain="iso-test",
+                    billing_plan="test",
+                    ad_server="mock",
+                    enable_axe_signals=False,
+                    is_active=True,
+                    authorized_emails=["iso-test@example.com"],
+                    authorized_domains=None,
+                    policy_settings=None,
+                    signals_agent_config=None,
+                    ai_policy=None,
+                    auto_approve_format_ids=["display_300x250"],
+                    human_review_required=False,
+                    auth_setup_mode=False,
+                    created_at=now_iso,
+                    updated_at=now_iso,
+                )
+                iso_session.add(iso_tenant)
+                try:
+                    iso_session.commit()
+                    print(f"  ✓ Created isolation tenant (ID: {iso_tenant_id})")
+                except Exception as e:
+                    iso_session.rollback()
+                    print(f"  ⚠️  Isolation tenant race condition: {e}")
+                    stmt_iso = select(Tenant).filter_by(subdomain="iso-test")
+                    existing_iso = iso_session.scalars(stmt_iso).first()
+                    if existing_iso:
+                        iso_tenant_id = existing_iso.tenant_id
+                    else:
+                        raise ValueError("Failed to create or find isolation tenant")
+
+            # Create principal for isolation tenant
+            stmt_iso_principal = select(Principal).filter_by(access_token="iso-test-token")
+            existing_iso_principal = iso_session.scalars(stmt_iso_principal).first()
+            if not existing_iso_principal:
+                iso_principal_id = str(uuid.uuid4())
+                iso_principal = Principal(
+                    principal_id=iso_principal_id,
+                    tenant_id=iso_tenant_id,
+                    name="Isolation Test Principal",
+                    access_token="iso-test-token",
+                    platform_mappings={"mock": {"advertiser_id": "iso-test-advertiser"}},
+                )
+                iso_session.add(iso_principal)
+                try:
+                    iso_session.commit()
+                    print(f"  ✓ Created isolation principal (ID: {iso_principal_id})")
+                except Exception as e:
+                    iso_session.rollback()
+                    print(f"  ⚠️  Isolation principal race condition: {e}")
+            else:
+                iso_principal_id = existing_iso_principal.principal_id
+                print(f"  ✓ Isolation principal already exists (ID: {iso_principal_id})")
+
+            # Create currency limit for isolation tenant
+            stmt_iso_currency = select(CurrencyLimit).filter_by(tenant_id=iso_tenant_id, currency_code="USD")
+            if not iso_session.scalars(stmt_iso_currency).first():
+                iso_session.add(
+                    CurrencyLimit(
+                        tenant_id=iso_tenant_id,
+                        currency_code="USD",
+                        min_package_budget=500.0,
+                        max_daily_package_spend=5000.0,
+                    )
+                )
+
+            # Create property tag for isolation tenant
+            now_iso = datetime.now(UTC)
+            stmt_iso_tag = select(PropertyTag).filter_by(tenant_id=iso_tenant_id, tag_id="all_inventory")
+            if not iso_session.scalars(stmt_iso_tag).first():
+                iso_session.add(
+                    PropertyTag(
+                        tag_id="all_inventory",
+                        tenant_id=iso_tenant_id,
+                        name="All Inventory",
+                        description="Default tag for isolation tenant",
+                        created_at=now_iso,
+                        updated_at=now_iso,
+                    )
+                )
+
+            try:
+                iso_session.commit()
+                print("  ✓ Created currency limit and property tag for isolation tenant")
+            except Exception as e:
+                iso_session.rollback()
+                print(f"  ⚠️  Isolation prerequisites race condition: {e}")
+
+            # Create products for isolation tenant (iso_ prefix for clear identification)
+            iso_products_data = [
+                {
+                    "product_id": "iso_display_standard",
+                    "name": "ISO Standard Display",
+                    "description": "Standard display ads for isolation testing",
+                    "formats": [
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+                    ],
+                    "targeting_template": {"geo": ["UK"], "device_type": "any"},
+                    "delivery_type": "guaranteed",
+                    "pricing": {"model": "cpm", "rate": 10.0, "is_fixed": True},
+                },
+            ]
+
+            for p in iso_products_data:
+                stmt_prod = select(Product).filter_by(tenant_id=iso_tenant_id, product_id=p["product_id"])
+                if not iso_session.scalars(stmt_prod).first():
+                    product = Product(
+                        tenant_id=iso_tenant_id,
+                        product_id=p["product_id"],
+                        name=p["name"],
+                        description=p["description"],
+                        format_ids=p["formats"],
+                        targeting_template=p["targeting_template"],
+                        delivery_type=p["delivery_type"],
+                        property_tags=["all_inventory"],
+                        measurement=None,
+                        creative_policy=None,
+                        price_guidance=None,
+                        countries=None,
+                        implementation_config=None,
+                        properties=None,
+                    )
+                    iso_session.add(product)
+                    print(f"  ✓ Created isolation product: {p['name']}")
+
+                    pricing = p["pricing"]
+                    iso_session.add(
+                        PricingOption(
+                            tenant_id=iso_tenant_id,
+                            product_id=p["product_id"],
+                            pricing_model=pricing["model"],
+                            rate=pricing["rate"],
+                            currency="USD",
+                            is_fixed=pricing["is_fixed"],
+                            price_guidance=None,
+                        )
+                    )
+                    print(f"  ✓ Created pricing_option for: {p['name']}")
+                else:
+                    print(f"  ℹ️  Isolation product already exists: {p['name']}")
+
+            iso_session.commit()
+
+            # Verify isolation tenant products
+            stmt_iso_verify = select(Product).filter_by(tenant_id=iso_tenant_id)
+            iso_products = iso_session.scalars(stmt_iso_verify).all()
+            print(f"\n✅ Isolation tenant verification: {len(iso_products)} products")
+            for prod in iso_products:
+                print(f"   - {prod.product_id}: {prod.name}")
+
         print("✅ Database initialized successfully with all validations passed")
     except ImportError as e:
         print(f"Import error: {e}")
