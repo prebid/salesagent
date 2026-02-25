@@ -43,6 +43,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     _ = identity.principal_id if identity else None
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    assert identity is not None, "identity is required for signals"
     tenant = identity.tenant
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")

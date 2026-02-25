@@ -90,6 +90,9 @@ def _get_adcp_capabilities_impl(
             supported_protocols=[SupportedProtocol.media_buy],
         )
 
+    # If we got here, tenant is truthy, which means identity was not None on line 84
+    assert identity is not None
+
     tenant_id = tenant["tenant_id"]
     tenant_name = tenant.get("name", "Unknown")
 

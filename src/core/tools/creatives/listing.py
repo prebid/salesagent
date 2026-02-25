@@ -195,6 +195,7 @@ def _list_creatives_impl(
         raise AdCPAuthenticationError("Missing x-adcp-auth header")
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    assert identity is not None, "identity is required for listing creatives"
     tenant = identity.tenant
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")

@@ -355,10 +355,10 @@ admin_wsgi = WSGIMiddleware(flask_admin_app)
 _ADMIN_PATHS = ["/admin", "/static", "/auth", "/api", "/callback", "/logout", "/login", "/signup", "/test"]
 
 for _path in _ADMIN_PATHS:
-    app.mount(_path, admin_wsgi)
+    app.mount(_path, admin_wsgi)  # type: ignore[arg-type]  # WSGIMiddleware is a valid ASGI app; starlette/a2wsgi typing mismatch
 
 # Tenant-specific admin: /tenant/{tenant_id}/admin/...
-app.mount("/tenant", admin_wsgi)
+app.mount("/tenant", admin_wsgi)  # type: ignore[arg-type]  # WSGIMiddleware is a valid ASGI app; starlette/a2wsgi typing mismatch
 
 
 # ---------------------------------------------------------------------------

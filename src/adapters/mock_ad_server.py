@@ -230,7 +230,7 @@ class MockAdServer(AdServerAdapter):
         ctx_manager = get_context_manager()
 
         # Create a context for async operations if needed
-        context = ctx_manager.create_context(tenant_id=self.tenant_id, principal_id=self.principal.principal_id)
+        context = ctx_manager.create_context(tenant_id=self.tenant_id or "unknown", principal_id=self.principal.principal_id)
 
         # Add protocol field for webhook payload creation (mock adapter defaults to MCP)
         request_data_with_protocol = {**request_data, "protocol": "mcp"}
@@ -669,7 +669,7 @@ class MockAdServer(AdServerAdapter):
         media_buy_id = f"buy_{request.po_number}" if request.po_number else f"buy_{uuid.uuid4().hex[:8]}"
 
         # Use tenant_id from adapter instance (set during construction)
-        tenant_id = self.tenant_id
+        tenant_id = self.tenant_id or "unknown"
 
         # Generate order name using naming template
         from sqlalchemy import select
