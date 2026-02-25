@@ -62,6 +62,21 @@ class TestListProducts:
         assert response.status_code == 200
         assert response.json()["count"] == 1
 
+    @patch("src.routes.admin_tenant._product_svc")
+    def test_route_passes_tenant_id_string_not_orm_object(self, mock_svc, client, auth_header):
+        """Detached Tenant safety: route handlers must pass tenant_id (str) to services, not the Tenant ORM object.
+
+        The Tenant returned by require_tenant_admin is expunged from the DB session.
+        Accessing lazy-loaded relationships (tenant.products, tenant.principals, etc.)
+        on an expunged Tenant would raise DetachedInstanceError. This test guards
+        against future regressions where a developer accidentally passes _tenant to
+        a service method that accesses relationships.
+        """
+        mock_svc.list_products.return_value = {"products": [], "count": 0}
+        client.get(f"/api/v1/admin/{TENANT_ID}/products", headers=auth_header)
+        # Service must be called with the string tenant_id from the URL, not the Tenant ORM object
+        mock_svc.list_products.assert_called_once_with(TENANT_ID)
+
 
 class TestCreateProduct:
     @patch("src.routes.admin_tenant._product_svc")
