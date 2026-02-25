@@ -84,9 +84,12 @@ class AdapterConfigService:
                 raise AdCPNotFoundError(f"Tenant '{tenant_id}' not found")
 
             # Validate against adapter schema if available
+            # Skip validation for adapters using base schema (they use legacy columns)
+            from src.adapters.base import BaseConnectionConfig
+
             schemas = get_adapter_schemas(adapter_type)
             validated_config = None
-            if schemas and schemas.connection_config:
+            if schemas and schemas.connection_config and schemas.connection_config is not BaseConnectionConfig:
                 try:
                     validated = schemas.connection_config(**config)
                     validated_config = validated.model_dump()

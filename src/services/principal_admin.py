@@ -72,17 +72,29 @@ class PrincipalAdminService:
         principal_id = f"prin_{uuid.uuid4().hex[:8]}"
         access_token = f"tok_{secrets.token_urlsafe(32)}"
 
-        platform_mappings = data.get("platform_mappings", {})
+        platform_mappings = data.get("platform_mappings")
 
         with get_db_session() as session:
+            # If no platform_mappings provided, generate default based on adapter type
+            if not platform_mappings:
+                adapter_stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
+                adapter = session.scalars(adapter_stmt).first()
+                adapter_type = adapter.adapter_type if adapter else "mock"
+                if adapter_type == "google_ad_manager":
+                    platform_mappings = {"google_ad_manager": {"advertiser_id": "placeholder"}}
+                elif adapter_type == "kevel":
+                    platform_mappings = {"kevel": {"advertiser_id": "placeholder"}}
+                elif adapter_type == "triton":
+                    platform_mappings = {"triton": {"advertiser_id": "placeholder"}}
+                else:
+                    platform_mappings = {"mock": {"advertiser_id": "default"}}
+
             principal = Principal(
                 tenant_id=tenant_id,
                 principal_id=principal_id,
                 name=name,
                 access_token=access_token,
-                platform_mappings=(
-                    json.dumps(platform_mappings) if isinstance(platform_mappings, dict) else platform_mappings
-                ),
+                platform_mappings=platform_mappings,
                 created_at=datetime.now(UTC),
             )
             session.add(principal)
@@ -105,8 +117,7 @@ class PrincipalAdminService:
                 principal.name = data["name"]
 
             if "platform_mappings" in data:
-                mappings = data["platform_mappings"]
-                principal.platform_mappings = json.dumps(mappings) if isinstance(mappings, dict) else mappings
+                principal.platform_mappings = data["platform_mappings"]
 
             principal.updated_at = datetime.now(UTC)
             session.commit()

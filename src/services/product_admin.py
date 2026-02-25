@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -72,8 +71,6 @@ class ProductAdminService:
                 creative_policy=data.get("creative_policy"),
                 implementation_config=data.get("implementation_config"),
                 inventory_profile_id=data.get("inventory_profile_id"),
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
             )
             session.add(product)
 
@@ -157,7 +154,6 @@ class ProductAdminService:
                     )
                     session.add(po)
 
-            product.updated_at = datetime.now(UTC)
             session.commit()
             session.refresh(product)
             return self._to_dict(product, session)
