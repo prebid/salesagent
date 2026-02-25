@@ -190,6 +190,25 @@ class TestDeleteTenant:
 
 
 class TestTriggerSync:
+    def test_invalid_sync_type_returns_422(self, client, api_key_header):
+        """sync_type must be a known value — arbitrary strings rejected at schema level."""
+        response = client.post(
+            "/api/v1/platform/sync/t1",
+            json={"sync_type": "garbage_value"},
+            headers=api_key_header,
+        )
+        assert response.status_code == 422
+
+    def test_valid_sync_types_accepted(self, client, api_key_header):
+        """Each valid sync_type passes schema validation (service failure is OK here)."""
+        for sync_type in ("full", "inventory", "targeting", "selective"):
+            response = client.post(
+                "/api/v1/platform/sync/t1",
+                json={"sync_type": sync_type},
+                headers=api_key_header,
+            )
+            assert response.status_code != 422, f"Valid sync_type '{sync_type}' was rejected with 422"
+
     @patch("src.routes.admin_multi_tenant._sync_svc")
     def test_triggers_sync(self, mock_svc, client, api_key_header):
         mock_svc.trigger_sync.return_value = {"sync_id": "sync_123", "status": "completed"}

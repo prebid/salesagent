@@ -109,7 +109,7 @@ class TenantListResponse(SalesAgentBaseModel):
 
 
 class TriggerSyncRequest(SalesAgentBaseModel):
-    sync_type: str = "full"  # full, inventory, targeting, selective
+    sync_type: Literal["full", "inventory", "targeting", "selective"] = "full"
     force: bool = False
     sync_types: list[str] = Field(default_factory=list)  # For selective sync
     custom_targeting_limit: int = 1000
