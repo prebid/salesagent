@@ -27,10 +27,14 @@ def mock_tenant():
 
 
 @pytest.fixture
-def client():
+def client(mock_tenant):
+    """TestClient with auth dependency overridden."""
     from src.app import app
+    from src.core.admin_auth import require_tenant_admin
 
+    app.dependency_overrides[require_tenant_admin] = lambda: mock_tenant
     yield TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides.pop(require_tenant_admin, None)
 
 
 @pytest.fixture
@@ -45,8 +49,7 @@ def auth_header():
 
 class TestListProperties:
     @patch("src.routes.admin_tenant._property_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_properties(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_properties(self, mock_svc, client, auth_header):
         mock_svc.list_properties.return_value = {
             "properties": [
                 {"property_id": "p1", "name": "Homepage", "publisher_domain": "example.com"},
@@ -61,8 +64,7 @@ class TestListProperties:
 
 class TestCreateProperty:
     @patch("src.routes.admin_tenant._property_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_creates_property(self, mock_auth, mock_svc, client, auth_header):
+    def test_creates_property(self, mock_svc, client, auth_header):
         mock_svc.create_property.return_value = {
             "property_id": "prop_abc",
             "tenant_id": TENANT_ID,
@@ -80,8 +82,7 @@ class TestCreateProperty:
 
 class TestUpdateProperty:
     @patch("src.routes.admin_tenant._property_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_updates_property(self, mock_auth, mock_svc, client, auth_header):
+    def test_updates_property(self, mock_svc, client, auth_header):
         mock_svc.update_property.return_value = {
             "property_id": "p1",
             "name": "Updated",
@@ -97,8 +98,7 @@ class TestUpdateProperty:
 
 class TestDeleteProperty:
     @patch("src.routes.admin_tenant._property_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_deletes_property(self, mock_auth, mock_svc, client, auth_header):
+    def test_deletes_property(self, mock_svc, client, auth_header):
         mock_svc.delete_property.return_value = {"message": "Deleted", "property_id": "p1"}
         response = client.delete(f"/api/v1/admin/{TENANT_ID}/properties/p1", headers=auth_header)
         assert response.status_code == 200
@@ -106,8 +106,7 @@ class TestDeleteProperty:
 
 class TestBulkUpload:
     @patch("src.routes.admin_tenant._property_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_bulk_upload(self, mock_auth, mock_svc, client, auth_header):
+    def test_bulk_upload(self, mock_svc, client, auth_header):
         mock_svc.bulk_upload.return_value = {"success_count": 2, "error_count": 0, "errors": []}
         response = client.post(
             f"/api/v1/admin/{TENANT_ID}/properties/bulk",
@@ -125,8 +124,7 @@ class TestBulkUpload:
 
 class TestVerifyProperties:
     @patch("src.routes.admin_tenant._property_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_triggers_verification(self, mock_auth, mock_svc, client, auth_header):
+    def test_triggers_verification(self, mock_svc, client, auth_header):
         mock_svc.verify_properties.return_value = {"total_checked": 5, "verified": 3, "failed": 2}
         response = client.post(f"/api/v1/admin/{TENANT_ID}/properties/verify", headers=auth_header)
         assert response.status_code == 200
@@ -140,8 +138,7 @@ class TestVerifyProperties:
 
 class TestGetInventory:
     @patch("src.routes.admin_tenant._inventory_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_inventory(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_inventory(self, mock_svc, client, auth_header):
         mock_svc.get_inventory.return_value = {
             "items": [
                 {"inventory_id": "123", "name": "Homepage Banner", "inventory_type": "ad_unit"},
@@ -153,8 +150,7 @@ class TestGetInventory:
         assert response.json()["count"] == 1
 
     @patch("src.routes.admin_tenant._inventory_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_filters_by_type(self, mock_auth, mock_svc, client, auth_header):
+    def test_filters_by_type(self, mock_svc, client, auth_header):
         mock_svc.get_inventory.return_value = {"items": [], "count": 0}
         response = client.get(
             f"/api/v1/admin/{TENANT_ID}/inventory?inventory_type=placement",
@@ -168,8 +164,7 @@ class TestGetInventory:
 
 class TestGetSizes:
     @patch("src.routes.admin_tenant._inventory_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_sizes(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_sizes(self, mock_svc, client, auth_header):
         mock_svc.get_sizes.return_value = {"sizes": ["300x250", "728x90"], "count": 2}
         response = client.get(f"/api/v1/admin/{TENANT_ID}/inventory/sizes", headers=auth_header)
         assert response.status_code == 200
@@ -178,8 +173,7 @@ class TestGetSizes:
 
 class TestGetTargeting:
     @patch("src.routes.admin_tenant._inventory_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_targeting_data(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_targeting_data(self, mock_svc, client, auth_header):
         mock_svc.get_targeting.return_value = {
             "custom_targeting_keys": [{"name": "category"}],
             "audience_segments": [],
@@ -192,8 +186,7 @@ class TestGetTargeting:
 
 class TestGetTargetingValues:
     @patch("src.routes.admin_tenant._inventory_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_values(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_values(self, mock_svc, client, auth_header):
         mock_svc.get_targeting_values.return_value = {
             "key_id": "123",
             "key_name": "category",
@@ -205,8 +198,7 @@ class TestGetTargetingValues:
         assert response.json()["count"] == 2
 
     @patch("src.routes.admin_tenant._inventory_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_not_found_returns_404(self, mock_auth, mock_svc, client, auth_header):
+    def test_not_found_returns_404(self, mock_svc, client, auth_header):
         from src.core.exceptions import AdCPNotFoundError
 
         mock_svc.get_targeting_values.side_effect = AdCPNotFoundError("Not found")
@@ -221,8 +213,7 @@ class TestGetTargetingValues:
 
 class TestListProfiles:
     @patch("src.routes.admin_tenant._profile_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_profiles(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_profiles(self, mock_svc, client, auth_header):
         mock_svc.list_profiles.return_value = {
             "profiles": [
                 {"profile_id": "homepage_takeover", "name": "Homepage Takeover", "product_count": 2},
@@ -236,8 +227,7 @@ class TestListProfiles:
 
 class TestCreateProfile:
     @patch("src.routes.admin_tenant._profile_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_creates_profile(self, mock_auth, mock_svc, client, auth_header):
+    def test_creates_profile(self, mock_svc, client, auth_header):
         mock_svc.create_profile.return_value = {
             "id": 1,
             "profile_id": "homepage_takeover",
@@ -255,8 +245,7 @@ class TestCreateProfile:
 
 class TestUpdateProfile:
     @patch("src.routes.admin_tenant._profile_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_updates_profile(self, mock_auth, mock_svc, client, auth_header):
+    def test_updates_profile(self, mock_svc, client, auth_header):
         mock_svc.update_profile.return_value = {
             "profile_id": "homepage_takeover",
             "name": "Updated Profile",
@@ -271,8 +260,7 @@ class TestUpdateProfile:
 
 class TestDeleteProfile:
     @patch("src.routes.admin_tenant._profile_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_deletes_profile(self, mock_auth, mock_svc, client, auth_header):
+    def test_deletes_profile(self, mock_svc, client, auth_header):
         mock_svc.delete_profile.return_value = {"message": "Deleted", "profile_id": "homepage_takeover"}
         response = client.delete(
             f"/api/v1/admin/{TENANT_ID}/inventory-profiles/homepage_takeover",
@@ -281,8 +269,7 @@ class TestDeleteProfile:
         assert response.status_code == 200
 
     @patch("src.routes.admin_tenant._profile_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_cannot_delete_referenced_profile(self, mock_auth, mock_svc, client, auth_header):
+    def test_cannot_delete_referenced_profile(self, mock_svc, client, auth_header):
         from src.core.exceptions import AdCPValidationError
 
         mock_svc.delete_profile.side_effect = AdCPValidationError("Referenced by products")

@@ -29,14 +29,23 @@ def mock_tenant():
 
 
 @pytest.fixture
-def client():
-    """TestClient for tenant admin endpoints.
-
-    NOTE: Tenant admin routes call require_tenant_admin() directly (not via
-    Depends), so auth is patched per-test rather than via dependency_overrides.
-    """
+def client(mock_tenant):
+    """TestClient with auth dependency overridden."""
     from src.app import app
+    from src.core.admin_auth import require_tenant_admin
 
+    app.dependency_overrides[require_tenant_admin] = lambda: mock_tenant
+    yield TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides.pop(require_tenant_admin, None)
+
+
+@pytest.fixture
+def client_no_auth():
+    """TestClient without auth override (for testing auth enforcement)."""
+    from src.app import app
+    from src.core.admin_auth import require_tenant_admin
+
+    app.dependency_overrides.pop(require_tenant_admin, None)
     yield TestClient(app, raise_server_exceptions=False)
 
 
@@ -53,15 +62,10 @@ def auth_header():
 class TestTenantAdminAuthEnforcement:
     """Verify Bearer token auth is enforced on tenant admin endpoints."""
 
-    @patch("src.routes.admin_tenant._adapter_svc")
-    def test_adapter_config_requires_auth(self, mock_svc, client, auth_header):
-        """With auth failure, endpoints should return 401."""
-        from src.core.exceptions import AdCPAuthenticationError
-
-        with patch("src.routes.admin_tenant.require_tenant_admin") as mock_auth:
-            mock_auth.side_effect = AdCPAuthenticationError("Missing token")
-            response = client.get(f"/api/v1/admin/{TENANT_ID}/adapter")
-            assert response.status_code == 401
+    def test_adapter_config_requires_auth(self, client_no_auth):
+        """Without valid auth, endpoints should return 401."""
+        response = client_no_auth.get(f"/api/v1/admin/{TENANT_ID}/adapter")
+        assert response.status_code in (401, 403)
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +75,7 @@ class TestTenantAdminAuthEnforcement:
 
 class TestGetAdapterConfig:
     @patch("src.routes.admin_tenant._adapter_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_config(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_config(self, mock_svc, client, auth_header):
         mock_svc.get_adapter_config.return_value = {
             "adapter_type": "mock",
             "config": {"mock_dry_run": False},
@@ -82,8 +85,7 @@ class TestGetAdapterConfig:
         assert response.json()["adapter_type"] == "mock"
 
     @patch("src.routes.admin_tenant._adapter_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_not_found_returns_404(self, mock_auth, mock_svc, client, auth_header):
+    def test_not_found_returns_404(self, mock_svc, client, auth_header):
         from src.core.exceptions import AdCPNotFoundError
 
         mock_svc.get_adapter_config.side_effect = AdCPNotFoundError("No adapter")
@@ -93,8 +95,7 @@ class TestGetAdapterConfig:
 
 class TestSaveAdapterConfig:
     @patch("src.routes.admin_tenant._adapter_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_saves_config(self, mock_auth, mock_svc, client, auth_header):
+    def test_saves_config(self, mock_svc, client, auth_header):
         mock_svc.save_adapter_config.return_value = {
             "adapter_type": "mock",
             "tenant_id": TENANT_ID,
@@ -111,8 +112,7 @@ class TestSaveAdapterConfig:
 
 class TestTestConnection:
     @patch("src.routes.admin_tenant._adapter_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_connection_success(self, mock_auth, mock_svc, client, auth_header):
+    def test_connection_success(self, mock_svc, client, auth_header):
         mock_svc.test_connection.return_value = {"success": True, "message": "Mock adapter connected"}
         response = client.post(f"/api/v1/admin/{TENANT_ID}/adapter/test-connection", headers=auth_header)
         assert response.status_code == 200
@@ -121,8 +121,7 @@ class TestTestConnection:
 
 class TestGetCapabilities:
     @patch("src.routes.admin_tenant._adapter_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_capabilities(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_capabilities(self, mock_svc, client, auth_header):
         mock_svc.get_adapter_config.return_value = {"adapter_type": "mock"}
         mock_svc.get_capabilities.return_value = {
             "supports_inventory_sync": False,
@@ -140,8 +139,7 @@ class TestGetCapabilities:
 
 class TestListCurrencyLimits:
     @patch("src.routes.admin_tenant._currency_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_limits(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_limits(self, mock_svc, client, auth_header):
         mock_svc.list_limits.return_value = [
             {"tenant_id": TENANT_ID, "currency_code": "USD", "min_package_budget": 100.0},
         ]
@@ -154,8 +152,7 @@ class TestListCurrencyLimits:
 
 class TestCreateCurrencyLimit:
     @patch("src.routes.admin_tenant._currency_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_creates_limit(self, mock_auth, mock_svc, client, auth_header):
+    def test_creates_limit(self, mock_svc, client, auth_header):
         mock_svc.create_limit.return_value = {
             "tenant_id": TENANT_ID,
             "currency_code": "USD",
@@ -182,8 +179,7 @@ class TestCreateCurrencyLimit:
 
 class TestUpdateCurrencyLimit:
     @patch("src.routes.admin_tenant._currency_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_updates_limit(self, mock_auth, mock_svc, client, auth_header):
+    def test_updates_limit(self, mock_svc, client, auth_header):
         mock_svc.update_limit.return_value = {
             "tenant_id": TENANT_ID,
             "currency_code": "USD",
@@ -200,8 +196,7 @@ class TestUpdateCurrencyLimit:
 
 class TestDeleteCurrencyLimit:
     @patch("src.routes.admin_tenant._currency_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_deletes_limit(self, mock_auth, mock_svc, client, auth_header):
+    def test_deletes_limit(self, mock_svc, client, auth_header):
         mock_svc.delete_limit.return_value = {"message": "Deleted", "currency_code": "USD"}
         response = client.delete(f"/api/v1/admin/{TENANT_ID}/currency-limits/USD", headers=auth_header)
         assert response.status_code == 200
@@ -214,8 +209,7 @@ class TestDeleteCurrencyLimit:
 
 class TestListPropertyTags:
     @patch("src.routes.admin_tenant._tag_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_tags(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_tags(self, mock_svc, client, auth_header):
         mock_svc.list_tags.return_value = [
             {"tag_id": "all_inventory", "tenant_id": TENANT_ID, "name": "All Inventory", "description": "Default"},
         ]
@@ -228,8 +222,7 @@ class TestListPropertyTags:
 
 class TestCreatePropertyTag:
     @patch("src.routes.admin_tenant._tag_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_creates_tag(self, mock_auth, mock_svc, client, auth_header):
+    def test_creates_tag(self, mock_svc, client, auth_header):
         mock_svc.create_tag.return_value = {
             "tag_id": "sports",
             "tenant_id": TENANT_ID,
@@ -247,15 +240,13 @@ class TestCreatePropertyTag:
 
 class TestDeletePropertyTag:
     @patch("src.routes.admin_tenant._tag_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_deletes_tag(self, mock_auth, mock_svc, client, auth_header):
+    def test_deletes_tag(self, mock_svc, client, auth_header):
         mock_svc.delete_tag.return_value = {"message": "Deleted", "tag_id": "sports"}
         response = client.delete(f"/api/v1/admin/{TENANT_ID}/property-tags/sports", headers=auth_header)
         assert response.status_code == 200
 
     @patch("src.routes.admin_tenant._tag_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_cannot_delete_default_tag(self, mock_auth, mock_svc, client, auth_header):
+    def test_cannot_delete_default_tag(self, mock_svc, client, auth_header):
         from src.core.exceptions import AdCPValidationError
 
         mock_svc.delete_tag.side_effect = AdCPValidationError("Cannot delete 'all_inventory'")

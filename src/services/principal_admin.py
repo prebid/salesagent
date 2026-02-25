@@ -157,8 +157,8 @@ class PrincipalAdminService:
 
     def search_gam_advertisers(self, tenant_id: str, data: dict[str, Any]) -> dict[str, Any]:
         """Search GAM advertisers for principal mapping."""
+        # Extract values from ORM object inside the session to avoid DetachedInstanceError
         with get_db_session() as session:
-            # Verify tenant has GAM configured
             stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
             adapter = session.scalars(stmt).first()
             if not adapter:
@@ -167,20 +167,30 @@ class PrincipalAdminService:
             if not adapter.gam_network_code:
                 raise AdCPValidationError("GAM network code not configured")
 
-        # Attempt to query GAM
+            # Extract all needed fields before exiting the session
+            gam_network_code = adapter.gam_network_code
+            gam_refresh_token = adapter.gam_refresh_token
+            gam_trafficker_id = adapter.gam_trafficker_id
+            gam_manual_approval_required = adapter.gam_manual_approval_required
+
         try:
-            from src.adapters.gam.gam_config_helpers import build_gam_config_from_adapter
             from src.adapters.google_ad_manager import GoogleAdManager
             from src.core.schemas import Principal as PrincipalSchema
 
-            config = build_gam_config_from_adapter(adapter)
+            gam_config: dict[str, Any] = {
+                "enabled": True,
+                "network_code": gam_network_code,
+                "refresh_token": gam_refresh_token,
+                "trafficker_id": gam_trafficker_id,
+                "manual_approval_required": gam_manual_approval_required,
+            }
             admin_principal = PrincipalSchema(principal_id="admin", name="admin", platform_mappings={})
             gam = GoogleAdManager(
-                config=config,
+                config=gam_config,
                 principal=admin_principal,
-                network_code=adapter.gam_network_code or "",
+                network_code=gam_network_code,
                 advertiser_id=None,
-                trafficker_id=adapter.gam_trafficker_id or None,
+                trafficker_id=gam_trafficker_id or None,
                 dry_run=False,
                 tenant_id=tenant_id,
             )

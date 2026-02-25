@@ -42,6 +42,15 @@ class InventorySyncService:
             audience_segment_limit = data.get("audience_segment_limit")
             sync_types = data.get("sync_types", [])
 
+            # Validate sync_type before creating the job
+            valid_sync_types = ("full", "inventory", "targeting", "selective")
+            if sync_type not in valid_sync_types:
+                raise AdCPValidationError(
+                    f"Unsupported sync type: {sync_type}. Must be one of: {', '.join(valid_sync_types)}"
+                )
+            if sync_type == "selective" and not sync_types:
+                raise AdCPValidationError("sync_types required for selective sync")
+
             # Check for recent sync
             if not force:
                 sync_stmt = select(SyncJob).where(
@@ -105,8 +114,6 @@ class InventorySyncService:
                 elif sync_type in ("inventory", "targeting"):
                     result = adapter.sync_inventory(session, force=force, custom_targeting_limit=custom_targeting_limit)
                 elif sync_type == "selective":
-                    if not sync_types:
-                        raise AdCPValidationError("sync_types required for selective sync")
                     result = adapter.sync_selective(
                         session,
                         sync_types=sync_types,

@@ -10,14 +10,16 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from src.core.schemas import SalesAgentBaseModel
 
 # ---------------------------------------------------------------------------
 # Platform (Multi-Tenant) API Models
 # ---------------------------------------------------------------------------
 
 
-class CreateTenantRequest(BaseModel):
+class CreateTenantRequest(SalesAgentBaseModel):
     name: str
     subdomain: str
     ad_server: str  # google_ad_manager, mock, kevel, triton, broadstreet
@@ -48,7 +50,7 @@ class CreateTenantRequest(BaseModel):
     mock_dry_run: bool = False
 
 
-class UpdateTenantRequest(BaseModel):
+class UpdateTenantRequest(SalesAgentBaseModel):
     name: str | None = None
     is_active: bool | None = None
     billing_plan: str | None = None
@@ -65,7 +67,7 @@ class UpdateTenantRequest(BaseModel):
     adapter_config: dict[str, Any] | None = None
 
 
-class TenantResponse(BaseModel):
+class TenantResponse(SalesAgentBaseModel):
     tenant_id: str
     name: str
     subdomain: str
@@ -84,7 +86,7 @@ class TenantDetailResponse(TenantResponse):
     principals_count: int = 0
 
 
-class CreateTenantResponse(BaseModel):
+class CreateTenantResponse(SalesAgentBaseModel):
     tenant_id: str
     name: str
     subdomain: str
@@ -92,11 +94,11 @@ class CreateTenantResponse(BaseModel):
     default_principal_token: str | None = None
 
 
-class DeleteTenantRequest(BaseModel):
+class DeleteTenantRequest(SalesAgentBaseModel):
     hard_delete: bool = False
 
 
-class TenantListResponse(BaseModel):
+class TenantListResponse(SalesAgentBaseModel):
     tenants: list[TenantResponse]
     count: int
 
@@ -106,7 +108,7 @@ class TenantListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class TriggerSyncRequest(BaseModel):
+class TriggerSyncRequest(SalesAgentBaseModel):
     sync_type: str = "full"  # full, inventory, targeting, selective
     force: bool = False
     sync_types: list[str] = Field(default_factory=list)  # For selective sync
@@ -114,7 +116,7 @@ class TriggerSyncRequest(BaseModel):
     audience_segment_limit: int | None = None
 
 
-class SyncStatusResponse(BaseModel):
+class SyncStatusResponse(SalesAgentBaseModel):
     sync_id: str
     tenant_id: str
     adapter_type: str | None = None
@@ -128,21 +130,21 @@ class SyncStatusResponse(BaseModel):
     error: str | None = None
 
 
-class SyncHistoryResponse(BaseModel):
+class SyncHistoryResponse(SalesAgentBaseModel):
     total: int
     limit: int
     offset: int
     results: list[dict[str, Any]]
 
 
-class SyncStatsResponse(BaseModel):
+class SyncStatsResponse(SalesAgentBaseModel):
     status_counts: dict[str, int]
     recent_failures: list[dict[str, Any]]
     stale_tenants: list[dict[str, Any]]
     since: str
 
 
-class SyncTenantInfo(BaseModel):
+class SyncTenantInfo(SalesAgentBaseModel):
     tenant_id: str
     name: str
     subdomain: str
@@ -151,7 +153,7 @@ class SyncTenantInfo(BaseModel):
     last_sync: dict[str, Any] | None = None
 
 
-class SyncTenantsResponse(BaseModel):
+class SyncTenantsResponse(SalesAgentBaseModel):
     total: int
     tenants: list[SyncTenantInfo]
 
@@ -161,19 +163,19 @@ class SyncTenantsResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class AdapterConfigRequest(BaseModel):
+class AdapterConfigRequest(SalesAgentBaseModel):
     adapter_type: str
     config: dict[str, Any] = Field(default_factory=dict)
 
 
-class AdapterConfigResponse(BaseModel):
+class AdapterConfigResponse(SalesAgentBaseModel):
     adapter_type: str
     created_at: str | None = None
     updated_at: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
 
 
-class AdapterCapabilitiesResponse(BaseModel):
+class AdapterCapabilitiesResponse(SalesAgentBaseModel):
     supports_inventory_sync: bool = False
     supports_inventory_profiles: bool = False
     inventory_entity_label: str = "Items"
@@ -185,13 +187,13 @@ class AdapterCapabilitiesResponse(BaseModel):
     supports_realtime_reporting: bool = False
 
 
-class CurrencyLimitRequest(BaseModel):
+class CurrencyLimitRequest(SalesAgentBaseModel):
     currency_code: str = Field(..., min_length=3, max_length=3)
     min_package_budget: Decimal | None = None
     max_daily_package_spend: Decimal | None = None
 
 
-class CurrencyLimitResponse(BaseModel):
+class CurrencyLimitResponse(SalesAgentBaseModel):
     tenant_id: str
     currency_code: str
     min_package_budget: float | None = None
@@ -200,18 +202,18 @@ class CurrencyLimitResponse(BaseModel):
     updated_at: str | None = None
 
 
-class UpdateCurrencyLimitRequest(BaseModel):
+class UpdateCurrencyLimitRequest(SalesAgentBaseModel):
     min_package_budget: Decimal | None = None
     max_daily_package_spend: Decimal | None = None
 
 
-class PropertyTagRequest(BaseModel):
+class PropertyTagRequest(SalesAgentBaseModel):
     tag_id: str
     name: str
     description: str = ""
 
 
-class PropertyTagResponse(BaseModel):
+class PropertyTagResponse(SalesAgentBaseModel):
     tag_id: str
     tenant_id: str
     name: str
@@ -224,7 +226,7 @@ class PropertyTagResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class AuthorizedPropertyRequest(BaseModel):
+class AuthorizedPropertyRequest(SalesAgentBaseModel):
     property_id: str | None = None  # Auto-generated if not provided
     property_type: str = "website"
     name: str
@@ -233,7 +235,7 @@ class AuthorizedPropertyRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class AuthorizedPropertyResponse(BaseModel):
+class AuthorizedPropertyResponse(SalesAgentBaseModel):
     property_id: str
     tenant_id: str
     property_type: str
@@ -245,7 +247,7 @@ class AuthorizedPropertyResponse(BaseModel):
     created_at: str | None = None
 
 
-class UpdateAuthorizedPropertyRequest(BaseModel):
+class UpdateAuthorizedPropertyRequest(SalesAgentBaseModel):
     name: str | None = None
     publisher_domain: str | None = None
     property_type: str | None = None
@@ -253,11 +255,11 @@ class UpdateAuthorizedPropertyRequest(BaseModel):
     tags: list[str] | None = None
 
 
-class BulkPropertyUploadRequest(BaseModel):
+class BulkPropertyUploadRequest(SalesAgentBaseModel):
     properties: list[AuthorizedPropertyRequest]
 
 
-class InventoryProfileRequest(BaseModel):
+class InventoryProfileRequest(SalesAgentBaseModel):
     name: str
     description: str | None = None
     inventory_config: dict[str, Any] = Field(default_factory=dict)
@@ -266,7 +268,7 @@ class InventoryProfileRequest(BaseModel):
     targeting_template: dict[str, Any] | None = None
 
 
-class UpdateInventoryProfileRequest(BaseModel):
+class UpdateInventoryProfileRequest(SalesAgentBaseModel):
     name: str | None = None
     description: str | None = None
     inventory_config: dict[str, Any] | None = None
@@ -275,7 +277,7 @@ class UpdateInventoryProfileRequest(BaseModel):
     targeting_template: dict[str, Any] | None = None
 
 
-class InventoryProfileResponse(BaseModel):
+class InventoryProfileResponse(SalesAgentBaseModel):
     id: int
     profile_id: str
     tenant_id: str
@@ -294,7 +296,7 @@ class InventoryProfileResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class PricingOptionRequest(BaseModel):
+class PricingOptionRequest(SalesAgentBaseModel):
     pricing_model: str  # cpm, vcpm, cpc, cpcv, cpp, cpv, flat_rate
     rate: Decimal | None = None
     currency: str = "USD"
@@ -304,7 +306,7 @@ class PricingOptionRequest(BaseModel):
     min_spend_per_package: Decimal | None = None
 
 
-class CreateProductRequest(BaseModel):
+class CreateProductRequest(SalesAgentBaseModel):
     product_id: str | None = None  # Auto-generated if not provided
     name: str
     description: str | None = None
@@ -325,7 +327,7 @@ class CreateProductRequest(BaseModel):
     implementation_config: dict[str, Any] | None = None
 
 
-class UpdateProductRequest(BaseModel):
+class UpdateProductRequest(SalesAgentBaseModel):
     name: str | None = None
     description: str | None = None
     delivery_type: str | None = None
@@ -339,7 +341,7 @@ class UpdateProductRequest(BaseModel):
     implementation_config: dict[str, Any] | None = None
 
 
-class ProductResponse(BaseModel):
+class ProductResponse(SalesAgentBaseModel):
     tenant_id: str
     product_id: str
     name: str
@@ -354,23 +356,23 @@ class ProductResponse(BaseModel):
     created_at: str | None = None
 
 
-class CreatePrincipalRequest(BaseModel):
+class CreatePrincipalRequest(SalesAgentBaseModel):
     name: str
     platform_mappings: dict[str, Any] = Field(default_factory=dict)
 
 
-class UpdatePrincipalRequest(BaseModel):
+class UpdatePrincipalRequest(SalesAgentBaseModel):
     name: str | None = None
     platform_mappings: dict[str, Any] | None = None
 
 
-class GAMAdvertiserSearchRequest(BaseModel):
+class GAMAdvertiserSearchRequest(SalesAgentBaseModel):
     search: str | None = None
     limit: int = 500
     fetch_all: bool = False
 
 
-class PrincipalResponse(BaseModel):
+class PrincipalResponse(SalesAgentBaseModel):
     tenant_id: str
     principal_id: str
     name: str
