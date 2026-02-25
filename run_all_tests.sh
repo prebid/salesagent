@@ -50,6 +50,55 @@ run_suite() {  # run_suite <label> <name> <dir> [pytest args...]
     echo ""
 }
 
+run_suite_bg() {  # run_suite_bg <label> <name> <cmd> [args...]
+    # Run a command in background, capture exit code to temp file.
+    # Sets BGPID to the background process PID.
+    # <cmd> is the command to run (e.g., "uv" or "true"/"false" for testing).
+    local label=$1 name=$2 cmd=$3; shift 3
+    (
+        echo -e "${BLUE}[${label}] ${name}...${NC}"
+        local rc=0
+        if [ "$cmd" = "true" ] || [ "$cmd" = "false" ]; then
+            # Simple commands for testing
+            $cmd || rc=1
+        else
+            # Real pytest execution
+            if $cmd "$@" \
+                --json-report --json-report-file="$RESULTS_DIR/${name}.json" --json-report-indent=2 \
+                -q --tb=line > "$RESULTS_DIR/${name}.log" 2>&1; then
+                echo -e "${GREEN}${name} PASSED${NC}"
+            else
+                rc=1
+                echo -e "${RED}${name} FAILED${NC}"
+            fi
+        fi
+        echo "$rc" > "$RESULTS_DIR/.exitcode.${name}"
+    ) &
+    BGPID=$!
+}
+
+collect_results() {  # collect_results <name1> <name2> ...
+    # Read exit code files and build FAILURES string.
+    # Prints per-suite summary.
+    FAILURES=""
+    for name in "$@"; do
+        local exitfile="$RESULTS_DIR/.exitcode.${name}"
+        if [ -f "$exitfile" ]; then
+            local rc
+            rc=$(cat "$exitfile")
+            if [ "$rc" != "0" ]; then
+                FAILURES="$FAILURES $name"
+                echo -e "${RED}${name} FAILED${NC}"
+            else
+                echo -e "${GREEN}${name} PASSED${NC}"
+            fi
+        else
+            FAILURES="$FAILURES $name"
+            echo -e "${RED}${name} MISSING (no exit code file)${NC}"
+        fi
+    done
+}
+
 validate_imports() {
     echo "Validating imports..."
     if ! uv run python -c "
@@ -94,33 +143,114 @@ setup_docker() {
     echo -e "${GREEN}Stack ready (pg:$POSTGRES_PORT srv:$MCP_PORT)${NC}"; echo ""
 }
 
-cleanup() { [ "$MODE" = ci ] && { dc down -v 2>/dev/null || true; }; }
+cleanup() {
+    if [ "$MODE" = "ci" ] && [ -n "${COMPOSE_PROJECT_NAME:-}" ]; then
+        dc down -v 2>/dev/null || true
+    fi
+}
 trap cleanup EXIT
 
-# --- Quick mode ---
+# --- Source-only mode (for testing) ---
+# When sourced with --source-only, define functions but don't execute anything
+if [ "$MODE" = "--source-only" ]; then
+    trap - EXIT  # Remove cleanup trap when just sourcing
+    return 0 2>/dev/null || exit 0
+fi
+
+# --- Quick mode (parallel) ---
 if [ "$MODE" = "quick" ]; then
     validate_imports
-    run_suite "1/3" unit       tests/unit/           -m "not requires_db"
-    run_suite "2/3" integration tests/integration/   -m "not requires_db and not requires_server and not skip_ci"
-    run_suite "3/3" integration_v2 tests/integration_v2/ -m "not requires_db and not requires_server and not skip_ci"
+
+    PIDS=()
+
+    # Run all 3 suites in parallel
+    run_suite_bg "1/3" unit "uv" run pytest tests/unit/ -m "not requires_db"
+    PIDS+=($BGPID)
+
+    run_suite_bg "2/3" integration "uv" run pytest tests/integration/ -m "not requires_db and not requires_server and not skip_ci"
+    PIDS+=($BGPID)
+
+    run_suite_bg "3/3" integration_v2 "uv" run pytest tests/integration_v2/ -m "not requires_db and not requires_server and not skip_ci"
+    PIDS+=($BGPID)
+
+    echo -e "${BLUE}Waiting for 3 parallel suites...${NC}"
+    for pid in "${PIDS[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+
+    # Print per-suite log output
+    echo ""
+    echo -e "${BLUE}--- Suite Logs ---${NC}"
+    for name in unit integration integration_v2; do
+        if [ -f "$RESULTS_DIR/${name}.log" ]; then
+            echo -e "${BLUE}=== ${name} ===${NC}"
+            cat "$RESULTS_DIR/${name}.log"
+            echo ""
+        fi
+    done
+
+    collect_results unit integration integration_v2
 
 # --- CI mode ---
 elif [ "$MODE" = "ci" ]; then
-    setup_docker
-    _saved_db="$DATABASE_URL"; unset DATABASE_URL
+    # Phase 0: validate_imports (fast, no deps) + start Docker in parallel
+    _saved_db="${DATABASE_URL:-}"
+    unset DATABASE_URL
     validate_imports
-    export DATABASE_URL="$_saved_db"
+
+    # Restore DATABASE_URL for setup_docker
+    if [ -n "$_saved_db" ]; then
+        export DATABASE_URL="$_saved_db"
+    fi
+
+    setup_docker
 
     if [ -n "$PYTEST_TARGET" ]; then
+        # Targeted mode: single suite, sequential
         run_suite "1/1" targeted "$PYTEST_TARGET" -m "not requires_server and not skip_ci" $PYTEST_ARGS
     else
-        _saved_db="$DATABASE_URL"; unset DATABASE_URL
-        run_suite "1/5" unit tests/unit/
-        export DATABASE_URL="$_saved_db"
-        run_suite "2/5" integration    tests/integration/    -m "not requires_server and not skip_ci"
-        run_suite "3/5" integration_v2 tests/integration_v2/ -m "not requires_server and not skip_ci"
-        ADCP_SALES_PORT=$MCP_PORT run_suite "4/5" e2e tests/e2e/
-        [ -d tests/ui ] && ADCP_SALES_PORT=$MCP_PORT run_suite "5/5" ui tests/ui/ -m "not requires_server and not slow" || echo -e "${YELLOW}[5/5] UI tests skipped${NC}"
+        # Phase 1+2: Run all 5 suites in parallel
+        PIDS=()
+
+        # Unit tests run with DATABASE_URL unset (env override for the subshell)
+        DATABASE_URL= run_suite_bg "1/5" unit "uv" run pytest tests/unit/
+        PIDS+=($BGPID)
+
+        # Integration suites (need Postgres only)
+        run_suite_bg "2/5" integration "uv" run pytest tests/integration/ -m "not requires_server and not skip_ci"
+        PIDS+=($BGPID)
+
+        run_suite_bg "3/5" integration_v2 "uv" run pytest tests/integration_v2/ -m "not requires_server and not skip_ci"
+        PIDS+=($BGPID)
+
+        # E2E + UI suites (need Postgres + server)
+        ADCP_SALES_PORT=$MCP_PORT run_suite_bg "4/5" e2e "uv" run pytest tests/e2e/
+        PIDS+=($BGPID)
+
+        if [ -d tests/ui ]; then
+            ADCP_SALES_PORT=$MCP_PORT run_suite_bg "5/5" ui "uv" run pytest tests/ui/ -m "not requires_server and not slow"
+            PIDS+=($BGPID)
+        else
+            echo -e "${YELLOW}[5/5] UI tests skipped (no tests/ui directory)${NC}"
+        fi
+
+        echo -e "${BLUE}Waiting for parallel suites...${NC}"
+        for pid in "${PIDS[@]}"; do
+            wait "$pid" 2>/dev/null || true
+        done
+
+        # Print per-suite log output
+        echo ""
+        echo -e "${BLUE}--- Suite Logs ---${NC}"
+        for name in unit integration integration_v2 e2e ui; do
+            if [ -f "$RESULTS_DIR/${name}.log" ]; then
+                echo -e "${BLUE}=== ${name} ===${NC}"
+                cat "$RESULTS_DIR/${name}.log"
+                echo ""
+            fi
+        done
+
+        collect_results unit integration integration_v2 e2e ui
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
