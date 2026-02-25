@@ -75,14 +75,22 @@ def docker_services_e2e(request):
 
         print(f"✓ Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 
-        # Quick health check
-        try:
-            response = requests.get(f"http://localhost:{mcp_port}/.well-known/agent.json", timeout=2)
-            if response.status_code == 200:
-                print("✓ Server is healthy (A2A agent card OK)")
-        except Exception as e:
-            print(f"⚠️  Warning: Could not verify server: {e}")
-            print("   Services may still be starting up")
+        # Wait for server to be ready. /health is proxied to the upstream
+        # (not returned by nginx directly), so this confirms the app is serving.
+        max_wait = 60
+        start_time = time.time()
+        for _ in range(max_wait // 2):
+            try:
+                response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
+                if response.status_code == 200:
+                    elapsed = int(time.time() - start_time)
+                    print(f"✓ Server is healthy ({elapsed}s)")
+                    break
+            except requests.RequestException:
+                pass
+            time.sleep(2)
+        else:
+            pytest.fail(f"Server not ready after {max_wait}s (port {mcp_port})")
 
     else:
         # Check if Docker is available
@@ -182,7 +190,8 @@ def docker_services_e2e(request):
                 except:
                     pass
 
-            # Check server health (unified: MCP + A2A + Admin)
+            # Check server health. /health is proxied to upstream, so it
+            # confirms the FastAPI app is actually serving (not just nginx).
             if not server_ready:
                 try:
                     response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
