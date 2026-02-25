@@ -51,7 +51,11 @@ class TestListTasksTool:
 
         from src.core.main import mcp
 
-        tool = asyncio.new_event_loop().run_until_complete(mcp.get_tool("list_tasks"))
+        loop = asyncio.new_event_loop()
+        try:
+            tool = loop.run_until_complete(mcp.get_tool("list_tasks"))
+        finally:
+            loop.close()
         assert tool is not None, "list_tasks should be registered (unified mode is default)"
         return tool.fn
 
@@ -144,7 +148,11 @@ class TestGetTaskTool:
 
         from src.core.main import mcp
 
-        tool = asyncio.new_event_loop().run_until_complete(mcp.get_tool("get_task"))
+        loop = asyncio.new_event_loop()
+        try:
+            tool = loop.run_until_complete(mcp.get_tool("get_task"))
+        finally:
+            loop.close()
         assert tool is not None, "get_task should be registered (unified mode is default)"
         return tool.fn
 
@@ -233,7 +241,11 @@ class TestCompleteTaskTool:
 
         from src.core.main import mcp
 
-        tool = asyncio.new_event_loop().run_until_complete(mcp.get_tool("complete_task"))
+        loop = asyncio.new_event_loop()
+        try:
+            tool = loop.run_until_complete(mcp.get_tool("complete_task"))
+        finally:
+            loop.close()
         assert tool is not None, "complete_task should be registered (unified mode is default)"
         return tool.fn
 

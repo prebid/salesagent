@@ -753,6 +753,10 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+    if process.stdout:
+        process.stdout.close()
+    if process.stderr:
+        process.stderr.close()
 
     # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
 
