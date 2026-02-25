@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -24,39 +25,68 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     GetMediaBuyDeliveryRequest,
     GetProductsRequest,
-    GetSignalsRequest,
-    ListAuthorizedPropertiesRequest,
     ListCreativesRequest,
     SyncCreativesRequest,
     UpdateMediaBuyRequest,
 )
 
-# Map schema file paths to Pydantic model classes
-# Only include models that exist in our codebase
+# Base URL for downloading AdCP schemas
+_ADCP_SCHEMA_BASE_URL = "https://adcontextprotocol.org"
+
+# Cache directory for downloaded schemas (same as AdCPSchemaValidator)
+_SCHEMA_CACHE_DIR = Path(__file__).parent.parent.parent / "schemas" / "v1"
+
+# Map AdCP schema refs to Pydantic model classes.
+# Schema refs match $ref values from the AdCP schema index.
 #
-# NOTE: CreateMediaBuyRequest is temporarily excluded due to AdCP v2.4 spec evolution.
-# The spec now requires brand_card (AdCP v2.4), but we maintain backward compatibility
+# NOTE: CreateMediaBuyRequest is temporarily excluded due to AdCP spec evolution.
+# The spec now requires brand_card, but we maintain backward compatibility
 # via brand_manifest. Full brand_card implementation will be added in a separate PR.
-# This allows us to continue testing other schemas while we work on the brand_card feature.
 SCHEMA_TO_MODEL_MAP = {
-    "schemas/v1/_schemas_v1_media-buy_get-products-request_json.json": GetProductsRequest,
-    # "schemas/v1/_schemas_v1_media-buy_create-media-buy-request_json.json": CreateMediaBuyRequest,  # Skipped - pending brand_card implementation
-    "schemas/v1/_schemas_v1_media-buy_update-media-buy-request_json.json": UpdateMediaBuyRequest,
-    "schemas/v1/_schemas_v1_media-buy_get-media-buy-delivery-request_json.json": GetMediaBuyDeliveryRequest,
-    "schemas/v1/_schemas_v1_media-buy_sync-creatives-request_json.json": SyncCreativesRequest,
-    "schemas/v1/_schemas_v1_media-buy_list-creatives-request_json.json": ListCreativesRequest,
-    "schemas/v1/_schemas_v1_signals_get-signals-request_json.json": GetSignalsRequest,
-    "schemas/v1/_schemas_v1_media-buy_list-authorized-properties-request_json.json": ListAuthorizedPropertiesRequest,
+    "/schemas/latest/media-buy/get-products-request.json": GetProductsRequest,
+    # "/schemas/latest/media-buy/create-media-buy-request.json": CreateMediaBuyRequest,  # Skipped - pending brand_card implementation
+    "/schemas/latest/media-buy/update-media-buy-request.json": UpdateMediaBuyRequest,
+    "/schemas/latest/media-buy/get-media-buy-delivery-request.json": GetMediaBuyDeliveryRequest,
+    "/schemas/latest/media-buy/sync-creatives-request.json": SyncCreativesRequest,
+    "/schemas/latest/media-buy/list-creatives-request.json": ListCreativesRequest,
+    # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
 
-def load_json_schema(schema_path: str) -> dict[str, Any]:
-    """Load a JSON schema file."""
-    path = Path(schema_path)
-    if not path.exists():
-        pytest.skip(f"Schema file not found: {schema_path}")
-    with open(path) as f:
-        return json.load(f)
+def _schema_ref_to_cache_path(schema_ref: str) -> Path:
+    """Convert a schema ref to a local cache file path.
+
+    Uses the same naming convention as AdCPSchemaValidator._get_cache_path().
+    """
+    safe_name = schema_ref.replace("/", "_").replace(".", "_") + ".json"
+    return _SCHEMA_CACHE_DIR / safe_name
+
+
+def load_json_schema(schema_ref: str) -> dict[str, Any]:
+    """Load a JSON schema, downloading from AdCP website if not cached locally."""
+    cache_path = _schema_ref_to_cache_path(schema_ref)
+
+    # Use cached version if available
+    if cache_path.exists():
+        with open(cache_path) as f:
+            return json.load(f)
+
+    # Download from AdCP website
+    url = f"{_ADCP_SCHEMA_BASE_URL}{schema_ref}"
+    try:
+        response = httpx.get(url, timeout=30.0)
+        response.raise_for_status()
+        schema_data = response.json()
+    except (httpx.HTTPError, json.JSONDecodeError) as e:
+        pytest.skip(f"Could not download schema {schema_ref}: {e}")
+
+    # Cache for future runs
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "w") as f:
+        json.dump(schema_data, f, indent=2)
+        f.write("\n")
+
+    return schema_data
 
 
 def generate_example_value(field_type: str, field_name: str = "", field_spec: dict = None) -> Any:
@@ -302,8 +332,8 @@ def generate_full_valid_request(schema: dict[str, Any]) -> dict[str, Any]:
 class TestPydanticSchemaAlignment:
     """Test that Pydantic models accept all fields from AdCP JSON schemas."""
 
-    @pytest.mark.parametrize("schema_path,model_class", SCHEMA_TO_MODEL_MAP.items())
-    def test_model_accepts_all_schema_fields(self, schema_path: str, model_class: type):
+    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
+    def test_model_accepts_all_schema_fields(self, schema_ref: str, model_class: type):
         """Test that Pydantic model accepts ALL fields defined in JSON schema.
 
         This is the critical test that would have caught:
@@ -311,7 +341,7 @@ class TestPydanticSchemaAlignment:
         - filters missing from GetProductsRequest
         """
         # Load the JSON schema
-        schema = load_json_schema(schema_path)
+        schema = load_json_schema(schema_ref)
 
         # Generate a request with ALL fields from schema
         full_request = generate_full_valid_request(schema)
@@ -330,10 +360,10 @@ class TestPydanticSchemaAlignment:
             # These are acceptable if they don't reject spec fields
             # Only fail if we're rejecting fields that ARE in the spec
             if rejected_fields:
-                error_msg = f"\n❌ {model_class.__name__} REJECTED AdCP spec fields!\n"
+                error_msg = f"\n{model_class.__name__} REJECTED AdCP spec fields!\n"
                 error_msg += f"   Rejected fields: {rejected_fields}\n"
                 error_msg += "\n   This means clients sending spec-compliant requests will get validation errors.\n"
-                error_msg += f"   Schema: {schema_path}\n"
+                error_msg += f"   Schema: {schema_ref}\n"
                 error_msg += f"   Error details: {e}\n"
                 pytest.fail(error_msg)
 
@@ -349,11 +379,11 @@ class TestPydanticSchemaAlignment:
                     f"This is acceptable. Error: {e}"
                 )
 
-    @pytest.mark.parametrize("schema_path,model_class", SCHEMA_TO_MODEL_MAP.items())
-    def test_model_has_all_required_fields(self, schema_path: str, model_class: type):
+    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
+    def test_model_has_all_required_fields(self, schema_ref: str, model_class: type):
         """Test that Pydantic model requires all fields marked as required in JSON schema."""
         # Load the JSON schema
-        schema = load_json_schema(schema_path)
+        schema = load_json_schema(schema_ref)
 
         # Get required fields from schema
         required_in_schema = set(extract_required_fields(schema))
@@ -410,15 +440,15 @@ class TestPydanticSchemaAlignment:
                         f"This is acceptable for backward compatibility."
                     )
 
-    @pytest.mark.parametrize("schema_path,model_class", SCHEMA_TO_MODEL_MAP.items())
-    def test_model_accepts_minimal_request(self, schema_path: str, model_class: type):
+    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
+    def test_model_accepts_minimal_request(self, schema_ref: str, model_class: type):
         """Test that Pydantic model accepts minimal valid request (only required fields).
 
         Note: Models CAN require additional fields beyond the spec for business logic.
         This test skips cases where models are intentionally stricter.
         """
         # Load the JSON schema
-        schema = load_json_schema(schema_path)
+        schema = load_json_schema(schema_ref)
 
         # Generate minimal request
         minimal_request = generate_minimal_valid_request(schema)
@@ -448,7 +478,7 @@ class TestPydanticSchemaAlignment:
             # Other validation errors are real problems
             pytest.fail(
                 f"{model_class.__name__} rejected minimal valid request.\n"
-                f"Schema: {schema_path}\n"
+                f"Schema: {schema_ref}\n"
                 f"Request: {minimal_request}\n"
                 f"Error: {e}"
             )
@@ -520,11 +550,11 @@ class TestSpecificFieldValidation:
 class TestFieldNameConsistency:
     """Test that field names match between Pydantic models and JSON schemas."""
 
-    @pytest.mark.parametrize("schema_path,model_class", SCHEMA_TO_MODEL_MAP.items())
-    def test_field_names_match_schema(self, schema_path: str, model_class: type):
+    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
+    def test_field_names_match_schema(self, schema_ref: str, model_class: type):
         """Test that Pydantic model field names match JSON schema property names."""
         # Load the JSON schema
-        schema = load_json_schema(schema_path)
+        schema = load_json_schema(schema_ref)
 
         # Get all properties from schema
         schema_fields = set(schema.get("properties", {}).keys())
@@ -547,10 +577,10 @@ class TestFieldNameConsistency:
 
             if critical_missing:
                 pytest.fail(
-                    f"\n⚠️  {model_class.__name__} is missing schema fields!\n"
+                    f"\n{model_class.__name__} is missing schema fields!\n"
                     f"   Missing: {critical_missing}\n"
                     f"   These fields are defined in AdCP spec but not in Pydantic model.\n"
-                    f"   Schema: {schema_path}\n"
+                    f"   Schema: {schema_ref}\n"
                 )
 
 

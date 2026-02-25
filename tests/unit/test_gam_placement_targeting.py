@@ -105,19 +105,179 @@ class TestPlacementTargetingSchema:
 class TestPlacementIdsValidation:
     """Test placement_ids validation logic in update_media_buy."""
 
-    def test_validation_code_structure_exists(self):
-        """Verify the placement_ids validation code structure exists in update_media_buy."""
-        import inspect
+    def test_invalid_placement_ids_returns_error(self):
+        """When creative_assignments reference placement_ids not defined on the product,
+        _update_media_buy_impl returns UpdateMediaBuyError with code='invalid_placement_ids'."""
+        from unittest.mock import MagicMock, Mock, patch
 
-        from src.core.tools import media_buy_update
+        from fastmcp.server.context import Context
 
-        # Get the source code
-        source = inspect.getsource(media_buy_update)
+        from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
+        from src.core.testing_hooks import AdCPTestContext
+        from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        # Verify key validation patterns exist
-        assert "invalid_placement_ids" in source, "Should have invalid_placement_ids error code"
-        assert "placement_targeting_not_supported" in source, "Should have placement_targeting_not_supported error code"
-        assert "all_requested_placement_ids" in source, "Should have validation variable"
+        MODULE = "src.core.tools.media_buy_update"
+        DB_MODULE = "src.core.database.database_session"
+
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.headers = {"x-adcp-auth": "test-token"}
+
+        # Build mock DB session
+        mock_session = MagicMock()
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = Mock(return_value=mock_session)
+        mock_cm.__exit__ = Mock(return_value=False)
+
+        with (
+            patch(f"{MODULE}.get_principal_id_from_context", return_value="principal_test"),
+            patch(f"{MODULE}.get_current_tenant", return_value={"tenant_id": "t1", "name": "Test"}),
+            patch(f"{MODULE}.get_principal_object") as m_principal_obj,
+            patch(f"{MODULE}.get_testing_context", return_value=AdCPTestContext(dry_run=False)),
+            patch(f"{MODULE}._verify_principal"),
+            patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
+            patch(f"{MODULE}.get_adapter") as m_adapter,
+            patch(f"{MODULE}.get_audit_logger", return_value=MagicMock()),
+            patch(f"{DB_MODULE}.get_db_session", return_value=mock_cm),
+        ):
+            m_principal_obj.return_value = MagicMock(principal_id="principal_test")
+
+            mock_step = MagicMock(step_id="step_001")
+            mock_ctx_mgr = MagicMock()
+            mock_ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_001")
+            mock_ctx_mgr.create_workflow_step.return_value = mock_step
+            m_ctx_mgr.return_value = mock_ctx_mgr
+
+            mock_adapter = MagicMock()
+            mock_adapter.manual_approval_required = False
+            mock_adapter.manual_approval_operations = []
+            m_adapter.return_value = mock_adapter
+
+            # Mock DB lookups for the creative_assignments path:
+            # 1. media_buy lookup (by media_buy_id)
+            mock_media_buy = MagicMock()
+            mock_media_buy.media_buy_id = "mb_placement"
+            mock_media_buy.status = "approved"
+            mock_media_buy.approved_at = None
+
+            # 2. package lookup
+            mock_package = MagicMock()
+            mock_package.package_config = {"product_id": "prod_1"}
+
+            # 3. product lookup with placements that do NOT include "invalid_placement"
+            mock_product = MagicMock()
+            mock_product.placements = [
+                {"placement_id": "homepage_atf"},
+                {"placement_id": "sidebar"},
+            ]
+
+            # Wire up scalars().first() to return the right objects in sequence
+            mock_scalars = MagicMock()
+            mock_scalars.first.side_effect = [mock_media_buy, mock_package, mock_product]
+            mock_session.scalars.return_value = mock_scalars
+
+            req = UpdateMediaBuyRequest(
+                media_buy_id="mb_placement",
+                packages=[
+                    {
+                        "package_id": "pkg_1",
+                        "creative_assignments": [
+                            {
+                                "creative_id": "c1",
+                                "weight": 100,
+                                "placement_ids": ["homepage_atf", "invalid_placement"],
+                            },
+                        ],
+                    }
+                ],
+            )
+            result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+
+            assert isinstance(result, UpdateMediaBuyError)
+            assert len(result.errors) == 1
+            assert result.errors[0].code == "invalid_placement_ids"
+            assert "invalid_placement" in result.errors[0].message
+
+    def test_placement_targeting_not_supported_returns_error(self):
+        """When product has no placements defined but creative_assignments reference placement_ids,
+        _update_media_buy_impl returns UpdateMediaBuyError with code='placement_targeting_not_supported'."""
+        from unittest.mock import MagicMock, Mock, patch
+
+        from fastmcp.server.context import Context
+
+        from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
+        from src.core.testing_hooks import AdCPTestContext
+        from src.core.tools.media_buy_update import _update_media_buy_impl
+
+        MODULE = "src.core.tools.media_buy_update"
+        DB_MODULE = "src.core.database.database_session"
+
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.headers = {"x-adcp-auth": "test-token"}
+
+        mock_session = MagicMock()
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = Mock(return_value=mock_session)
+        mock_cm.__exit__ = Mock(return_value=False)
+
+        with (
+            patch(f"{MODULE}.get_principal_id_from_context", return_value="principal_test"),
+            patch(f"{MODULE}.get_current_tenant", return_value={"tenant_id": "t1", "name": "Test"}),
+            patch(f"{MODULE}.get_principal_object") as m_principal_obj,
+            patch(f"{MODULE}.get_testing_context", return_value=AdCPTestContext(dry_run=False)),
+            patch(f"{MODULE}._verify_principal"),
+            patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
+            patch(f"{MODULE}.get_adapter") as m_adapter,
+            patch(f"{MODULE}.get_audit_logger", return_value=MagicMock()),
+            patch(f"{DB_MODULE}.get_db_session", return_value=mock_cm),
+        ):
+            m_principal_obj.return_value = MagicMock(principal_id="principal_test")
+
+            mock_step = MagicMock(step_id="step_001")
+            mock_ctx_mgr = MagicMock()
+            mock_ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_001")
+            mock_ctx_mgr.create_workflow_step.return_value = mock_step
+            m_ctx_mgr.return_value = mock_ctx_mgr
+
+            mock_adapter = MagicMock()
+            mock_adapter.manual_approval_required = False
+            mock_adapter.manual_approval_operations = []
+            m_adapter.return_value = mock_adapter
+
+            # Mock media_buy lookup
+            mock_media_buy = MagicMock()
+            mock_media_buy.media_buy_id = "mb_no_placements"
+            mock_media_buy.status = "approved"
+            mock_media_buy.approved_at = None
+
+            # Mock package lookup
+            mock_package = MagicMock()
+            mock_package.package_config = {"product_id": "prod_no_placements"}
+
+            # Mock product with NO placements (empty list)
+            mock_product = MagicMock()
+            mock_product.placements = []
+
+            mock_scalars = MagicMock()
+            mock_scalars.first.side_effect = [mock_media_buy, mock_package, mock_product]
+            mock_session.scalars.return_value = mock_scalars
+
+            req = UpdateMediaBuyRequest(
+                media_buy_id="mb_no_placements",
+                packages=[
+                    {
+                        "package_id": "pkg_1",
+                        "creative_assignments": [
+                            {"creative_id": "c1", "weight": 100, "placement_ids": ["some_placement"]},
+                        ],
+                    }
+                ],
+            )
+            result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+
+            assert isinstance(result, UpdateMediaBuyError)
+            assert len(result.errors) == 1
+            assert result.errors[0].code == "placement_targeting_not_supported"
+            assert "prod_no_placements" in result.errors[0].message
 
     def test_adcp_package_update_accepts_placement_ids_in_creative_assignments(self):
         """Verify AdCPPackageUpdate accepts placement_ids in creative_assignments."""

@@ -46,7 +46,7 @@ dependencies = [
     # Security patches for transitive dependencies
     "filelock>=3.20.3",  # GHSA-qmgc-5h2g-mvrw
     "urllib3>=2.6.3",  # GHSA-38jv-5279-wg99
-    "werkzeug>=3.1.6",  # GHSA-87hc-h4r5-73f7
+    "werkzeug>=3.1.6",  # GHSA-87hc-h4r5-73f7 + GHSA-29vq-49wr-vm6x
     "jaraco-context>=6.1.0",  # GHSA-58pv-8j8x-9vj2
     "cryptography>=46.0.5",  # GHSA-r6ph-v2qm-q3c2
     "pillow>=12.1.1",  # GHSA-cfh3-3jmp-rvhc
@@ -136,15 +136,16 @@ exclude = [
 
 [tool.ruff.lint]
 select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "UP",  # pyupgrade
-    "C90", # mccabe complexity
-    "PLR", # pylint refactor
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "C90",    # mccabe complexity
+    "PLR",    # pylint refactor
+    "TID251", # banned-api — enforce prohibited function usage
 ]
 ignore = [
     # Justified suppressions — each must explain WHY it's ignored, not just WHAT it is.
@@ -166,6 +167,9 @@ ignore = [
     "PLR0913", # 94 too-many-arguments — structural; fix incrementally
     "PLR0915", # 134 too-many-statements — structural; fix incrementally
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"inspect.getsource".msg = "inspect.getsource() is banned in tests. Write behavioral tests that exercise the actual code path instead of asserting strings exist in source code. See salesagent-gqzp."
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E722", "F821"]

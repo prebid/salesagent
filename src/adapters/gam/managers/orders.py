@@ -144,8 +144,9 @@ class GAMOrdersManager:
             statement = statement_builder.ToStatement()
 
             result = order_service.getOrdersByStatement(statement)
-            if result and result.get("results"):
-                return result["results"][0].get("status", "UNKNOWN")
+            if result and "results" in result and result["results"]:
+                order = result["results"][0]
+                return order["status"] if "status" in order else "UNKNOWN"
             else:
                 return "NOT_FOUND"
         except Exception as e:
@@ -181,7 +182,8 @@ class GAMOrdersManager:
 
             result = order_service.performOrderAction(archive_action, statement)
 
-            if result and result.get("numChanges", 0) > 0:
+            num_changes = result["numChanges"] if result and "numChanges" in result else 0
+            if num_changes > 0:
                 logger.info(f"✓ Successfully archived GAM Order {order_id}")
                 return True
             else:
@@ -237,8 +239,7 @@ class GAMOrdersManager:
                 logger.info(f"[APPROVAL] Attempting ApproveAndOverbookOrders for Order {order_id}")
                 result = order_service.performOrderAction(approve_action, statement)
 
-                # Result is a Zeep object (UpdateResult), use getattr instead of .get()
-                num_changes = getattr(result, "numChanges", 0) if result else 0
+                num_changes = result["numChanges"] if result and "numChanges" in result else 0
                 if num_changes > 0:
                     logger.info(f"✓ Successfully approved GAM Order {order_id} ({num_changes} changes)")
                     return True
@@ -298,7 +299,7 @@ class GAMOrdersManager:
             statement = statement_builder.ToStatement()
 
             result = lineitem_service.getLineItemsByStatement(statement)
-            return result.get("results", []) if isinstance(result, dict) else getattr(result, "results", [])
+            return result["results"] if result and "results" in result else []
         except Exception as e:
             logger.error(f"Error getting line items for order {order_id}: {e}")
             return []
@@ -316,12 +317,8 @@ class GAMOrdersManager:
         guaranteed_types = []
 
         for line_item in line_items:
-            # Handle both dict and Zeep object formats
-            line_item_type = (
-                line_item.get("lineItemType")
-                if isinstance(line_item, dict)
-                else getattr(line_item, "lineItemType", None)
-            )
+            # Zeep CompoundValue objects support bracket access but not .get()
+            line_item_type = line_item["lineItemType"] if "lineItemType" in line_item else None
             if line_item_type in GUARANTEED_LINE_ITEM_TYPES:
                 guaranteed_types.append(line_item_type)
 
@@ -1113,7 +1110,7 @@ class GAMOrdersManager:
                 statement = statement_builder.ToStatement()
 
                 result = line_item_service.getLineItemsByStatement(statement)
-                line_items = result.get("results", []) if isinstance(result, dict) else getattr(result, "results", [])
+                line_items = result["results"] if result and "results" in result else []
 
                 if not line_items:
                     logger.error(f"Line item {line_item_id} not found in GAM")
@@ -1233,7 +1230,7 @@ class GAMOrdersManager:
             statement = statement_builder.ToStatement()
 
             result = line_item_service.getLineItemsByStatement(statement)
-            line_items = result.get("results", []) if isinstance(result, dict) else getattr(result, "results", [])
+            line_items = result["results"] if result and "results" in result else []
 
             if not line_items:
                 logger.error(f"Line item {line_item_id} not found in GAM")

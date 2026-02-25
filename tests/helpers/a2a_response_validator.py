@@ -56,7 +56,7 @@ class A2AResponseValidator:
         "get_products": {"products"},
         "list_creatives": {"creatives", "query_summary", "pagination"},  # Per AdCP spec structure
         "list_creative_formats": {"formats"},  # Removed 'total_count' (not in spec)
-        "get_signals": {"signals"},
+        # Note: get_signals removed — signals is dead code (UC-008)
     }
 
     def validate_skill_response(self, response: dict[str, Any], skill_name: str | None = None) -> ValidationResult:
@@ -128,7 +128,7 @@ class A2AResponseValidator:
             "_handle_get_products_skill",
             "_handle_list_creatives_skill",
             "_handle_list_creative_formats_skill",
-            "_handle_get_signals_skill",
+            # Note: _handle_get_signals_skill removed — signals is dead code (UC-008)
         ]
 
         for method_name in expected_methods:

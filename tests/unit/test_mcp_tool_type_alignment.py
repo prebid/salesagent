@@ -129,7 +129,6 @@ class TestMCPToolTypeAlignment:
             CreateMediaBuyRequest,
             GetMediaBuyDeliveryRequest,
             GetProductsRequest,
-            GetSignalsRequest,
             ListCreativesRequest,
             UpdateMediaBuyRequest,
         )
@@ -138,15 +137,14 @@ class TestMCPToolTypeAlignment:
         from src.core.tools.media_buy_delivery import get_media_buy_delivery
         from src.core.tools.media_buy_update import update_media_buy
         from src.core.tools.products import get_products
-        from src.core.tools.signals import get_signals
 
+        # Note: get_signals removed — signals is dead code (UC-008)
         tool_schema_pairs = [
             (get_media_buy_delivery, GetMediaBuyDeliveryRequest, "get_media_buy_delivery"),
             (create_media_buy, CreateMediaBuyRequest, "create_media_buy"),
             (update_media_buy, UpdateMediaBuyRequest, "update_media_buy"),
             (get_products, GetProductsRequest, "get_products"),
             (list_creatives, ListCreativesRequest, "list_creatives"),
-            (get_signals, GetSignalsRequest, "get_signals"),
         ]
 
         issues = []

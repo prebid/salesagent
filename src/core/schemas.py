@@ -1478,15 +1478,32 @@ class GetProductsRequest(LibraryGetProductsRequest):
     # BrandManifest, dict, and URL string inputs. Consumers access the inner value
     # via .root (e.g., brand_manifest.root.name).
 
-    # Internal-only fields (not in AdCP spec)
-    product_selectors: LibraryPromotedProducts | None = Field(
+    # Spec fields not yet in adcp library v3.2.0
+    buying_mode: str | None = Field(
         None,
-        description="Selectors to filter the brand manifest product catalog for product discovery",
-        exclude=True,
+        description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
+    )
+    brand: dict[str, Any] | None = Field(
+        None,
+        description="Brand reference for product discovery context (spec: brand-ref.json)",
+    )
+    catalog: dict[str, Any] | None = Field(
+        None,
+        description="Catalog of items the buyer wants to promote (spec: catalog.json)",
+    )
+    buyer_campaign_ref: str | None = Field(
+        None,
+        description="Buyer's campaign reference label for CRM and ad server correlation",
     )
     pagination: dict[str, Any] | None = Field(
         None,
         description="Cursor-based pagination parameters (max_results, cursor)",
+    )
+
+    # Internal-only fields (not in AdCP spec)
+    product_selectors: LibraryPromotedProducts | None = Field(
+        None,
+        description="Selectors to filter the brand manifest product catalog for product discovery",
         exclude=True,
     )
 
@@ -3307,6 +3324,17 @@ class GetSignalsRequest(LibraryGetSignalsRequest):
     """Extends library GetSignalsRequest with environment-aware validation."""
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Fields in AdCP spec but not yet in adcp library v3.2.0 (spec leads library)
+    signal_ids: list[dict[str, Any]] | None = Field(
+        None,
+        description="Specific signals to look up by data provider and ID. "
+        "Each item is a SignalId object with 'source' discriminator ('catalog' or 'agent').",
+    )
+    pagination: dict[str, Any] | None = Field(
+        None,
+        description="Cursor-based pagination parameters (max_results, cursor).",
+    )
 
     # Backward compatibility properties (deprecated)
     @property

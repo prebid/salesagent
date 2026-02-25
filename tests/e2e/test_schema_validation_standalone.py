@@ -122,6 +122,13 @@ async def test_get_products_request_validation():
         }
         await validator.validate_request("get-products", full_request)
 
+        # Wholesale mode with brand_manifest as URL string
+        url_request = {
+            "buying_mode": "wholesale",
+            "brand_manifest": "https://cdn.example.com/brand-manifest.json",
+        }
+        await validator.validate_request("get-products", url_request)
+
 
 @pytest.mark.asyncio
 async def test_offline_mode():

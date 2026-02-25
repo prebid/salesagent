@@ -133,8 +133,8 @@ class TestFunctionCallRegression:
                 core_sync_creatives_tool,
             )
         except ImportError as e:
-            if "a2a" in str(e):
-                pytest.skip("a2a library not available in CI environment")
+            if e.name and e.name.startswith("a2a"):
+                pytest.skip(f"a2a-sdk library not installed: {e}")
             raise
 
         # These should be callable functions, not FunctionTool objects
@@ -189,8 +189,8 @@ class TestFunctionCallRegression:
             # Note: signals tools removed - should come from dedicated signals agents
             from src.a2a_server.adcp_a2a_server import core_create_media_buy_tool, core_get_products_tool
         except ImportError as e:
-            if "a2a" in str(e):
-                pytest.skip("a2a library not available in CI environment")
+            if e.name and e.name.startswith("a2a"):
+                pytest.skip(f"a2a-sdk library not installed: {e}")
             raise
 
         # These should be async functions
@@ -288,8 +288,8 @@ def test_regression_prevention_summary():
         handler = AdCPRequestHandler()
         assert hasattr(handler, "_handle_get_products_skill"), "REGRESSION: Handler missing skill method"
     except ImportError as e:
-        if "a2a" in str(e):
-            pytest.skip("a2a library not available in CI environment")
+        if e.name and e.name.startswith("a2a"):
+            pytest.skip(f"a2a-sdk library not installed: {e}")
         raise
 
     # 4. File doesn't contain problematic patterns

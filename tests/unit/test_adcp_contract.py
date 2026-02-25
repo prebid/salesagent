@@ -121,8 +121,10 @@ class TestSchemaMatchesLibrary:
         # GetProductsRequest - local extends library with spec fields not yet in library
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
-        # TODO(adcp-lib): Remove allowlist when adcp library adds product_selectors + pagination
-        local_extensions = {"product_selectors", "pagination"}
+        # TODO(adcp-lib): Remove allowlist when adcp library adds these fields
+        # product_selectors — internal-only field
+        # buying_mode, brand, catalog, buyer_campaign_ref, pagination — spec fields not yet in adcp library v3.2.0
+        local_extensions = {"product_selectors", "buying_mode", "pagination", "brand", "catalog", "buyer_campaign_ref"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
         )
@@ -158,10 +160,15 @@ class TestSchemaMatchesLibrary:
         # NOTE: ListAuthorizedPropertiesRequest comparison skipped - type removed from adcp 3.2.0
         # We define it locally in src/core/schemas.py with fields: context, ext, property_tags, publisher_domains
 
-        # GetSignalsRequest - now has ext field, should match
+        # GetSignalsRequest - local extends library with spec fields not yet in library
         lib_fields = set(LibGetSignalsRequest.model_fields.keys())
         local_fields = set(LocalGetSignalsRequest.model_fields.keys())
-        assert lib_fields == local_fields, f"GetSignalsRequest drift: lib={lib_fields}, local={local_fields}"
+        # TODO(adcp-lib): Remove allowlist when adcp library adds signal_ids and pagination
+        # signal_ids, pagination — AdCP spec fields not yet in adcp library v3.2.0
+        local_extensions = {"signal_ids", "pagination"}
+        assert lib_fields == local_fields - local_extensions, (
+            f"GetSignalsRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
         # SyncCreativesRequest - now has ext field, should match
         lib_fields = set(LibSyncCreativesRequest.model_fields.keys())

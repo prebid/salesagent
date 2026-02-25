@@ -6,7 +6,9 @@ for monitoring and reporting workflows.
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any, cast
 
 from fastmcp.exceptions import ToolError
@@ -18,6 +20,35 @@ from sqlalchemy import select
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _MediaBuyData:
+    """Plain data extracted from a MediaBuy ORM row."""
+
+    media_buy_id: str
+    buyer_ref: str | None
+    currency: str | None
+    budget: Decimal | None
+    start_date: date | None
+    end_date: date | None
+    start_time: datetime | None
+    end_time: datetime | None
+    raw_request: dict | None
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass
+class _PackageData:
+    """Plain data extracted from a MediaPackage ORM row."""
+
+    media_buy_id: str
+    package_id: str
+    package_config: dict | None
+    budget: Decimal | None
+    bid_price: Decimal | None
+
 
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
@@ -245,7 +276,7 @@ def _fetch_target_media_buys(
     principal_id: str,
     tenant: dict[str, Any],
     today: date,
-) -> list[MediaBuy]:
+) -> list[_MediaBuyData]:
     """Fetch media buys from database matching the request filters."""
     filter_statuses = _resolve_status_filter(req.status_filter)
 
@@ -257,23 +288,37 @@ def _fetch_target_media_buys(
                 MediaBuy.media_buy_id.in_(req.media_buy_ids),
             )
             buys = session.scalars(stmt).all()
-            return [buy for buy in buys if _compute_status(buy, today) in filter_statuses]
-
-        if req.buyer_refs:
+        elif req.buyer_refs:
             stmt = select(MediaBuy).where(
                 MediaBuy.tenant_id == tenant["tenant_id"],
                 MediaBuy.principal_id == principal_id,
                 MediaBuy.buyer_ref.in_(req.buyer_refs),
             )
             buys = session.scalars(stmt).all()
-            return [buy for buy in buys if _compute_status(buy, today) in filter_statuses]
+        else:
+            stmt = select(MediaBuy).where(
+                MediaBuy.tenant_id == tenant["tenant_id"],
+                MediaBuy.principal_id == principal_id,
+            )
+            buys = session.scalars(stmt).all()
 
-        stmt = select(MediaBuy).where(
-            MediaBuy.tenant_id == tenant["tenant_id"],
-            MediaBuy.principal_id == principal_id,
-        )
-        all_buys = session.scalars(stmt).all()
-        return [buy for buy in all_buys if _compute_status(buy, today) in filter_statuses]
+        return [
+            _MediaBuyData(
+                media_buy_id=buy.media_buy_id,
+                buyer_ref=buy.buyer_ref,
+                currency=buy.currency,
+                budget=buy.budget,
+                start_date=cast(date, buy.start_date),
+                end_date=cast(date, buy.end_date),
+                start_time=buy.start_time,
+                end_time=buy.end_time,
+                raw_request=buy.raw_request,
+                created_at=buy.created_at,
+                updated_at=buy.updated_at,
+            )
+            for buy in buys
+            if _compute_status(buy, today) in filter_statuses
+        ]
 
 
 def _resolve_status_filter(
@@ -293,7 +338,7 @@ def _resolve_status_filter(
     return {status_filter}
 
 
-def _compute_status(buy: MediaBuy, today: date) -> MediaBuyStatus:
+def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
     """Compute the current AdCP status of a media buy based on its dates."""
     start = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
     end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
@@ -305,16 +350,24 @@ def _compute_status(buy: MediaBuy, today: date) -> MediaBuyStatus:
     return MediaBuyStatus.active
 
 
-def _fetch_packages(media_buy_ids: list[str]) -> dict[str, list[MediaPackage]]:
+def _fetch_packages(media_buy_ids: list[str]) -> dict[str, list[_PackageData]]:
     """Fetch all packages for the given media buy IDs, grouped by media_buy_id."""
     if not media_buy_ids:
         return {}
     with get_db_session() as session:
         stmt = select(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids))
         packages = session.scalars(stmt).all()
-        result: dict[str, list[MediaPackage]] = {}
+        result: dict[str, list[_PackageData]] = {}
         for pkg in packages:
-            result.setdefault(pkg.media_buy_id, []).append(pkg)
+            result.setdefault(pkg.media_buy_id, []).append(
+                _PackageData(
+                    media_buy_id=pkg.media_buy_id,
+                    package_id=pkg.package_id,
+                    package_config=pkg.package_config,
+                    budget=pkg.budget,
+                    bid_price=pkg.bid_price,
+                )
+            )
         return result
 
 

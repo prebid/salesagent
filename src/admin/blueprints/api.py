@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from sqlalchemy import func, select, text
 
+from src.adapters.gam.utils.constants import GAM_API_VERSION
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -331,7 +332,7 @@ def test_gam_connection():
         client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent-Setup")
 
         # Get network service
-        network_service = client.GetService("NetworkService", version="v202505")
+        network_service = client.GetService("NetworkService", version=GAM_API_VERSION)
 
         # Get all networks user has access to
         try:
@@ -430,7 +431,7 @@ def test_gam_connection():
                 result["companies"] = companies
 
                 # Get current user info
-                user_service = client.GetService("UserService", version="v202505")
+                user_service = client.GetService("UserService", version=GAM_API_VERSION)
                 current_user = user_service.getCurrentUser()
                 result["current_user"] = {
                     "id": current_user.id,

@@ -331,9 +331,6 @@ if [ "$MODE" == "ci" ]; then
     TARGET_TO_RUN=${PYTEST_TARGET:-tests/integration/}
     # Keep DATABASE_URL set so integration tests can access the PostgreSQL container
     if ! DATABASE_URL="$DATABASE_URL" ADCP_TESTING=true uv run pytest "$TARGET_TO_RUN" -q --tb=line -m "not requires_server and not skip_ci" \
-          --ignore=tests/integration/test_a2a_error_responses.py \
-          --ignore=tests/integration/test_a2a_skill_invocation.py \
-          --ignore=tests/integration/test_get_products_format_id_filter.py \
           $PYTEST_ARGS; then
         echo -e "${RED}❌ Integration tests failed!${NC}"
         exit 1
