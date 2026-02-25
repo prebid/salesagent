@@ -88,6 +88,7 @@ def delivery_webhook_server():
     }
 
     server.shutdown()
+    server.server_close()
     DeliveryWebhookReceiver.received_webhooks.clear()
 
 
