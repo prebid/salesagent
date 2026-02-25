@@ -220,6 +220,15 @@ def list_authorized_properties(
     """
     from src.core.transport_helpers import resolve_identity_from_context
 
+    # Inject payload-level context into the request object so _impl can echo it back
+    # (follows the same pattern as list_creative_formats and all other MCP wrappers)
+    if context is not None:
+        if req is None:
+            req = ListAuthorizedPropertiesRequest(context=context)
+        else:
+            req = cast(ListAuthorizedPropertiesRequest, req)
+            req.context = context
+
     identity = resolve_identity_from_context(ctx, require_valid_token=False)
     response = _list_authorized_properties_impl(cast(ListAuthorizedPropertiesRequest | None, req), identity)
 
