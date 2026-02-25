@@ -112,6 +112,25 @@ class TestCreateTenant:
         )
         assert response.status_code == 422
 
+    def test_invalid_ad_server_returns_422(self, client, api_key_header):
+        """ad_server must be a known adapter type — arbitrary strings rejected at schema level."""
+        response = client.post(
+            "/api/v1/platform/tenants",
+            json={"name": "Acme", "subdomain": "acme", "ad_server": "totally_invalid_garbage"},
+            headers=api_key_header,
+        )
+        assert response.status_code == 422
+
+    def test_valid_ad_servers_accepted(self, client, api_key_header):
+        """Each valid adapter type string passes schema validation (service failure is OK)."""
+        for ad_server in ("google_ad_manager", "mock", "kevel", "triton", "broadstreet"):
+            response = client.post(
+                "/api/v1/platform/tenants",
+                json={"name": "Acme", "subdomain": "acme", "ad_server": ad_server},
+                headers=api_key_header,
+            )
+            assert response.status_code != 422, f"Valid ad_server '{ad_server}' was rejected with 422"
+
 
 class TestGetTenant:
     @patch("src.routes.admin_multi_tenant._tenant_svc")

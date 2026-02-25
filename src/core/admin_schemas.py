@@ -8,7 +8,7 @@ Organized by API surface:
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -22,7 +22,7 @@ from src.core.schemas import SalesAgentBaseModel
 class CreateTenantRequest(SalesAgentBaseModel):
     name: str
     subdomain: str
-    ad_server: str  # google_ad_manager, mock, kevel, triton, broadstreet
+    ad_server: Literal["google_ad_manager", "mock", "kevel", "triton", "broadstreet"]
     creator_email: str | None = None
     authorized_emails: list[str] = []
     authorized_domains: list[str] = []
