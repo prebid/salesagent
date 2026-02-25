@@ -10,10 +10,11 @@ import time
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from adcp import BrandManifest, FormatId, ProductFilters
+from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import PushNotificationConfig
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -736,7 +737,7 @@ async def _get_products_impl(
 
 
 async def get_products(
-    brand_manifest: BrandManifest | None = None,
+    brand: BrandReference | None = None,
     brief: str = "",
     adcp_version: str = "1.0.0",
     filters: ProductFilters | None = None,
@@ -746,10 +747,10 @@ async def get_products(
 ):
     """Get available products matching the brief.
 
-    MCP tool wrapper aligned with adcp v1.2.1 spec.
+    MCP tool wrapper aligned with adcp v3.6.0 spec.
 
     Args:
-        brand_manifest: Brand information following AdCP BrandManifest schema
+        brand: Brand reference per adcp 3.6.0. Example: BrandReference(domain="acme.com")
         brief: Brief description of the advertising campaign or requirements (optional)
         adcp_version: Client's AdCP version (default: 1.0.0). V3+ clients get clean responses.
         filters: Structured filters for product discovery (optional)
@@ -764,7 +765,7 @@ async def get_products(
     try:
         req = create_get_products_request(
             brief=brief,
-            brand_manifest=brand_manifest,
+            brand=brand,
             filters=filters,
             context=context,
         )
@@ -795,7 +796,7 @@ async def get_products(
 
 async def get_products_raw(
     brief: str,
-    brand_manifest: dict[str, Any] | None = None,
+    brand: dict[str, Any] | BrandReference | None = None,
     min_exposures: int | None = None,
     filters: dict | None = None,
     strategy_id: str | None = None,
@@ -811,8 +812,8 @@ async def get_products_raw(
 
     Args:
         brief: Brief description of the advertising campaign or requirements
-        brand_manifest: Brand information as dict following AdCP BrandManifest schema.
-                       Example: {"name": "Acme", "url": "https://acme.com"}
+        brand: Brand reference per adcp 3.6.0 (BrandReference or dict with domain).
+               Dict is accepted since A2A passes JSON-deserialized dicts.
         min_exposures: Minimum impressions needed for measurement validity (optional)
         filters: Structured filters for product discovery (optional)
         strategy_id: Optional strategy ID for linking operations (optional)
@@ -832,7 +833,7 @@ async def get_products_raw(
     # Create request object - adcp library validates schema
     req = create_get_products_request(
         brief=brief or "",
-        brand_manifest=brand_manifest,
+        brand=brand,
         filters=filters,
         context=context,
     )

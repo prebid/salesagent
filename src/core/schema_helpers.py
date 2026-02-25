@@ -13,7 +13,7 @@ Philosophy:
 from typing import Any
 
 from adcp import GetProductsRequest, GetProductsResponse, Product
-from adcp.types import BrandManifest
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.product_filters import ProductFilters
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
@@ -55,10 +55,27 @@ def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> R
     return None  # Fallback for unexpected types
 
 
+def to_brand_reference(brand: dict[str, Any] | BrandReference | None) -> BrandReference | None:
+    """Convert dict brand to BrandReference for adcp 3.6.0 compatibility.
+
+    Args:
+        brand: Brand as dict or BrandReference or None
+
+    Returns:
+        BrandReference or None
+    """
+    if brand is None:
+        return None
+    if isinstance(brand, BrandReference):
+        return brand
+    if isinstance(brand, dict):
+        return BrandReference(**brand)
+    return None  # Fallback for unexpected types
+
+
 def create_get_products_request(
     brief: str = "",
-    brand_manifest: dict[str, Any] | BrandManifest | None = None,
-    brand: dict[str, Any] | None = None,
+    brand: dict[str, Any] | BrandReference | None = None,
     filters: dict[str, Any] | ProductFilters | None = None,
     context: dict[str, Any] | ContextObject | None = None,
 ) -> GetProductsRequest:
@@ -66,10 +83,8 @@ def create_get_products_request(
 
     Args:
         brief: Natural language description of campaign requirements
-        brand_manifest: (Legacy) Brand information - converted to brand.domain for backward compat.
-                       Example: {"name": "Acme", "url": "https://acme.com"}
-        brand: Brand reference with domain field per adcp 3.6.0.
-               Example: {"domain": "acme.com"}
+        brand: Brand reference per adcp 3.6.0 (BrandReference or dict with domain field).
+               Example: BrandReference(domain="acme.com") or {"domain": "acme.com"}
         filters: Structured filters for product discovery (dict or ProductFilters)
         context: Application-level context (dict or ContextObject)
 
@@ -78,40 +93,10 @@ def create_get_products_request(
 
     Examples:
         >>> req = create_get_products_request(
-        ...     brand={"domain": "acme.com"},
+        ...     brand=BrandReference(domain="acme.com"),
         ...     brief="Display ads"
         ... )
     """
-    # Handle brand / brand_manifest -> brand (adcp 3.6.0: brand replaced brand_manifest)
-    # brand takes precedence; brand_manifest is a legacy backward-compat input
-    brand_dict: dict[str, Any] | None = brand
-    if brand_dict is None and brand_manifest is not None:
-        # Convert legacy brand_manifest to brand dict
-        if isinstance(brand_manifest, BrandManifest):
-            # Extract domain from url field if available
-            url = getattr(brand_manifest, "url", None)
-            if url:
-                from urllib.parse import urlparse
-
-                domain = urlparse(str(url)).netloc or str(url)
-                brand_dict = {"domain": domain}
-            else:
-                name = getattr(brand_manifest, "name", None)
-                if name:
-                    brand_dict = {"domain": name}
-        elif isinstance(brand_manifest, dict):
-            # Extract domain from url or name fields
-            if "domain" in brand_manifest:
-                brand_dict = {"domain": brand_manifest["domain"]}
-            elif "url" in brand_manifest:
-                from urllib.parse import urlparse
-
-                url_str = brand_manifest["url"]
-                domain = urlparse(url_str).netloc or url_str
-                brand_dict = {"domain": domain}
-            elif "name" in brand_manifest:
-                brand_dict = {"domain": brand_manifest["name"]}
-
     # Handle filters - can be dict, ProductFilters, or None
     filters_obj: ProductFilters | None = None
     if filters is not None:
@@ -121,7 +106,7 @@ def create_get_products_request(
             filters_obj = ProductFilters(**filters)
 
     return GetProductsRequest(
-        brand=brand_dict,
+        brand=to_brand_reference(brand),
         brief=brief or None,
         filters=filters_obj,
         context=to_context_object(context),
@@ -162,11 +147,13 @@ def create_get_products_response(
 
 # Re-export commonly used generated types for convenience
 __all__ = [
+    "to_brand_reference",
     "to_context_object",
     "to_reporting_webhook",
     "create_get_products_request",
     "create_get_products_response",
     # Re-export types for type hints
+    "BrandReference",
     "GetProductsRequest",
     "GetProductsResponse",
     "Product",

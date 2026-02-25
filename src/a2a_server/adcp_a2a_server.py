@@ -1491,29 +1491,19 @@ class AdCPRequestHandler(RequestHandler):
                 # No auth token - resolve identity from headers for tenant detection
                 identity = self._resolve_identity_unauthenticated()
 
-            # Normalize brand_manifest: URL string → dict (adcp v1.2.1)
-            brand_manifest = parameters.get("brand_manifest")
-            if isinstance(brand_manifest, str):
-                brand_manifest = {"url": brand_manifest}
-            elif brand_manifest is not None and not isinstance(brand_manifest, dict):
-                raise ServerError(
-                    InvalidParamsError(
-                        message=f"brand_manifest must be a dict or URL string, got {type(brand_manifest)}"
-                    )
-                )
-
             brief = parameters.get("brief", "")
+            brand = parameters.get("brand")
 
-            # Require either brand_manifest OR brief
-            if not brief and not brand_manifest:
+            # Require either brief OR brand
+            if not brief and not brand:
                 raise ServerError(
-                    InvalidParamsError(message="Either 'brand_manifest' or 'brief' parameter is required")
+                    InvalidParamsError(message="Either 'brief' or 'brand' parameter is required")
                 )
 
             # Call core function with identity — _raw handles full schema validation
             response = await core_get_products_tool(
                 brief=brief,
-                brand_manifest=brand_manifest,
+                brand=brand,
                 filters=parameters.get("filters"),
                 min_exposures=parameters.get("min_exposures"),
                 strategy_id=parameters.get("strategy_id"),
@@ -1575,7 +1565,7 @@ class AdCPRequestHandler(RequestHandler):
             params.setdefault("buyer_ref", f"A2A-{tool_context.principal_id}")
 
             # Validate required AdCP parameters (packages is optional in model but required by spec)
-            required_params = ["brand_manifest", "packages", "start_time", "end_time"]
+            required_params = ["brand", "packages", "start_time", "end_time"]
             missing_params = [p for p in required_params if p not in params]
             if missing_params:
                 return {
@@ -1608,9 +1598,8 @@ class AdCPRequestHandler(RequestHandler):
                 }
 
             # Call core function with validated parameters and identity
-            # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
             response = await core_create_media_buy_tool(
-                brand=params.get("brand") or params.get("brand_manifest"),  # Support both
+                brand=params.get("brand"),
                 po_number=req.po_number,
                 buyer_ref=req.buyer_ref,
                 packages=params["packages"],  # Required — validated above
@@ -2137,15 +2126,9 @@ class AdCPRequestHandler(RequestHandler):
             )
             identity = self._resolve_identity(tool_context)
 
-            # Extract brand name from query and create brand_manifest
-            # This provides backward compatibility for natural language queries
-            brand_name = self._extract_brand_name_from_query(query)
-            brand_manifest = {"name": brand_name} if brand_name else None
-
             # Call core function directly using the underlying function
             response = await core_get_products_tool(
                 brief=query,
-                brand_manifest=brand_manifest,
                 identity=identity,
             )
 
