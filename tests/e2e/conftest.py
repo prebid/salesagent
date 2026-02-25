@@ -24,8 +24,9 @@ def find_free_port(start_port: int = 10000, end_port: int = 60000) -> int:
     """Find an available port in the given range."""
     for port in range(start_port, end_port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
             try:
-                s.bind(("127.0.0.1", port))
+                s.bind(("0.0.0.0", port))  # Match Docker's binding interface
                 return port
             except OSError:
                 continue
