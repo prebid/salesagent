@@ -14,6 +14,24 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+def pytest_configure(config):
+    """Prevent fastmcp from overriding pytest's warning filters.
+
+    FastMCP's __init__.py calls ``warnings.simplefilter("default",
+    DeprecationWarning)`` at import time, which prepends a catch-all
+    ``default`` filter to the front of the warnings filter list.  This
+    causes the ``ignore`` entries in pytest.ini's ``filterwarnings`` to
+    be shadowed, so third-party deprecation warnings (a2a HTTP_413,
+    starlette WSGI) leak through despite being explicitly suppressed.
+
+    Setting FASTMCP_DEPRECATION_WARNINGS=false before fastmcp is
+    imported disables this behaviour and lets pytest.ini filters work
+    as intended.
+    """
+    os.environ.setdefault("FASTMCP_DEPRECATION_WARNINGS", "false")
+
+
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
