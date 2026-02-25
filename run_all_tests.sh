@@ -60,11 +60,8 @@ elif [ "$MODE" = "ci" ]; then
     validate_imports
     if [ -n "$_saved_db" ]; then export DATABASE_URL="$_saved_db"; fi
 
-    # Start Docker stack
-    source <(./scripts/test-stack.sh up 2>&1 | tee /dev/stderr | grep "^export " || true)
-    if [ ! -f .test-stack.env ]; then
-        echo -e "${RED}Docker stack failed to start${NC}"; exit 1
-    fi
+    # Start Docker stack (writes .test-stack.env)
+    ./scripts/test-stack.sh up
     source .test-stack.env
     trap './scripts/test-stack.sh down 2>/dev/null || true' EXIT
 
