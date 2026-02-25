@@ -212,15 +212,32 @@ class TestSyncHistory:
 
 class TestInitApiKey:
     @patch("src.routes.admin_multi_tenant._tenant_svc")
-    def test_initializes_key(self, mock_svc, client):
+    def test_initializes_key(self, mock_svc, client, monkeypatch):
+        monkeypatch.setenv("BOOTSTRAP_SECRET", "test-bootstrap-secret")
         mock_svc.initialize_api_key.return_value = {
             "message": "Tenant management API key initialized",
             "api_key": "sk-new-key",
             "warning": "Save this key securely.",
         }
-        response = client.post("/api/v1/platform/init-api-key")
+        response = client.post(
+            "/api/v1/platform/init-api-key",
+            headers={"x-bootstrap-secret": "test-bootstrap-secret"},
+        )
         assert response.status_code == 201
         assert "api_key" in response.json()
+
+    def test_rejects_without_bootstrap_secret_env(self, client):
+        """Endpoint fails closed when BOOTSTRAP_SECRET is not set."""
+        response = client.post("/api/v1/platform/init-api-key")
+        assert response.status_code == 401
+
+    def test_rejects_wrong_bootstrap_secret(self, client, monkeypatch):
+        monkeypatch.setenv("BOOTSTRAP_SECRET", "correct-secret")
+        response = client.post(
+            "/api/v1/platform/init-api-key",
+            headers={"x-bootstrap-secret": "wrong-secret"},
+        )
+        assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------

@@ -29,10 +29,14 @@ def mock_tenant():
 
 
 @pytest.fixture
-def client():
+def client(mock_tenant):
+    """TestClient with auth dependency overridden."""
     from src.app import app
+    from src.core.admin_auth import require_tenant_admin
 
+    app.dependency_overrides[require_tenant_admin] = lambda: mock_tenant
     yield TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides.pop(require_tenant_admin, None)
 
 
 @pytest.fixture
@@ -47,8 +51,7 @@ def auth_header():
 
 class TestListProducts:
     @patch("src.routes.admin_tenant._product_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_products(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_products(self, mock_svc, client, auth_header):
         mock_svc.list_products.return_value = {
             "products": [
                 {"product_id": "prod_1", "name": "Homepage Banner", "delivery_type": "guaranteed"},
@@ -62,8 +65,7 @@ class TestListProducts:
 
 class TestCreateProduct:
     @patch("src.routes.admin_tenant._product_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_creates_product(self, mock_auth, mock_svc, client, auth_header):
+    def test_creates_product(self, mock_svc, client, auth_header):
         mock_svc.create_product.return_value = {
             "product_id": "prod_abc",
             "tenant_id": TENANT_ID,
@@ -94,8 +96,7 @@ class TestCreateProduct:
 
 class TestGetProduct:
     @patch("src.routes.admin_tenant._product_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_product(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_product(self, mock_svc, client, auth_header):
         mock_svc.get_product.return_value = {
             "product_id": "prod_1",
             "name": "Banner",
@@ -106,8 +107,7 @@ class TestGetProduct:
         assert response.json()["product_id"] == "prod_1"
 
     @patch("src.routes.admin_tenant._product_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_not_found_returns_404(self, mock_auth, mock_svc, client, auth_header):
+    def test_not_found_returns_404(self, mock_svc, client, auth_header):
         from src.core.exceptions import AdCPNotFoundError
 
         mock_svc.get_product.side_effect = AdCPNotFoundError("Not found")
@@ -117,8 +117,7 @@ class TestGetProduct:
 
 class TestUpdateProduct:
     @patch("src.routes.admin_tenant._product_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_updates_product(self, mock_auth, mock_svc, client, auth_header):
+    def test_updates_product(self, mock_svc, client, auth_header):
         mock_svc.update_product.return_value = {"product_id": "prod_1", "name": "Updated"}
         response = client.put(
             f"/api/v1/admin/{TENANT_ID}/products/prod_1",
@@ -130,8 +129,7 @@ class TestUpdateProduct:
 
 class TestDeleteProduct:
     @patch("src.routes.admin_tenant._product_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_deletes_product(self, mock_auth, mock_svc, client, auth_header):
+    def test_deletes_product(self, mock_svc, client, auth_header):
         mock_svc.delete_product.return_value = {"message": "Deleted", "product_id": "prod_1"}
         response = client.delete(f"/api/v1/admin/{TENANT_ID}/products/prod_1", headers=auth_header)
         assert response.status_code == 200
@@ -139,8 +137,7 @@ class TestDeleteProduct:
 
 class TestCreativeFormats:
     @patch("src.routes.admin_tenant._product_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_formats(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_formats(self, mock_svc, client, auth_header):
         mock_svc.list_creative_formats.return_value = {
             "formats": [{"id": "display_300x250", "name": "Medium Rectangle"}],
             "count": 1,
@@ -157,8 +154,7 @@ class TestCreativeFormats:
 
 class TestListPrincipals:
     @patch("src.routes.admin_tenant._principal_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_principals(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_principals(self, mock_svc, client, auth_header):
         mock_svc.list_principals.return_value = {
             "principals": [
                 {"principal_id": "prin_1", "name": "Acme Corp", "media_buy_count": 3},
@@ -172,8 +168,7 @@ class TestListPrincipals:
 
 class TestCreatePrincipal:
     @patch("src.routes.admin_tenant._principal_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_creates_principal_returns_token(self, mock_auth, mock_svc, client, auth_header):
+    def test_creates_principal_returns_token(self, mock_svc, client, auth_header):
         mock_svc.create_principal.return_value = {
             "principal_id": "prin_abc",
             "name": "Brand X",
@@ -192,8 +187,7 @@ class TestCreatePrincipal:
 
 class TestGetPrincipal:
     @patch("src.routes.admin_tenant._principal_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_principal(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_principal(self, mock_svc, client, auth_header):
         mock_svc.get_principal.return_value = {
             "principal_id": "prin_1",
             "name": "Acme",
@@ -205,8 +199,7 @@ class TestGetPrincipal:
 
 class TestUpdatePrincipal:
     @patch("src.routes.admin_tenant._principal_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_updates_principal(self, mock_auth, mock_svc, client, auth_header):
+    def test_updates_principal(self, mock_svc, client, auth_header):
         mock_svc.update_principal.return_value = {"principal_id": "prin_1", "name": "Updated"}
         response = client.put(
             f"/api/v1/admin/{TENANT_ID}/principals/prin_1",
@@ -218,8 +211,7 @@ class TestUpdatePrincipal:
 
 class TestDeletePrincipal:
     @patch("src.routes.admin_tenant._principal_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_deletes_principal(self, mock_auth, mock_svc, client, auth_header):
+    def test_deletes_principal(self, mock_svc, client, auth_header):
         mock_svc.delete_principal.return_value = {"message": "Deleted", "principal_id": "prin_1"}
         response = client.delete(f"/api/v1/admin/{TENANT_ID}/principals/prin_1", headers=auth_header)
         assert response.status_code == 200
@@ -227,8 +219,7 @@ class TestDeletePrincipal:
 
 class TestRegenerateToken:
     @patch("src.routes.admin_tenant._principal_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_regenerates_token(self, mock_auth, mock_svc, client, auth_header):
+    def test_regenerates_token(self, mock_svc, client, auth_header):
         mock_svc.regenerate_token.return_value = {
             "principal_id": "prin_1",
             "access_token": "tok_new_secret",
@@ -244,8 +235,7 @@ class TestRegenerateToken:
 
 class TestSearchGAMAdvertisers:
     @patch("src.routes.admin_tenant._principal_svc")
-    @patch("src.routes.admin_tenant.require_tenant_admin")
-    def test_returns_advertisers(self, mock_auth, mock_svc, client, auth_header):
+    def test_returns_advertisers(self, mock_svc, client, auth_header):
         mock_svc.search_gam_advertisers.return_value = {
             "advertisers": [{"id": "123", "name": "Acme"}],
             "count": 1,
