@@ -578,6 +578,8 @@ def list_creatives_raw(
 
         identity = resolve_identity_from_context(ctx)
 
+    # FIXME(salesagent-v0kb): boundary-completeness — filters, fields, include_performance,
+    # include_assignments, include_sub_assets not passed to _impl
     return _list_creatives_impl(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,

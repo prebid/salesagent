@@ -643,6 +643,7 @@ def _get_target_media_buys(
 
 
 def _get_pricing_options(pricing_option_ids: list[Any | None]) -> dict[str, PricingOption]:
+    # FIXME(salesagent-mq3n): pricing_option_ids are strings from JSON but PricingOption.id is Integer PK
     with get_db_session() as session:
         statement = select(PricingOption).where(PricingOption.id.in_(pricing_option_ids))
         pricing_options = session.scalars(statement).all()

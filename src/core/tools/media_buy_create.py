@@ -3632,6 +3632,7 @@ async def create_media_buy(
             _ctx_id = http_headers.get("x-context-id")
     except Exception:
         pass
+    # FIXME(salesagent-v0kb): boundary-completeness — push_notification_config not passed to _impl
     result = await _create_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
     return ToolResult(content=str(result), structured_content=result)
 
@@ -3713,6 +3714,7 @@ async def create_media_buy_raw(
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
 
+    # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return await _create_media_buy_impl(
         req=req,
         push_notification_config=push_notification_config,

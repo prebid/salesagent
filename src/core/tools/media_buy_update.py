@@ -1534,4 +1534,5 @@ def update_media_buy_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return _update_media_buy_impl(req=req, identity=identity)
