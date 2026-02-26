@@ -885,6 +885,136 @@ class TestDeliveryImplStatusFilter:
         assert len(result) == 1
         assert result[0][0] == "mb_active"
 
+    def test_status_filter_rootmodel_wrapping_list(self):
+        """RootModel[list[MediaBuyStatus]] must be unwrapped — isinstance(list) is False.
+
+        Bug salesagent-joxr: If the library types wrap status_filter in a
+        RootModel, isinstance(req.status_filter, list) returns False and the
+        filter silently falls through to the single-value branch, producing a
+        garbage string from str(RootModel) that matches no internal status.
+        Result: all buys are filtered out.
+        """
+        from adcp.types import MediaBuyStatus
+        from pydantic import RootModel
+
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        # Build a RootModel wrapper (the way adcp could type status_filter)
+        StatusFilter = RootModel[list[MediaBuyStatus]]
+        status_filter_value = StatusFilter([MediaBuyStatus.active, MediaBuyStatus.completed])
+
+        ref_date = date(2025, 6, 15)
+
+        buy_active = _make_mock_media_buy(
+            media_buy_id="mb_active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        buy_completed = _make_mock_media_buy(
+            media_buy_id="mb_done",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 5, 1),
+        )
+
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = None
+        mock_req.buyer_refs = None
+        mock_req.status_filter = status_filter_value
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [buy_active, buy_completed]
+
+        tenant = {"tenant_id": "test_tenant"}
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
+            mock_db.return_value.__enter__.return_value = mock_session
+            result = _get_target_media_buys(mock_req, "test_principal", tenant, ref_date)
+
+        # Both buys should be returned (active + completed both requested)
+        assert len(result) == 2
+        returned_ids = {buy_id for buy_id, _ in result}
+        assert returned_ids == {"mb_active", "mb_done"}
+
+    def test_status_filter_plain_list_of_enums(self):
+        """Plain list[MediaBuyStatus] must work for status filtering."""
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        ref_date = date(2025, 6, 15)
+
+        buy_active = _make_mock_media_buy(
+            media_buy_id="mb_active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        buy_completed = _make_mock_media_buy(
+            media_buy_id="mb_done",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 5, 1),
+        )
+        buy_ready = _make_mock_media_buy(
+            media_buy_id="mb_ready",
+            start_date=date(2025, 7, 1),
+            end_date=date(2025, 12, 31),
+        )
+
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = None
+        mock_req.buyer_refs = None
+        mock_req.status_filter = [MediaBuyStatus.active, MediaBuyStatus.completed]
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [buy_active, buy_completed, buy_ready]
+
+        tenant = {"tenant_id": "test_tenant"}
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
+            mock_db.return_value.__enter__.return_value = mock_session
+            result = _get_target_media_buys(mock_req, "test_principal", tenant, ref_date)
+
+        # Only active + completed returned, not the ready one
+        assert len(result) == 2
+        returned_ids = {buy_id for buy_id, _ in result}
+        assert returned_ids == {"mb_active", "mb_done"}
+
+    def test_status_filter_single_enum_value(self):
+        """Single MediaBuyStatus enum value must filter correctly."""
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        ref_date = date(2025, 6, 15)
+
+        buy_active = _make_mock_media_buy(
+            media_buy_id="mb_active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        buy_completed = _make_mock_media_buy(
+            media_buy_id="mb_done",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 5, 1),
+        )
+
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = None
+        mock_req.buyer_refs = None
+        mock_req.status_filter = MediaBuyStatus.completed
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [buy_active, buy_completed]
+
+        tenant = {"tenant_id": "test_tenant"}
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
+            mock_db.return_value.__enter__.return_value = mock_session
+            result = _get_target_media_buys(mock_req, "test_principal", tenant, ref_date)
+
+        # Only completed buy returned
+        assert len(result) == 1
+        assert result[0][0] == "mb_done"
+
 
 class TestDeliveryImplCustomDateRange:
     """T-UC-004-daterange: custom date range in response."""

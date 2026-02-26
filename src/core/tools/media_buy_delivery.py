@@ -16,7 +16,7 @@ from typing import Any, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
+from pydantic import RootModel, ValidationError
 from rich.console import Console
 from sqlalchemy import select
 
@@ -558,6 +558,48 @@ def _require_admin(context: Context) -> None:
         raise PermissionError("This operation requires admin privileges")
 
 
+def _resolve_delivery_status_filter(
+    status_filter: Any,
+    valid_internal_statuses: set[str],
+    to_internal: Any,
+) -> list[str]:
+    """Resolve status_filter to a list of internal status strings.
+
+    Handles all possible status_filter representations:
+    - None -> default to ["active"]
+    - RootModel[list[MediaBuyStatus]] -> unwrap .root, convert each
+    - list[MediaBuyStatus] -> convert each
+    - Single MediaBuyStatus enum -> convert
+    - Special "all" value (via .value attribute) -> all valid statuses
+    """
+    if not status_filter:
+        return ["active"]
+
+    # Unwrap RootModel (e.g., RootModel[list[MediaBuyStatus]])
+    if isinstance(status_filter, RootModel):
+        status_filter = status_filter.root
+
+    # Handle list of statuses (plain list or unwrapped RootModel)
+    if isinstance(status_filter, list):
+        result = []
+        for s in status_filter:
+            internal = to_internal(s) if isinstance(s, MediaBuyStatus) else str(s)
+            if internal in valid_internal_statuses:
+                result.append(internal)
+        return result
+
+    # Handle single enum value
+    if isinstance(status_filter, MediaBuyStatus):
+        return [to_internal(status_filter)]
+
+    # Handle special values (e.g., "all" via mock or raw string)
+    status_str = status_filter.value if hasattr(status_filter, "value") else str(status_filter)
+    if status_str == "all":
+        return list(valid_internal_statuses)
+
+    return [status_str] if status_str in valid_internal_statuses else ["active"]
+
+
 # -- Helper functions --
 def _get_target_media_buys(
     req: GetMediaBuyDeliveryRequest,
@@ -566,38 +608,19 @@ def _get_target_media_buys(
     reference_date: date,
 ) -> list[tuple[str, MediaBuy]]:
     with get_db_session() as session:
-        # Use status_filter to determine which buys to fetch
+        # Resolve status_filter to a set of internal status strings.
         # Internal statuses: ready, active, paused, completed, failed
         # AdCP MediaBuyStatus: pending_activation, active, paused, completed
         # Map: pending_activation -> ready (internal)
-        valid_internal_statuses = ["active", "ready", "paused", "completed", "failed"]
-        filter_statuses: list[str] = []
+        valid_internal_statuses = {"active", "ready", "paused", "completed", "failed"}
 
-        def normalize_status(status: str) -> str:
-            """Convert AdCP status to internal status."""
-            # AdCP 'pending_activation' maps to internal 'ready'
-            if status == "pending_activation":
+        def _to_internal(status: MediaBuyStatus) -> str:
+            """Convert AdCP MediaBuyStatus enum to internal status string."""
+            if status == MediaBuyStatus.pending_activation:
                 return "ready"
-            return status
+            return status.value
 
-        if req.status_filter:
-            # Handle both enum values and strings (enum has .value attribute)
-            if isinstance(req.status_filter, list):
-                for s in req.status_filter:
-                    status_str = s.value if hasattr(s, "value") else str(s)
-                    normalized = normalize_status(status_str)
-                    if normalized in valid_internal_statuses:
-                        filter_statuses.append(normalized)
-            else:
-                status_str = req.status_filter.value if hasattr(req.status_filter, "value") else str(req.status_filter)
-                if status_str == "all":
-                    filter_statuses = valid_internal_statuses
-                else:
-                    normalized = normalize_status(status_str)
-                    filter_statuses = [normalized]
-        else:
-            # Default to active
-            filter_statuses = ["active"]
+        filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses, _to_internal)
 
         fetched_buys: Sequence[MediaBuy] = []
         target_media_buys: list[tuple[str, MediaBuy]] = []  # list of tuples(media_buy_id, MediaBuy)
