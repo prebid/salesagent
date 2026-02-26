@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -638,7 +638,6 @@ class TestCreateMediaBuyValidation:
         Source: UC-002
         """
 
-    @pytest.mark.skip(reason="STUB: UC-002-V13 -- pricing_model not offered by product")
     def test_pricing_model_not_offered_rejected(self):
         """UC-002-V13: pricing_model not in product's options rejected.
 
@@ -648,8 +647,22 @@ class TestCreateMediaBuyValidation:
         Type: unit
         Source: UC-002, BR-RULE-006
         """
+        from src.core.tools.media_buy_create import _validate_pricing_model_selection
 
-    @pytest.mark.skip(reason="STUB: UC-002-V14 -- bid_price below floor rejected")
+        product = _mock_product("prod_1")  # only has cpm_usd_fixed
+        # Package requesting a pricing_option_id not offered by product
+        package = MagicMock()
+        package.pricing_option_id = "cpc_usd_fixed"  # product only has cpm
+        package.bid_price = None
+        package.pricing_model = None
+
+        with pytest.raises(AdCPValidationError, match="(?i)does not offer"):
+            _validate_pricing_model_selection(
+                package=package,
+                product=product,
+                campaign_currency="USD",
+            )
+
     def test_bid_price_below_floor_rejected(self):
         """UC-002-V14: auction bid_price below floor_price rejected.
 
@@ -659,8 +672,36 @@ class TestCreateMediaBuyValidation:
         Type: unit
         Source: UC-002, BR-RULE-006
         """
+        from src.core.tools.media_buy_create import _validate_pricing_model_selection
 
-    @pytest.mark.skip(reason="STUB: UC-002-V15 -- budget below minimum_spend_per_package rejected (BR-RULE-011)")
+        pricing_option = MagicMock(
+            spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "price_guidance", "root"],
+        )
+        pricing_option.pricing_model = "cpm"
+        pricing_option.currency = "USD"
+        pricing_option.is_fixed = False  # auction
+        pricing_option.rate = None
+        pricing_option.price_guidance = {"floor": "5.00"}
+        pricing_option.min_spend_per_package = None
+        pricing_option.root = pricing_option
+
+        product = MagicMock()
+        product.product_id = "prod_1"
+        product.name = "Test Product"
+        product.pricing_options = [pricing_option]
+
+        package = MagicMock()
+        package.pricing_option_id = "cpm_usd_auction"
+        package.bid_price = 2.0  # below floor of 5.0
+        package.pricing_model = None
+
+        with pytest.raises(AdCPValidationError, match="(?i)below.*floor"):
+            _validate_pricing_model_selection(
+                package=package,
+                product=product,
+                campaign_currency="USD",
+            )
+
     def test_budget_below_minimum_spend_rejected(self):
         """UC-002-V15: package budget below min_spend_per_package rejected.
 
@@ -670,6 +711,36 @@ class TestCreateMediaBuyValidation:
         Type: unit
         Source: UC-002, BR-RULE-011
         """
+        from src.core.tools.media_buy_create import _validate_pricing_model_selection
+
+        pricing_option = MagicMock(
+            spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "floor_price", "root"],
+        )
+        pricing_option.pricing_model = "cpm"
+        pricing_option.currency = "USD"
+        pricing_option.is_fixed = True
+        pricing_option.rate = Decimal("5.00")
+        pricing_option.min_spend_per_package = Decimal("1000")
+        pricing_option.floor_price = None
+        pricing_option.root = pricing_option
+
+        product = MagicMock()
+        product.product_id = "prod_1"
+        product.name = "Test Product"
+        product.pricing_options = [pricing_option]
+
+        package = MagicMock()
+        package.pricing_option_id = "cpm_usd_fixed"
+        package.bid_price = None
+        package.pricing_model = None
+        package.budget = 500.0  # below min_spend of 1000
+
+        with pytest.raises(AdCPValidationError, match="(?i)minimum|min.spend"):
+            _validate_pricing_model_selection(
+                package=package,
+                product=product,
+                campaign_currency="USD",
+            )
 
 
 class TestCreateMediaBuyCreativeValidation:
@@ -870,8 +941,8 @@ class TestCreateMediaBuyImplAuth:
             assert isinstance(response, CreateMediaBuyError)
             assert status == "failed"
 
-    @pytest.mark.skip(reason="STUB: UC-002-A03 -- missing tenant context raises auth error")
-    def test_missing_tenant_raises_auth_error(self):
+    @pytest.mark.asyncio
+    async def test_missing_tenant_raises_auth_error(self):
         """UC-002-A03: identity without tenant raises AdCPAuthenticationError.
 
         Spec: UNSPECIFIED (implementation-defined authentication boundary)
@@ -879,9 +950,21 @@ class TestCreateMediaBuyImplAuth:
         Type: unit
         Source: UC-002 ext-a
         """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    @pytest.mark.skip(reason="STUB: UC-002-A04 -- setup incomplete raises validation error")
-    def test_setup_incomplete_raises_error(self):
+        req = _make_request()
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_tenant",
+            tenant=None,
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=False, test_session_id=None),
+        )
+        with pytest.raises(AdCPAuthenticationError, match="(?i)tenant"):
+            await _create_media_buy_impl(req, identity=identity)
+
+    @pytest.mark.asyncio
+    async def test_setup_incomplete_raises_error(self):
         """UC-002-A04: incomplete tenant setup raises validation error.
 
         Spec: UNSPECIFIED (implementation-defined tenant setup validation)
@@ -889,6 +972,30 @@ class TestCreateMediaBuyImplAuth:
         Type: unit
         Source: UC-002 main flow
         """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.services.setup_checklist_service import SetupIncompleteError
+
+        req = _make_request()
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=False, test_session_id=None),
+        )
+
+        with (
+            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
+            patch(
+                "src.core.tools.media_buy_create.validate_setup_complete",
+                side_effect=SetupIncompleteError(
+                    "Complete required setup tasks",
+                    missing_tasks=[{"name": "Add Products", "description": "Add at least one product"}],
+                ),
+            ),
+        ):
+            with pytest.raises(AdCPValidationError, match="(?i)setup.*incomplete|required.*tasks"):
+                await _create_media_buy_impl(req, identity=identity)
 
 
 class TestCreateMediaBuyManualApproval:
@@ -1373,7 +1480,6 @@ class TestUpdateMediaBuyIdentification:
                 packages=[],
             )
 
-    @pytest.mark.skip(reason="STUB: UC-003-ID03 -- media_buy_id not found returns error")
     def test_media_buy_id_not_found(self):
         """UC-003-ID03: nonexistent media_buy_id returns media_buy_not_found.
 
@@ -1383,8 +1489,30 @@ class TestUpdateMediaBuyIdentification:
         Type: unit
         Source: UC-003 ext-b
         """
+        from src.core.tools.media_buy_update import _update_media_buy_impl
 
-    @pytest.mark.skip(reason="STUB: UC-003-ID04 -- buyer_ref not found returns error")
+        req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent", packages=[])
+        identity = _make_identity()
+
+        with (
+            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
+            patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
+            patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+        ):
+            ctx_mgr = MagicMock()
+            ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
+            ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
+            mock_ctx_mgr.return_value = ctx_mgr
+
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=None)
+            session.scalars.return_value.first.return_value = None
+            mock_db.return_value = session
+
+            with pytest.raises(ValueError, match="(?i)not found"):
+                _update_media_buy_impl(req=req, identity=identity)
+
     def test_buyer_ref_not_found(self):
         """UC-003-ID04: nonexistent buyer_ref returns media_buy_not_found.
 
@@ -1394,12 +1522,34 @@ class TestUpdateMediaBuyIdentification:
         Type: unit
         Source: UC-003 ext-b
         """
+        from src.core.tools.media_buy_update import _update_media_buy_impl
+
+        req = UpdateMediaBuyRequest(buyer_ref="nonexistent_ref", packages=[])
+        identity = _make_identity()
+
+        with (
+            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
+            patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
+            patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+        ):
+            ctx_mgr = MagicMock()
+            ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
+            ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
+            mock_ctx_mgr.return_value = ctx_mgr
+
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=None)
+            session.scalars.return_value.first.return_value = None
+            mock_db.return_value = session
+
+            with pytest.raises(ValueError, match="(?i)not found"):
+                _update_media_buy_impl(req=req, identity=identity)
 
 
 class TestUpdateMediaBuyOwnership:
     """UC-003 ext-c: ownership verification."""
 
-    @pytest.mark.skip(reason="STUB: UC-003-OW01 -- principal does not own media buy (P0 security)")
     def test_ownership_mismatch_rejected(self):
         """UC-003-OW01: non-owner gets permission error.
 
@@ -1408,6 +1558,37 @@ class TestUpdateMediaBuyOwnership:
         Type: unit
         Source: UC-003 ext-c
         """
+        from src.core.tools.media_buy_update import _update_media_buy_impl
+
+        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
+        identity = _make_identity(principal_id="different_principal")
+
+        with (
+            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
+            patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
+            patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+            patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
+        ):
+            ctx_mgr = MagicMock()
+            ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
+            ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
+            mock_ctx_mgr.return_value = ctx_mgr
+
+            mock_audit.return_value = MagicMock()
+
+            mock_buy = MagicMock()
+            mock_buy.media_buy_id = "mb_1"
+            mock_buy.principal_id = "original_owner"
+            mock_buy.tenant_id = "test_tenant"
+
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=None)
+            session.scalars.return_value.first.return_value = mock_buy
+            mock_db.return_value = session
+
+            with pytest.raises(PermissionError, match="(?i)does not own"):
+                _update_media_buy_impl(req=req, identity=identity)
 
 
 class TestUpdateMediaBuyManualApproval:
@@ -1517,7 +1698,6 @@ class TestDeliveryImplSingleBuy:
             assert len(resp.media_buy_deliveries) == 1
             assert resp.aggregated_totals.impressions >= 0
 
-    @pytest.mark.skip(reason="STUB: UC-004-D02 -- fetch by buyer_refs")
     def test_fetch_by_buyer_refs(self):
         """UC-004-D02: buyer_refs resolution returns delivery data.
 
@@ -1527,6 +1707,47 @@ class TestDeliveryImplSingleBuy:
         Type: unit
         Source: UC-004 main flow, BR-RULE-030
         """
+        buy = _mock_media_buy(media_buy_id="mb_1", buyer_ref="test-buyer-ref")
+        buy.raw_request = {
+            "packages": [{"package_id": "pkg_1", "product_id": "prod_1"}],
+            "buyer_ref": "test-buyer-ref",
+        }
+
+        adapter_response = AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id="mb_1",
+            reporting_period=ReportingPeriod(start=datetime.now(UTC) - timedelta(days=5), end=datetime.now(UTC)),
+            totals=DeliveryTotals(impressions=500, spend=25.0),
+            by_package=[AdapterPackageDelivery(package_id="pkg_1", impressions=500, spend=25.0)],
+            currency="USD",
+        )
+
+        identity = _make_identity()
+        adapter_mock = MagicMock()
+        adapter_mock.get_media_buy_delivery.return_value = adapter_response
+
+        _PATCH = "src.core.tools.media_buy_delivery"
+        with (
+            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
+            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(f"{_PATCH}.get_db_session") as mock_db,
+        ):
+            mock_principal.return_value = MagicMock(principal_id="test_principal")
+            mock_inner_session = MagicMock()
+            mock_inner_session.scalars.return_value.all.return_value = []
+            mock_db.return_value.__enter__.return_value = mock_inner_session
+
+            req = GetMediaBuyDeliveryRequest(
+                buyer_refs=["test-buyer-ref"],
+                start_date="2025-01-01",
+                end_date="2025-06-30",
+            )
+            resp = _get_media_buy_delivery_impl(req, identity)
+
+            assert isinstance(resp, GetMediaBuyDeliveryResponse)
+            assert len(resp.media_buy_deliveries) == 1
+            assert resp.currency == "USD"
 
     @pytest.mark.skip(reason="STUB: UC-004-D03 -- multiple media buys aggregate totals")
     def test_multiple_buys_aggregate_totals(self):
@@ -1539,7 +1760,6 @@ class TestDeliveryImplSingleBuy:
         Source: UC-004 main flow
         """
 
-    @pytest.mark.skip(reason="STUB: UC-004-D04 -- neither ids nor refs fetches all for principal")
     def test_no_ids_fetches_all(self):
         """UC-004-D04: no identifiers = all buys for principal.
 
@@ -1549,6 +1769,60 @@ class TestDeliveryImplSingleBuy:
         Type: unit
         Source: UC-004 main flow, BR-RULE-030
         """
+        buy1 = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
+        buy1.raw_request = {
+            "packages": [{"package_id": "pkg_1", "product_id": "prod_1"}],
+            "buyer_ref": "buyer1",
+        }
+        buy2 = _mock_media_buy(media_buy_id="mb_2", start_date=date.today() - timedelta(days=3))
+        buy2.raw_request = {
+            "packages": [{"package_id": "pkg_2", "product_id": "prod_2"}],
+            "buyer_ref": "buyer2",
+        }
+
+        adapter_resp1 = AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id="mb_1",
+            reporting_period=ReportingPeriod(start=datetime.now(UTC) - timedelta(days=5), end=datetime.now(UTC)),
+            totals=DeliveryTotals(impressions=1000, spend=50.0),
+            by_package=[AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=50.0)],
+            currency="USD",
+        )
+        adapter_resp2 = AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id="mb_2",
+            reporting_period=ReportingPeriod(start=datetime.now(UTC) - timedelta(days=3), end=datetime.now(UTC)),
+            totals=DeliveryTotals(impressions=500, spend=25.0),
+            by_package=[AdapterPackageDelivery(package_id="pkg_2", impressions=500, spend=25.0)],
+            currency="USD",
+        )
+
+        identity = _make_identity()
+        adapter_mock = MagicMock()
+        adapter_mock.get_media_buy_delivery.side_effect = [adapter_resp1, adapter_resp2]
+
+        _PATCH = "src.core.tools.media_buy_delivery"
+        with (
+            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch(
+                f"{_PATCH}._get_target_media_buys",
+                return_value=[("mb_1", buy1), ("mb_2", buy2)],
+            ),
+            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(f"{_PATCH}.get_db_session") as mock_db,
+        ):
+            mock_principal.return_value = MagicMock(principal_id="test_principal")
+            mock_inner_session = MagicMock()
+            mock_inner_session.scalars.return_value.all.return_value = []
+            mock_db.return_value.__enter__.return_value = mock_inner_session
+
+            req = GetMediaBuyDeliveryRequest(
+                start_date="2025-01-01",
+                end_date="2025-06-30",
+            )
+            resp = _get_media_buy_delivery_impl(req, identity)
+
+            assert isinstance(resp, GetMediaBuyDeliveryResponse)
+            assert len(resp.media_buy_deliveries) == 2
 
     @pytest.mark.skip(reason="STUB: UC-004-D05 -- media_buy_ids takes precedence over buyer_refs")
     def test_media_buy_ids_wins_over_buyer_refs(self):
@@ -1596,7 +1870,6 @@ class TestDeliveryImplStatusFilter:
         Source: UC-004 alt-filtered
         """
 
-    @pytest.mark.skip(reason="STUB: UC-004-SF04 -- no buys match filter returns empty array (not error)")
     def test_no_match_returns_empty(self):
         """UC-004-SF04: empty result is success, not error.
 
@@ -1606,6 +1879,28 @@ class TestDeliveryImplStatusFilter:
         Type: unit
         Source: UC-004 alt-filtered
         """
+        identity = _make_identity()
+        adapter_mock = MagicMock()
+
+        _PATCH = "src.core.tools.media_buy_delivery"
+        with (
+            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            # No buys match the status filter — returns empty, not error
+            patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
+            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+        ):
+            mock_principal.return_value = MagicMock(principal_id="test_principal")
+
+            # No specific IDs — query all, but status filter yields none
+            req = GetMediaBuyDeliveryRequest(
+                start_date="2025-01-01",
+                end_date="2025-06-30",
+            )
+            resp = _get_media_buy_delivery_impl(req, identity)
+
+            assert isinstance(resp, GetMediaBuyDeliveryResponse)
+            assert resp.media_buy_deliveries == []
 
 
 class TestDeliveryImplDateRange:
@@ -1686,7 +1981,6 @@ class TestDeliveryImplErrors:
             assert resp.errors is not None
             assert any(e.code == "principal_not_found" for e in resp.errors)
 
-    @pytest.mark.skip(reason="STUB: UC-004-E03 -- adapter error returns adapter_error code")
     def test_adapter_error_returns_error_code(self):
         """UC-004-E03: adapter failure returns adapter_error.
 
@@ -1696,8 +1990,40 @@ class TestDeliveryImplErrors:
         Type: unit
         Source: UC-004 ext-f
         """
+        buy = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
+        buy.raw_request = {
+            "packages": [{"package_id": "pkg_1", "product_id": "prod_1"}],
+            "buyer_ref": "test",
+        }
 
-    @pytest.mark.skip(reason="STUB: UC-004-E04 -- ownership mismatch returns media_buy_not_found (security)")
+        identity = _make_identity()
+        adapter_mock = MagicMock()
+        adapter_mock.get_media_buy_delivery.side_effect = RuntimeError("Network timeout")
+
+        _PATCH = "src.core.tools.media_buy_delivery"
+        with (
+            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
+            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(f"{_PATCH}.get_db_session") as mock_db,
+        ):
+            mock_principal.return_value = MagicMock(principal_id="test_principal")
+            mock_inner_session = MagicMock()
+            mock_inner_session.scalars.return_value.all.return_value = []
+            mock_db.return_value.__enter__.return_value = mock_inner_session
+
+            req = GetMediaBuyDeliveryRequest(
+                media_buy_ids=["mb_1"],
+                start_date="2025-01-01",
+                end_date="2025-06-30",
+            )
+            resp = _get_media_buy_delivery_impl(req, identity)
+
+            assert isinstance(resp, GetMediaBuyDeliveryResponse)
+            assert resp.errors is not None
+            assert any(e.code == "adapter_error" for e in resp.errors)
+
     def test_ownership_mismatch_returns_not_found(self):
         """UC-004-E04: non-owner sees not_found, not ownership_mismatch.
 
@@ -1706,6 +2032,27 @@ class TestDeliveryImplErrors:
         Type: unit
         Source: UC-004 ext-d
         """
+        identity = _make_identity(principal_id="different_principal")
+        adapter_mock = MagicMock()
+
+        _PATCH = "src.core.tools.media_buy_delivery"
+        with (
+            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
+            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+        ):
+            mock_principal.return_value = MagicMock(principal_id="different_principal")
+
+            req = GetMediaBuyDeliveryRequest(
+                media_buy_ids=["mb_owned_by_other"],
+                start_date="2025-01-01",
+                end_date="2025-06-30",
+            )
+            resp = _get_media_buy_delivery_impl(req, identity)
+
+            assert isinstance(resp, GetMediaBuyDeliveryResponse)
+            assert len(resp.media_buy_deliveries) == 0
 
 
 class TestDeliveryImplPricingLookup:
