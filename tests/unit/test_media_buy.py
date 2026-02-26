@@ -1495,23 +1495,28 @@ class TestUpdateMediaBuyMainFlow:
             adapter.update_media_buy.return_value = adapter_result
             mock_adapter.return_value = adapter
 
-            # buyer_ref resolution session (module-level get_db_session)
+            # Both module-level and locally-imported get_db_session need to work.
+            # buyer_ref resolution uses the module-level one (first call).
+            # Currency validation re-imports get_db_session locally.
             session = MagicMock()
             session.__enter__ = MagicMock(return_value=session)
             session.__exit__ = MagicMock(return_value=None)
             session.scalars.return_value.first.return_value = mock_buy
             mock_db.return_value = session
 
-            # Inner session for currency validation (re-imported get_db_session)
+            # Inner session for buyer_ref resolution + currency validation
+            # (both use locally-imported get_db_session)
             inner_session = MagicMock()
             inner_session.__enter__ = MagicMock(return_value=inner_session)
             inner_session.__exit__ = MagicMock(return_value=None)
-            inner_session.scalars.return_value.first.side_effect = [mock_buy, cl]
+            # 3 .first() calls: buyer_ref lookup, media_buy in currency check, currency_limit
+            inner_session.scalars.return_value.first.side_effect = [mock_buy, mock_buy, cl]
             mock_db_inner.return_value = inner_session
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
+        # media_buy_id resolved from buyer_ref
         assert result.media_buy_id == "mb_resolved"
 
     def test_partial_update_omitted_fields_unchanged(self):
@@ -1834,6 +1839,7 @@ class TestUpdateMediaBuyTiming:
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+            patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
@@ -1854,9 +1860,13 @@ class TestUpdateMediaBuyTiming:
             session = MagicMock()
             session.__enter__ = MagicMock(return_value=session)
             session.__exit__ = MagicMock(return_value=None)
-            # First scalars call returns media buy, second returns currency limit
-            session.scalars.return_value.first.side_effect = [mock_buy, cl]
             mock_db.return_value = session
+
+            inner_session = MagicMock()
+            inner_session.__enter__ = MagicMock(return_value=inner_session)
+            inner_session.__exit__ = MagicMock(return_value=None)
+            inner_session.scalars.return_value.first.side_effect = [mock_buy, cl]
+            mock_db_inner.return_value = inner_session
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1980,6 +1990,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+            patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
@@ -2000,14 +2011,13 @@ class TestUpdateMediaBuyCreativeIds:
             session = MagicMock()
             session.__enter__ = MagicMock(return_value=session)
             session.__exit__ = MagicMock(return_value=None)
+            mock_db.return_value = session
 
-            # Mock the scalars chain for multiple queries:
-            # 1. Find media buy by ID
-            # 2. Find creatives by IDs
-            # 3. Find package
-            # 4. Find product
-            # 5. Find existing assignments
-            scalars_calls = []
+            # Inner session for creative_ids path (re-imported get_db_session)
+            inner_session = MagicMock()
+            inner_session.__enter__ = MagicMock(return_value=inner_session)
+            inner_session.__exit__ = MagicMock(return_value=None)
+
             mb_result = MagicMock()
             mb_result.first.return_value = mock_buy
             creative_result = MagicMock()
@@ -2019,8 +2029,8 @@ class TestUpdateMediaBuyCreativeIds:
             assign_result = MagicMock()
             assign_result.all.return_value = [mock_existing_assignment]
 
-            session.scalars.side_effect = [mb_result, creative_result, pkg_result, prod_result, assign_result]
-            mock_db.return_value = session
+            inner_session.scalars.side_effect = [mb_result, creative_result, pkg_result, prod_result, assign_result]
+            mock_db_inner.return_value = inner_session
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2028,7 +2038,7 @@ class TestUpdateMediaBuyCreativeIds:
         assert result.affected_packages is not None
         assert len(result.affected_packages) >= 1
         # The old assignment should have been deleted (replacement semantics)
-        session.delete.assert_called_with(mock_existing_assignment)
+        inner_session.delete.assert_called_with(mock_existing_assignment)
 
     def test_creative_ids_not_found(self):
         """UC-003-CI02: nonexistent creative_ids returns creatives_not_found.
@@ -2056,6 +2066,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+            patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
@@ -2076,15 +2087,19 @@ class TestUpdateMediaBuyCreativeIds:
             session = MagicMock()
             session.__enter__ = MagicMock(return_value=session)
             session.__exit__ = MagicMock(return_value=None)
+            mock_db.return_value = session
 
-            # Media buy found, but creative not found
+            inner_session = MagicMock()
+            inner_session.__enter__ = MagicMock(return_value=inner_session)
+            inner_session.__exit__ = MagicMock(return_value=None)
+
             mb_result = MagicMock()
             mb_result.first.return_value = mock_buy
             creative_result = MagicMock()
             creative_result.all.return_value = []  # no creatives found
 
-            session.scalars.side_effect = [mb_result, creative_result]
-            mock_db.return_value = session
+            inner_session.scalars.side_effect = [mb_result, creative_result]
+            mock_db_inner.return_value = inner_session
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2132,6 +2147,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+            patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
@@ -2152,6 +2168,11 @@ class TestUpdateMediaBuyCreativeIds:
             session = MagicMock()
             session.__enter__ = MagicMock(return_value=session)
             session.__exit__ = MagicMock(return_value=None)
+            mock_db.return_value = session
+
+            inner_session = MagicMock()
+            inner_session.__enter__ = MagicMock(return_value=inner_session)
+            inner_session.__exit__ = MagicMock(return_value=None)
 
             mb_result = MagicMock()
             mb_result.first.return_value = mock_buy
@@ -2162,8 +2183,8 @@ class TestUpdateMediaBuyCreativeIds:
             prod_result = MagicMock()
             prod_result.first.return_value = mock_product
 
-            session.scalars.side_effect = [mb_result, creative_result, pkg_result, prod_result]
-            mock_db.return_value = session
+            inner_session.scalars.side_effect = [mb_result, creative_result, pkg_result, prod_result]
+            mock_db_inner.return_value = inner_session
 
             with pytest.raises(AdCPValidationError, match="(?i)cannot.*assign|error|invalid"):
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2209,6 +2230,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+            patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
@@ -2229,6 +2251,11 @@ class TestUpdateMediaBuyCreativeIds:
             session = MagicMock()
             session.__enter__ = MagicMock(return_value=session)
             session.__exit__ = MagicMock(return_value=None)
+            mock_db.return_value = session
+
+            inner_session = MagicMock()
+            inner_session.__enter__ = MagicMock(return_value=inner_session)
+            inner_session.__exit__ = MagicMock(return_value=None)
 
             mb_result = MagicMock()
             mb_result.first.return_value = mock_buy
@@ -2239,8 +2266,8 @@ class TestUpdateMediaBuyCreativeIds:
             prod_result = MagicMock()
             prod_result.first.return_value = mock_product
 
-            session.scalars.side_effect = [mb_result, creative_result, pkg_result, prod_result]
-            mock_db.return_value = session
+            inner_session.scalars.side_effect = [mb_result, creative_result, pkg_result, prod_result]
+            mock_db_inner.return_value = inner_session
 
             with pytest.raises(AdCPValidationError, match="(?i)format|not supported"):
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2302,6 +2329,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+            patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
@@ -2322,6 +2350,11 @@ class TestUpdateMediaBuyCreativeIds:
             session = MagicMock()
             session.__enter__ = MagicMock(return_value=session)
             session.__exit__ = MagicMock(return_value=None)
+            mock_db.return_value = session
+
+            inner_session = MagicMock()
+            inner_session.__enter__ = MagicMock(return_value=inner_session)
+            inner_session.__exit__ = MagicMock(return_value=None)
 
             mb_result = MagicMock()
             mb_result.first.return_value = mock_buy
@@ -2334,20 +2367,20 @@ class TestUpdateMediaBuyCreativeIds:
             assign_result = MagicMock()
             assign_result.all.return_value = [mock_assign_c1, mock_assign_c2, mock_assign_c3]
 
-            session.scalars.side_effect = [mb_result, creative_result, pkg_result, prod_result, assign_result]
-            mock_db.return_value = session
+            inner_session.scalars.side_effect = [mb_result, creative_result, pkg_result, prod_result, assign_result]
+            mock_db_inner.return_value = inner_session
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
         # c1 and c3 should be deleted (removed)
-        deleted_ids = {call.args[0].creative_id for call in session.delete.call_args_list}
+        deleted_ids = {call.args[0].creative_id for call in inner_session.delete.call_args_list}
         assert "c1" in deleted_ids
         assert "c3" in deleted_ids
         # c2 should NOT be deleted (unchanged)
         assert "c2" not in deleted_ids
         # c4 should be added (new)
-        assert session.add.called
+        assert inner_session.add.called
 
 
 class TestUpdateMediaBuyCreativeAssignments:
@@ -2704,6 +2737,16 @@ class TestUpdateMediaBuyAdapterFailure:
         )
         identity = _make_identity()
 
+        mock_buy = _mock_media_buy(media_buy_id="mb_1")
+        mock_buy.principal_id = "test_principal"
+        mock_buy.currency = "USD"
+        mock_buy.start_time = datetime(2026, 3, 1, tzinfo=UTC)
+        mock_buy.end_time = datetime(2026, 3, 31, tzinfo=UTC)
+
+        cl = MagicMock()
+        cl.max_daily_package_spend = Decimal("5000")
+        cl.min_package_budget = None
+
         adapter_error = UpdateMediaBuyError(
             errors=[Error(code="adapter_failure", message="GAM API timeout")],
         )
@@ -2712,6 +2755,7 @@ class TestUpdateMediaBuyAdapterFailure:
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.get_db_session") as mock_db,
+            patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
@@ -2735,11 +2779,18 @@ class TestUpdateMediaBuyAdapterFailure:
             session.__exit__ = MagicMock(return_value=None)
             mock_db.return_value = session
 
+            inner_session = MagicMock()
+            inner_session.__enter__ = MagicMock(return_value=inner_session)
+            inner_session.__exit__ = MagicMock(return_value=None)
+            inner_session.scalars.return_value.first.side_effect = [mock_buy, cl]
+            mock_db_inner.return_value = inner_session
+
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
         # No DB commit should have happened
         session.commit.assert_not_called()
+        inner_session.commit.assert_not_called()
         # Workflow step should be marked as failed
         ctx_mgr.update_workflow_step.assert_called()
         call_kwargs = ctx_mgr.update_workflow_step.call_args
