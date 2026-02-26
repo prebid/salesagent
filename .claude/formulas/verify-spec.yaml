@@ -1,0 +1,393 @@
+name: verify-spec
+description: >
+  Verify every test expectation in entity surface suites against the
+  authoritative adcp spec (adcontextprotocol/adcp) and library
+  (adcontextprotocol/adcp-client-python). Adds commit-pinned spec
+  permalinks to each test docstring. Flags discrepancies where tests
+  assume behavior the spec doesn't define.
+
+variables:
+  ENTITY_NAMES:
+    description: "Space-separated entity names (e.g., creative media-buy delivery)"
+    required: true
+
+labels:
+  - "mol:verify-spec"
+
+iterate:
+  over: "ENTITY_NAMES"
+  item_var: "ENTITY_NAME"
+  all_var: "ALL_ENTITIES"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # -- Atom 1: Pre-Check -------------------------------------------------
+    - id: "precheck-{ENTITY_NAME}"
+      title: "Pre-check: {ENTITY_NAME} surface exists"
+      description: |
+        Verify that the entity test suite from /surface exists before
+        proceeding with spec verification.
+
+        ## Instructions
+
+        1. Check that the file exists:
+           ```bash
+           test -f tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py && echo "EXISTS" || echo "MISSING"
+           ```
+           (Where {ENTITY_NAME_UNDERSCORE} is {ENTITY_NAME} with hyphens replaced
+           by underscores)
+
+        2. If MISSING, output:
+           ```
+           STOP: No entity test suite for {ENTITY_NAME}.
+           Run /surface {ENTITY_NAME} first.
+           ```
+           Leave this atom OPEN (blocking all downstream).
+
+        3. If EXISTS, count tests and stubs:
+           ```bash
+           grep -c "def test_" tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           grep -c "@pytest.mark.skip" tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           ```
+           Note the counts and close this atom.
+
+      acceptance: "File exists. Test and stub counts recorded."
+      labels: ["atom:precheck"]
+
+    # -- Atom 2: Pin Source Commits ----------------------------------------
+    - id: "pin-commits-{ENTITY_NAME}"
+      title: "Pin source commits for {ENTITY_NAME} verification"
+      description: |
+        Record the exact commits of all source-of-truth repos so that
+        spec permalinks are reproducible.
+
+        ## Instructions
+
+        1. Get the adcp spec repo commit:
+           ```bash
+           git -C /Users/konst/projects/adcp log --oneline -1
+           git -C /Users/konst/projects/adcp rev-parse HEAD
+           ```
+
+        2. Get the adcp-client-python repo commit (use upstream remote):
+           ```bash
+           git -C /Users/konst/projects/adcp-client-python log --oneline -1 upstream/main
+           git -C /Users/konst/projects/adcp-client-python rev-parse upstream/main
+           ```
+           NOTE: Use the UPSTREAM remote (adcontextprotocol), not the fork.
+
+        3. Record the installed adcp library version:
+           ```bash
+           uv run python -c "import adcp; print(adcp.__version__)"
+           ```
+
+        4. Record the adcp-req commit (derivative index, for reference only):
+           ```bash
+           git -C /Users/konst/projects/adcp-req log --oneline -1
+           ```
+
+        5. Build the permalink templates:
+           - Spec: `https://github.com/adcontextprotocol/adcp/blob/{SPEC_COMMIT}/...`
+           - Library: `https://github.com/adcontextprotocol/adcp-client-python/blob/{LIB_COMMIT}/...`
+
+        ## Store Findings
+
+        ```bash
+        bd update {ENTITY_NAME}-verify --append-notes "## Source Commits
+        - adcp spec: {SPEC_COMMIT_HASH} ({SPEC_COMMIT_SHORT})
+        - adcp-client-python upstream: {LIB_COMMIT_HASH} ({LIB_COMMIT_SHORT})
+        - adcp library version: {VERSION}
+        - adcp-req (index only): {REQ_COMMIT_SHORT}
+
+        ## Permalink Templates
+        - Spec: https://github.com/adcontextprotocol/adcp/blob/{SPEC_COMMIT_HASH}/
+        - Library: https://github.com/adcontextprotocol/adcp-client-python/blob/{LIB_COMMIT_HASH}/"
+        ```
+
+      acceptance: "All four commits recorded. Permalink templates built."
+      depends_on: ["precheck-{ENTITY_NAME}"]
+      labels: ["atom:pin"]
+
+    # -- Atom 3: Extract Expectations --------------------------------------
+    - id: "extract-expectations-{ENTITY_NAME}"
+      title: "Extract test expectations for {ENTITY_NAME}"
+      description: |
+        Parse the entity test suite and extract what each test expects.
+
+        ## Instructions
+
+        1. Read `tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py`
+
+        2. For each test (both real and stubs), extract:
+           - **Test name**: `test_create_media_buy_requires_brand`
+           - **Obligation ID**: from docstring or skip reason (e.g., UC-002-S01)
+           - **Expected behavior**: one sentence (e.g., "CreateMediaBuyRequest
+             raises ValidationError when brand is missing")
+           - **Assertion type**: schema (field required/optional/type),
+             behavior (function returns X), error (raises Y), security
+             (rejects unauthorized), lifecycle (status transition)
+           - **Which spec file likely defines this**: based on the entity
+             mapping in the skill doc
+
+        3. Group expectations by spec file they map to. This makes the
+           next atom efficient — verify all expectations for one spec file
+           at once.
+
+        ## Store Findings
+
+        ```bash
+        bd update {ENTITY_NAME}-verify --append-notes "## Extracted Expectations
+        Total: N tests (M real, K stubs)
+
+        ### Group: media-buy.json (23 expectations)
+        | # | Test Name | Obligation | Expected Behavior | Type |
+        |---|-----------|-----------|-------------------|------|
+        | 1 | test_create_requires_brand | UC-002-S01 | brand is required | schema |
+        [...]
+
+        ### Group: package.json (15 expectations)
+        [...]"
+        ```
+
+      acceptance: "Every test has an extracted expectation. Grouped by spec file."
+      depends_on: ["pin-commits-{ENTITY_NAME}"]
+      labels: ["atom:extract"]
+
+    # -- Atom 4: Verify Against Spec ---------------------------------------
+    - id: "verify-spec-{ENTITY_NAME}"
+      title: "Verify {ENTITY_NAME} expectations against spec"
+      description: |
+        For each extracted expectation, confirm it against the authoritative
+        sources.
+
+        ## Sources of Truth (check in this order)
+
+        1. **adcp spec repo** (JSON schemas):
+           `/Users/konst/projects/adcp/dist/schemas/3.0.0-beta.3/core/`
+           These are the canonical schema definitions.
+
+        2. **adcp-client-python** (Pydantic models):
+           `/Users/konst/projects/adcp-client-python/adcp/types/generated_poc/`
+           These show how the spec translates to Python types.
+
+        3. **adcp-req** (as INDEX only):
+           `/Users/konst/projects/adcp-req/docs/requirements/use-cases/`
+           Each requirement lists its source — follow those links to (1) or (2).
+           Do NOT treat adcp-req assertions as confirmed truth.
+
+        ## Verification Process
+
+        For each group of expectations (grouped by spec file):
+
+        1. **Read the spec file** (JSON schema or Python type)
+        2. **For each expectation in the group**:
+           a. Find the specific property/field/constraint in the spec
+           b. Compare what the spec says vs what the test expects
+           c. Classify:
+              - `CONFIRMED` — spec explicitly defines this behavior.
+                Record the spec file path + line/property.
+              - `UNSPECIFIED` — spec doesn't address this. It's an
+                implementation decision. Still valid but not spec-mandated.
+              - `CONTRADICTS` — spec says something different. The test
+                expectation is WRONG and must be corrected before /remediate.
+              - `SPEC_AMBIGUOUS` — spec could be read either way. Note the
+                ambiguity for human review.
+
+        3. **For behavior/lifecycle expectations** that aren't in JSON schemas:
+           Check the adcp-client-python code for validators, computed
+           properties, or documented behavior in docstrings.
+
+        4. **For security expectations** (auth, isolation):
+           These are typically implementation-defined (UNSPECIFIED by the
+           protocol spec), but may be in business-rules. Mark as
+           UNSPECIFIED unless you find explicit spec support.
+
+        ## Store Findings
+
+        ```bash
+        bd update {ENTITY_NAME}-verify --append-notes "## Verification Results
+        - CONFIRMED: N
+        - UNSPECIFIED: N
+        - CONTRADICTS: N
+        - SPEC_AMBIGUOUS: N
+
+        ### Detailed Results
+        | # | Test Name | Verdict | Spec Reference | Notes |
+        |---|-----------|---------|---------------|-------|
+        | 1 | test_create_requires_brand | CONFIRMED | media-buy.json: brand (required) | |
+        | 2 | test_ownership_isolation | UNSPECIFIED | — | implementation-defined security |
+        | 3 | test_wrong_field_type | CONTRADICTS | media-buy.json: field is string not int | MUST FIX |
+        [...]
+
+        ### CONTRADICTS Detail (requires action)
+        - test_X: spec says Y but test expects Z. Fix: [what to change]
+        [...]"
+        ```
+
+      acceptance: "Every expectation verified. All CONTRADICTS items have fix instructions."
+      depends_on: ["extract-expectations-{ENTITY_NAME}"]
+      labels: ["atom:verify"]
+
+    # -- Atom 5: Annotate Test File ----------------------------------------
+    - id: "annotate-{ENTITY_NAME}"
+      title: "Annotate {ENTITY_NAME} test file with spec links"
+      description: |
+        Update the entity test file with spec permalinks and verification
+        metadata.
+
+        ## Instructions
+
+        1. **Update the module docstring** with verification summary:
+           ```python
+           """Entity test suite: {ENTITY_NAME}
+
+           Spec verification: YYYY-MM-DD
+           adcp spec commit: {SPEC_COMMIT_SHORT}
+           adcp-client-python commit: {LIB_COMMIT_SHORT}
+           Verified: X/Y CONFIRMED, A UNSPECIFIED, B CONTRADICTS
+
+           ...existing docstring content...
+           """
+           ```
+
+        2. **For CONFIRMED tests**, add spec link to docstring:
+           ```python
+           def test_create_media_buy_requires_brand(self):
+               """UC-002-S01: CreateMediaBuyRequest requires brand.
+
+               Spec: https://github.com/adcontextprotocol/adcp/blob/{COMMIT}/dist/schemas/.../media-buy.json
+               """
+           ```
+           Keep it concise — one Spec: line, optionally a Library: line
+           if the Python type adds relevant context.
+
+        3. **For UNSPECIFIED tests**, mark as implementation-defined:
+           ```python
+           def test_ownership_isolation(self):
+               """BR-RULE-034: Cross-principal isolation.
+
+               Spec: UNSPECIFIED (implementation-defined security boundary)
+               """
+           ```
+
+        4. **For CONTRADICTS tests**, fix the expectation:
+           - If it's a real test: update the assertion to match the spec
+           - If it's a stub: update the skip reason and docstring
+           - Add a comment explaining the correction
+
+        5. **For SPEC_AMBIGUOUS tests**, mark for human review:
+           ```python
+           def test_ambiguous_behavior(self):
+               """UC-002-S15: Package budget validation.
+
+               Spec: AMBIGUOUS — see media-buy.json `budget` property.
+               Review: [brief explanation of the ambiguity]
+               """
+           ```
+
+        6. **Run the tests** to ensure nothing broke:
+           ```bash
+           uv run pytest tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py -v --tb=short
+           ```
+
+      acceptance: "All tests annotated. CONTRADICTS fixed. Tests still pass/skip correctly."
+      depends_on: ["verify-spec-{ENTITY_NAME}"]
+      labels: ["atom:annotate"]
+
+    # -- Atom 6: Review ----------------------------------------------------
+    - id: "review-{ENTITY_NAME}"
+      title: "Review {ENTITY_NAME} spec verification"
+      description: |
+        Review the verification results and annotations.
+
+        ## Review Criteria
+
+        1. **CONTRADICTS items**: Were they fixed correctly? Does the new
+           expectation match the spec?
+        2. **UNSPECIFIED items**: Are these truly unspecified, or did the
+           verifier miss a spec reference?
+        3. **Permalink quality**: Do the spec links point to the right
+           files and properties?
+        4. **Coverage**: Were any tests skipped or missed during verification?
+
+        ## Rate Each Finding
+
+        - **LOW**: Minor annotation improvement
+        - **MEDIUM**: Verification needs correction
+        - **HIGH**: CONTRADICTS fix is wrong, or CONFIRMED is actually wrong
+
+        ## Write Review
+
+        ```bash
+        bd update {ENTITY_NAME}-verify --append-notes "## Review
+        - [RATING] Finding: [description]
+        ...
+        Overall: [ALL_LOW | NEEDS_REFINEMENT | NEEDS_USER_INPUT]"
+        ```
+
+      acceptance: "Review written with rated findings."
+      depends_on: ["annotate-{ENTITY_NAME}"]
+      labels: ["atom:review", "atom:gate"]
+
+    # -- Atom 7: Verify Quality + Commit -----------------------------------
+    - id: "commit-{ENTITY_NAME}"
+      title: "Commit {ENTITY_NAME} spec verification"
+      description: |
+        Run quality gate and commit the annotated test file.
+
+        ## Instructions
+
+        1. Run quality gate:
+           ```bash
+           make quality
+           ```
+
+        2. Stage the annotated test file:
+           ```bash
+           git add tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           ```
+
+        3. Commit:
+           ```bash
+           git commit -m "test: add spec traceability links to {ENTITY_NAME} test suite"
+           ```
+
+      acceptance: "make quality passes. Annotated file committed."
+      depends_on: ["review-{ENTITY_NAME}"]
+      labels: ["atom:commit"]
+
+finalize:
+  - id: verify-spec-report
+    title: "Generate spec verification report"
+    description: |
+      Generate a summary of spec verification across all {N} entities.
+
+      ## Instructions
+
+      1. Count verification results across all entities:
+         ```bash
+         for entity in {ALL_ENTITIES}; do
+           f="tests/unit/test_$(echo $entity | tr '-' '_').py"
+           if [ -f "$f" ]; then
+             confirmed=$(grep -c "Spec:" "$f" 2>/dev/null || echo 0)
+             unspec=$(grep -c "UNSPECIFIED" "$f" 2>/dev/null || echo 0)
+             contra=$(grep -c "CONTRADICTS" "$f" 2>/dev/null || echo 0)
+             ambig=$(grep -c "AMBIGUOUS" "$f" 2>/dev/null || echo 0)
+             echo "$entity: $confirmed confirmed, $unspec unspecified, $contra contradicts, $ambig ambiguous"
+           fi
+         done
+         ```
+
+      2. Sync beads:
+         ```bash
+         bd sync
+         ```
+
+      3. Run full quality gate:
+         ```bash
+         make quality
+         ```
+
+    acceptance: "All {N} entities verified. Summary generated. make quality passes."
+    depends_on_all_barriers: true
+    labels: ["atom:verify"]
