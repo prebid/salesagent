@@ -1494,15 +1494,18 @@ class AdCPRequestHandler(RequestHandler):
             brief = parameters.get("brief", "")
             brand = parameters.get("brand")
 
-            # Require either brief OR brand
-            if not brief and not brand:
-                raise ServerError(InvalidParamsError(message="Either 'brief' or 'brand' parameter is required"))
+            # Require at least one search criterion (brief, brand, or filters)
+            filters = parameters.get("filters")
+            if not brief and not brand and not filters:
+                raise ServerError(
+                    InvalidParamsError(message="At least one of 'brief', 'brand', or 'filters' parameter is required")
+                )
 
             # Call core function with identity — _raw handles full schema validation
             response = await core_get_products_tool(
                 brief=brief,
                 brand=brand,
-                filters=parameters.get("filters"),
+                filters=filters,
                 min_exposures=parameters.get("min_exposures"),
                 strategy_id=parameters.get("strategy_id"),
                 context=parameters.get("context"),
