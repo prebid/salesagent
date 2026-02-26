@@ -277,6 +277,19 @@ class Product(Base, JSONValidatorMixin):
     # Type hint: reporting capabilities dict
     reporting_capabilities: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
+    # AdCP 3.6.0 product fields
+    signal_targeting_allowed: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    # Type hint: CatalogMatch object (matching criteria for product catalogs)
+    catalog_match: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: list of CatalogType enum values
+    catalog_types: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: ConversionTracking object (conversion measurement config)
+    conversion_tracking: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: list of DataProviderSignalSelector objects
+    data_provider_signals: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: DeliveryForecast object (delivery predictions)
+    forecast: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+
     # Dynamic product fields
     # Type hint: whether this product is a dynamic template that generates variants
     is_dynamic: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

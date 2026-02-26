@@ -329,6 +329,20 @@ def convert_product_model_to_schema(product_model) -> Product:
     # Default is_custom to False if not set
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False
 
+    # AdCP 3.6.0 fields
+    if getattr(product_model, "signal_targeting_allowed", None) is not None:
+        product_data["signal_targeting_allowed"] = product_model.signal_targeting_allowed
+    if getattr(product_model, "catalog_match", None) is not None:
+        product_data["catalog_match"] = product_model.catalog_match
+    if getattr(product_model, "catalog_types", None) is not None:
+        product_data["catalog_types"] = product_model.catalog_types
+    if getattr(product_model, "conversion_tracking", None) is not None:
+        product_data["conversion_tracking"] = product_model.conversion_tracking
+    if getattr(product_model, "data_provider_signals", None) is not None:
+        product_data["data_provider_signals"] = product_model.data_provider_signals
+    if getattr(product_model, "forecast", None) is not None:
+        product_data["forecast"] = product_model.forecast
+
     # Internal fields (not in AdCP spec, but in our extended Product schema)
     # Use effective_implementation_config to auto-resolve from inventory profile if set
     if hasattr(product_model, "effective_implementation_config"):
