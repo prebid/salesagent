@@ -963,6 +963,20 @@ def _update_media_buy_impl(
                     updated_assignments = []
                     new_assignments_created = []
 
+                    # BR-RULE-024 INV-2: creative_assignments replaces ALL existing
+                    # assignments for this package. Delete existing assignments not
+                    # in the new list, matching the creative_ids handler pattern.
+                    requested_creative_ids = {ca.creative_id for ca in pkg_update.creative_assignments}
+                    existing_stmt = select(DBAssignment).where(
+                        DBAssignment.tenant_id == tenant["tenant_id"],
+                        DBAssignment.media_buy_id == actual_media_buy_id,
+                        DBAssignment.package_id == pkg_update.package_id,
+                    )
+                    existing_assignments = session.scalars(existing_stmt).all()
+                    for existing in existing_assignments:
+                        if existing.creative_id not in requested_creative_ids:
+                            session.delete(existing)
+
                     for ca in pkg_update.creative_assignments:
                         # Schema validates and coerces dict inputs to LibraryCreativeAssignment
                         creative_id = ca.creative_id
