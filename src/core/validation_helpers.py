@@ -116,7 +116,7 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
 
     Example:
         >>> try:
-        ...     req = CreateMediaBuyRequest(brand_manifest={"target_audience": {}})
+        ...     req = CreateMediaBuyRequest(brand={"domain": "example.com"})
         ... except ValidationError as e:
         ...     raise ToolError(format_validation_error(e))
     """

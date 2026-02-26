@@ -5,7 +5,7 @@ Supports variable substitution with fallback syntax:
 - {campaign_name|brand_name} - Use campaign_name, fall back to brand_name
 - {date_range} - Formatted date range (e.g., "Oct 7-14, 2025")
 - {month_year} - Month and year (e.g., "Oct 2025")
-- {brand_name} - Brand from brand_manifest
+- {brand_name} - Brand from brand reference
 - {buyer_ref} - Buyer's reference ID
 - {product_name} - Product name from database (for line items)
 - {package_name} - Package name from MediaPackage.name (for line items)
@@ -116,16 +116,14 @@ def build_order_name_context(
     Returns:
         Dictionary of variables available for template substitution
     """
-    # Extract brand name from brand_manifest
+    # Extract brand name from brand (BrandReference)
     brand_name = None
-    if hasattr(request, "brand_manifest") and request.brand_manifest:
-        manifest = request.brand_manifest
-        if isinstance(manifest, str):
-            brand_name = manifest
-        elif hasattr(manifest, "name"):
-            brand_name = manifest.name
-        elif isinstance(manifest, dict):
-            brand_name = manifest.get("name")
+    if hasattr(request, "brand") and request.brand:
+        brand = request.brand
+        if hasattr(brand, "domain"):
+            brand_name = brand.domain
+        elif isinstance(brand, dict):
+            brand_name = brand.get("domain")
 
     # campaign_name is no longer on CreateMediaBuyRequest per AdCP spec
     # Use brand_name or generate from buyer_ref as fallback

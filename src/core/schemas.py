@@ -1464,7 +1464,7 @@ class ProductFilters(LibraryFilters):
 class GetProductsRequest(LibraryGetProductsRequest):
     """Extends library GetProductsRequest with internal-only fields.
 
-    Library provides: account_id, brand_manifest, brief, context, ext, filters,
+    Library provides: account_id, brand, brief, context, ext, filters,
     property_list, proposal_id — all inherited from AdCP spec.
 
     Local adds: product_selectors, pagination — internal fields for
@@ -1473,10 +1473,8 @@ class GetProductsRequest(LibraryGetProductsRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # brand_manifest is inherited from library as BrandManifestReference | None.
-    # BrandManifestReference is a RootModel[BrandManifest | AnyUrl] that auto-coerces
-    # BrandManifest, dict, and URL string inputs. Consumers access the inner value
-    # via .root (e.g., brand_manifest.root.name).
+    # brand is inherited from library as BrandReference | None.
+    # BrandReference has .domain (required str) and .brand_id (optional BrandId).
 
     # Spec fields not yet in adcp library v3.2.0
     buying_mode: str | None = Field(
@@ -2519,7 +2517,7 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     """Extends library CreateMediaBuyRequest from AdCP spec.
 
     Per AdCP spec, the required fields are:
-    - brand_manifest: BrandManifest | str (inline object or URL)
+    - brand: BrandReference (with domain and optional brand_id)
     - buyer_ref: str (buyer's reference identifier)
     - packages: list[PackageRequest] (array of package configurations)
     - start_time: str | datetime ('asap' or ISO 8601 datetime)

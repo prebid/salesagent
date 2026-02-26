@@ -1473,7 +1473,7 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_get_products_skill(self, parameters: dict, auth_token: str | None) -> Any:
         """Handle explicit get_products skill invocation.
 
-        Aligned with adcp v1.2.1 spec - brand_manifest must be a dict.
+        Aligned with adcp spec - brand must be a BrandReference dict.
 
         NOTE: Authentication is OPTIONAL for this endpoint. Access depends on tenant's
         brand_manifest_policy setting (public/require_brand/require_auth).
@@ -1496,9 +1496,7 @@ class AdCPRequestHandler(RequestHandler):
 
             # Require either brief OR brand
             if not brief and not brand:
-                raise ServerError(
-                    InvalidParamsError(message="Either 'brief' or 'brand' parameter is required")
-                )
+                raise ServerError(InvalidParamsError(message="Either 'brief' or 'brand' parameter is required"))
 
             # Call core function with identity — _raw handles full schema validation
             response = await core_get_products_tool(
@@ -1536,7 +1534,7 @@ class AdCPRequestHandler(RequestHandler):
 
         IMPORTANT: This handler ONLY accepts AdCP spec-compliant format:
         - packages[] (required) - each package must have budget
-        - brand_manifest (required)
+        - brand (required)
         - start_time (required)
         - end_time (required)
 
@@ -2151,7 +2149,7 @@ class AdCPRequestHandler(RequestHandler):
         """Extract or infer brand name from the user query.
 
         Used for backward compatibility with natural language queries.
-        Extracts a brand name to populate brand_manifest for adcp v1.2.1.
+        Extracts a brand name to populate brand (BrandReference) for adcp v3.6.0.
         """
         # Look for common patterns that might indicate the brand/offering
         query_lower = query.lower()
@@ -2202,12 +2200,12 @@ class AdCPRequestHandler(RequestHandler):
             return {
                 "success": False,
                 "message": f"Authentication successful for {tool_context.principal_id}. To create a media buy, use explicit skill invocation with AdCP v2.2.0 spec-compliant format.",
-                "required_fields": ["brand_manifest", "packages", "start_time", "end_time"],
+                "required_fields": ["brand", "packages", "start_time", "end_time"],
                 "note": "Per AdCP v2.2.0 spec, budget is specified at the PACKAGE level, not top level",
                 "authenticated_tenant": tool_context.tenant_id,
                 "authenticated_principal": tool_context.principal_id,
                 "example": {
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "example.com"},
                     "packages": [
                         {
                             "buyer_ref": "pkg_1",
