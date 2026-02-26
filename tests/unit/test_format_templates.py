@@ -495,6 +495,38 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
         )
         assert fmt.get_primary_dimensions() is None
 
+    def test_works_with_library_format_id(self):
+        """get_primary_dimensions must work when format_id is library FormatId (not our subclass).
+
+        Bug #1067: When formats come from the creative agent, they are deserialized
+        with the library's FormatId which lacks get_dimensions(). This caused a 500
+        error on the New Product page.
+        """
+        # Use the library FormatId directly (as happens when deserializing from creative agent)
+        fmt = Format(
+            format_id=FormatId(
+                agent_url="https://creative.adcontextprotocol.org",
+                id="display_static",
+                width=300,
+                height=250,
+            ),
+            name="Static Display",
+            type="display",
+        )
+        assert fmt.get_primary_dimensions() == (300, 250)
+
+    def test_works_with_library_format_id_no_dimensions(self):
+        """get_primary_dimensions returns None with library FormatId that has no dimensions."""
+        fmt = Format(
+            format_id=FormatId(
+                agent_url="https://creative.adcontextprotocol.org",
+                id="video_hosted",
+            ),
+            name="Hosted Video",
+            type="video",
+        )
+        assert fmt.get_primary_dimensions() is None
+
 
 class TestFormatTemplatesAPI:
     """Tests for format templates API endpoint (/api/formats/templates)."""
