@@ -20,6 +20,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -511,49 +512,14 @@ class TestCampaignBudgetValidationAndPersistence:
         mock_session.commit.assert_called()
 
     def test_zero_budget_returns_error(self, standard_mocks):
-        """When total_budget == 0, returns code='invalid_budget'.
-
-        Note: Budget validation (total <= 0) happens AFTER currency validation.
-        Currency validation is triggered because req.budget is set.
-        We must mock the DB for currency validation to pass first.
-        """
-        mock_session = _setup_db_session(standard_mocks)
-        mock_media_buy = _make_mock_media_buy("mb_budget_zero")
-        mock_currency_limit = _make_mock_currency_limit()
-        mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
-        mock_session.scalars.return_value = mock_scalars
-
-        identity = _make_identity()
-        req = UpdateMediaBuyRequest(
-            media_buy_id="mb_budget_zero",
-            budget=Budget(total=0.0, currency="USD", pacing="even"),
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) == 1
-        assert result.errors[0].code == "invalid_budget"
+        """When total_budget == 0, rejected at schema level (gt=0) per BR-RULE-008."""
+        with pytest.raises(ValidationError, match="greater_than"):
+            Budget(total=0.0, currency="USD", pacing="even")
 
     def test_negative_budget_returns_error(self, standard_mocks):
-        """When total_budget < 0, returns code='invalid_budget'."""
-        mock_session = _setup_db_session(standard_mocks)
-        mock_media_buy = _make_mock_media_buy("mb_budget_neg")
-        mock_currency_limit = _make_mock_currency_limit()
-        mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
-        mock_session.scalars.return_value = mock_scalars
-
-        identity = _make_identity()
-        req = UpdateMediaBuyRequest(
-            media_buy_id="mb_budget_neg",
-            budget=Budget(total=-500.0, currency="USD", pacing="even"),
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) == 1
-        assert result.errors[0].code == "invalid_budget"
+        """When total_budget < 0, rejected at schema level (gt=0) per BR-RULE-008."""
+        with pytest.raises(ValidationError, match="greater_than"):
+            Budget(total=-500.0, currency="USD", pacing="even")
 
 
 # ---------------------------------------------------------------------------

@@ -1014,7 +1014,7 @@ class Targeting(TargetingOverlay):
 class Budget(SalesAgentBaseModel):
     """Budget object with multi-currency support (AdCP spec compliant)."""
 
-    total: float = Field(..., description="Total budget amount (AdCP spec field name)")
+    total: float = Field(..., gt=0, description="Total budget amount (AdCP spec field name)")
     currency: str = Field(..., description="ISO 4217 currency code (e.g., 'USD', 'EUR')")
     daily_cap: float | None = Field(None, description="Optional daily spending limit")
     pacing: Literal["even", "asap", "daily_budget"] = Field("even", description="Budget pacing strategy")
