@@ -25,23 +25,38 @@ uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
 uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"video"}'
 ```
 
-## Shared Implementation Pattern (Critical Pattern #5)
-All tools use shared `_tool_name_impl()` called by both MCP and A2A paths:
+## Transport Boundary: Layer Separation (Critical Pattern #5)
 
+All tools have two layers with strict responsibilities:
+
+**`_impl` functions** (business logic — transport-agnostic):
 ```python
-# main.py
-def _create_media_buy_impl(...) -> CreateMediaBuyResponse:
-    return response
-
-@mcp.tool()
-def create_media_buy(...) -> CreateMediaBuyResponse:
-    return _create_media_buy_impl(...)
-
-# tools.py
-def create_media_buy_raw(...) -> CreateMediaBuyResponse:
-    from src.core.main import _create_media_buy_impl
-    return _create_media_buy_impl(...)
+async def _create_media_buy_impl(
+    req: CreateMediaBuyRequest,
+    push_notification_config: dict | None = None,
+    identity: ResolvedIdentity | None = None,    # NOT Context/ToolContext
+) -> CreateMediaBuyResult:
+    # Business logic only — no transport awareness
+    ...
 ```
+
+**Transport wrappers** (boundary — resolves identity, forwards all params):
+```python
+@mcp.tool()
+async def create_media_buy(ctx: Context, ...) -> CreateMediaBuyResponse:
+    identity = resolve_identity(ctx.http.headers, protocol="mcp")
+    return await _create_media_buy_impl(req=req, identity=identity, ...)
+
+async def create_media_buy_raw(...) -> CreateMediaBuyResponse:
+    identity = resolve_identity(headers, protocol="a2a")
+    return await _create_media_buy_impl(req=req, identity=identity, ...)
+```
+
+**`_impl` rules:** Accept `ResolvedIdentity` (not Context). Raise `AdCPError` (not ToolError). Zero imports from fastmcp/a2a/starlette/fastapi.
+
+**Wrapper rules:** Call `resolve_identity()` first. Forward every `_impl` parameter. Translate `AdCPError` to transport-specific format.
+
+**Enforced by 4 structural guards** — see `docs/development/structural-guards.md`.
 
 ## Access Points (via nginx at http://localhost:8000)
 - Admin UI: `/admin/` or `/tenant/default`
