@@ -442,6 +442,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 review_id=review_id,
                 creative_id=creative_id,
                 tenant_id=tenant_id,
+                principal_id=creative.principal_id,
                 reviewed_at=datetime.now(UTC),
                 review_type="human",
                 reviewer_email=approved_by,
@@ -632,6 +633,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
                 review_id=review_id,
                 creative_id=creative_id,
                 tenant_id=tenant_id,
+                principal_id=creative.principal_id,
                 reviewed_at=datetime.now(UTC),
                 review_type="human",
                 reviewer_email=rejected_by,
@@ -886,7 +888,9 @@ def get_ai_review_status(task_id: str) -> dict:
             return {"status": "failed", "error": str(e), "creative_id": task_info["creative_id"]}
 
 
-def _create_review_record(db_session, creative_id: str, tenant_id: str, ai_result: dict):
+def _create_review_record(
+    db_session, creative_id: str, tenant_id: str, ai_result: dict, principal_id: str | None = None
+):
     """Create a CreativeReview record from AI review result.
 
     Args:
@@ -900,6 +904,7 @@ def _create_review_record(db_session, creative_id: str, tenant_id: str, ai_resul
             - confidence_score: Float 0.0-1.0
             - policy_triggered: Policy that was triggered
             - ai_recommendation: Optional AI recommendation if different from final
+        principal_id: Principal ID (required for composite FK to creatives)
     """
     from src.core.database.models import CreativeReview
 
@@ -910,6 +915,7 @@ def _create_review_record(db_session, creative_id: str, tenant_id: str, ai_resul
             review_id=review_id,
             creative_id=creative_id,
             tenant_id=tenant_id,
+            principal_id=principal_id,
             reviewed_at=datetime.now(UTC),
             review_type="ai",
             reviewer_email=None,
@@ -1094,6 +1100,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                     creative_id,
                     tenant_id,
                     result_dict,
+                    principal_id=creative.principal_id,
                 )
                 # Record metrics
                 ai_review_total.labels(
@@ -1120,6 +1127,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                         creative_id,
                         tenant_id,
                         result_dict,
+                        principal_id=creative.principal_id,
                     )
                     # Record metrics
                     ai_review_total.labels(
@@ -1142,6 +1150,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                         creative_id,
                         tenant_id,
                         result_dict,
+                        principal_id=creative.principal_id,
                     )
                     # Record metrics
                     ai_review_total.labels(
@@ -1167,6 +1176,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                         creative_id,
                         tenant_id,
                         result_dict,
+                        principal_id=creative.principal_id,
                     )
                     # Record metrics
                     ai_review_total.labels(
@@ -1189,6 +1199,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                         creative_id,
                         tenant_id,
                         result_dict,
+                        principal_id=creative.principal_id,
                     )
                     # Record metrics
                     ai_review_total.labels(
@@ -1213,6 +1224,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                 creative_id,
                 tenant_id,
                 result_dict,
+                principal_id=creative.principal_id,
             )
             # Record metrics
             ai_review_total.labels(tenant_id=tenant_id, decision="pending_review", policy_triggered="uncertain").inc()

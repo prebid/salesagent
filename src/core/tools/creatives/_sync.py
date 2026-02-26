@@ -325,6 +325,7 @@ def _sync_creatives_impl(
         results=results,
         tenant=tenant,
         validation_mode=validation_mode,
+        principal_id=principal_id,
     )
 
     # Create workflow steps and send notifications for creatives requiring approval

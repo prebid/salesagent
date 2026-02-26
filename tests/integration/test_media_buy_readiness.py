@@ -215,6 +215,7 @@ class TestMediaBuyReadinessService:
             assignment = CreativeAssignment(
                 assignment_id="assign_1",
                 tenant_id=test_tenant,
+                principal_id=test_principal,
                 creative_id=creative_id,
                 media_buy_id=media_buy_id,
                 package_id="pkg_1",
@@ -278,6 +279,7 @@ class TestMediaBuyReadinessService:
             assignment = CreativeAssignment(
                 assignment_id="assign_1",
                 tenant_id=test_tenant,
+                principal_id=test_principal,
                 creative_id=creative_id,
                 media_buy_id=media_buy_id,
                 package_id="pkg_1",

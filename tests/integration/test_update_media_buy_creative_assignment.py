@@ -277,6 +277,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
         assignment1 = DBAssignment(
             assignment_id="assign_existing",
             tenant_id="test_tenant",
+            principal_id="test_principal",
             media_buy_id="test_buy_456",
             package_id="pkg_default",
             creative_id="creative_1",

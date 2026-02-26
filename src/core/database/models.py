@@ -718,10 +718,8 @@ class Creative(Base):
     __tablename__ = "creatives"
 
     creative_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(
-        String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
-    )
-    principal_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
     format: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -771,12 +769,11 @@ class CreativeReview(Base):
     __tablename__ = "creative_reviews"
 
     review_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    creative_id: Mapped[str] = mapped_column(
-        String(100), ForeignKey("creatives.creative_id", ondelete="CASCADE"), nullable=False
-    )
+    creative_id: Mapped[str] = mapped_column(String(100), nullable=False)
     tenant_id: Mapped[str] = mapped_column(
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
+    principal_id: Mapped[str] = mapped_column(String(100), nullable=False)
 
     # Review metadata
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -798,9 +795,14 @@ class CreativeReview(Base):
 
     # Relationships
     creative = relationship("Creative", back_populates="reviews")
-    tenant = relationship("Tenant")
+    tenant = relationship("Tenant", overlaps="creative,reviews")
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["creative_id", "tenant_id", "principal_id"],
+            ["creatives.creative_id", "creatives.tenant_id", "creatives.principal_id"],
+            ondelete="CASCADE",
+        ),
         Index("ix_creative_reviews_creative_id", "creative_id"),
         Index("ix_creative_reviews_tenant_id", "tenant_id"),
         Index("ix_creative_reviews_reviewed_at", "reviewed_at"),
@@ -824,6 +826,7 @@ class CreativeAssignment(Base):
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
     creative_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    principal_id: Mapped[str] = mapped_column(String(100), nullable=False)
     media_buy_id: Mapped[str] = mapped_column(String(100), nullable=False)
     package_id: Mapped[str] = mapped_column(String(100), nullable=False)
     weight: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
@@ -835,7 +838,10 @@ class CreativeAssignment(Base):
     tenant = relationship("Tenant")
 
     __table_args__ = (
-        ForeignKeyConstraint(["creative_id"], ["creatives.creative_id"]),
+        ForeignKeyConstraint(
+            ["creative_id", "tenant_id", "principal_id"],
+            ["creatives.creative_id", "creatives.tenant_id", "creatives.principal_id"],
+        ),
         ForeignKeyConstraint(["media_buy_id"], ["media_buys.media_buy_id"]),
         Index("idx_creative_assignments_tenant", "tenant_id"),
         Index("idx_creative_assignments_creative", "creative_id"),
