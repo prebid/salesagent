@@ -2507,18 +2507,15 @@ class TestAdCPContract:
             assert "total" in budget, "budget must have total field"
             assert "currency" in budget, "budget must have currency field (not top-level)"
 
-        # NOTE: oneOf constraint validation happens at protocol boundary (MCP/A2A request validation)
-        # not in Pydantic model construction. The JSON Schema enforces this when requests come in.
-        # Internal construction allows flexibility for testing and data manipulation.
+        # AdCP oneOf constraint: exactly one of media_buy_id or buyer_ref required
+        # Now enforced at Pydantic model level (validate_identification_xor validator)
+        import pytest
 
-        # Verify that both construction patterns work internally
-        # (they would be rejected by JSON Schema validation at the protocol boundary)
-        req_both = UpdateMediaBuyRequest(media_buy_id="mb_123", buyer_ref="br_456")
-        assert req_both.media_buy_id == "mb_123"
-        assert req_both.buyer_ref == "br_456"
+        with pytest.raises(ValueError, match="media_buy_id or buyer_ref, not both"):
+            UpdateMediaBuyRequest(media_buy_id="mb_123", buyer_ref="br_456")
 
-        req_neither = UpdateMediaBuyRequest(paused=False)  # adcp 2.12.0+
-        assert req_neither.paused is False
+        with pytest.raises(ValueError, match="media_buy_id or buyer_ref is required"):
+            UpdateMediaBuyRequest(paused=False)  # neither identifier
 
         # ✅ VERIFY backward compatibility properties work (deprecated)
         with warnings.catch_warnings(record=True) as w:

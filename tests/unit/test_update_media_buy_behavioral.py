@@ -573,7 +573,6 @@ def test_manual_approval_path_through_impl(standard_mocks):
     identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_manual",
-        buyer_ref="buyer_manual",
     )
     result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -647,7 +646,6 @@ def test_pause_completes_workflow_step(standard_mocks):
     identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_pause",
-        buyer_ref="buyer_pause",
         paused=True,
     )
     result = _update_media_buy_impl(req=req, identity=identity)
@@ -688,7 +686,6 @@ def test_manual_approval_stores_raw_request(standard_mocks):
     identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_approval",
-        buyer_ref="buyer_approval",
         paused=True,
     )
     result = _update_media_buy_impl(req=req, identity=identity)
