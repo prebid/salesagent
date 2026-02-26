@@ -1,5 +1,11 @@
 """Canonical test surface for the Creative entity.
 
+Spec verification: 2026-02-26
+adcp spec commit: 8f26baf3
+adcp-client-python commit: a08805d
+Verified: 72 real tests, 75 skip-stubs
+  CONFIRMED: 42, UNSPECIFIED: 30, CONTRADICTS: 0, SPEC_AMBIGUOUS: 0
+
 Maps every testable behavior of the Creative domain to either a real test
 or a skip-stub documenting the gap.  Organized by source obligation doc:
 
@@ -139,12 +145,16 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
 
 
 class TestCreativeSchemaCompliance:
-    """Creative schema construction and serialization per adcp 3.6.0."""
+    """Creative schema construction and serialization per adcp 3.6.0.
+
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-asset.json
+    """
 
     def test_creative_extends_library_creative(self):
         """Creative must extend adcp library Creative type.
 
-        Ref: BR-UC-006 schema compliance scenario.
+        Spec: CONFIRMED -- creative-asset.json defines the base schema;
+        library type at adcp-client-python core/creative_asset.py:43.
         Existing: test_architecture_schema_inheritance.py (structural guard)
         """
         from adcp.types import Creative as LibraryCreative
@@ -154,7 +164,10 @@ class TestCreativeSchemaCompliance:
     def test_creative_model_dump_excludes_internal_fields(self):
         """model_dump() must NOT include internal fields (name, assets, status, etc).
 
-        Ref: adcp 3.6.0 -- internal fields marked exclude=True.
+        Spec: UNSPECIFIED (implementation-defined serialization boundary).
+        The spec defines which fields appear in list_creatives response
+        vs sync_creatives response -- internal exclude logic is salesagent's
+        implementation choice to match spec response shapes.
         Existing: test_creative_response_serialization.py, test_list_creatives_serialization.py
         """
         creative = _make_creative()
@@ -176,6 +189,7 @@ class TestCreativeSchemaCompliance:
     def test_creative_model_dump_internal_includes_all(self):
         """model_dump_internal() must include internal fields for DB storage.
 
+        Spec: UNSPECIFIED (implementation-defined internal serialization).
         Existing: test_creative_status_serialization.py
         """
         creative = _make_creative()
@@ -188,7 +202,8 @@ class TestCreativeSchemaCompliance:
     def test_creative_format_id_auto_upgrade_from_dict(self):
         """Creative accepts dict format_id and upgrades to FormatId object.
 
-        Ref: Creative.validate_format_id model validator.
+        Spec: CONFIRMED -- format-id.json requires object with agent_url + id;
+        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/format-id.json
         """
         creative = Creative(
             creative_id="c_upgrade",
@@ -200,7 +215,10 @@ class TestCreativeSchemaCompliance:
         assert str(creative.format_id.agent_url).rstrip("/") == DEFAULT_AGENT_URL
 
     def test_creative_format_property_aliases(self):
-        """Creative.format, format_id_str, format_agent_url properties work."""
+        """Creative.format, format_id_str, format_agent_url properties work.
+
+        Spec: UNSPECIFIED (implementation-defined convenience properties).
+        """
         creative = _make_creative()
         assert creative.format is not None
         assert creative.format_id_str == "display_300x250_image"
@@ -209,6 +227,9 @@ class TestCreativeSchemaCompliance:
     def test_all_creative_status_enum_values_serialize(self):
         """Every CreativeStatusEnum value serializes to string.
 
+        Spec: CONFIRMED -- creative-status enum defines: processing, approved,
+        rejected, pending_review, archived.
+        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/enums/creative_status.py
         Existing: test_creative_status_serialization.py
         """
         from src.core.schemas import CreativeStatus
@@ -225,12 +246,17 @@ class TestCreativeSchemaCompliance:
 
 
 class TestSyncCreativeResultSchema:
-    """SyncCreativeResult schema per adcp 3.6.0."""
+    """SyncCreativeResult schema per adcp 3.6.0.
+
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/sync-creatives-response.json
+    """
 
     def test_excludes_internal_fields(self):
         """model_dump() must NOT include status or review_feedback.
 
-        Ref: SyncCreativeResult.model_dump override.
+        Spec: CONFIRMED -- sync-creatives-response.json per-creative result
+        does NOT include 'status' or 'review_feedback' fields.
+        Required fields are only creative_id + action.
         """
         result = SyncCreativeResult(
             creative_id="c_1",
@@ -245,7 +271,11 @@ class TestSyncCreativeResultSchema:
         assert data["action"] == CreativeAction.created or data["action"] == "created"
 
     def test_empty_lists_excluded(self):
-        """Empty changes/errors/warnings lists should be omitted."""
+        """Empty changes/errors/warnings lists should be omitted.
+
+        Spec: CONFIRMED -- sync-creatives-response.json marks changes, errors,
+        warnings as optional (no default); omission is valid.
+        """
         result = SyncCreativeResult(
             creative_id="c_1",
             action="created",
@@ -256,7 +286,11 @@ class TestSyncCreativeResultSchema:
         assert "warnings" not in data
 
     def test_populated_lists_included(self):
-        """Non-empty changes/errors/warnings should be present."""
+        """Non-empty changes/errors/warnings should be present.
+
+        Spec: CONFIRMED -- sync-creatives-response.json defines changes
+        (action='updated'), errors (action='failed'), warnings arrays.
+        """
         result = SyncCreativeResult(
             creative_id="c_1",
             action="updated",
@@ -270,6 +304,8 @@ class TestSyncCreativeResultSchema:
     def test_assignment_fields_present(self):
         """assigned_to and assignment_errors fields work.
 
+        Spec: CONFIRMED -- sync-creatives-response.json defines assigned_to
+        (array of strings) and assignment_errors (object keyed by package ID).
         Existing: test_sync_creatives_assignment_reporting.py
         """
         result = SyncCreativeResult(
@@ -284,7 +320,9 @@ class TestSyncCreativeResultSchema:
     def test_creative_action_enum_values(self):
         """CreativeAction enum must include all spec values.
 
-        Ref: BR-UC-006 schema compliance.
+        Spec: CONFIRMED -- creative-action enum defines exactly:
+        created, updated, unchanged, failed, deleted.
+        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/enums/creative_action.py
         """
         expected = {"created", "updated", "unchanged", "failed", "deleted"}
         actual = {action.value for action in CreativeAction}
@@ -292,10 +330,17 @@ class TestSyncCreativeResultSchema:
 
 
 class TestSyncCreativesResponseSchema:
-    """SyncCreativesResponse RootModel proxy."""
+    """SyncCreativesResponse RootModel proxy.
+
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/sync-creatives-response.json
+    """
 
     def test_success_variant_construction(self):
-        """Can construct success variant with creatives list."""
+        """Can construct success variant with creatives list.
+
+        Spec: CONFIRMED -- response oneOf[0] (SyncCreativesSuccess) requires
+        'creatives' array with optional 'dry_run' boolean.
+        """
         response = SyncCreativesResponse(  # type: ignore[call-arg]
             creatives=[
                 SyncCreativeResult(creative_id="c_1", action="created"),
@@ -308,7 +353,10 @@ class TestSyncCreativesResponseSchema:
         assert response.errors is None
 
     def test_str_method_summary(self):
-        """__str__ returns human-readable summary."""
+        """__str__ returns human-readable summary.
+
+        Spec: UNSPECIFIED (implementation-defined convenience method).
+        """
         response = SyncCreativesResponse(  # type: ignore[call-arg]
             creatives=[
                 SyncCreativeResult(creative_id="c_1", action="created"),
@@ -322,7 +370,10 @@ class TestSyncCreativesResponseSchema:
         assert "1 failed" in msg
 
     def test_str_method_dry_run(self):
-        """__str__ includes dry run marker."""
+        """__str__ includes dry run marker.
+
+        Spec: UNSPECIFIED (implementation-defined convenience method).
+        """
         response = SyncCreativesResponse(  # type: ignore[call-arg]
             creatives=[],
             dry_run=True,
@@ -331,9 +382,13 @@ class TestSyncCreativesResponseSchema:
 
 
 class TestListCreativesResponseSchema:
-    """ListCreativesResponse schema."""
+    """ListCreativesResponse schema.
+
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/list-creatives-response.json
+    """
 
     def test_construction(self):
+        """Spec: CONFIRMED -- list-creatives-response.json requires query_summary, pagination, creatives."""
         creative = _make_creative()
         response = ListCreativesResponse(
             creatives=[creative],
@@ -344,6 +399,7 @@ class TestListCreativesResponseSchema:
         assert response.query_summary.total_matching == 1
 
     def test_str_all_on_one_page(self):
+        """Spec: UNSPECIFIED (implementation-defined convenience method)."""
         creative = _make_creative()
         response = ListCreativesResponse(
             creatives=[creative],
@@ -353,6 +409,7 @@ class TestListCreativesResponseSchema:
         assert "Found 1 creative." in str(response)
 
     def test_str_paginated(self):
+        """Spec: UNSPECIFIED (implementation-defined convenience method)."""
         creative = _make_creative()
         response = ListCreativesResponse(
             creatives=[creative],
@@ -364,6 +421,8 @@ class TestListCreativesResponseSchema:
     def test_nested_creative_excludes_internal_fields(self):
         """Nested Creative in response must exclude internal fields.
 
+        Spec: UNSPECIFIED (implementation-defined serialization boundary;
+        principal_id is not in the spec response schema at all).
         Existing: test_list_creatives_serialization.py
         """
         creative = _make_creative()
@@ -379,11 +438,16 @@ class TestListCreativesResponseSchema:
 
 
 class TestSyncCreativesRequestSchema:
-    """SyncCreativesRequest inherits from library with overrides."""
+    """SyncCreativesRequest inherits from library with overrides.
+
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/sync-creatives-request.json
+    """
 
     def test_accepts_creative_ids_filter(self):
         """creative_ids filter parameter is accepted.
 
+        Spec: CONFIRMED -- sync-creatives-request.json defines creative_ids
+        as optional array with minItems:1, maxItems:100.
         Existing: test_adcp_25_creative_management.py
         """
         creative = _make_creative()
@@ -394,7 +458,11 @@ class TestSyncCreativesRequestSchema:
         assert req.creative_ids == ["c_test_1"]
 
     def test_accepts_assignments_dict(self):
-        """assignments parameter (creative_id -> package_ids) accepted."""
+        """assignments parameter (creative_id -> package_ids) accepted.
+
+        Spec: CONFIRMED -- sync-creatives-request.json defines assignments
+        as optional object with pattern-keyed string arrays.
+        """
         creative = _make_creative()
         req = SyncCreativesRequest(
             creatives=[creative],
@@ -404,18 +472,25 @@ class TestSyncCreativesRequestSchema:
 
 
 class TestCreativeAssignmentSchema:
-    """CreativeAssignment internal tracking entity."""
+    """CreativeAssignment internal tracking entity.
+
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-assignment.json
+    """
 
     def test_does_not_extend_library_type(self):
         """CreativeAssignment intentionally does NOT extend library type.
 
-        Ref: Comment at schemas.py:1772.
+        Spec: UNSPECIFIED (implementation-defined internal tracking entity).
+        The spec creative-assignment.json defines only creative_id + weight +
+        placement_ids for use in media buy requests; salesagent's internal
+        assignment has additional tracking fields.
         """
         from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 
         assert not issubclass(CreativeAssignment, LibraryCreativeAssignment)
 
     def test_full_construction(self):
+        """Spec: UNSPECIFIED (implementation-defined internal entity fields)."""
         assignment = CreativeAssignment(
             assignment_id="a_1",
             media_buy_id="mb_1",
@@ -430,7 +505,10 @@ class TestCreativeAssignmentSchema:
 
 
 class TestListCreativeFormatsResponseSchema:
-    """ListCreativeFormatsResponse schema."""
+    """ListCreativeFormatsResponse schema.
+
+    Spec: https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/creative/list_creative_formats_response.py
+    """
 
     @staticmethod
     def _make_format(fmt_id: str = "fmt_1", name: str = "Test Format"):
@@ -446,14 +524,17 @@ class TestListCreativeFormatsResponseSchema:
         )
 
     def test_str_empty(self):
+        """Spec: UNSPECIFIED (implementation-defined convenience method)."""
         response = ListCreativeFormatsResponse(formats=[])
         assert "No creative formats" in str(response)
 
     def test_str_single(self):
+        """Spec: UNSPECIFIED (implementation-defined convenience method)."""
         response = ListCreativeFormatsResponse(formats=[self._make_format()])
         assert "Found 1 creative format" in str(response)
 
     def test_str_multiple(self):
+        """Spec: UNSPECIFIED (implementation-defined convenience method)."""
         fmts = [self._make_format(f"f{i}", f"Format {i}") for i in range(3)]
         response = ListCreativeFormatsResponse(formats=fmts)
         assert "Found 3 creative formats" in str(response)
@@ -467,12 +548,15 @@ class TestListCreativeFormatsResponseSchema:
 class TestSyncCreativesAuth:
     """Authentication requirements for sync_creatives.
 
+    Spec: UNSPECIFIED (implementation-defined security boundary).
+    Auth is transport-level, not defined in the schema spec.
     Existing: test_sync_creatives_auth.py covers core auth check.
     """
 
     def test_no_identity_raises_auth_error(self):
         """Missing identity raises AdCPAuthenticationError.
 
+        Spec: UNSPECIFIED (implementation-defined security boundary).
         Existing: test_sync_creatives_auth.py::test_sync_creatives_requires_authentication
         """
         from src.core.tools.creatives import _sync_creatives_impl
@@ -481,7 +565,10 @@ class TestSyncCreativesAuth:
             _sync_creatives_impl(creatives=[{"creative_id": "c1", "name": "x", "assets": {}}])
 
     def test_identity_without_principal_raises(self):
-        """Identity with None principal_id raises AdCPAuthenticationError."""
+        """Identity with None principal_id raises AdCPAuthenticationError.
+
+        Spec: UNSPECIFIED (implementation-defined security boundary).
+        """
         from src.core.tools.creatives import _sync_creatives_impl
 
         identity = ResolvedIdentity(
@@ -497,7 +584,10 @@ class TestSyncCreativesAuth:
             )
 
     def test_identity_without_tenant_raises(self):
-        """Identity with no tenant context raises AdCPAuthenticationError."""
+        """Identity with no tenant context raises AdCPAuthenticationError.
+
+        Spec: UNSPECIFIED (implementation-defined security boundary).
+        """
         from src.core.tools.creatives import _sync_creatives_impl
 
         identity = ResolvedIdentity(
@@ -514,12 +604,15 @@ class TestSyncCreativesAuth:
 
 
 class TestCrossPrincipalIsolation:
-    """BR-RULE-034: Cross-principal creative isolation."""
+    """BR-RULE-034: Cross-principal creative isolation.
+
+    Spec: UNSPECIFIED (implementation-defined multi-tenant isolation).
+    """
 
     def test_creative_lookup_filters_by_principal(self):
         """Creative upsert lookup uses tenant_id + principal_id + creative_id triple.
 
-        Ref: BR-RULE-034 INV-1 -- _sync.py line 189-193.
+        Spec: UNSPECIFIED (implementation-defined multi-tenant isolation).
         Existing: test_sync_creatives_format_validation.py (indirectly)
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
@@ -568,7 +661,7 @@ class TestCrossPrincipalIsolation:
     def test_new_creative_stamped_with_principal_id(self):
         """New creative DB record has principal_id from identity.
 
-        Ref: BR-RULE-034 INV-3 -- _processing.py line 772.
+        Spec: UNSPECIFIED (implementation-defined multi-tenant isolation).
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
@@ -614,12 +707,16 @@ class TestCrossPrincipalIsolation:
 
 
 class TestCreativeValidation:
-    """Creative input validation via _validate_creative_input."""
+    """Creative input validation via _validate_creative_input.
+
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-asset.json
+    """
 
     def test_empty_name_rejected(self):
         """Creative with empty name raises ValueError.
 
-        Ref: BR-UC-006-ext-d, _validation.py line 83.
+        Spec: CONFIRMED -- creative-asset.json requires 'name' (type: string).
+        Empty string rejection is implementation-defined strictness.
         """
         from src.core.tools.creatives._validation import _validate_creative_input
 
@@ -630,7 +727,10 @@ class TestCreativeValidation:
             _validate_creative_input(creative, mock_registry, "p1")
 
     def test_whitespace_only_name_rejected(self):
-        """Creative with whitespace-only name raises ValueError."""
+        """Creative with whitespace-only name raises ValueError.
+
+        Spec: CONFIRMED -- creative-asset.json requires 'name' (type: string).
+        """
         from src.core.tools.creatives._validation import _validate_creative_input
 
         creative = _make_creative_asset(name="   ")
@@ -642,9 +742,8 @@ class TestCreativeValidation:
     def test_missing_format_id_rejected_at_schema_level(self):
         """Creative with format_id=None is rejected at Pydantic schema level.
 
-        Ref: BR-UC-006-ext-e, BR-RULE-035 INV-1.
-        FormatId is required on CreativeAsset — Pydantic catches None before
-        business logic ever runs.
+        Spec: CONFIRMED -- creative-asset.json lists format_id in required array.
+        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-asset.json
         """
         from pydantic import ValidationError as PydanticValidationError
 
@@ -659,7 +758,9 @@ class TestCreativeValidation:
     def test_adapter_format_skips_external_validation(self):
         """Non-HTTP agent_url (adapter format) skips creative agent check.
 
-        Ref: BR-RULE-035 INV-2, _validation.py line 102-104.
+        Spec: UNSPECIFIED (implementation-defined adapter routing).
+        The spec defines agent_url as URI format but does not prescribe
+        validation behavior for non-HTTP schemes.
         """
         from src.core.tools.creatives._validation import _validate_creative_input
 
@@ -675,7 +776,7 @@ class TestCreativeValidation:
     def test_unreachable_agent_raises_with_retry(self):
         """Unreachable creative agent raises ValueError with retry suggestion.
 
-        Ref: BR-UC-006-ext-g, BR-RULE-035 INV-3.
+        Spec: UNSPECIFIED (implementation-defined error handling for agent connectivity).
         """
         from src.core.tools.creatives._validation import _validate_creative_input
 
@@ -692,7 +793,7 @@ class TestCreativeValidation:
     def test_unknown_format_raises_with_discovery_hint(self):
         """Known agent but unknown format raises ValueError mentioning list_creative_formats.
 
-        Ref: BR-UC-006-ext-f, BR-RULE-035 INV-4.
+        Spec: UNSPECIFIED (implementation-defined error handling for format discovery).
         """
         from src.core.tools.creatives._validation import _validate_creative_input
 
@@ -708,15 +809,20 @@ class TestCreativeValidation:
 
 
 class TestGetFieldHelper:
-    """_get_field transitional helper for dict/model access."""
+    """_get_field transitional helper for dict/model access.
+
+    Spec: UNSPECIFIED (implementation-defined utility).
+    """
 
     def test_dict_access(self):
+        """Spec: UNSPECIFIED (implementation-defined utility)."""
         from src.core.tools.creatives._validation import _get_field
 
         assert _get_field({"a": 1}, "a") == 1
         assert _get_field({"a": 1}, "b", "default") == "default"
 
     def test_model_access(self):
+        """Spec: UNSPECIFIED (implementation-defined utility)."""
         from src.core.tools.creatives._validation import _get_field
 
         class SimpleObj:
@@ -735,11 +841,13 @@ class TestGetFieldHelper:
 class TestExtractUrlFromAssets:
     """URL extraction from creative assets.
 
+    Spec: UNSPECIFIED (implementation-defined asset processing).
     Existing: test_extract_url_from_assets.py has thorough coverage.
     These confirm the priority chain.
     """
 
     def test_direct_url_attribute_takes_priority(self):
+        """Spec: UNSPECIFIED (implementation-defined asset URL extraction)."""
         from src.core.tools.creatives._assets import _extract_url_from_assets
 
         creative = _make_creative_asset()
@@ -750,6 +858,7 @@ class TestExtractUrlFromAssets:
         assert url == "https://example.com/banner.png"
 
     def test_no_assets_returns_none(self):
+        """Spec: UNSPECIFIED (implementation-defined asset URL extraction)."""
         from src.core.tools.creatives._assets import _extract_url_from_assets
 
         creative = _make_creative_asset(assets={})
@@ -760,10 +869,12 @@ class TestExtractUrlFromAssets:
 class TestBuildCreativeData:
     """_build_creative_data dict construction.
 
+    Spec: UNSPECIFIED (implementation-defined data construction).
     Existing: test_build_creative_data.py has thorough coverage.
     """
 
     def test_standard_fields_always_present(self):
+        """Spec: UNSPECIFIED (implementation-defined data construction)."""
         from src.core.tools.creatives._assets import _build_creative_data
 
         creative = _make_creative_asset()
@@ -775,6 +886,7 @@ class TestBuildCreativeData:
         assert "duration" in data
 
     def test_context_stored_when_provided(self):
+        """Spec: UNSPECIFIED (implementation-defined data construction)."""
         from src.core.tools.creatives._assets import _build_creative_data
 
         creative = _make_creative_asset()
@@ -783,6 +895,7 @@ class TestBuildCreativeData:
         assert data["context"] == {"request_id": "req_123"}
 
     def test_assets_stored_when_present(self):
+        """Spec: UNSPECIFIED (implementation-defined data construction)."""
         from src.core.tools.creatives._assets import _build_creative_data
 
         creative = _make_creative_asset(assets={"main": {"url": "https://example.com/main.png"}})
@@ -797,12 +910,17 @@ class TestBuildCreativeData:
 
 
 class TestApprovalWorkflow:
-    """BR-RULE-037: Creative approval modes."""
+    """BR-RULE-037: Creative approval modes.
+
+    Spec: UNSPECIFIED (implementation-defined approval workflow).
+    The spec defines creative-status enum values but does not prescribe
+    approval workflow modes.
+    """
 
     def test_auto_approve_sets_approved_status(self):
         """Auto-approve mode sets creative status to approved.
 
-        Ref: BR-RULE-037 INV-2.
+        Spec: UNSPECIFIED (implementation-defined approval workflow).
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
@@ -836,7 +954,7 @@ class TestApprovalWorkflow:
     def test_require_human_sets_pending_review(self):
         """Require-human mode sets creative status to pending_review.
 
-        Ref: BR-RULE-037 INV-3.
+        Spec: UNSPECIFIED (implementation-defined approval workflow).
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
@@ -880,11 +998,15 @@ class TestApprovalWorkflow:
 class TestSlackNotificationGuard:
     """BR-RULE-037 INV-6: Slack notification guard conditions.
 
+    Spec: UNSPECIFIED (implementation-defined notification behavior).
     Existing: test_sync_creatives_behavioral.py::TestSlackNotificationGuard
     """
 
     def test_no_notification_without_webhook(self):
-        """No Slack sent when slack_webhook_url is None."""
+        """No Slack sent when slack_webhook_url is None.
+
+        Spec: UNSPECIFIED (implementation-defined notification behavior).
+        """
         from src.core.tools.creatives._workflow import _send_creative_notifications
 
         # Should not raise, should silently skip
@@ -896,7 +1018,10 @@ class TestSlackNotificationGuard:
         )
 
     def test_no_notification_for_auto_approve(self):
-        """No Slack sent in auto-approve mode even with webhook configured."""
+        """No Slack sent in auto-approve mode even with webhook configured.
+
+        Spec: UNSPECIFIED (implementation-defined notification behavior).
+        """
         from src.core.tools.creatives._workflow import _send_creative_notifications
 
         _send_creative_notifications(
@@ -907,7 +1032,10 @@ class TestSlackNotificationGuard:
         )
 
     def test_no_notification_for_ai_powered(self):
-        """No immediate Slack for ai-powered mode (deferred to after review)."""
+        """No immediate Slack for ai-powered mode (deferred to after review).
+
+        Spec: UNSPECIFIED (implementation-defined notification behavior).
+        """
         from src.core.tools.creatives._workflow import _send_creative_notifications
 
         _send_creative_notifications(
@@ -926,11 +1054,16 @@ class TestSlackNotificationGuard:
 class TestAssignmentProcessing:
     """Creative-to-package assignment processing.
 
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/sync-creatives-request.json
     Existing: test_sync_creatives_behavioral.py covers BR-RULE-040 transitions.
     """
 
     def test_none_assignments_returns_empty(self):
-        """None assignments produces empty assignment list."""
+        """None assignments produces empty assignment list.
+
+        Spec: CONFIRMED -- sync-creatives-request.json defines assignments
+        as optional; omission means no assignments.
+        """
         from src.core.tools.creatives._assignments import _process_assignments
 
         result = _process_assignments(
@@ -942,7 +1075,10 @@ class TestAssignmentProcessing:
         assert result == []
 
     def test_empty_dict_assignments_returns_empty(self):
-        """Empty dict assignments produces empty assignment list."""
+        """Empty dict assignments produces empty assignment list.
+
+        Spec: CONFIRMED -- assignments is an object; empty object means no assignments.
+        """
         from src.core.tools.creatives._assignments import _process_assignments
 
         result = _process_assignments(
@@ -956,7 +1092,8 @@ class TestAssignmentProcessing:
     def test_strict_mode_package_not_found_raises(self):
         """Strict mode raises AdCPNotFoundError for missing package.
 
-        Ref: BR-RULE-033 INV-2, BR-RULE-038 INV-1.
+        Spec: CONFIRMED -- sync-creatives-request.json defines validation_mode
+        with default 'strict'. Strict mode semantics: fail on error.
         Existing: test_sync_creatives_behavioral.py
         """
         from src.core.tools.creatives._assignments import _process_assignments
@@ -984,7 +1121,8 @@ class TestAssignmentProcessing:
     def test_lenient_mode_package_not_found_continues(self):
         """Lenient mode logs warning and continues for missing package.
 
-        Ref: BR-RULE-033 INV-3.
+        Spec: CONFIRMED -- validation_mode 'lenient' processes valid items
+        and reports errors per the spec description.
         Existing: test_sync_creatives_behavioral.py
         """
         from src.core.tools.creatives._assignments import _process_assignments
@@ -1018,16 +1156,23 @@ class TestAssignmentProcessing:
 
 
 class TestListCreativesAuth:
-    """Authentication for list_creatives."""
+    """Authentication for list_creatives.
+
+    Spec: UNSPECIFIED (implementation-defined security boundary).
+    """
 
     def test_no_identity_raises_auth_error(self):
-        """list_creatives requires authentication (creatives are principal-scoped)."""
+        """list_creatives requires authentication (creatives are principal-scoped).
+
+        Spec: UNSPECIFIED (implementation-defined security boundary).
+        """
         from src.core.tools.creatives.listing import _list_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError, match="x-adcp-auth"):
             _list_creatives_impl(identity=None)
 
     def test_no_principal_raises_auth_error(self):
+        """Spec: UNSPECIFIED (implementation-defined security boundary)."""
         from src.core.tools.creatives.listing import _list_creatives_impl
 
         identity = ResolvedIdentity(
@@ -1040,6 +1185,7 @@ class TestListCreativesAuth:
             _list_creatives_impl(identity=identity)
 
     def test_no_tenant_raises_auth_error(self):
+        """Spec: UNSPECIFIED (implementation-defined security boundary)."""
         from src.core.tools.creatives.listing import _list_creatives_impl
 
         identity = ResolvedIdentity(
@@ -1053,10 +1199,17 @@ class TestListCreativesAuth:
 
 
 class TestListCreativesValidation:
-    """Input validation for list_creatives."""
+    """Input validation for list_creatives.
+
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-filters.json
+    """
 
     def test_invalid_created_after_date_raises(self):
-        """Invalid date string for created_after raises AdCPValidationError."""
+        """Invalid date string for created_after raises AdCPValidationError.
+
+        Spec: CONFIRMED -- creative-filters.json defines created_after as
+        type: string, format: date-time.
+        """
         from src.core.tools.creatives.listing import _list_creatives_impl
 
         identity = _make_identity()
@@ -1064,6 +1217,7 @@ class TestListCreativesValidation:
             _list_creatives_impl(created_after="not-a-date", identity=identity)
 
     def test_invalid_created_before_date_raises(self):
+        """Spec: CONFIRMED -- creative-filters.json defines created_before as format: date-time."""
         from src.core.tools.creatives.listing import _list_creatives_impl
 
         identity = _make_identity()
@@ -1074,6 +1228,7 @@ class TestListCreativesValidation:
 class TestListCreativesRawBoundaryCompleteness:
     """list_creatives_raw boundary completeness.
 
+    Spec: UNSPECIFIED (implementation-defined transport boundary).
     Ref: FIXME(salesagent-v0kb) at listing.py:581.
     """
 
@@ -1097,9 +1252,13 @@ class TestListCreativesRawBoundaryCompleteness:
 
 
 class TestListCreativeFormatsAuth:
-    """UC-005: Auth is optional for format discovery but tenant is required."""
+    """UC-005: Auth is optional for format discovery but tenant is required.
+
+    Spec: UNSPECIFIED (implementation-defined security boundary).
+    """
 
     def test_no_tenant_raises(self):
+        """Spec: UNSPECIFIED (implementation-defined security boundary)."""
         from src.core.tools.creative_formats import _list_creative_formats_impl
 
         identity = ResolvedIdentity(
@@ -1115,6 +1274,7 @@ class TestListCreativeFormatsAuth:
 class TestListCreativeFormatsFiltering:
     """UC-005: Format filtering logic.
 
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/format.json
     Existing: test_creative_formats_behavioral.py has thorough BDD coverage
     of sort, type filter, dimension filter, asset_type filter, name_search.
     These tests complement with additional cases.
@@ -1153,7 +1313,8 @@ class TestListCreativeFormatsFiltering:
     def test_no_filters_returns_all(self):
         """Empty request returns all formats.
 
-        Ref: UC-005 BR-1.
+        Spec: CONFIRMED -- list-creative-formats-request has optional filter fields;
+        omitting all means return everything.
         Existing: test_creative_formats_behavioral.py
         """
         from adcp.types.generated_poc.enums.format_category import FormatCategory
@@ -1179,6 +1340,7 @@ class TestListCreativeFormatsFiltering:
     def test_type_filter(self):
         """Filter by format category type.
 
+        Spec: CONFIRMED -- format.json defines 'type' property using format-category enum.
         Existing: test_creative_formats_behavioral.py
         """
         from adcp.types.generated_poc.enums.format_category import FormatCategory
@@ -1206,7 +1368,8 @@ class TestListCreativeFormatsFiltering:
     def test_name_search_case_insensitive(self):
         """Name search is case-insensitive partial match.
 
-        Ref: UC-005 BR-7.
+        Spec: UNSPECIFIED (implementation-defined search semantics).
+        The spec defines format name as a string; search behavior is platform-defined.
         """
         from adcp.types.generated_poc.enums.format_category import FormatCategory
 
@@ -1224,7 +1387,10 @@ class TestListCreativeFormatsFiltering:
         assert len(result) == 1
 
     def test_default_request_when_none(self):
-        """Passing None request uses default (empty) request."""
+        """Passing None request uses default (empty) request.
+
+        Spec: UNSPECIFIED (implementation-defined default behavior).
+        """
         result = self._call_impl([], req=None)
         assert result == []
 
@@ -1235,7 +1401,12 @@ class TestListCreativeFormatsFiltering:
 
 
 class TestGenerativeCreativeBuild:
-    """BR-RULE-036: Generative creative build via creative agent."""
+    """BR-RULE-036: Generative creative build via creative agent.
+
+    Spec: CONFIRMED -- creative-asset.json defines inputs array for generative
+    preview contexts; format.json defines output_format_ids.
+    https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-asset.json
+    """
 
     @pytest.mark.skip(reason="GAP: BR-RULE-036 INV-2 -- prompt extraction priority: message > brief > prompt")
     def test_prompt_extracted_from_message_role(self):
@@ -1273,12 +1444,15 @@ class TestGenerativeCreativeBuild:
 
 
 class TestWorkflowStepCreation:
-    """Workflow step creation for creatives needing approval."""
+    """Workflow step creation for creatives needing approval.
+
+    Spec: UNSPECIFIED (implementation-defined approval workflow).
+    """
 
     def test_creates_workflow_step_for_pending_creative(self):
         """_create_sync_workflow_steps creates step with correct metadata.
 
-        Ref: BR-RULE-037 INV-5, _workflow.py.
+        Spec: UNSPECIFIED (implementation-defined approval workflow).
         """
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
@@ -1334,10 +1508,16 @@ class TestWorkflowStepCreation:
 
 
 class TestAuditLogging:
-    """Audit logging for sync_creatives."""
+    """Audit logging for sync_creatives.
+
+    Spec: UNSPECIFIED (implementation-defined audit logging).
+    """
 
     def test_audit_log_sync_succeeds_without_principal_in_db(self):
-        """_audit_log_sync does not crash when principal not found in DB."""
+        """_audit_log_sync does not crash when principal not found in DB.
+
+        Spec: UNSPECIFIED (implementation-defined audit logging).
+        """
         from src.core.tools.creatives._workflow import _audit_log_sync
 
         with (
@@ -1379,13 +1559,15 @@ class TestAuditLogging:
 class TestCreativeIdsFilter:
     """sync_creatives creative_ids filter (AdCP 2.5 scoped sync).
 
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/sync-creatives-request.json
     Existing: test_adcp_25_creative_management.py covers schema + basic filter.
     """
 
     def test_filter_narrows_to_matching_creatives(self):
         """creative_ids filter restricts processing to matching IDs only.
 
-        Ref: _sync.py lines 72-76.
+        Spec: CONFIRMED -- sync-creatives-request.json defines creative_ids:
+        'Optional filter to limit sync scope to specific creative IDs.'
         """
         from src.core.tools.creatives._validation import _get_field
 
@@ -1406,9 +1588,9 @@ class TestCreativeIdsFilter:
     def test_empty_creative_ids_filters_all(self):
         """Empty creative_ids list [] means process nothing.
 
-        Ref: _sync.py line 73 -- truthy check means [] is falsy, so no filtering.
-        Note: Current impl does NOT filter when creative_ids is [] (falsy).
-        This documents the actual behavior.
+        Spec: CONFIRMED -- sync-creatives-request.json specifies minItems:1
+        for creative_ids, so empty [] is invalid per schema. Implementation
+        treats falsy [] as no-filter (documents actual behavior).
         """
         creatives = [{"creative_id": "c1"}]
         creative_ids: list[str] = []
@@ -1429,7 +1611,10 @@ class TestCreativeIdsFilter:
 
 
 class TestDeleteMissing:
-    """delete_missing parameter for sync_creatives."""
+    """delete_missing parameter for sync_creatives.
+
+    Spec: CONFIRMED -- sync-creatives-request.json defines delete_missing (boolean, default: false).
+    """
 
     @pytest.mark.skip(reason="GAP: delete_missing=True not implemented in _sync_creatives_impl")
     def test_delete_missing_archives_unlisted_creatives(self):
@@ -1438,7 +1623,10 @@ class TestDeleteMissing:
 
 
 class TestDryRun:
-    """dry_run parameter for sync_creatives."""
+    """dry_run parameter for sync_creatives.
+
+    Spec: CONFIRMED -- sync-creatives-request.json defines dry_run (boolean, default: false).
+    """
 
     @pytest.mark.skip(reason="GAP: dry_run=True -- flag passed through to response but no DB skip logic")
     def test_dry_run_does_not_persist(self):
@@ -1447,7 +1635,10 @@ class TestDryRun:
 
 
 class TestCreativeGroupCRUD:
-    """CreativeGroup management operations."""
+    """CreativeGroup management operations.
+
+    Spec: UNSPECIFIED (no group management in current spec).
+    """
 
     @pytest.mark.skip(reason="GAP: CreativeGroup schema exists but no tool implementation")
     def test_create_creative_group(self):
@@ -1459,7 +1650,10 @@ class TestCreativeGroupCRUD:
 
 
 class TestCreativeAdaptation:
-    """AdaptCreativeRequest flow."""
+    """AdaptCreativeRequest flow.
+
+    Spec: UNSPECIFIED (no adaptation operation in current spec).
+    """
 
     @pytest.mark.skip(reason="GAP: AdaptCreativeRequest schema exists but no tool implementation")
     def test_adapt_creative(self):
@@ -1467,7 +1661,10 @@ class TestCreativeAdaptation:
 
 
 class TestCreativeWebhookDelivery:
-    """Webhook delivery when creative is approved."""
+    """Webhook delivery when creative is approved.
+
+    Spec: UNSPECIFIED (implementation-defined notification behavior).
+    """
 
     @pytest.mark.skip(reason="GAP: Webhook delivery on approval tested in admin blueprint, not unit")
     def test_webhook_delivered_on_approval(self):
@@ -1475,7 +1672,10 @@ class TestCreativeWebhookDelivery:
 
 
 class TestCreativePreviewFailed:
-    """BR-UC-006-ext-h: Preview failed with no media_url."""
+    """BR-UC-006-ext-h: Preview failed with no media_url.
+
+    Spec: UNSPECIFIED (implementation-defined preview failure handling).
+    """
 
     @pytest.mark.skip(reason="GAP: Needs _create_new_creative integration with mock preview failure")
     def test_no_previews_no_media_url_fails(self):
@@ -1489,9 +1689,13 @@ class TestCreativePreviewFailed:
 
 
 class TestCreativeApprovalStatusSchema:
-    """CreativeApprovalStatus schema."""
+    """CreativeApprovalStatus schema.
+
+    Spec: UNSPECIFIED (implementation-defined approval status entity).
+    """
 
     def test_construction(self):
+        """Spec: UNSPECIFIED (implementation-defined approval status entity)."""
         status = CreativeApprovalStatus(
             creative_id="c1",
             status="approved",
@@ -1502,6 +1706,7 @@ class TestCreativeApprovalStatusSchema:
         assert status.suggested_adaptations == []
 
     def test_with_suggested_adaptations(self):
+        """Spec: UNSPECIFIED (implementation-defined approval status entity)."""
         from src.core.schemas import CreativeAdaptation
 
         adaptation = CreativeAdaptation(
@@ -1528,14 +1733,17 @@ class TestCreativeApprovalStatusSchema:
 class TestFormatIdSchema:
     """FormatId schema extensions.
 
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/format-id.json
     Existing: test_format_id.py, test_format_id_parsing.py, etc.
     """
 
     def test_str_returns_id(self):
+        """Spec: UNSPECIFIED (implementation-defined convenience method)."""
         fmt = _format_id("display_300x250")
         assert str(fmt) == "display_300x250"
 
     def test_get_dimensions(self):
+        """Spec: CONFIRMED -- format-id.json defines width + height (integer, min:1) with co-dependency."""
         fmt = FormatId(
             agent_url=DEFAULT_AGENT_URL,
             id="custom",
@@ -1546,10 +1754,12 @@ class TestFormatIdSchema:
         assert dims == (300, 250)
 
     def test_get_dimensions_none_when_missing(self):
+        """Spec: CONFIRMED -- width/height are optional in format-id.json."""
         fmt = _format_id()
         assert fmt.get_dimensions() is None
 
     def test_get_duration_ms(self):
+        """Spec: CONFIRMED -- format-id.json defines duration_ms (number, min:1)."""
         fmt = FormatId(
             agent_url=DEFAULT_AGENT_URL,
             id="video",
@@ -1566,6 +1776,7 @@ class TestFormatIdSchema:
 class TestRESTCreativeRoutes:
     """REST API routes for creative operations.
 
+    Spec: UNSPECIFIED (implementation-defined transport layer).
     Existing: test_rest_api_endpoints.py covers route registration.
     These verify route existence without hitting the full stack.
     """
@@ -1592,7 +1803,9 @@ class TestCreativeWrongBaseClass:
     """P0 stubs for salesagent-goy2: Creative extends delivery base instead of
     listing base.  These fail today because the fix is not yet landed.
 
-    Obligation: BR-UC-006 -- Creative Schema Compliance (3.6 Upgrade)
+    Spec: CONFIRMED -- list-creatives-response.json Creative requires:
+    creative_id, name, format_id, status, created_date, updated_date.
+    https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/list-creatives-response.json
     """
 
     @pytest.mark.skip(
@@ -1637,7 +1850,14 @@ class TestCreativeWrongBaseClass:
 
 
 class TestCreativeAssetTypes:
-    """BR-UC-006 schema P1: CreativeAsset must accept all 11 asset types."""
+    """BR-UC-006 schema P1: CreativeAsset asset type coverage.
+
+    Spec: CONFIRMED -- creative-asset.json assets field oneOf lists 10 types;
+    format.json assets array lists 13 individual asset types (image, video,
+    audio, text, markdown, html, css, javascript, vast, daast,
+    promoted_offerings, url, webhook).
+    https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-asset.json
+    """
 
     @pytest.mark.skip(
         reason="STUB: BR-UC-006 schema P1 -- CreativeAsset must accept all 11 asset types "
@@ -1656,8 +1876,11 @@ class TestCreativeAssetTypes:
 class TestValidationModeSemantics:
     """BR-RULE-033: strict vs lenient validation mode.
 
+    Spec: CONFIRMED -- sync-creatives-request.json defines validation_mode
+    (default: strict). 'strict' fails entire sync on any error;
+    'lenient' processes valid creatives and reports errors.
+    https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/sync-creatives-request.json
     Existing: test_sync_creatives_behavioral.py covers strict/lenient branching.
-    These stubs cover gaps in the per-creative savepoint isolation and default semantics.
     """
 
     @pytest.mark.skip(
@@ -1686,7 +1909,11 @@ class TestValidationModeSemantics:
 
 
 class TestAssignmentPackageValidationGaps:
-    """BR-RULE-038 stubs not covered by existing TestAssignmentProcessing."""
+    """BR-RULE-038 stubs not covered by existing TestAssignmentProcessing.
+
+    Spec: CONFIRMED -- assignments field in sync-creatives-request.json
+    maps creative_ids to package_id arrays.
+    """
 
     @pytest.mark.skip(
         reason="STUB: BR-RULE-038 INV-3 -- idempotent upsert for duplicate assignment "
@@ -1711,8 +1938,9 @@ class TestAssignmentPackageValidationGaps:
 class TestFormatCompatibility:
     """BR-RULE-039: Assignment format compatibility checks.
 
+    Spec: UNSPECIFIED (implementation-defined format compatibility logic).
+    The spec defines format_id structure but not compatibility checking.
     Existing: test_validate_creative_format_against_product.py covers basic checks.
-    These stubs cover normalization, strict/lenient, and edge cases.
     """
 
     @pytest.mark.skip(reason="STUB: BR-RULE-039 INV-1/INV-2 -- URL normalization strips trailing '/' and '/mcp'")
@@ -1748,8 +1976,8 @@ class TestFormatCompatibility:
 class TestMediaBuyStatusTransition:
     """BR-RULE-040: Media buy status transitions on creative assignment.
 
+    Spec: UNSPECIFIED (implementation-defined status machine).
     Existing: test_sync_creatives_behavioral.py covers basic transitions.
-    These stubs cover guard conditions and upsert triggers.
     """
 
     @pytest.mark.skip(reason="STUB: BR-RULE-040 INV-1 -- draft + approved_at => pending_creatives")
@@ -1775,7 +2003,10 @@ class TestMediaBuyStatusTransition:
 
 
 class TestSyncCreativesMainFlowGaps:
-    """Main flow scenarios from BR-UC-006-main-mcp/rest not covered elsewhere."""
+    """Main flow scenarios from BR-UC-006-main-mcp/rest not covered elsewhere.
+
+    Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/sync-creatives-request.json
+    """
 
     @pytest.mark.skip(reason="STUB: BR-UC-006 main P1 -- multiple creatives batch sync (5 creatives => 5 results)")
     def test_batch_sync_multiple_creatives(self):
@@ -1809,7 +2040,10 @@ class TestSyncCreativesMainFlowGaps:
 
 
 class TestExtensionGaps:
-    """Extension scenarios from BR-UC-006 not covered by existing tests."""
+    """Extension scenarios from BR-UC-006 not covered by existing tests.
+
+    Mixed CONFIRMED/UNSPECIFIED -- see individual stub reasons.
+    """
 
     @pytest.mark.skip(reason="STUB: BR-UC-006-ext-b -- tenant not found returns TENANT_NOT_FOUND error")
     def test_ext_b_tenant_not_found(self):
@@ -1861,7 +2095,10 @@ class TestExtensionGaps:
 
 
 class TestA2ATransportGaps:
-    """A2A transport layer tests for creative operations."""
+    """A2A transport layer tests for creative operations.
+
+    Spec: UNSPECIFIED (implementation-defined transport layer).
+    """
 
     @pytest.mark.skip(reason="STUB: BR-UC-006-main-rest -- sync_creatives via A2A endpoint")
     def test_sync_creatives_via_a2a(self):
@@ -1890,7 +2127,12 @@ class TestA2ATransportGaps:
 
 
 class TestAsyncLifecycle:
-    """BR-UC-006 async lifecycle stubs (P3 -- async protocol not yet implemented)."""
+    """BR-UC-006 async lifecycle stubs (P3 -- async protocol not yet implemented).
+
+    Spec: CONFIRMED -- adcp spec defines sync-creatives-async-response-submitted,
+    sync-creatives-async-response-working, sync-creatives-async-response-input-required.
+    https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/media_buy/sync_creatives_async_response_submitted.py
+    """
 
     @pytest.mark.skip(reason="STUB: BR-UC-006 async P3 -- SyncCreativesAsyncResponseSubmitted schema")
     def test_async_submitted_response(self):
@@ -1911,7 +2153,11 @@ class TestAsyncLifecycle:
 
 
 class TestRequestConstraintValidation:
-    """Request-level constraints on sync_creatives input."""
+    """Request-level constraints on sync_creatives input.
+
+    Spec: CONFIRMED -- sync-creatives-request.json creatives array:
+    minItems: 1, maxItems: 100.
+    """
 
     @pytest.mark.skip(reason="STUB: BR-UC-006 PRE-B2 -- zero creatives rejected (minItems: 1)")
     def test_zero_creatives_rejected(self):
@@ -1928,7 +2174,11 @@ class TestRequestConstraintValidation:
 
 
 class TestDeleteMissingDefault:
-    """delete_missing=false default behavior."""
+    """delete_missing=false default behavior.
+
+    Spec: CONFIRMED -- sync-creatives-request.json defines delete_missing
+    with default: false.
+    """
 
     @pytest.mark.skip(reason="STUB: BR-UC-006 P2 -- delete_missing=false (default) preserves unlisted creatives")
     def test_delete_missing_false_preserves_unlisted(self):
@@ -1943,8 +2193,9 @@ class TestDeleteMissingDefault:
 class TestAssignmentsResponseCompleteness:
     """POST-S3, POST-S4: assignment visibility in per-creative results.
 
+    Spec: CONFIRMED -- sync-creatives-response.json per-creative result includes
+    assigned_to, assignment_errors, and warnings arrays.
     Existing: test_sync_creatives_assignment_reporting.py covers assigned_to/assignment_errors.
-    These stubs cover gaps in warnings visibility.
     """
 
     @pytest.mark.skip(reason="STUB: POST-S4 P2 -- warnings array included in per-creative results")
@@ -1958,7 +2209,10 @@ class TestAssignmentsResponseCompleteness:
 
 
 class TestCreativeIdsScopeFilterGap:
-    """creative_ids scope filter gap."""
+    """creative_ids scope filter gap.
+
+    Spec: CONFIRMED -- sync-creatives-request.json defines creative_ids for scoped sync.
+    """
 
     @pytest.mark.skip(reason="STUB: BR-UC-006 P3 -- creative_ids limits which creatives are processed")
     def test_creative_ids_filter_scope(self):
