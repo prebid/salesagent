@@ -259,6 +259,13 @@ def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant
     for creative in creatives_list:
         creative_data = creative.data or {}
 
+        # BR-RULE-026: Reject creatives in terminal error states
+        if hasattr(creative, "status") and creative.status in ("error", "rejected"):
+            validation_errors.append(
+                f"Creative {creative.creative_id} has status '{creative.status}' and cannot be used in a media buy"
+            )
+            continue
+
         # Get format specification from creative agent (uses in-memory cache with 30min TTL)
         format_spec = None
         if creative.format:
