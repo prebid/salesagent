@@ -3,7 +3,7 @@
 Spec verification: 2026-02-26
 adcp spec commit: 8f26baf3
 adcp-client-python commit: a08805d
-Verified: 30/59 CONFIRMED, 29/59 UNSPECIFIED, 0 CONTRADICTS, 0 SPEC_AMBIGUOUS
+Verified: 30/59 CONFIRMED, 24/59 UNSPECIFIED, 5 CONTRADICTS (salesagent-mexj), 0 SPEC_AMBIGUOUS
 
 This module maps every test obligation from docs/test-obligations/UC-004-deliver-media-buy-metrics.md
 to either a real test or a skip stub. It covers:
@@ -545,44 +545,41 @@ class TestDeliveryIdentificationModes:
         assert call_req.buyer_refs is None
         assert len(response.media_buy_deliveries) == 1
 
-    def test_partial_ids_returns_only_valid(self):
-        """UC-004-MAIN-14: partial resolution returns found buys only.
+    @pytest.mark.skip(
+        reason="STUB: UC-004-MAIN-14 -- CONTRADICTS: partial resolution must report errors for missing IDs (salesagent-mexj)"
+    )
+    def test_partial_ids_returns_found_and_errors_for_missing(self):
+        """UC-004-MAIN-14: partial resolution returns found buys AND errors for missing.
 
-        Spec: UNSPECIFIED (implementation-defined partial resolution behavior).
+        Spec: CONTRADICTS -- get-media-buy-delivery-response.json has errors array for
+        "Task-specific errors and warnings (e.g., missing delivery data)". Current impl
+        silently drops missing IDs. Correct: return delivery for found IDs + populate
+        errors with media_buy_not_found for each missing ID.
+        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/media-buy/get-media-buy-delivery-response.json
+        Fix: _get_target_media_buys must track which requested IDs were not found and
+        return errors for them. See salesagent-mexj.
+        Priority: P1
+        Type: unit
+        Source: UC-004, salesagent-mexj
         """
-        buy = _make_mock_media_buy(media_buy_id="mb_valid")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_valid",
-            impressions=100,
-            spend=10.0,
-            packages=[{"package_id": "pkg_001", "impressions": 100, "spend": 10.0}],
-        )
 
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_valid", "mb_nonexistent"])
+        pass
 
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_valid", buy)],
-        )
+    @pytest.mark.skip(
+        reason="STUB: UC-004-MAIN-15 -- CONTRADICTS: all IDs missing must return errors, not silent empty (salesagent-mexj)"
+    )
+    def test_all_ids_invalid_returns_empty_with_errors(self):
+        """UC-004-MAIN-15: all requested IDs missing returns empty deliveries + errors.
 
-        assert len(response.media_buy_deliveries) == 1
-        assert response.media_buy_deliveries[0].media_buy_id == "mb_valid"
-        assert response.errors is None
-
-    def test_all_ids_invalid_returns_empty_no_error(self):
-        """UC-004-MAIN-15: zero identifiers resolve returns empty array.
-
-        Spec: UNSPECIFIED (implementation-defined behavior when no identifiers resolve).
+        Spec: CONTRADICTS -- response.errors must contain media_buy_not_found for each
+        missing ID. Current impl returns empty with errors=None.
+        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/media-buy/get-media-buy-delivery-response.json
+        Fix: populate errors array. See salesagent-mexj.
+        Priority: P1
+        Type: unit
+        Source: UC-004, salesagent-mexj
         """
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_ghost1", "mb_ghost2"])
-
-        response = _run_impl_with_patches(req, target_buys=[])
-
-        assert len(response.media_buy_deliveries) == 0
-        assert response.errors is None
-        assert response.aggregated_totals.media_buy_count == 0
+        pass
 
 
 # ===========================================================================
@@ -942,41 +939,52 @@ class TestDeliveryMediaBuyNotFound:
     """UC-004-EXT-C: media buy resolution failures."""
 
     @pytest.mark.skip(
-        reason="STUB: UC-004-EXT-C1 -- media_buy_id not found returns media_buy_not_found error (current impl returns empty, spec says error)"
+        reason="STUB: UC-004-EXT-C1 -- CONTRADICTS: media_buy_id not found must return media_buy_not_found error (salesagent-mexj)"
     )
     def test_media_buy_not_found_returns_error(self):
-        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
-        CONFIRMED: errors array uses core/error.json; spec supports error reporting in response."""
+        """UC-004-EXT-C1: single media_buy_id not found returns error in response.
+
+        Spec: CONTRADICTS -- get-media-buy-delivery-response.json errors array is for
+        "Task-specific errors and warnings (e.g., missing delivery data)". Current impl
+        returns empty deliveries with errors=None. Correct: errors=[{code: "media_buy_not_found"}].
+        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/media-buy/get-media-buy-delivery-response.json
+        Fix: _get_target_media_buys must diff requested IDs vs found IDs. See salesagent-mexj.
+        Priority: P1
+        Type: unit
+        Source: UC-004, salesagent-mexj
+        """
         pass
 
-    def test_partial_ids_returns_found_only(self):
-        """UC-004-EXT-C2: partial failure returns only found buys (BR-RULE-030 INV-5).
+    @pytest.mark.skip(
+        reason="STUB: UC-004-EXT-C2 -- CONTRADICTS: partial failure must return found buys AND errors for missing (salesagent-mexj)"
+    )
+    def test_partial_ids_returns_found_and_errors(self):
+        """UC-004-EXT-C2: partial failure returns found buys + errors for missing.
 
-        Spec: UNSPECIFIED (implementation-defined partial resolution behavior).
+        Spec: CONTRADICTS -- current impl returns found buys with errors=None.
+        Correct: return found buys in media_buy_deliveries AND populate errors with
+        media_buy_not_found for each missing ID. Both arrays populated simultaneously.
+        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/media-buy/get-media-buy-delivery-response.json
+        Fix: _get_target_media_buys must diff requested vs found. See salesagent-mexj.
+        Priority: P1
+        Type: unit
+        Source: UC-004, salesagent-mexj, BR-RULE-030
         """
-        buy = _make_mock_media_buy(media_buy_id="mb_found")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_found",
-            impressions=100,
-            spend=10.0,
-            packages=[{"package_id": "pkg_001", "impressions": 100, "spend": 10.0}],
-        )
+        pass
 
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_found", "mb_missing"])
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_found", buy)],
-        )
-
-        assert len(response.media_buy_deliveries) == 1
-        assert response.errors is None
-
-    @pytest.mark.skip(reason="STUB: UC-004-EXT-C3 -- buyer_ref does not resolve returns media_buy_not_found")
+    @pytest.mark.skip(
+        reason="STUB: UC-004-EXT-C3 -- CONTRADICTS: buyer_ref not found must return media_buy_not_found error (salesagent-mexj)"
+    )
     def test_buyer_ref_not_found_returns_error(self):
-        """Spec: UNSPECIFIED (implementation-defined error behavior for unresolved buyer_ref)."""
+        """UC-004-EXT-C3: buyer_ref not found returns error in response.
+
+        Spec: CONTRADICTS -- same pattern as media_buy_id: errors array must report
+        unresolved buyer_refs. Current impl silently returns empty.
+        Fix: _get_target_media_buys must diff requested buyer_refs vs found. See salesagent-mexj.
+        Priority: P1
+        Type: unit
+        Source: UC-004, salesagent-mexj
+        """
         pass
 
 
