@@ -44,12 +44,6 @@ KNOWN_VIOLATIONS = {
     "src.core.tools.media_buy_create::_create_media_buy_impl::a2a::context_id",
     # A2A wrapper for update_media_buy doesn't pass context_id
     "src.core.tools.media_buy_update::_update_media_buy_impl::a2a::context_id",
-    # A2A wrapper for list_creatives doesn't pass newer _impl parameters
-    "src.core.tools.creatives.listing::_list_creatives_impl::a2a::filters",
-    "src.core.tools.creatives.listing::_list_creatives_impl::a2a::fields",
-    "src.core.tools.creatives.listing::_list_creatives_impl::a2a::include_performance",
-    "src.core.tools.creatives.listing::_list_creatives_impl::a2a::include_assignments",
-    "src.core.tools.creatives.listing::_list_creatives_impl::a2a::include_sub_assets",
 }
 
 # Parameters resolved at the boundary, not forwarded from the caller

@@ -652,10 +652,75 @@ class TestCrossPrincipalIsolation:
             # Should have processed (possibly failed) but not crashed
             assert result is not None
 
-    @pytest.mark.skip(reason="GAP: BR-RULE-034 INV-2 -- needs integration test with two principals")
     def test_same_creative_id_different_principal_creates_new(self):
-        """Same creative_id under different principal creates new creative, not overwrite."""
-        pass
+        """Same creative_id under different principal creates new creative, not overwrite.
+
+        The filter_by uses (tenant_id, principal_id, creative_id). When principal_id
+        differs, the lookup returns None, triggering _create_new_creative instead of
+        _update_existing_creative.
+        """
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+
+        identity_p1 = _make_identity(principal_id="principal_1")
+        identity_p2 = _make_identity(principal_id="principal_2")
+
+        create_calls = []
+
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch(
+                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                return_value=MagicMock(),
+            ),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._sync._create_new_creative") as mock_create,
+        ):
+            mock_reg = MagicMock()
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = mock_reg
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+
+            # DB returns None for both principals (neither has the creative yet)
+            mock_session.scalars.return_value.first.return_value = None
+
+            from adcp.types.generated_poc.enums.creative_action import CreativeAction
+
+            mock_create.return_value = (
+                SyncCreativeResult(creative_id="c_shared", action=CreativeAction.created),
+                False,
+            )
+
+            # Sync same creative_id for principal_1
+            _sync_creatives_impl(
+                creatives=[_make_creative_asset(creative_id="c_shared")],
+                identity=identity_p1,
+            )
+            # Sync same creative_id for principal_2
+            _sync_creatives_impl(
+                creatives=[_make_creative_asset(creative_id="c_shared")],
+                identity=identity_p2,
+            )
+
+            # Both calls should invoke _create_new_creative (not update)
+            assert mock_create.call_count == 2
+            # Verify different principal_ids were used
+            call_principal_ids = [call.kwargs["principal_id"] for call in mock_create.call_args_list]
+            assert "principal_1" in call_principal_ids
+            assert "principal_2" in call_principal_ids
 
     def test_new_creative_stamped_with_principal_id(self):
         """New creative DB record has principal_id from identity.
@@ -1279,18 +1344,50 @@ class TestListCreativesRawBoundaryCompleteness:
     Ref: FIXME(salesagent-v0kb) at listing.py:581.
     """
 
-    @pytest.mark.skip(reason="GAP: FIXME(salesagent-v0kb) -- filters, fields, include_* not forwarded to _impl")
     def test_raw_forwards_filters_to_impl(self):
         """list_creatives_raw must forward filters parameter to _list_creatives_impl."""
-        pass
+        from adcp import CreativeFilters
 
-    @pytest.mark.skip(reason="GAP: FIXME(salesagent-v0kb) -- include_performance not forwarded")
+        from src.core.tools.creatives.listing import list_creatives_raw
+
+        test_filters = CreativeFilters()
+        identity = _make_identity()
+
+        with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
+            mock_impl.return_value = ListCreativesResponse(
+                creatives=[], pagination=Pagination(has_more=False), query_summary=QuerySummary()
+            )
+            list_creatives_raw(filters=test_filters, identity=identity)
+            mock_impl.assert_called_once()
+            assert mock_impl.call_args.kwargs["filters"] is test_filters
+
     def test_raw_forwards_include_performance(self):
-        pass
+        """list_creatives_raw must forward include_performance parameter to _list_creatives_impl."""
+        from src.core.tools.creatives.listing import list_creatives_raw
 
-    @pytest.mark.skip(reason="GAP: FIXME(salesagent-v0kb) -- include_assignments not forwarded")
+        identity = _make_identity()
+
+        with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
+            mock_impl.return_value = ListCreativesResponse(
+                creatives=[], pagination=Pagination(has_more=False), query_summary=QuerySummary()
+            )
+            list_creatives_raw(include_performance=True, identity=identity)
+            mock_impl.assert_called_once()
+            assert mock_impl.call_args.kwargs["include_performance"] is True
+
     def test_raw_forwards_include_assignments(self):
-        pass
+        """list_creatives_raw must forward include_assignments parameter to _list_creatives_impl."""
+        from src.core.tools.creatives.listing import list_creatives_raw
+
+        identity = _make_identity()
+
+        with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
+            mock_impl.return_value = ListCreativesResponse(
+                creatives=[], pagination=Pagination(has_more=False), query_summary=QuerySummary()
+            )
+            list_creatives_raw(include_assignments=True, identity=identity)
+            mock_impl.assert_called_once()
+            assert mock_impl.call_args.kwargs["include_assignments"] is True
 
 
 # ============================================================================
@@ -2046,10 +2143,59 @@ class TestDeleteMissing:
     Spec: CONFIRMED -- sync-creatives-request.json defines delete_missing (boolean, default: false).
     """
 
-    @pytest.mark.skip(reason="GAP: delete_missing=True not implemented in _sync_creatives_impl")
+    @pytest.mark.xfail(
+        reason="delete_missing=True not yet implemented in _sync_creatives_impl — parameter accepted but archive logic missing"
+    )
     def test_delete_missing_archives_unlisted_creatives(self):
         """When delete_missing=True, creatives not in payload are deleted/archived."""
-        pass
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+
+        identity = _make_identity()
+
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch(
+                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                return_value=MagicMock(),
+            ),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+        ):
+            mock_reg = MagicMock()
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = mock_reg
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.first.return_value = None
+
+            # Sync only c1, with delete_missing=True
+            result = _sync_creatives_impl(
+                creatives=[_make_creative_asset(creative_id="c1")],
+                delete_missing=True,
+                identity=identity,
+            )
+
+            # Expect a "deleted" action for creatives not in payload
+            actions = []
+            for r in result.creatives:
+                action = r.action
+                if hasattr(action, "value"):
+                    action = action.value
+                actions.append(action)
+
+            assert "deleted" in actions, "delete_missing=True should produce 'deleted' actions for unlisted creatives"
 
 
 class TestDryRun:
@@ -2058,10 +2204,53 @@ class TestDryRun:
     Spec: CONFIRMED -- sync-creatives-request.json defines dry_run (boolean, default: false).
     """
 
-    @pytest.mark.skip(reason="GAP: dry_run=True -- flag passed through to response but no DB skip logic")
+    @pytest.mark.xfail(
+        reason="dry_run=True is passed through to response but DB write is not skipped — needs implementation"
+    )
     def test_dry_run_does_not_persist(self):
         """When dry_run=True, no creatives are persisted to DB."""
-        pass
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+
+        identity = _make_identity()
+
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch(
+                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                return_value=MagicMock(),
+            ),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+        ):
+            mock_reg = MagicMock()
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = mock_reg
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.first.return_value = None
+
+            result = _sync_creatives_impl(
+                creatives=[_make_creative_asset(creative_id="c1")],
+                dry_run=True,
+                identity=identity,
+            )
+
+            assert result.dry_run is True
+            # dry_run should NOT call session.add or session.commit
+            mock_session.add.assert_not_called()
+            mock_session.commit.assert_not_called()
 
 
 class TestCreativeGroupCRUD:
@@ -2070,13 +2259,39 @@ class TestCreativeGroupCRUD:
     Spec: UNSPECIFIED (no group management in current spec).
     """
 
-    @pytest.mark.skip(reason="GAP: CreativeGroup schema exists but no tool implementation")
+    @pytest.mark.xfail(reason="CreativeGroup schema exists but no create_creative_group tool implementation yet")
     def test_create_creative_group(self):
-        pass
+        """CreateCreativeGroupRequest schema is defined; a create tool should exist."""
+        from src.core.schemas import CreateCreativeGroupRequest
 
-    @pytest.mark.skip(reason="GAP: No list/get creative groups tool")
+        req = CreateCreativeGroupRequest(name="Holiday Banners", description="Q4 campaign")
+        assert req.name == "Holiday Banners"
+
+        # The tool function should exist (will fail until implemented)
+        from src.core import tools
+
+        assert hasattr(tools, "create_creative_group") or hasattr(tools, "create_creative_group_raw"), (
+            "No create_creative_group tool found"
+        )
+
+    @pytest.mark.xfail(reason="CreativeGroup schema exists but no list/get creative groups tool yet")
     def test_list_creative_groups(self):
-        pass
+        """CreativeGroup schema is defined; a list tool should exist."""
+        from src.core.schemas import CreativeGroup
+
+        group = CreativeGroup(
+            group_id="g1",
+            principal_id="p1",
+            name="Test Group",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        assert group.group_id == "g1"
+
+        from src.core import tools
+
+        assert hasattr(tools, "list_creative_groups") or hasattr(tools, "list_creative_groups_raw"), (
+            "No list_creative_groups tool found"
+        )
 
 
 class TestCreativeAdaptation:
@@ -2085,9 +2300,22 @@ class TestCreativeAdaptation:
     Spec: UNSPECIFIED (no adaptation operation in current spec).
     """
 
-    @pytest.mark.skip(reason="GAP: AdaptCreativeRequest schema exists but no tool implementation")
+    @pytest.mark.xfail(reason="AdaptCreativeRequest schema exists but no adapt_creative tool implementation yet")
     def test_adapt_creative(self):
-        pass
+        """AdaptCreativeRequest schema is defined; an adapt tool should exist."""
+        from src.core.schemas import AdaptCreativeRequest
+
+        req = AdaptCreativeRequest(
+            media_buy_id="mb1",
+            original_creative_id="c1",
+            target_format_id="video_640x480",
+            new_creative_id="c1_adapted",
+        )
+        assert req.target_format_id == "video_640x480"
+
+        from src.core import tools
+
+        assert hasattr(tools, "adapt_creative") or hasattr(tools, "adapt_creative_raw"), "No adapt_creative tool found"
 
 
 class TestCreativeWebhookDelivery:
@@ -2096,9 +2324,32 @@ class TestCreativeWebhookDelivery:
     Spec: UNSPECIFIED (implementation-defined notification behavior).
     """
 
-    @pytest.mark.skip(reason="GAP: Webhook delivery on approval tested in admin blueprint, not unit")
     def test_webhook_delivered_on_approval(self):
-        pass
+        """Slack notification is sent for creatives needing approval in require-human mode."""
+        from src.core.tools.creatives._workflow import _send_creative_notifications
+
+        tenant = {
+            "tenant_id": "t1",
+            "slack_webhook_url": "https://hooks.slack.com/test",
+        }
+        creatives_needing_approval = [
+            {"creative_id": "c1", "format": "display_300x250_image", "name": "Banner", "status": "pending_review"},
+        ]
+
+        with patch("src.services.slack_notifier.get_slack_notifier") as mock_get_notifier:
+            mock_notifier = MagicMock()
+            mock_get_notifier.return_value = mock_notifier
+
+            _send_creative_notifications(
+                creatives_needing_approval=creatives_needing_approval,
+                tenant=tenant,
+                approval_mode="require-human",
+                principal_id="p1",
+            )
+
+            mock_notifier.notify_creative_pending.assert_called_once()
+            call_kwargs = mock_notifier.notify_creative_pending.call_args
+            assert call_kwargs.kwargs["creative_id"] == "c1" or call_kwargs[1].get("creative_id") == "c1"
 
 
 class TestCreativePreviewFailed:
@@ -2107,10 +2358,56 @@ class TestCreativePreviewFailed:
     Spec: UNSPECIFIED (implementation-defined preview failure handling).
     """
 
-    @pytest.mark.skip(reason="GAP: Needs _create_new_creative integration with mock preview failure")
     def test_no_previews_no_media_url_fails(self):
         """Creative agent returns no previews and creative has no media_url => action=failed."""
-        pass
+        from src.core.tools.creatives._processing import _create_new_creative
+
+        mock_session = MagicMock()
+        # Creative with no url in assets
+        creative = _make_creative_asset(
+            creative_id="c_no_preview",
+            assets={},
+        )
+        format_value = _format_id()
+        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+
+        mock_format_obj = MagicMock()
+        mock_format_obj.format_id = _adcp_format_id()
+        mock_format_obj.agent_url = DEFAULT_AGENT_URL
+        mock_format_obj.output_format_ids = None  # Not generative
+
+        mock_registry = MagicMock()
+
+        with (
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt_info,
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context") as mock_run_async,
+        ):
+            mock_fmt_info.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+            # preview_creative returns empty dict (no previews)
+            mock_run_async.return_value = {}
+
+            result, needs_approval = _create_new_creative(
+                creative=creative,
+                session=mock_session,
+                format_value=format_value,
+                approval_mode="auto-approve",
+                tenant=tenant,
+                webhook_url=None,
+                context=None,
+                all_formats=[mock_format_obj],
+                registry=mock_registry,
+                principal_id="p1",
+            )
+
+            action = result.action
+            if hasattr(action, "value"):
+                action = action.value
+            assert action == "failed", f"Expected 'failed' action but got '{action}'"
+            assert result.errors and len(result.errors) > 0
 
 
 # ============================================================================
@@ -2546,19 +2843,98 @@ class TestAssignmentPackageValidationGaps:
     maps creative_ids to package_id arrays.
     """
 
-    @pytest.mark.skip(
-        reason="STUB: BR-RULE-038 INV-3 -- idempotent upsert for duplicate assignment "
-        "(weight reset to 100, no duplicate record)"
-    )
     def test_idempotent_upsert_duplicate_assignment(self):
-        """Same creative-package pair synced twice -> existing record updated, not duplicated."""
+        """Same creative-package pair synced twice -> existing record updated, not duplicated.
 
-    @pytest.mark.skip(
-        reason="STUB: BR-RULE-038 INV-1 -- cross-tenant package isolation "
-        "(package in tenant T1 not visible from tenant T2)"
-    )
+        The code checks for existing assignments via filter_by on
+        (tenant_id, media_buy_id, package_id, creative_id) and resets weight to 100.
+        """
+        from src.core.tools.creatives._assignments import _process_assignments
+
+        tenant = {"tenant_id": "t1"}
+
+        # Mock existing assignment with weight != 100
+        mock_existing_assignment = MagicMock()
+        mock_existing_assignment.weight = 50
+        mock_existing_assignment.assignment_id = "a1"
+        mock_existing_assignment.media_buy_id = "mb1"
+        mock_existing_assignment.package_id = "pkg1"
+        mock_existing_assignment.creative_id = "c1"
+
+        # Pre-existing result entry for creative c1
+        results = [SyncCreativeResult(creative_id="c1", action="created")]
+
+        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+
+            # Package lookup returns valid package+media_buy
+            mock_package = MagicMock()
+            mock_package.media_buy_id = "mb1"
+            mock_package.package_id = "pkg1"
+            mock_package.package_config = {}
+            mock_media_buy = MagicMock()
+            mock_media_buy.status = "approved"
+            mock_media_buy.approved_at = None
+            mock_session.execute.return_value.first.return_value = (mock_package, mock_media_buy)
+
+            # Creative lookup (for format validation)
+            mock_creative = MagicMock()
+            mock_creative.agent_url = DEFAULT_AGENT_URL
+            mock_creative.format = "display_300x250_image"
+
+            def scalars_side_effect(stmt):
+                result = MagicMock()
+                # First call: creative lookup, second call: existing assignment
+                return result
+
+            mock_session.scalars.return_value.first.side_effect = [
+                mock_creative,  # creative lookup
+                mock_existing_assignment,  # existing assignment lookup
+            ]
+
+            _process_assignments(
+                assignments={"c1": ["pkg1"]},
+                results=results,
+                tenant=tenant,
+                validation_mode="strict",
+            )
+
+            # Weight should be reset to 100
+            assert mock_existing_assignment.weight == 100
+            # No new assignment added (idempotent)
+            mock_session.add.assert_not_called()
+
     def test_cross_tenant_package_isolation(self):
-        """Package lookup must be scoped by tenant_id."""
+        """Package lookup must be scoped by tenant_id.
+
+        The _process_assignments function joins MediaPackage with MediaBuy
+        and filters by MediaBuy.tenant_id. This test verifies that a package
+        belonging to tenant T1 is not visible when processing for tenant T2.
+        """
+        from src.core.tools.creatives._assignments import _process_assignments
+
+        results = [SyncCreativeResult(creative_id="c1", action="created")]
+
+        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+
+            # Package lookup returns None (package belongs to different tenant)
+            mock_session.execute.return_value.first.return_value = None
+
+            # Should raise AdCPNotFoundError in strict mode
+            from src.core.exceptions import AdCPNotFoundError
+
+            with pytest.raises(AdCPNotFoundError, match="Package not found"):
+                _process_assignments(
+                    assignments={"c1": ["pkg_other_tenant"]},
+                    results=results,
+                    tenant={"tenant_id": "t2"},
+                    validation_mode="strict",
+                )
 
 
 # ============================================================================
@@ -3809,17 +4185,59 @@ class TestAsyncLifecycle:
     https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/media_buy/sync_creatives_async_response_submitted.py
     """
 
-    @pytest.mark.skip(reason="STUB: BR-UC-006 async P3 -- SyncCreativesAsyncResponseSubmitted schema")
     def test_async_submitted_response(self):
         """Async submitted acknowledgment conforms to adcp 3.6.0 schema."""
+        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_submitted import (
+            SyncCreativesSubmitted,
+        )
 
-    @pytest.mark.skip(reason="STUB: BR-UC-006 async P3 -- SyncCreativesAsyncResponseWorking schema")
+        # Schema accepts context and ext fields
+        response = SyncCreativesSubmitted(context=None, ext=None)
+        assert "context" in SyncCreativesSubmitted.model_fields
+        assert "ext" in SyncCreativesSubmitted.model_fields
+
+        # Can be constructed with no args (all optional)
+        empty = SyncCreativesSubmitted()
+        assert empty.context is None
+
     def test_async_working_response(self):
         """Async working response includes progress percentage and counts."""
+        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_working import (
+            SyncCreativesWorking,
+        )
 
-    @pytest.mark.skip(reason="STUB: BR-UC-006 async P3 -- SyncCreativesAsyncResponseInputRequired schema")
+        response = SyncCreativesWorking(
+            percentage=50.0,
+            creatives_processed=5,
+            creatives_total=10,
+            current_step="validating",
+            step_number=2,
+            total_steps=4,
+        )
+        data = response.model_dump()
+        assert data["percentage"] == 50.0
+        assert data["creatives_processed"] == 5
+        assert data["creatives_total"] == 10
+        assert data["current_step"] == "validating"
+
     def test_async_input_required_response(self):
         """Async input-required response indicates what input is needed."""
+        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_input_required import (
+            Reason,
+            SyncCreativesInputRequired,
+        )
+
+        response = SyncCreativesInputRequired(reason=Reason.APPROVAL_REQUIRED)
+        assert response.reason == Reason.APPROVAL_REQUIRED
+
+        # model_dump with mode="json" should serialize enum to string
+        data = response.model_dump(mode="json")
+        assert data["reason"] == "APPROVAL_REQUIRED"
+
+        # All reason enum values should be valid
+        for reason in Reason:
+            r = SyncCreativesInputRequired(reason=reason)
+            assert r.reason == reason
 
 
 # ============================================================================
@@ -3954,6 +4372,55 @@ class TestCreativeIdsScopeFilterGap:
     Spec: CONFIRMED -- sync-creatives-request.json defines creative_ids for scoped sync.
     """
 
-    @pytest.mark.skip(reason="STUB: BR-UC-006 P3 -- creative_ids limits which creatives are processed")
     def test_creative_ids_filter_scope(self):
         """Sending creatives [C1,C2,C3] with creative_ids=[C1,C3] processes only C1,C3."""
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+
+        identity = _make_identity()
+
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch(
+                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                return_value=MagicMock(),
+            ),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+        ):
+            mock_reg = MagicMock()
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = mock_reg
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.first.return_value = None
+
+            creatives = [
+                _make_creative_asset(creative_id="C1"),
+                _make_creative_asset(creative_id="C2"),
+                _make_creative_asset(creative_id="C3"),
+            ]
+
+            result = _sync_creatives_impl(
+                creatives=creatives,
+                creative_ids=["C1", "C3"],
+                identity=identity,
+            )
+
+            # Only C1 and C3 should be processed
+            processed_ids = [r.creative_id for r in result.creatives]
+            assert "C1" in processed_ids
+            assert "C3" in processed_ids
+            assert "C2" not in processed_ids
+            assert len(result.creatives) == 2

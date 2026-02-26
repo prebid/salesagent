@@ -536,6 +536,11 @@ def list_creatives_raw(
     created_after: str = None,
     created_before: str = None,
     search: str = None,
+    filters: CreativeFilters | None = None,
+    fields: list[str] | None = None,
+    include_performance: bool = False,
+    include_assignments: bool = False,
+    include_sub_assets: bool = False,
     page: int = 1,
     limit: int = 50,
     sort_by: str = "created_date",
@@ -559,6 +564,11 @@ def list_creatives_raw(
         created_after: Filter creatives created after this date (ISO format) (optional)
         created_before: Filter creatives created before this date (ISO format) (optional)
         search: Search in creative name or description (optional)
+        filters: Advanced filtering options (CreativeFilters model, optional)
+        fields: Specific fields to return (optional)
+        include_performance: Include performance metrics (optional)
+        include_assignments: Include package assignments (optional)
+        include_sub_assets: Include sub-assets (optional)
         page: Page number for pagination (default: 1)
         limit: Number of results per page (default: 50, max: 1000)
         sort_by: Sort field (default: created_date)
@@ -575,8 +585,6 @@ def list_creatives_raw(
 
         identity = resolve_identity_from_context(ctx)
 
-    # FIXME(salesagent-v0kb): boundary-completeness — filters, fields, include_performance,
-    # include_assignments, include_sub_assets not passed to _impl
     return _list_creatives_impl(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
@@ -588,6 +596,11 @@ def list_creatives_raw(
         created_after=created_after,
         created_before=created_before,
         search=search,
+        filters=filters,
+        fields=fields,
+        include_performance=include_performance,
+        include_assignments=include_assignments,
+        include_sub_assets=include_sub_assets,
         page=page,
         limit=limit,
         sort_by=sort_by,
