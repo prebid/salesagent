@@ -219,7 +219,7 @@ def _seed_lifecycle_test_data():
             updated_at=datetime.now(UTC),
             creative_auto_approve_threshold=0.8,
             creative_auto_reject_threshold=0.2,
-            brand_manifest_policy="flexible",
+            brand_manifest_policy="public",
             auth_setup_mode=True,
         )
         session.add(tenant)
