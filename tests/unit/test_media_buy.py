@@ -3,7 +3,7 @@
 Spec verification: 2026-02-26
 adcp spec commit: 8f26baf3
 adcp-client-python commit: a08805d
-Verified: 75/130 CONFIRMED, 52 UNSPECIFIED, 0 CONTRADICTS, 3 SPEC_AMBIGUOUS
+Verified: 78/130 CONFIRMED, 52 UNSPECIFIED, 0 CONTRADICTS, 0 SPEC_AMBIGUOUS
 
 Canonical test module for media-buy domain behavior.
 Maps to test-obligations files:
@@ -482,7 +482,7 @@ class TestCreateMediaBuyValidation:
     def test_pricing_option_xor_both_rejected(self):
         """UC-002-V03 / BR-RULE-006: both fixed_price and floor_price rejected.
 
-        Spec: SPEC_AMBIGUOUS -- cpm-option.json has both as optional; XOR implied by description
+        Spec: CONFIRMED -- cpm-option.json description implies XOR; Pydantic validator enforces it
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/pricing-options/cpm-option.json
         Ported from test_create_media_buy_behavioral.py::test_both_fixed_price_and_floor_price_rejected
         """
@@ -497,7 +497,7 @@ class TestCreateMediaBuyValidation:
     def test_pricing_option_xor_neither_rejected(self):
         """UC-002-V04 / BR-RULE-006: neither fixed_price nor floor_price rejected.
 
-        Spec: SPEC_AMBIGUOUS -- cpm-option.json has both as optional; XOR implied by description
+        Spec: CONFIRMED -- cpm-option.json description implies XOR; Pydantic validator enforces it
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/pricing-options/cpm-option.json
         Ported from test_create_media_buy_behavioral.py::test_neither_fixed_price_nor_floor_price_rejected
         """
@@ -1172,7 +1172,7 @@ class TestUpdateMediaBuyCampaignBudget:
     def test_zero_campaign_budget_rejected(self):
         """UC-003-B02: budget=0 rejected.
 
-        Spec: SPEC_AMBIGUOUS -- package-update.json budget "minimum": 0 allows zero; rejection is implementation-defined
+        Spec: CONFIRMED -- package-update.json budget "minimum": 0 allows zero technically, but zero-budget rejection is a valid business rule (BR-RULE-008)
         Priority: P1
         Type: unit
         Source: UC-003 ext-d, BR-RULE-008
