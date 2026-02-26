@@ -4001,21 +4001,20 @@ class TestGetMediaBuysResponseShape:
 class TestGetMediaBuysImplAuth:
     """get_media_buys: authentication and principal checks."""
 
-    def test_missing_context_raises_error(self):
-        """GMB-A01: None ctx raises ToolError.
+    def test_missing_identity_raises_error(self):
+        """GMB-A01: None identity raises AdCPAuthenticationError.
 
         Spec: UNSPECIFIED (implementation-defined authentication boundary)
         Priority: P0
         Type: unit
         Source: get_media_buys
         """
-        from fastmcp.exceptions import ToolError
-
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         req = GetMediaBuysRequest()
-        with pytest.raises(ToolError):
-            _get_media_buys_impl(req, ctx=None)
+        with pytest.raises(AdCPAuthenticationError):
+            _get_media_buys_impl(req, identity=None)
 
     def test_missing_principal_returns_empty(self):
         """GMB-A02: no principal_id returns empty media_buys with error.
@@ -4025,16 +4024,19 @@ class TestGetMediaBuysImplAuth:
         Type: unit
         Source: get_media_buys
         """
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         req = GetMediaBuysRequest()
-        mock_ctx = MagicMock()
+        identity = ResolvedIdentity(
+            principal_id=None,
+            tenant_id="tenant_1",
+            tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
+            protocol="mcp",
+            testing_context=None,
+        )
 
-        with (
-            patch("src.core.tools.media_buy_list.get_testing_context", return_value=None),
-            patch("src.core.tools.media_buy_list.get_principal_id_from_context", return_value=None),
-        ):
-            resp = _get_media_buys_impl(req, ctx=mock_ctx)
+        resp = _get_media_buys_impl(req, identity=identity)
 
         assert isinstance(resp, GetMediaBuysResponse)
         assert resp.media_buys == []
@@ -4050,15 +4052,21 @@ class TestGetMediaBuysImplAuth:
         Type: unit
         Source: get_media_buys
         """
-        from fastmcp.exceptions import ToolError
-
+        from src.core.exceptions import AdCPValidationError
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         req = GetMediaBuysRequest(account_id="acc_123")
-        mock_ctx = MagicMock()
+        identity = ResolvedIdentity(
+            principal_id="principal_1",
+            tenant_id="tenant_1",
+            tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
+            protocol="mcp",
+            testing_context=None,
+        )
 
-        with pytest.raises(ToolError, match="(?i)account_id.*not.*supported"):
-            _get_media_buys_impl(req, ctx=mock_ctx)
+        with pytest.raises(AdCPValidationError, match="(?i)account_id.*not.*supported"):
+            _get_media_buys_impl(req, identity=identity)
 
 
 # ===========================================================================

@@ -30,7 +30,7 @@ def _make_mock_media_buy():
     mb.currency = "USD"
     mb.raw_request = {
         "buyer_ref": "test-buyer",
-        "brand_manifest": {"name": "Test Brand"},
+        "brand": {"domain": "testbrand.com"},
         "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         "end_time": (datetime.now(UTC) + timedelta(days=8)).isoformat(),
         "packages": [
