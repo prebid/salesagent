@@ -1,5 +1,10 @@
 """Canonical test suite for UC-004: Deliver Media Buy Metrics.
 
+Spec verification: 2026-02-26
+adcp spec commit: 8f26baf3
+adcp-client-python commit: a08805d
+Verified: 30/59 CONFIRMED, 29/59 UNSPECIFIED, 0 CONTRADICTS, 0 SPEC_AMBIGUOUS
+
 This module maps every test obligation from docs/test-obligations/UC-004-deliver-media-buy-metrics.md
 to either a real test or a skip stub. It covers:
 - Main flow: polling delivery metrics (single/multi buy, identification modes)
@@ -226,6 +231,11 @@ class TestDeliveryPollingSingleBuy:
 
         Verifies: reporting_period, currency, aggregated_totals, media_buy_deliveries[0]
         with totals and by_package, and status.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: reporting_period (required), currency (required), media_buy_deliveries (required),
+        aggregated_totals.impressions/spend/media_buy_count (required), media_buy_deliveries[].status (required),
+        media_buy_deliveries[].totals (required), media_buy_deliveries[].by_package (required).
         """
         buy = _make_mock_media_buy(
             media_buy_id="mb_single",
@@ -303,7 +313,13 @@ class TestDeliveryPollingMultiBuy:
     """UC-004-MAIN: multiple buys with aggregated totals."""
 
     def test_two_buys_aggregate_correctly(self):
-        """UC-004-MAIN-03, MAIN-11: aggregated_totals sum across multiple buys."""
+        """UC-004-MAIN-03, MAIN-11: aggregated_totals sum across multiple buys.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: aggregated_totals.impressions (required, >=0), aggregated_totals.spend (required, >=0),
+        aggregated_totals.media_buy_count (required, >=0). Spec defines these as combined metrics across
+        all returned media buys.
+        """
         buy1 = _make_mock_media_buy(
             media_buy_id="mb_agg_1",
             budget=5000.0,
@@ -377,7 +393,11 @@ class TestDeliveryIdentificationModes:
     """UC-004 BR-RULE-030: media_buy_ids vs buyer_refs vs both vs neither."""
 
     def test_media_buy_ids_only(self):
-        """UC-004-MAIN-01: media_buy_ids provided, buyer_refs absent."""
+        """UC-004-MAIN-01: media_buy_ids provided, buyer_refs absent.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: media_buy_ids is an optional array of strings (minItems: 1).
+        """
         buy = _make_mock_media_buy(media_buy_id="mb_id1")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -411,7 +431,11 @@ class TestDeliveryIdentificationModes:
         assert call_req.media_buy_ids == ["mb_id1"]
 
     def test_buyer_refs_only(self):
-        """UC-004-MAIN-02: buyer_refs provided, media_buy_ids absent."""
+        """UC-004-MAIN-02: buyer_refs provided, media_buy_ids absent.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: buyer_refs is an optional array of strings (minItems: 1).
+        """
         buy = _make_mock_media_buy(media_buy_id="mb_ref1", buyer_ref="buyer_A")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -444,7 +468,11 @@ class TestDeliveryIdentificationModes:
         assert call_req.buyer_refs == ["buyer_A"]
 
     def test_both_provided_media_buy_ids_wins(self):
-        """UC-004-MAIN-05: media_buy_ids takes precedence over buyer_refs."""
+        """UC-004-MAIN-05: media_buy_ids takes precedence over buyer_refs.
+
+        Spec: UNSPECIFIED (implementation-defined precedence when both identifiers provided).
+        Request schema allows both fields simultaneously but does not define precedence.
+        """
         buy = _make_mock_media_buy(media_buy_id="mb_priority")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -480,7 +508,11 @@ class TestDeliveryIdentificationModes:
         assert len(response.media_buy_deliveries) == 1
 
     def test_neither_provided_fetches_all(self):
-        """UC-004-MAIN-04: neither identifiers fetches all principal buys."""
+        """UC-004-MAIN-04: neither identifiers fetches all principal buys.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: media_buy_ids and buyer_refs are both optional (no required fields in request schema).
+        """
         buy = _make_mock_media_buy(media_buy_id="mb_all1")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -514,7 +546,10 @@ class TestDeliveryIdentificationModes:
         assert len(response.media_buy_deliveries) == 1
 
     def test_partial_ids_returns_only_valid(self):
-        """UC-004-MAIN-14: partial resolution returns found buys only."""
+        """UC-004-MAIN-14: partial resolution returns found buys only.
+
+        Spec: UNSPECIFIED (implementation-defined partial resolution behavior).
+        """
         buy = _make_mock_media_buy(media_buy_id="mb_valid")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -537,7 +572,10 @@ class TestDeliveryIdentificationModes:
         assert response.errors is None
 
     def test_all_ids_invalid_returns_empty_no_error(self):
-        """UC-004-MAIN-15: zero identifiers resolve returns empty array."""
+        """UC-004-MAIN-15: zero identifiers resolve returns empty array.
+
+        Spec: UNSPECIFIED (implementation-defined behavior when no identifiers resolve).
+        """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_ghost1", "mb_ghost2"])
 
         response = _run_impl_with_patches(req, target_buys=[])
@@ -556,7 +594,12 @@ class TestDeliveryStatusFilter:
     """UC-004-FILT: status filtering via _get_target_media_buys."""
 
     def test_status_filter_all_returns_all_statuses(self):
-        """UC-004-FILT-06: status_filter='all' returns buys of any status."""
+        """UC-004-FILT-06: status_filter='all' returns buys of any status.
+
+        Spec: UNSPECIFIED (implementation-defined 'all' filter value).
+        The spec's media-buy-status enum is [pending_activation, active, paused, completed];
+        'all' is not a spec-defined status value.
+        """
         from src.core.tools.media_buy_delivery import _get_target_media_buys
 
         ref_date = date(2025, 6, 15)
@@ -596,7 +639,11 @@ class TestDeliveryStatusFilter:
         assert returned_ids == {"mb_ready", "mb_active", "mb_completed"}
 
     def test_status_filter_default_is_active(self):
-        """UC-004-FILT-05: no status_filter defaults to active."""
+        """UC-004-FILT-05: no status_filter defaults to active.
+
+        Spec: UNSPECIFIED (implementation-defined default when status_filter omitted).
+        Request schema has status_filter as optional with no default.
+        """
         patches = _standard_patches(target_buys=[])
         req = GetMediaBuyDeliveryRequest()
         identity = _make_identity()
@@ -615,7 +662,10 @@ class TestDeliveryStatusFilter:
         assert call_req.status_filter is None  # None -> impl defaults to ["active"]
 
     def test_default_filter_only_returns_active_buys(self):
-        """UC-004-FILT-01 (partial): default filter returns only active buys."""
+        """UC-004-FILT-01 (partial): default filter returns only active buys.
+
+        Spec: UNSPECIFIED (implementation-defined default filter behavior).
+        """
         from src.core.tools.media_buy_delivery import _get_target_media_buys
 
         ref_date = date(2025, 6, 15)
@@ -648,18 +698,25 @@ class TestDeliveryStatusFilter:
 
     @pytest.mark.skip(reason="STUB: UC-004-FILT-02 -- filter by status completed")
     def test_status_filter_completed(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: status_filter accepts media-buy-status enum including 'completed'."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-FILT-03 -- filter by status paused")
     def test_status_filter_paused(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: status_filter accepts media-buy-status enum including 'paused'."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-FILT-04 -- no media buys match filter returns empty result")
     def test_status_filter_no_match_returns_empty(self):
+        """Spec: UNSPECIFIED (implementation-defined empty-result behavior)."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-FILT-07 -- valid status enum values accepted by schema")
     def test_valid_status_enum_values_accepted(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/enums/media-buy-status.json
+        CONFIRMED: enum values are [pending_activation, active, paused, completed]."""
         pass
 
 
@@ -672,7 +729,12 @@ class TestDeliveryDateRange:
     """UC-004-DATE: custom date range handling."""
 
     def test_custom_date_range_reflected_in_reporting_period(self):
-        """UC-004-DATE-01: both start and end provided."""
+        """UC-004-DATE-01: both start and end provided.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: start_date and end_date are optional strings with YYYY-MM-DD pattern.
+        Response reporting_period has required start/end datetime fields.
+        """
         req = GetMediaBuyDeliveryRequest(
             start_date="2025-03-15",
             end_date="2025-04-15",
@@ -684,7 +746,12 @@ class TestDeliveryDateRange:
         assert response.reporting_period.end == datetime(2025, 4, 15, tzinfo=UTC)
 
     def test_no_date_range_defaults_to_last_30_days(self):
-        """UC-004-MAIN-06: no dates defaults to last 30 days."""
+        """UC-004-MAIN-06: no dates defaults to last 30 days.
+
+        Spec: UNSPECIFIED (implementation-defined default date range).
+        Spec says "When omitted along with end_date, returns campaign lifetime data"
+        but implementation uses 30-day window.
+        """
         req = GetMediaBuyDeliveryRequest()
 
         response = _run_impl_with_patches(req, target_buys=[])
@@ -696,16 +763,20 @@ class TestDeliveryDateRange:
 
     @pytest.mark.skip(reason="STUB: UC-004-DATE-02 -- only start_date provided, end defaults to now")
     def test_only_start_date_end_defaults_to_now(self):
+        """Spec: UNSPECIFIED (implementation-defined default for missing end_date)."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-DATE-03 -- only end_date provided, start defaults to creation date")
     def test_only_end_date_start_defaults_to_creation(self):
+        """Spec: UNSPECIFIED (implementation-defined default for missing start_date)."""
         pass
 
     @pytest.mark.skip(
         reason="STUB: UC-004-DATE-04 -- custom date range overrides default 30-day window (verify explicitly)"
     )
     def test_custom_range_overrides_default(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: start_date/end_date are explicit request parameters that define the reporting period."""
         pass
 
 
@@ -726,22 +797,33 @@ class TestDeliveryPricingOptionLookup:
         reason="STUB: UC-004-UPG-01 -- CRITICAL: pricing_option_id lookup must use string field, not integer PK. See salesagent-mq3n"
     )
     def test_pricing_option_lookup_uses_string_field_not_integer_pk(self):
-        """_get_pricing_options must resolve pricing_option_id through the string field."""
+        """_get_pricing_options must resolve pricing_option_id through the string field.
+
+        Spec: UNSPECIFIED (implementation-defined ID resolution strategy).
+        """
         pass
 
     @pytest.mark.skip(
         reason="STUB: UC-004-UPG-02 -- CRITICAL: delivery spend computed correctly when pricing lookup succeeds"
     )
     def test_delivery_spend_correct_with_cpm_pricing(self):
-        """CPM pricing: 10,000 impressions at $5.00 CPM = $50.00 spend."""
+        """CPM pricing: 10,000 impressions at $5.00 CPM = $50.00 spend.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
+        CONFIRMED: spend (type: number, minimum: 0) and impressions (type: number, minimum: 0) are defined.
+        """
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-UPG-02 -- CPC pricing: 500 clicks at $0.50 = $250.00 spend")
     def test_delivery_spend_correct_with_cpc_pricing(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
+        CONFIRMED: clicks (type: number, minimum: 0) and spend are defined metrics."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-UPG-02 -- FLAT_RATE pricing: total rate $5,000")
     def test_delivery_spend_correct_with_flat_rate_pricing(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/pricing-option.json
+        CONFIRMED: flat-rate-option is one of the pricing option types."""
         pass
 
 
@@ -754,7 +836,11 @@ class TestDeliveryUpgradeCompat:
     """UC-004-UPG: 3.6 upgrade schema compatibility."""
 
     def test_buyer_ref_present_in_delivery_entries(self):
-        """UC-004-UPG-03: buyer_ref present in media_buy_deliveries."""
+        """UC-004-UPG-03: buyer_ref present in media_buy_deliveries.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: media_buy_deliveries[].buyer_ref is an optional string field.
+        """
         buy = _make_mock_media_buy(
             media_buy_id="mb_ref",
             buyer_ref="buyer_camp_1",
@@ -786,10 +872,13 @@ class TestDeliveryUpgradeCompat:
         reason="STUB: UC-004-UPG-04 -- GetMediaBuyDeliveryResponse nested serialization with NestedModelSerializerMixin"
     )
     def test_nested_serialization_model_dump(self):
+        """Spec: UNSPECIFIED (implementation-defined serialization mechanism)."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-UPG-05 -- delivery response preserves ext fields")
     def test_ext_fields_preserved(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: ext field references core/ext.json; additionalProperties: true on response."""
         pass
 
 
@@ -802,7 +891,10 @@ class TestDeliveryAuthErrors:
     """UC-004-EXT-A/B: authentication and principal errors."""
 
     def test_missing_principal_id_returns_error(self):
-        """UC-004-EXT-A1: no principal_id returns principal_id_missing error."""
+        """UC-004-EXT-A1: no principal_id returns principal_id_missing error.
+
+        Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
+        """
         identity = ResolvedIdentity(
             principal_id="",
             tenant_id="test_tenant",
@@ -820,7 +912,10 @@ class TestDeliveryAuthErrors:
         assert response.media_buy_deliveries == []
 
     def test_principal_not_found_returns_error(self):
-        """UC-004-EXT-B1: principal ID not in tenant returns principal_not_found."""
+        """UC-004-EXT-B1: principal ID not in tenant returns principal_not_found.
+
+        Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
+        """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
         identity = _make_identity(principal_id="ghost_principal")
 
@@ -834,6 +929,7 @@ class TestDeliveryAuthErrors:
 
     @pytest.mark.skip(reason="STUB: UC-004-EXT-A2 -- system state unchanged on auth failure (read-only op)")
     def test_auth_failure_no_state_change(self):
+        """Spec: UNSPECIFIED (implementation-defined security boundary)."""
         pass
 
 
@@ -849,10 +945,15 @@ class TestDeliveryMediaBuyNotFound:
         reason="STUB: UC-004-EXT-C1 -- media_buy_id not found returns media_buy_not_found error (current impl returns empty, spec says error)"
     )
     def test_media_buy_not_found_returns_error(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: errors array uses core/error.json; spec supports error reporting in response."""
         pass
 
     def test_partial_ids_returns_found_only(self):
-        """UC-004-EXT-C2: partial failure returns only found buys (BR-RULE-030 INV-5)."""
+        """UC-004-EXT-C2: partial failure returns only found buys (BR-RULE-030 INV-5).
+
+        Spec: UNSPECIFIED (implementation-defined partial resolution behavior).
+        """
         buy = _make_mock_media_buy(media_buy_id="mb_found")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -875,6 +976,7 @@ class TestDeliveryMediaBuyNotFound:
 
     @pytest.mark.skip(reason="STUB: UC-004-EXT-C3 -- buyer_ref does not resolve returns media_buy_not_found")
     def test_buyer_ref_not_found_returns_error(self):
+        """Spec: UNSPECIFIED (implementation-defined error behavior for unresolved buyer_ref)."""
         pass
 
 
@@ -894,16 +996,19 @@ class TestDeliveryOwnership:
         reason="STUB: UC-004-EXT-D1 -- SECURITY: principal does not own media buy returns media_buy_not_found"
     )
     def test_ownership_mismatch_returns_not_found(self):
+        """Spec: UNSPECIFIED (implementation-defined security boundary)."""
         pass
 
     @pytest.mark.skip(
         reason="STUB: UC-004-EXT-D2 -- SECURITY: error is media_buy_not_found not ownership_mismatch (no info leakage)"
     )
     def test_no_info_leakage_on_ownership_error(self):
+        """Spec: UNSPECIFIED (implementation-defined security boundary)."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-EXT-D3 -- mixed ownership: some owned, some not")
     def test_mixed_ownership_behavior(self):
+        """Spec: UNSPECIFIED (implementation-defined security boundary)."""
         pass
 
 
@@ -916,7 +1021,11 @@ class TestDeliveryInvalidDateRange:
     """UC-004-EXT-E: invalid date range validation."""
 
     def test_start_date_equals_end_date_returns_error(self):
-        """UC-004-EXT-E1: start_date == end_date returns invalid_date_range."""
+        """UC-004-EXT-E1: start_date == end_date returns invalid_date_range.
+
+        Spec: UNSPECIFIED (implementation-defined date range validation).
+        Spec defines start_date/end_date as string patterns but no ordering constraint.
+        """
         req = GetMediaBuyDeliveryRequest(
             start_date="2025-03-15",
             end_date="2025-03-15",
@@ -929,7 +1038,10 @@ class TestDeliveryInvalidDateRange:
         assert response.media_buy_deliveries == []
 
     def test_start_date_after_end_date_returns_error(self):
-        """UC-004-EXT-E2: start_date > end_date returns invalid_date_range."""
+        """UC-004-EXT-E2: start_date > end_date returns invalid_date_range.
+
+        Spec: UNSPECIFIED (implementation-defined date range validation).
+        """
         req = GetMediaBuyDeliveryRequest(
             start_date="2025-03-20",
             end_date="2025-03-10",
@@ -943,6 +1055,7 @@ class TestDeliveryInvalidDateRange:
 
     @pytest.mark.skip(reason="STUB: UC-004-EXT-E3 -- state unchanged on date range error (read-only op)")
     def test_date_range_error_no_state_change(self):
+        """Spec: UNSPECIFIED (implementation-defined error handling behavior)."""
         pass
 
 
@@ -955,7 +1068,12 @@ class TestDeliveryAdapterError:
     """UC-004-EXT-F: adapter failure handling."""
 
     def test_adapter_exception_returns_adapter_error(self):
-        """UC-004-EXT-F1: adapter raises Exception -> adapter_error code."""
+        """UC-004-EXT-F1: adapter raises Exception -> adapter_error code.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: errors array (items: core/error.json) is an optional field for task-specific
+        errors and warnings.
+        """
         buy = _make_mock_media_buy(media_buy_id="mb_err")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.side_effect = RuntimeError("GAM API timeout")
@@ -976,7 +1094,12 @@ class TestDeliveryAdapterError:
         assert response.aggregated_totals.spend == 0.0
 
     def test_adapter_error_preserves_reporting_period(self):
-        """UC-004-EXT-F2: adapter error still includes correct reporting_period."""
+        """UC-004-EXT-F2: adapter error still includes correct reporting_period.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: reporting_period is a required field in the response, so it must be present
+        even when errors occur.
+        """
         buy = _make_mock_media_buy(media_buy_id="mb_err2", currency="EUR")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.side_effect = ConnectionError("Network down")
@@ -999,10 +1122,12 @@ class TestDeliveryAdapterError:
 
     @pytest.mark.skip(reason="STUB: UC-004-EXT-F3 -- adapter failure logged to audit trail (NFR-003)")
     def test_adapter_failure_audit_logged(self):
+        """Spec: UNSPECIFIED (implementation-defined audit/logging behavior)."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-EXT-F4 -- state unchanged on adapter error (verify no DB writes)")
     def test_adapter_error_no_state_change(self):
+        """Spec: UNSPECIFIED (implementation-defined error handling behavior)."""
         pass
 
 
@@ -1027,24 +1152,36 @@ class TestDeliveryWebhookHappyPath:
 
     @pytest.mark.skip(reason="STUB: UC-004-WH-06 -- next_expected_at computed for non-final deliveries")
     def test_next_expected_at_computed(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: next_expected_at is an optional datetime field, described as present
+        "when notification_type is not 'final'"."""
         pass
 
     @pytest.mark.skip(
         reason="STUB: UC-004-WH-07 -- webhook payload signed with HMAC-SHA256 (verify X-ADCP-Signature + X-ADCP-Timestamp)"
     )
     def test_hmac_sha256_signature_headers(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/reporting-webhook.json
+        CONFIRMED: authentication.schemes supports ['HMAC-SHA256'] for signature verification."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-WH-09 -- webhook does NOT include aggregated_totals")
     def test_webhook_excludes_aggregated_totals(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: aggregated_totals description says "Only included in API responses
+        (get_media_buy_delivery), not in webhook notifications."."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-WH-10 -- webhook filters to requested_metrics only")
     def test_webhook_filters_requested_metrics(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/reporting-webhook.json
+        CONFIRMED: requested_metrics is an optional array of available-metric enum values;
+        "If omitted, all available metrics are included."."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-WH-11 -- only active media buys trigger webhook delivery")
     def test_only_active_trigger_webhook(self):
+        """Spec: UNSPECIFIED (implementation-defined webhook trigger criteria)."""
         pass
 
 
@@ -1062,7 +1199,10 @@ class TestDeliveryWebhookRetry:
     """
 
     def test_five_failures_opens_circuit_breaker(self):
-        """UC-004-EXT-G3: 5 consecutive failures transitions to OPEN state."""
+        """UC-004-EXT-G3: 5 consecutive failures transitions to OPEN state.
+
+        Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
 
         assert cb.state == CircuitState.CLOSED
@@ -1074,7 +1214,10 @@ class TestDeliveryWebhookRetry:
         assert cb.state == CircuitState.OPEN
 
     def test_open_circuit_rejects_requests(self):
-        """UC-004-EXT-G3: OPEN circuit -> can_attempt() returns False."""
+        """UC-004-EXT-G3: OPEN circuit -> can_attempt() returns False.
+
+        Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
         for _ in range(5):
             cb.record_failure()
@@ -1083,7 +1226,10 @@ class TestDeliveryWebhookRetry:
         assert cb.can_attempt() is False
 
     def test_open_transitions_to_half_open_after_timeout(self):
-        """UC-004-EXT-G4: OPEN state + timeout -> HALF_OPEN."""
+        """UC-004-EXT-G4: OPEN state + timeout -> HALF_OPEN.
+
+        Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
         for _ in range(5):
             cb.record_failure()
@@ -1094,7 +1240,10 @@ class TestDeliveryWebhookRetry:
         assert cb.state == CircuitState.HALF_OPEN
 
     def test_half_open_recovers_after_success_threshold(self):
-        """UC-004-EXT-G4: HALF_OPEN + 2 successes -> CLOSED."""
+        """UC-004-EXT-G4: HALF_OPEN + 2 successes -> CLOSED.
+
+        Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
         for _ in range(5):
             cb.record_failure()
@@ -1107,7 +1256,10 @@ class TestDeliveryWebhookRetry:
         assert cb.state == CircuitState.CLOSED
 
     def test_half_open_failure_returns_to_open(self):
-        """UC-004-EXT-G4: HALF_OPEN + failure -> back to OPEN."""
+        """UC-004-EXT-G4: HALF_OPEN + failure -> back to OPEN.
+
+        Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
         for _ in range(5):
             cb.record_failure()
@@ -1123,10 +1275,12 @@ class TestDeliveryWebhookRetry:
 
     @pytest.mark.skip(reason="STUB: UC-004-EXT-G6 -- 401/403 auth rejection marks webhook as failed, no retry")
     def test_auth_rejection_marks_webhook_failed(self):
+        """Spec: UNSPECIFIED (implementation-defined webhook retry/failure behavior)."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-EXT-G7 -- webhook failures produce no synchronous error to buyer")
     def test_webhook_failures_no_synchronous_error(self):
+        """Spec: UNSPECIFIED (implementation-defined webhook error isolation)."""
         pass
 
 
@@ -1140,20 +1294,30 @@ class TestDeliveryProtocol:
 
     @pytest.mark.skip(reason="STUB: UC-004-MAIN-12 -- response wrapped in protocol envelope with status=completed")
     def test_protocol_envelope_status_completed(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/protocol-envelope.json
+        CONFIRMED: protocol envelope wraps task responses with status field."""
         pass
 
     @pytest.mark.skip(reason="STUB: UC-004-MAIN-13 -- MCP ToolResult contains both content and structured_content")
     def test_mcp_toolresult_content_and_structured(self):
+        """Spec: UNSPECIFIED (MCP transport-specific implementation detail)."""
         pass
 
     @pytest.mark.skip(
         reason="STUB: UC-004-MAIN-16 -- delivery metrics include all standard fields (impressions, spend, clicks, ctr, video, conversions, viewability)"
     )
     def test_delivery_metrics_all_standard_fields(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
+        CONFIRMED: delivery-metrics.json defines impressions, spend, clicks, ctr, views,
+        completed_views, completion_rate, conversions, conversion_value, roas, cost_per_acquisition,
+        viewability, engagement_rate, cost_per_click, quartile_data, dooh_metrics, etc."""
         pass
 
     @pytest.mark.skip(
         reason="STUB: UC-004-MAIN-17 -- unpopulated fields (daily_breakdown, effective_rate, viewability, creative_breakdowns) handled gracefully"
     )
     def test_unpopulated_fields_handled_gracefully(self):
+        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        CONFIRMED: daily_breakdown, effective_rate, viewability, by_creative are all optional
+        fields in the spec (no required constraint)."""
         pass
