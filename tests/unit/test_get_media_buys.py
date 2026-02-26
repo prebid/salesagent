@@ -18,6 +18,7 @@ import pytest
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from pydantic import RootModel
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
@@ -29,7 +30,6 @@ from src.core.schemas import (
     Snapshot,
     SnapshotUnavailableReason,
 )
-from src.core.tool_context import ToolContext
 from src.core.tools.media_buy_list import (
     _compute_status,
     _fetch_target_media_buys,
@@ -43,14 +43,21 @@ from src.core.tools.media_buy_list import (
 # ---------------------------------------------------------------------------
 
 
-def make_tool_context(tenant_id="tenant_1", principal_id="principal_1"):
-    return ToolContext(
-        tenant_id=tenant_id,
+def make_identity(
+    tenant_id="tenant_1",
+    principal_id="principal_1",
+    tenant=None,
+    testing_context=None,
+):
+    """Create a ResolvedIdentity for testing."""
+    if tenant is None:
+        tenant = {"tenant_id": tenant_id, "adapter_type": "mock"}
+    return ResolvedIdentity(
         principal_id=principal_id,
-        testing_context={},
-        context_id="test-ctx",
-        tool_name="get_media_buys",
-        request_timestamp="2025-01-01T00:00:00Z",
+        tenant_id=tenant_id,
+        tenant=tenant,
+        protocol="mcp",
+        testing_context=testing_context,
     )
 
 
@@ -217,10 +224,7 @@ class TestGetMediaBuysImpl:
     def _make_request(self, **kwargs):
         return GetMediaBuysRequest(**kwargs)
 
-    @patch("src.core.tools.media_buy_list.get_principal_id_from_context")
     @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list.get_current_tenant")
-    @patch("src.core.tools.media_buy_list.get_testing_context")
     @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
     @patch("src.core.tools.media_buy_list._fetch_packages")
     @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
@@ -229,16 +233,10 @@ class TestGetMediaBuysImpl:
         mock_fetch_approvals,
         mock_fetch_packages,
         mock_fetch_buys,
-        mock_testing_ctx,
-        mock_tenant,
         mock_principal_obj,
-        mock_principal_id,
     ):
         """Basic happy path: one active media buy returned."""
-        mock_principal_id.return_value = "principal_1"
         mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-        mock_tenant.return_value = {"tenant_id": "tenant_1", "adapter_type": "mock"}
-        mock_testing_ctx.return_value = None
 
         # Use clearly active dates (past start, far future end)
         buy = make_media_buy(
@@ -251,28 +249,23 @@ class TestGetMediaBuysImpl:
         mock_fetch_approvals.return_value = {}
 
         req = self._make_request()
-        response = _get_media_buys_impl(req, make_tool_context())
+        response = _get_media_buys_impl(req, identity=make_identity())
 
         assert len(response.media_buys) == 1
         assert response.media_buys[0].media_buy_id == "buy_active"
 
-    @patch("src.core.tools.media_buy_list.get_principal_id_from_context")
-    def test_missing_principal_returns_error(self, mock_principal_id):
-        """If principal ID not in context, return empty list with error."""
-        mock_principal_id.return_value = None
+    def test_missing_principal_returns_error(self):
+        """If principal ID not in identity, return empty list with error."""
+        identity = make_identity(principal_id=None)
 
-        with patch("src.core.tools.media_buy_list.get_testing_context", return_value=None):
-            req = self._make_request()
-            response = _get_media_buys_impl(req, make_tool_context())
+        req = self._make_request()
+        response = _get_media_buys_impl(req, identity=identity)
 
         assert response.media_buys == []
         assert response.errors is not None
         assert len(response.errors) > 0
 
-    @patch("src.core.tools.media_buy_list.get_principal_id_from_context")
     @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list.get_current_tenant")
-    @patch("src.core.tools.media_buy_list.get_testing_context")
     @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
     @patch("src.core.tools.media_buy_list._fetch_packages")
     @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
@@ -281,16 +274,10 @@ class TestGetMediaBuysImpl:
         mock_fetch_approvals,
         mock_fetch_packages,
         mock_fetch_buys,
-        mock_testing_ctx,
-        mock_tenant,
         mock_principal_obj,
-        mock_principal_id,
     ):
         """When include_snapshot=False, adapter.get_packages_snapshot not called."""
-        mock_principal_id.return_value = "principal_1"
         mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-        mock_tenant.return_value = {"tenant_id": "tenant_1", "adapter_type": "mock"}
-        mock_testing_ctx.return_value = None
 
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         mock_fetch_buys.return_value = [buy]
@@ -303,14 +290,11 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request(include_snapshot=False)
-            _get_media_buys_impl(req, make_tool_context())
+            _get_media_buys_impl(req, identity=make_identity())
 
         mock_adapter.get_packages_snapshot.assert_not_called()
 
-    @patch("src.core.tools.media_buy_list.get_principal_id_from_context")
     @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list.get_current_tenant")
-    @patch("src.core.tools.media_buy_list.get_testing_context")
     @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
     @patch("src.core.tools.media_buy_list._fetch_packages")
     @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
@@ -319,16 +303,10 @@ class TestGetMediaBuysImpl:
         mock_fetch_approvals,
         mock_fetch_packages,
         mock_fetch_buys,
-        mock_testing_ctx,
-        mock_tenant,
         mock_principal_obj,
-        mock_principal_id,
     ):
         """When include_snapshot=True, adapter.get_packages_snapshot is called."""
-        mock_principal_id.return_value = "principal_1"
         mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-        mock_tenant.return_value = {"tenant_id": "tenant_1", "adapter_type": "mock"}
-        mock_testing_ctx.return_value = None
 
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package(package_config={"platform_line_item_id": "li_123"})
@@ -349,7 +327,7 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request(include_snapshot=True)
-            response = _get_media_buys_impl(req, make_tool_context())
+            response = _get_media_buys_impl(req, identity=make_identity())
 
         mock_adapter.get_packages_snapshot.assert_called_once()
         # The package_refs passed should include the platform_line_item_id
@@ -359,10 +337,7 @@ class TestGetMediaBuysImpl:
         # Response should contain the snapshot
         assert response.media_buys[0].packages[0].snapshot is not None
 
-    @patch("src.core.tools.media_buy_list.get_principal_id_from_context")
     @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list.get_current_tenant")
-    @patch("src.core.tools.media_buy_list.get_testing_context")
     @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
     @patch("src.core.tools.media_buy_list._fetch_packages")
     @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
@@ -371,16 +346,10 @@ class TestGetMediaBuysImpl:
         mock_fetch_approvals,
         mock_fetch_packages,
         mock_fetch_buys,
-        mock_testing_ctx,
-        mock_tenant,
         mock_principal_obj,
-        mock_principal_id,
     ):
         """When include_snapshot=True but adapter lacks get_packages_snapshot, mark as unsupported."""
-        mock_principal_id.return_value = "principal_1"
         mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-        mock_tenant.return_value = {"tenant_id": "tenant_1", "adapter_type": "mock"}
-        mock_testing_ctx.return_value = None
 
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package()
@@ -393,18 +362,18 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request(include_snapshot=True)
-            response = _get_media_buys_impl(req, make_tool_context())
+            response = _get_media_buys_impl(req, identity=make_identity())
 
         pkg_response = response.media_buys[0].packages[0]
         assert pkg_response.snapshot is None
         assert pkg_response.snapshot_unavailable_reason == SnapshotUnavailableReason.SNAPSHOT_UNSUPPORTED
 
-    def test_context_required(self):
-        """Context=None raises ToolError."""
-        from fastmcp.exceptions import ToolError
+    def test_identity_required(self):
+        """identity=None raises AdCPAuthenticationError."""
+        from src.core.exceptions import AdCPAuthenticationError
 
         req = self._make_request()
-        with pytest.raises(ToolError, match="Context is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             _get_media_buys_impl(req, None)
 
 

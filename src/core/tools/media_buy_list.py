@@ -54,11 +54,11 @@ from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
 from src.core.auth import get_principal_object
-from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, MediaPackage
-from src.core.helpers import get_principal_id_from_context
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers.adapter_helpers import get_adapter
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
@@ -69,20 +69,30 @@ from src.core.schemas import (
     Snapshot,
     SnapshotUnavailableReason,
 )
-from src.core.testing_hooks import get_testing_context
 from src.core.validation_helpers import format_validation_error
 
 
-def _get_media_buys_impl(req: GetMediaBuysRequest, ctx: Context | ToolContext | None) -> GetMediaBuysResponse:
-    """Get media buys with status, creative approval state, and optional delivery snapshots."""
-    if ctx is None:
-        raise ToolError("Context is required")
+def _get_media_buys_impl(
+    req: GetMediaBuysRequest,
+    identity: ResolvedIdentity | None = None,
+) -> GetMediaBuysResponse:
+    """Get media buys with status, creative approval state, and optional delivery snapshots.
+
+    Args:
+        req: Validated GetMediaBuysRequest with all protocol fields
+        identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
+
+    Returns:
+        GetMediaBuysResponse with matching media buys
+    """
+    if identity is None:
+        raise AdCPAuthenticationError("Identity is required")
 
     if req.account_id is not None:
-        raise ToolError("account_id filtering is not yet supported")
+        raise AdCPValidationError("account_id filtering is not yet supported")
 
-    testing_ctx = get_testing_context(ctx)
-    principal_id = get_principal_id_from_context(ctx)
+    testing_ctx = identity.testing_context
+    principal_id = identity.principal_id
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
@@ -96,7 +106,7 @@ def _get_media_buys_impl(req: GetMediaBuysRequest, ctx: Context | ToolContext | 
             errors=[{"code": "principal_not_found", "message": f"Principal {principal_id} not found"}],
         )
 
-    tenant = get_current_tenant()
+    tenant = identity.tenant
     today = datetime.now(UTC).date()
 
     # Resolve which media buys to return
@@ -204,8 +214,7 @@ def get_media_buys(
 ):
     """Get media buys with status, creative approval state, and optional delivery snapshots.
 
-    Returns a list of media buys matching the requested filters. When no filters are provided,
-    returns all active media buys. Use include_snapshot=true for near-real-time delivery stats.
+    MCP tool wrapper that resolves identity and delegates to the shared implementation.
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to retrieve (optional)
@@ -219,6 +228,9 @@ def get_media_buys(
     Returns:
         ToolResult with GetMediaBuysResponse data
     """
+    from src.core.transport_helpers import resolve_identity_from_context
+
+    identity = resolve_identity_from_context(ctx, require_valid_token=True)
     try:
         req = GetMediaBuysRequest(
             media_buy_ids=media_buy_ids,
@@ -228,7 +240,7 @@ def get_media_buys(
             account_id=account_id,
             context=cast(ContextObject | None, context),
         )
-        response = _get_media_buys_impl(req, ctx)
+        response = _get_media_buys_impl(req, identity=identity)
         return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:
         raise ToolError(format_validation_error(e, context="get_media_buys request"))
@@ -242,6 +254,7 @@ def get_media_buys_raw(
     account_id: str | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ):
     """Get media buys (raw function for A2A server use).
 
@@ -252,11 +265,17 @@ def get_media_buys_raw(
         include_snapshot: When true, include near-real-time delivery stats per package (default: false)
         account_id: Filter to a specific account (optional)
         context: Application level context (optional)
-        ctx: Context for authentication
+        ctx: Context for authentication (used if identity not pre-resolved)
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         GetMediaBuysResponse
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=True, protocol="a2a")
+
     req = GetMediaBuysRequest(
         media_buy_ids=media_buy_ids,
         buyer_refs=buyer_refs,
@@ -265,7 +284,7 @@ def get_media_buys_raw(
         account_id=account_id,
         context=cast(ContextObject | None, context),
     )
-    return _get_media_buys_impl(req, ctx)
+    return _get_media_buys_impl(req, identity=identity)
 
 
 # --- Helper functions ---
