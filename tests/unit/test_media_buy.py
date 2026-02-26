@@ -3,7 +3,7 @@
 Spec verification: 2026-02-26
 adcp spec commit: 8f26baf3
 adcp-client-python commit: a08805d
-Verified: 74/130 CONFIRMED, 52 UNSPECIFIED, 0 CONTRADICTS, 4 SPEC_AMBIGUOUS
+Verified: 75/130 CONFIRMED, 52 UNSPECIFIED, 0 CONTRADICTS, 3 SPEC_AMBIGUOUS
 
 Canonical test module for media-buy domain behavior.
 Maps to test-obligations files:
@@ -957,7 +957,10 @@ class TestUpdateMediaBuySchemaCompliance:
     def test_update_buyer_campaign_ref_roundtrip(self):
         """UC-003-S04: buyer_campaign_ref preserved in update response.
 
-        Spec: SPEC_AMBIGUOUS -- update-media-buy-request.json has no buyer_campaign_ref; response has none
+        Spec: CONFIRMED -- buyer_campaign_ref is a create-time immutable field (present in
+        create-media-buy-request.json and core/media-buy.json, absent from update-media-buy-request.json
+        by design). Update response returns the full MediaBuy entity which includes it.
+        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/core/media-buy.json
         Priority: P0
         Type: unit
         Source: UC-003, salesagent-7gnv
