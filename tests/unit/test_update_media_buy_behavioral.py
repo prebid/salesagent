@@ -663,7 +663,6 @@ def test_manual_approval_creates_object_workflow_mapping(standard_mocks):
     # The DB session should have had an ObjectWorkflowMapping added via session.add()
     mock_session = standard_mocks["db_session"]
     add_calls = mock_session.add.call_args_list
-    commit_calls = mock_session.commit.call_args_list
 
     # Find ObjectWorkflowMapping among session.add() calls
     from src.core.database.models import ObjectWorkflowMapping

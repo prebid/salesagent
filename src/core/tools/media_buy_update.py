@@ -1345,6 +1345,7 @@ def _build_update_request(
     packages: list | None = None,
     push_notification_config: Any = None,
     context: Any = None,
+    reporting_webhook: Any = None,
     ext: Any = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
@@ -1396,6 +1397,8 @@ def _build_update_request(
         request_params["push_notification_config"] = push_notification_config
     if context is not None:
         request_params["context"] = context
+    if reporting_webhook is not None:
+        request_params["reporting_webhook"] = reporting_webhook
     if ext is not None:
         request_params["ext"] = ext
 
@@ -1422,6 +1425,7 @@ def update_media_buy(
     creatives: list = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
+    reporting_webhook: Any | None = None,  # AdCP ReportingWebhook
     ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
@@ -1447,6 +1451,7 @@ def update_media_buy(
         creatives: Add new creatives
         push_notification_config: Push notification config for async notifications (AdCP spec, optional)
         context: Application-level context per adcp spec
+        reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)
         ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: FastMCP context (automatically provided)
 
@@ -1470,6 +1475,7 @@ def update_media_buy(
         packages=packages,
         push_notification_config=push_notification_config,
         context=context,
+        reporting_webhook=reporting_webhook,
         ext=ext,
     )
     from src.core.transport_helpers import resolve_identity_from_context
@@ -1506,6 +1512,7 @@ def update_media_buy_raw(
     creatives: list = None,
     push_notification_config: dict = None,
     context: dict | None = None,  # payload-level context
+    reporting_webhook: dict | None = None,  # AdCP ReportingWebhook
     ext: dict | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -1531,6 +1538,7 @@ def update_media_buy_raw(
         creatives: Creative updates
         push_notification_config: Push notification config for status updates
         context: Application level context per adcp spec
+        reporting_webhook: Webhook configuration for automated reporting delivery
         ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
@@ -1553,6 +1561,7 @@ def update_media_buy_raw(
         packages=packages,
         push_notification_config=push_notification_config,
         context=context,
+        reporting_webhook=reporting_webhook,
         ext=ext,
     )
     if identity is None:

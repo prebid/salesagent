@@ -67,44 +67,41 @@ def _extract_wrapper_params(file_path: Path, wrapper_name: str) -> set[str]:
     return set()
 
 
-# Fields that exist in the wrapper signature for legacy/internal reasons
-# but are NOT part of the AdCP request schema — they're handled separately
-WRAPPER_ONLY_PARAMS = {
-    "create_media_buy": {
-        "ctx",  # FastMCP context
-        "product_ids",  # Legacy format conversion
-        "start_date",  # Legacy format conversion
-        "end_date",  # Legacy format conversion
-        "total_budget",  # Legacy format conversion
-        "budget",  # Deprecated — package-level only
-        "targeting_overlay",  # Processed separately
-        "pacing",  # Processed separately
-        "daily_budget",  # Processed separately
-        "creatives",  # Processed separately
-        "required_axe_signals",  # Processed separately
-        "enable_creative_macro",  # Processed separately
-        "strategy_id",  # Processed separately
-        "push_notification_config",  # Separate _impl param
-        "webhook_url",  # Legacy
-    },
-    "create_media_buy_raw": {
-        "ctx",  # FastMCP context
-        "identity",  # Boundary-resolved
-        "product_ids",  # Legacy format conversion
-        "start_date",  # Legacy format conversion
-        "end_date",  # Legacy format conversion
-        "total_budget",  # Legacy format conversion
-        "budget",  # Deprecated — package-level only
-        "targeting_overlay",  # Processed separately
-        "pacing",  # Processed separately
-        "daily_budget",  # Processed separately
-        "creatives",  # Processed separately
-        "required_axe_signals",  # Processed separately
-        "enable_creative_macro",  # Processed separately
-        "strategy_id",  # Processed separately
-        "push_notification_config",  # Separate _impl param
-    },
-}
+def _extract_call_kwargs(file_path: Path, caller_name: str, callee_name: str) -> set[str]:
+    """Extract keyword arguments passed from caller to callee function.
+
+    Finds calls like `callee_name(foo=foo, bar=bar, ...)` inside the named
+    caller function and returns the set of keyword argument names.
+    """
+    source = file_path.read_text()
+    tree = ast.parse(source, filename=str(file_path))
+
+    caller_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == caller_name:
+                caller_node = node
+                break
+
+    if caller_node is None:
+        return set()
+
+    kwargs = set()
+    for node in ast.walk(caller_node):
+        if not isinstance(node, ast.Call):
+            continue
+        called_name = None
+        if isinstance(node.func, ast.Name):
+            called_name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            called_name = node.func.attr
+        if called_name != callee_name:
+            continue
+        for kw in node.keywords:
+            if kw.arg is not None:
+                kwargs.add(kw.arg)
+
+    return kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -188,19 +185,77 @@ UPDATE_SPEC_FIELDS = {
 
 
 class TestUpdateMediaBuyFieldForwarding:
-    """MCP and A2A update wrappers must forward all AdCP fields into _build_update_request."""
+    """MCP and A2A update wrappers must forward all AdCP fields through _build_update_request."""
 
-    def test_mcp_wrapper_accepts_ext(self):
-        """MCP update_media_buy must accept ext as a parameter."""
+    def test_mcp_wrapper_accepts_all_spec_fields(self):
+        """MCP update_media_buy must accept all AdCP spec fields as parameters."""
         params = _extract_wrapper_params(UPDATE_FILE, "update_media_buy")
-        assert "ext" in params, "MCP wrapper 'update_media_buy' doesn't accept 'ext' as a parameter"
+        missing = UPDATE_SPEC_FIELDS - params
+        assert not missing, (
+            f"MCP wrapper 'update_media_buy' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        )
 
-    def test_a2a_wrapper_accepts_ext(self):
-        """A2A update_media_buy_raw must accept ext as a parameter."""
+    def test_a2a_wrapper_accepts_all_spec_fields(self):
+        """A2A update_media_buy_raw must accept all AdCP spec fields as parameters."""
         params = _extract_wrapper_params(UPDATE_FILE, "update_media_buy_raw")
-        assert "ext" in params, "A2A wrapper 'update_media_buy_raw' doesn't accept 'ext' as a parameter"
+        missing = UPDATE_SPEC_FIELDS - params
+        assert not missing, (
+            f"A2A wrapper 'update_media_buy_raw' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        )
 
-    def test_build_update_request_accepts_ext(self):
-        """_build_update_request must accept and forward ext."""
+    def test_build_update_request_accepts_all_spec_fields(self):
+        """_build_update_request must accept all AdCP spec fields as parameters."""
         params = _extract_wrapper_params(UPDATE_FILE, "_build_update_request")
-        assert "ext" in params, "_build_update_request doesn't accept 'ext' as a parameter"
+        missing = UPDATE_SPEC_FIELDS - params
+        assert not missing, f"_build_update_request doesn't accept AdCP fields as parameters: {sorted(missing)}"
+
+    def test_mcp_wrapper_forwards_all_spec_fields_to_build(self):
+        """MCP wrapper must pass all spec fields to _build_update_request call site."""
+        kwargs = _extract_call_kwargs(UPDATE_FILE, "update_media_buy", "_build_update_request")
+        missing = UPDATE_SPEC_FIELDS - kwargs
+        assert not missing, (
+            f"MCP wrapper 'update_media_buy' doesn't forward AdCP fields to _build_update_request: {sorted(missing)}"
+        )
+
+    def test_a2a_wrapper_forwards_all_spec_fields_to_build(self):
+        """A2A wrapper must pass all spec fields to _build_update_request call site."""
+        kwargs = _extract_call_kwargs(UPDATE_FILE, "update_media_buy_raw", "_build_update_request")
+        missing = UPDATE_SPEC_FIELDS - kwargs
+        assert not missing, (
+            f"A2A wrapper 'update_media_buy_raw' doesn't forward AdCP fields to "
+            f"_build_update_request: {sorted(missing)}"
+        )
+
+    def test_build_update_request_constructs_with_all_spec_fields(self):
+        """_build_update_request must include all spec fields in UpdateMediaBuyRequest construction."""
+        # _build_update_request uses request_params dict, not direct constructor kwargs.
+        # Check that every spec field has a `request_params["field"] = field` assignment.
+        source = Path(UPDATE_FILE).read_text()
+        tree = ast.parse(source)
+
+        # Find _build_update_request
+        func_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name == "_build_update_request":
+                    func_node = node
+                    break
+
+        assert func_node is not None, "_build_update_request function not found"
+
+        # Find all request_params["key"] = ... assignments
+        assigned_keys = set()
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "request_params"
+                        and isinstance(target.slice, ast.Constant)
+                        and isinstance(target.slice.value, str)
+                    ):
+                        assigned_keys.add(target.slice.value)
+
+        missing = UPDATE_SPEC_FIELDS - assigned_keys
+        assert not missing, f"_build_update_request doesn't include AdCP fields in request_params: {sorted(missing)}"

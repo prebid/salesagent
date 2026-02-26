@@ -1,11 +1,8 @@
-"""Guard: Test fixtures must use valid brand_manifest_policy values and valid BrandReference domains.
+"""Guard: Test fixtures must use valid brand_manifest_policy values.
 
 The brand_manifest_policy field accepts only: require_auth, require_brand, public.
 Invalid values like "flexible" silently fall through policy checks, acting like "public"
 without the developer's intent being explicit.
-
-BrandReference.domain must match the adcp regex pattern (valid domain format).
-Invalid strings like "Nike Air Jordan" must not appear as domain values.
 
 beads: salesagent-fd3i
 """
