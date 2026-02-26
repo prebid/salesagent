@@ -211,6 +211,20 @@ iterate:
         Convert stubs into real failing tests (TDD red step). The tests must
         FAIL because the production code doesn't yet satisfy them.
 
+        ## Iron Rule: Stubs Are Absolute Truth
+
+        **You MUST NOT drop, skip, or question any stub's expected behavior.**
+        Stubs were created by /surface and verified by /verify-spec. Those
+        phases already confirmed the expected behavior against the spec and
+        business rules. Your job is to IMPLEMENT the stub, not judge it.
+
+        If you cannot make a stub pass:
+        - Mark it `@pytest.mark.xfail(reason="...")` with a clear reason
+        - NEVER remove the stub or revert it to @pytest.mark.skip
+        - NEVER conclude "the stub is wrong because the code doesn't do this"
+
+        The code is what's wrong, not the stub.
+
         ## Prerequisites
 
         Read the batch plan from the design field.
@@ -229,11 +243,18 @@ iterate:
            uv run pytest tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py::test_name -x -v
            ```
            - AssertionError = right reason (behavior doesn't exist yet)
-           - ImportError/NameError = wrong reason (test has a bug)
+           - ImportError/NameError = wrong reason (test has a bug, fix the test)
            - Test passes = behavior already exists (note this and move on)
 
         4. **For stubs that already pass** (behavior exists but wasn't tested):
            This is fine — the test was a GAP that's now a real test. Keep it.
+
+        5. **For stubs you cannot implement** (missing infrastructure, unbuilt
+           feature, needs integration test):
+           - Write the test body with the correct assertions
+           - Mark with `@pytest.mark.xfail(reason="<why it can't pass yet>")`
+           - The xfail reason must explain what's MISSING, not claim the
+             stub is wrong
 
         ## Important
 
@@ -248,14 +269,19 @@ iterate:
         - Stubs implemented: N
         - Failing (expected): N
         - Already passing: N
+        - Marked xfail: N
         - Test bugs fixed: N
 
         ## Failing Tests
         - test_name: [failure reason — e.g., 'AssertionError: missing brand field']
+        [repeat]
+
+        ## xfail Tests
+        - test_name: [reason — e.g., 'buyer_ref uniqueness validation not yet implemented']
         [repeat]"
         ```
 
-      acceptance: "All batch stubs converted to real tests. Failing tests documented with failure reasons."
+      acceptance: "ALL batch stubs converted to real tests or xfail. ZERO stubs dropped. Failing tests documented with failure reasons."
       depends_on: ["triage-{ENTITY_NAME}"]
       depends_on_prev_barrier: true
       labels: ["atom:implement-red"]
@@ -269,7 +295,7 @@ iterate:
         ## Prerequisites
 
         Read the red step results from notes. Know which tests are failing
-        and why.
+        and why. Also note which tests are marked xfail.
 
         ## Workflow
 
@@ -299,6 +325,22 @@ iterate:
         make quality
         ```
 
+        ## Handling xfail Tests
+
+        Tests marked xfail from the red step represent behavior the stub
+        requires but the implementation doesn't yet support. For each xfail:
+
+        1. **Try to implement the missing behavior** if it's a reasonable
+           production code change (validation, error handling, field forwarding)
+        2. **If you can make it pass**: remove the xfail marker, it's now green
+        3. **If the fix is too large or risky**: leave xfail in place, file a
+           beads bug describing what's missing:
+           ```bash
+           bd create --title="Missing: <behavior>" --type=bug --priority=2 \
+             --description="Test test_name expects <behavior> but implementation lacks it. xfail in test_{ENTITY_NAME_UNDERSCORE}.py."
+           ```
+        4. **NEVER remove an xfail test**. It stays until the behavior is implemented.
+
         ## When Existing Tests Fail
 
         If your production code changes break OTHER tests:
@@ -315,7 +357,7 @@ iterate:
         bd close <bug-id> --reason="Fixed as part of {ENTITY_NAME} remediation"
         ```
 
-      acceptance: "All failing tests now pass. make quality passes. No existing tests modified without justification. Related bugs closed."
+      acceptance: "All failing tests now pass or are xfail with beads issues. make quality passes. No stubs dropped. Related bugs closed."
       depends_on: ["implement-red-{ENTITY_NAME}"]
       labels: ["atom:fix-green"]
 

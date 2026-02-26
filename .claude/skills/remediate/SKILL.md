@@ -99,6 +99,25 @@ The red/green split ensures tests are written BEFORE production code changes.
 This is enforced by atom dependencies — fix-green can't start until
 implement-red is closed.
 
+## Iron Rule: Stubs Are Absolute Truth
+
+**Remediation agents MUST NOT drop, skip, or question any stub's expected
+behavior.** Stubs were created by `/surface` and verified by `/verify-spec`.
+Those upstream phases already confirmed the expected behavior against the
+spec and business rules.
+
+The remediation agent's job is to IMPLEMENT, not judge:
+
+| Outcome | Action |
+|---------|--------|
+| Test passes | Keep it — behavior was correct but untested |
+| Test fails, fixable | Fix production code (TDD green) |
+| Test fails, not fixable now | Mark `@pytest.mark.xfail(reason="...")` + file beads bug |
+| Agent thinks stub is wrong | **IRRELEVANT** — implement it anyway. If there's truly a spec error, that's for `/verify-spec` to catch in a re-run, not for remediation to decide. |
+
+**NEVER**: remove a stub, revert to skip, or conclude "the code doesn't do
+this so the stub must be wrong." The code is what's wrong, not the stub.
+
 ## Related Bugs
 
 The plan-batch atom checks `bd list --status=open` for bugs related to the

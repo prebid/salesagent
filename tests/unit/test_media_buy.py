@@ -583,8 +583,9 @@ class TestCreateMediaBuyValidation:
         )
         assert req.get_total_budget() == 0
 
-    @pytest.mark.skip(reason="STUB: UC-002-V09 -- duplicate buyer_ref rejected (BR-RULE-009)")
-    def test_duplicate_buyer_ref_rejected(self):
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(reason="buyer_ref uniqueness validation not yet implemented (BR-RULE-009)")
+    async def test_duplicate_buyer_ref_rejected(self):
         """UC-002-V09: duplicate buyer_ref for same principal rejected.
 
         Spec: UNSPECIFIED (implementation-defined uniqueness enforcement)
@@ -592,6 +593,28 @@ class TestCreateMediaBuyValidation:
         Type: unit
         Source: UC-002, BR-RULE-009
         """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        identity = _make_identity()
+        req = _make_request(buyer_ref="duplicate-ref")
+
+        # First create should succeed
+        with (
+            patch("src.core.tools.media_buy_create.validate_setup_complete"),
+            patch("src.core.tools.media_buy_create.get_principal_object", return_value=MagicMock()),
+            patch("src.core.tools.media_buy_create.get_db_session") as mock_db,
+        ):
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_db.return_value.__exit__ = MagicMock(return_value=False)
+            # Simulate existing media buy with same buyer_ref
+            mock_session.scalars.return_value.first.return_value = MagicMock(buyer_ref="duplicate-ref")
+
+            result = await _create_media_buy_impl(req, identity=identity)
+            # Should reject with duplicate buyer_ref error
+            response, status = result
+            assert status == "failed"
+            assert "duplicate" in str(response).lower() or "buyer_ref" in str(response).lower()
 
     def test_missing_start_time_rejected(self):
         """UC-002-V10: missing start_time rejected.
@@ -1055,8 +1078,9 @@ class TestCreateMediaBuyAdapterInteraction:
         Source: UC-002
         """
 
-    @pytest.mark.skip(reason="STUB: UC-002-AD03 -- dry_run skips adapter call entirely")
-    def test_dry_run_skips_adapter(self):
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(reason="dry_run currently still calls adapter — should skip adapter entirely")
+    async def test_dry_run_skips_adapter(self):
         """UC-002-AD03: testing context dry_run=True never calls adapter.
 
         Spec: UNSPECIFIED (implementation-defined testing/sandbox behavior)
@@ -1064,6 +1088,26 @@ class TestCreateMediaBuyAdapterInteraction:
         Type: unit
         Source: UC-002
         """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        identity = _make_identity(dry_run=True)
+        req = _make_request()
+
+        with (
+            patch("src.core.tools.media_buy_create.validate_setup_complete"),
+            patch("src.core.tools.media_buy_create.get_principal_object", return_value=MagicMock()),
+            patch("src.core.tools.media_buy_create.get_adapter") as mock_get_adapter,
+            patch("src.core.tools.media_buy_create.get_db_session") as mock_db,
+        ):
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_db.return_value.__exit__ = MagicMock(return_value=False)
+            mock_adapter = MagicMock()
+            mock_get_adapter.return_value = mock_adapter
+
+            await _create_media_buy_impl(req, identity=identity)
+            # In dry_run mode, adapter should NEVER be called
+            mock_adapter.create_media_buy.assert_not_called()
 
 
 # ===========================================================================
@@ -1240,7 +1284,7 @@ class TestUpdateMediaBuyMainFlow:
         Source: UC-003, BR-RULE-022
         """
 
-    @pytest.mark.skip(reason="STUB: UC-003-MF04 -- empty update rejected (BR-RULE-022)")
+    @pytest.mark.xfail(reason="empty update validation not yet implemented (BR-RULE-022)")
     def test_empty_update_rejected(self):
         """UC-003-MF04: update with no updatable fields returns error.
 
@@ -1249,6 +1293,12 @@ class TestUpdateMediaBuyMainFlow:
         Type: unit
         Source: UC-003, BR-RULE-022
         """
+        # Update with only the identifier and nothing to change
+        with pytest.raises((ValueError, AdCPValidationError)):
+            UpdateMediaBuyRequest(
+                media_buy_id="mb_empty",
+                # no packages, no budget, no paused, no start_time, no end_time
+            )
 
 
 class TestUpdateMediaBuyPauseResume:
