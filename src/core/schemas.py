@@ -9,10 +9,6 @@ from typing import Any, Literal, TypeAlias
 from adcp import Error
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 
-# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
-# Note: AffectedPackage was removed in 2.9.0, use Package instead
-from adcp.types import Creative as LibraryCreative
-
 # Import correct Filters type for ListCreativesRequest
 # TODO(adcp-library): Move creative Filters to stable API
 from adcp.types import (
@@ -60,6 +56,12 @@ from adcp.types.generated_poc.core.context import ContextObject
 # V3: Page-based pagination for list responses (cursor-based in adcp 3.6.0)
 from adcp.types.generated_poc.core.pagination_response import PaginationResponse as LibraryResponsePagination
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+
+# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
+# Note: AffectedPackage was removed in 2.9.0, use Package instead
+from adcp.types.generated_poc.media_buy.list_creatives_response import (
+    Creative as LibraryCreative,
+)
 from adcp.types.generated_poc.media_buy.package_update import PackageUpdate1 as LibraryPackageUpdate1
 from adcp.types.generated_poc.media_buy.update_media_buy_request import (
     UpdateMediaBuyRequest1 as LibraryUpdateMediaBuyRequest1,
@@ -1653,45 +1655,33 @@ class FormatId(LibraryFormatId):
 
 
 class Creative(LibraryCreative):
-    """Individual creative asset - extends library Creative with internal workflow fields.
+    """Individual creative asset - extends listing Creative with internal workflow fields.
 
-    adcp 3.6.0 library fields:
-    - Required: creative_id, variants (list[CreativeVariant])
-    - Optional: format_id, media_buy_id, totals, variant_count
+    adcp 3.6.0 listing Creative fields (public):
+    - Required: creative_id, format_id, name, status, created_date, updated_date
+    - Optional: assets, assignments, catalogs, tags, performance, account, sub_assets
 
     Internal fields (excluded from AdCP responses, used for workflow/DB):
-    - assets: legacy asset storage from pre-3.6 schema (dict[str, Any])
-    - status: workflow approval status (processing/approved/rejected/pending_review)
     - principal_id: associates creative with advertiser principal
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # === Internal Fields (excluded from AdCP responses) ===
-    # assets: legacy field, library removed it in 3.6.0 but our DB and workflow still use it
-    assets: dict[str, Any] | None = Field(
-        default=None, exclude=True, description="Legacy asset storage (internal, not in AdCP 3.6.0 response)"
-    )
-    # status: workflow state, library removed it in 3.6.0 but our workflow still uses it
+    # === Overrides of listing Creative fields (with defaults for partial construction) ===
+    # The listing base requires these, but we allow None for DB records that predate schema.
+    name: str | None = Field(default=None, description="Creative name")  # type: ignore[assignment]
     status: CreativeStatus = Field(
         default=CreativeStatus.pending_review,
-        exclude=True,
-        description="Workflow approval status (internal, not in AdCP 3.6.0 response)",
+        description="Workflow approval status",
     )
+    created_date: datetime | None = Field(default=None, description="Creation timestamp")  # type: ignore[assignment]
+    updated_date: datetime | None = Field(default=None, description="Update timestamp")  # type: ignore[assignment]
+    # Override assets to untyped dict (our DB stores arbitrary asset dicts, not typed models)
+    assets: dict[str, Any] | None = Field(default=None, description="Creative assets")
+
+    # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(
         default=None, exclude=True, description="Associates creative with advertiser (workflow tracking)"
-    )
-    # Fields removed from library in 3.6.0 — kept as internal for Wave 0 compatibility.
-    # Wave 1 (Creative domain) will refactor these into DB-layer-only fields.
-    name: str | None = Field(default=None, exclude=True, description="Creative name (internal, DB storage)")
-    created_date: datetime | None = Field(
-        default=None, exclude=True, description="Creation timestamp (internal, was library field in 3.2.0)"
-    )
-    updated_date: datetime | None = Field(
-        default=None, exclude=True, description="Update timestamp (internal, was library field in 3.2.0)"
-    )
-    tags: list[str] | None = Field(
-        default=None, exclude=True, description="Tags (internal, was library field in 3.2.0)"
     )
 
     @model_validator(mode="before")
@@ -1710,6 +1700,12 @@ class Creative(LibraryCreative):
                 values.pop("format", None)
             except ValueError as e:
                 raise ValueError(f"Invalid format_id: {e}")
+
+        # Strip delivery-only fields that callers may still pass from old code.
+        # These fields existed on the delivery Creative base but not on the listing base.
+        for field in ("variants", "variant_count", "totals", "media_buy_id"):
+            values.pop(field, None)
+
         return values
 
     # Helper properties for format_id (still present in 3.6.0)
@@ -1732,13 +1728,12 @@ class Creative(LibraryCreative):
         """Dump including internal fields for database storage.
 
         Pydantic v2's Field(exclude=True) cannot be overridden via model_dump parameters.
-        We manually include internal fields by accessing attributes directly.
+        We manually include the principal_id field which is excluded from public responses.
         """
         data = super().model_dump(exclude=set(), **kwargs)
         if self.principal_id is not None:
             data["principal_id"] = self.principal_id
-        if self.assets is not None:
-            data["assets"] = self.assets
+        # Ensure status is always present as string value for DB storage
         data["status"] = self.status.value if isinstance(self.status, CreativeStatus) else self.status
         return data
 
@@ -1856,7 +1851,9 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    creatives: list[Creative] = Field(..., description="Array of creative assets to sync (create or update)")  # type: ignore[assignment]
+    creatives: list[Creative] = Field(
+        ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
+    )  # type: ignore[assignment]
     push_notification_config: dict[str, Any] | None = Field(  # type: ignore[assignment]
         None,
         description="Application-level webhook config (NOTE: Protocol-level push notifications via A2A/MCP transport take precedence)",
@@ -2964,6 +2961,21 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
             raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
+        return self
+
+    @model_validator(mode="after")
+    def validate_identification_xor(self):
+        """Enforce AdCP oneOf: exactly one of media_buy_id or buyer_ref required.
+
+        Per update-media-buy-request.json, the request uses oneOf to require
+        either media_buy_id or buyer_ref, but not both and not neither.
+        """
+        has_id = self.media_buy_id is not None
+        has_ref = self.buyer_ref is not None
+        if has_id and has_ref:
+            raise ValueError("Provide either media_buy_id or buyer_ref, not both (AdCP oneOf constraint)")
+        if not has_id and not has_ref:
+            raise ValueError("Either media_buy_id or buyer_ref is required (AdCP oneOf constraint)")
         return self
 
     # Backward compatibility properties (deprecated)

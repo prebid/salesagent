@@ -186,6 +186,13 @@ class TestSchemaInheritance:
             ("SyncCreativeResult", "changes"),
             ("SyncCreativesRequest", "creatives"),
             ("SyncCreativesRequest", "push_notification_config"),
+            # Creative overrides — listing base requires these fields, but we add
+            # defaults for partial construction and override assets to untyped dict
+            ("Creative", "name"),
+            ("Creative", "status"),
+            ("Creative", "created_date"),
+            ("Creative", "updated_date"),
+            ("Creative", "assets"),
             # Request field overrides — tighter validation
             ("GetMediaBuyDeliveryRequest", "account_id"),
         }

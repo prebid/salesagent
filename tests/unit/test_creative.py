@@ -151,23 +151,24 @@ class TestCreativeSchemaCompliance:
     """
 
     def test_creative_extends_library_creative(self):
-        """Creative must extend adcp library Creative type.
+        """Creative must extend adcp listing Creative type.
 
-        Spec: CONFIRMED -- creative-asset.json defines the base schema;
-        library type at adcp-client-python core/creative_asset.py:43.
+        Spec: CONFIRMED -- list-creatives-response.json defines the listing schema;
+        library type at adcp-client-python media_buy/list_creatives_response.py.
         Existing: test_architecture_schema_inheritance.py (structural guard)
         """
-        from adcp.types import Creative as LibraryCreative
+        from adcp.types.generated_poc.media_buy.list_creatives_response import (
+            Creative as ListingCreative,
+        )
 
-        assert issubclass(Creative, LibraryCreative)
+        assert issubclass(Creative, ListingCreative)
 
     def test_creative_model_dump_excludes_internal_fields(self):
-        """model_dump() must NOT include internal fields (name, assets, status, etc).
+        """model_dump() must NOT include internal-only fields (principal_id).
 
         Spec: UNSPECIFIED (implementation-defined serialization boundary).
-        The spec defines which fields appear in list_creatives response
-        vs sync_creatives response -- internal exclude logic is salesagent's
-        implementation choice to match spec response shapes.
+        The listing Creative makes name, status, created_date, updated_date public.
+        Only principal_id is salesagent-internal and excluded.
         Existing: test_creative_response_serialization.py, test_list_creatives_serialization.py
         """
         creative = _make_creative()
@@ -175,16 +176,14 @@ class TestCreativeSchemaCompliance:
 
         # Internal fields must be excluded
         assert "principal_id" not in data
-        assert "name" not in data
-        assert "assets" not in data
-        assert "status" not in data
-        assert "created_date" not in data
-        assert "updated_date" not in data
-        assert "tags" not in data
 
-        # Spec fields must be present
+        # Listing Creative public fields must be present
         assert "creative_id" in data
         assert data["creative_id"] == "c_test_1"
+        assert "name" in data
+        assert "status" in data
+        assert "created_date" in data
+        assert "updated_date" in data
 
     def test_creative_model_dump_internal_includes_all(self):
         """model_dump_internal() must include internal fields for DB storage.
@@ -237,7 +236,7 @@ class TestCreativeSchemaCompliance:
         for status in CreativeStatus:
             creative = Creative(
                 creative_id=f"c_{status.value}",
-                variants=[],
+                format_id=_format_id(),
                 status=status,
             )
             data = creative.model_dump_internal(mode="json")
@@ -1808,40 +1807,77 @@ class TestCreativeWrongBaseClass:
     https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/list-creatives-response.json
     """
 
-    @pytest.mark.skip(
-        reason="STUB: salesagent-goy2 P0 -- Creative must extend listing base class "
-        "(adcp.types.generated_poc.media_buy.list_creatives_response.Creative)"
-    )
     def test_creative_extends_listing_base_not_delivery(self):
         """Creative base class should be the listing Creative (13 fields),
         not the delivery Creative (6 fields)."""
+        from adcp.types.generated_poc.creative.get_creative_delivery_response import (
+            Creative as DeliveryCreative,
+        )
+        from adcp.types.generated_poc.media_buy.list_creatives_response import (
+            Creative as ListingCreative,
+        )
 
-    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- list_creatives response must include 'name'")
+        assert issubclass(Creative, ListingCreative), (
+            f"Creative must extend the listing Creative (list_creatives_response.Creative), not {Creative.__bases__}"
+        )
+        assert not issubclass(Creative, DeliveryCreative), (
+            "Creative must NOT extend the delivery Creative (get_creative_delivery_response.Creative)"
+        )
+
     def test_list_creatives_response_includes_name(self):
-        """name is currently exclude=True to work around wrong base class."""
+        """name must appear in model_dump() because the listing Creative schema
+        defines it as a required field."""
+        creative = _make_creative(name="Test Banner")
+        data = creative.model_dump()
+        assert "name" in data, "name must be a public field in listing Creative"
+        assert data["name"] == "Test Banner"
 
-    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- list_creatives response must include 'status'")
     def test_list_creatives_response_includes_status(self):
-        """status is currently exclude=True to work around wrong base class."""
+        """status must appear in model_dump() because the listing Creative schema
+        defines it as a required field."""
+        creative = _make_creative(status="approved")
+        data = creative.model_dump()
+        assert "status" in data, "status must be a public field in listing Creative"
 
-    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- list_creatives response must include 'created_date'")
     def test_list_creatives_response_includes_created_date(self):
-        """created_date is currently exclude=True to work around wrong base class."""
+        """created_date must appear in model_dump() because the listing Creative
+        schema defines it as a required field."""
+        creative = _make_creative()
+        data = creative.model_dump()
+        assert "created_date" in data, "created_date must be a public field in listing Creative"
 
-    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- list_creatives response must include 'updated_date'")
     def test_list_creatives_response_includes_updated_date(self):
-        """updated_date is currently exclude=True to work around wrong base class."""
+        """updated_date must appear in model_dump() because the listing Creative
+        schema defines it as a required field."""
+        creative = _make_creative()
+        data = creative.model_dump()
+        assert "updated_date" in data, "updated_date must be a public field in listing Creative"
 
-    @pytest.mark.skip(
-        reason="STUB: salesagent-goy2 P0 -- delivery-only fields (variants, variant_count, "
-        "totals, media_buy_id) must NOT appear in list_creatives response"
-    )
     def test_list_creatives_response_excludes_delivery_fields(self):
-        """variants=[] is currently hardcoded to satisfy wrong delivery base."""
+        """Delivery-only fields (variants, variant_count, totals, media_buy_id)
+        must NOT appear in listing Creative model_dump() output."""
+        creative = _make_creative()
+        data = creative.model_dump()
+        delivery_only_fields = ["variants", "variant_count", "totals", "media_buy_id"]
+        for field in delivery_only_fields:
+            assert field not in data, f"Delivery-only field '{field}' must NOT appear in listing Creative response"
 
-    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- model_dump must produce listing-schema-compliant JSON")
     def test_model_dump_validates_against_listing_schema(self):
-        """model_dump() output must validate against adcp 3.6.0 listing Creative sub-schema."""
+        """model_dump() output must validate against adcp 3.6.0 listing Creative sub-schema.
+        All required listing fields must be present: creative_id, format_id, name,
+        status, created_date, updated_date."""
+        creative = _make_creative()
+        data = creative.model_dump()
+
+        # All required listing Creative fields must be present
+        required_listing_fields = ["creative_id", "format_id", "name", "status", "created_date", "updated_date"]
+        for field in required_listing_fields:
+            assert field in data, f"Required listing field '{field}' missing from model_dump()"
+
+        # Optional listing fields may or may not be present (not an error either way)
+        # But delivery-only fields must NOT be present
+        assert "variants" not in data
+        assert "media_buy_id" not in data
 
 
 # ============================================================================
@@ -1898,9 +1934,15 @@ class TestValidationModeSemantics:
     def test_lenient_mode_continues_on_assignment_error(self):
         """Lenient mode: assignment error logged in assignment_errors, processing continues."""
 
-    @pytest.mark.skip(reason="STUB: BR-RULE-033 INV-5 -- default validation_mode is strict")
     def test_default_validation_mode_is_strict(self):
         """When validation_mode not specified, defaults to strict."""
+        creative = _make_creative()
+        req = SyncCreativesRequest(creatives=[creative])
+        assert req.validation_mode is not None
+        # validation_mode is an enum; compare by value
+        assert req.validation_mode.value == "strict", (
+            f"Default validation_mode should be 'strict', got '{req.validation_mode.value}'"
+        )
 
 
 # ============================================================================
@@ -2159,13 +2201,22 @@ class TestRequestConstraintValidation:
     minItems: 1, maxItems: 100.
     """
 
-    @pytest.mark.skip(reason="STUB: BR-UC-006 PRE-B2 -- zero creatives rejected (minItems: 1)")
     def test_zero_creatives_rejected(self):
-        """Empty creatives array should be rejected at schema level."""
+        """Empty creatives array should be rejected at schema level.
+        AdCP spec: sync-creatives-request.json creatives minItems: 1."""
+        from pydantic import ValidationError as PydanticValidationError
 
-    @pytest.mark.skip(reason="STUB: BR-UC-006 P2 -- more than 100 creatives rejected (maxItems: 100)")
+        with pytest.raises(PydanticValidationError):
+            SyncCreativesRequest(creatives=[])
+
     def test_over_100_creatives_rejected(self):
-        """Creatives array exceeding 100 should be rejected."""
+        """Creatives array exceeding 100 should be rejected.
+        AdCP spec: sync-creatives-request.json creatives maxItems: 100."""
+        from pydantic import ValidationError as PydanticValidationError
+
+        creatives = [_make_creative(creative_id=f"c_{i}") for i in range(101)]
+        with pytest.raises(PydanticValidationError):
+            SyncCreativesRequest(creatives=creatives)
 
 
 # ============================================================================

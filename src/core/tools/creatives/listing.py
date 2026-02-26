@@ -362,10 +362,7 @@ def _list_creatives_impl(
                 format_id=format_obj,
                 assets=assets_dict,
                 tags=db_creative.data.get("tags") if db_creative.data else None,
-                # adcp 3.6.0: variants is required (list of CreativeVariant).
-                # New/listing creatives have no variants yet (empty list).
-                variants=[],
-                # AdCP spec fields (library Creative)
+                # AdCP spec fields (listing Creative)
                 status=status_enum,
                 created_date=created_at_dt,
                 updated_date=updated_at_dt,

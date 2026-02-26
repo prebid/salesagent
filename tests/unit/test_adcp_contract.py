@@ -851,17 +851,18 @@ class TestAdCPContract:
         assert targeting.key_value_pairs is not None
 
     def test_creative_adcp_compliance(self):
-        """Test that Creative model complies with AdCP v1 creative-asset schema.
+        """Test that Creative model complies with AdCP listing Creative schema.
 
-        As of adcp 3.6.0, the Creative schema changed significantly:
-        - Public model_dump() only contains: creative_id, format_id, variants
-        - Internal fields (name, assets, tags, status, principal_id, created_date, updated_date)
-          are all excluded from model_dump() but available via model_dump_internal()
+        The Creative extends the listing Creative (list_creatives_response.Creative):
+        - Public model_dump() contains: creative_id, format_id, name, status,
+          created_date, updated_date, assets, tags (listing schema fields)
+        - Internal fields (principal_id) are excluded from model_dump()
+          but available via model_dump_internal()
         """
-        # Test creating a Creative with all fields (some internal, some public)
+
+        # Test creating a Creative with all fields (some public, some internal)
         creative = Creative(
             creative_id="test_creative_123",
-            variants=[],
             name="Test AdCP Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
@@ -876,25 +877,26 @@ class TestAdCPContract:
             tags=["display", "banner"],
             # Internal fields (optional, added by sales agent)
             principal_id="test_principal",
-            created_date=datetime.now(),
-            updated_date=datetime.now(),
+            created_date=datetime.now(tz=UTC),
+            updated_date=datetime.now(tz=UTC),
             status="approved",
         )
 
-        # Test AdCP-compliant model_dump (external response - excludes internal fields)
-        # adcp 3.6.0: Only creative_id, format_id, variants are public
+        # Test AdCP-compliant model_dump (external response - listing schema fields)
         adcp_response = creative.model_dump()
 
-        # Verify only public fields are present in model_dump()
-        adcp_public_fields = ["creative_id", "format_id", "variants"]
-        for field in adcp_public_fields:
-            assert field in adcp_response, f"Public field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Public field '{field}' is None"
+        # Verify listing Creative public fields are present in model_dump()
+        listing_public_fields = ["creative_id", "format_id", "name", "status", "created_date", "updated_date"]
+        for field in listing_public_fields:
+            assert field in adcp_response, f"Listing field '{field}' missing from response"
+            assert adcp_response[field] is not None, f"Listing field '{field}' is None"
 
-        # Verify ALL other fields are internal (excluded from model_dump)
-        internal_fields = ["principal_id", "name", "assets", "tags", "status", "created_date", "updated_date"]
-        for field in internal_fields:
-            assert field not in adcp_response, f"Internal field '{field}' exposed in AdCP response"
+        # Verify internal-only fields are excluded from model_dump
+        assert "principal_id" not in adcp_response, "Internal field 'principal_id' exposed in AdCP response"
+
+        # Verify delivery-only fields are NOT present (we extend listing, not delivery)
+        for field in ["variants", "variant_count", "totals", "media_buy_id"]:
+            assert field not in adcp_response, f"Delivery field '{field}' should not be in listing response"
 
         # Verify format_id is FormatId object
         assert isinstance(adcp_response["format_id"], dict), "format_id should be FormatId object (as dict)"
@@ -903,14 +905,12 @@ class TestAdCPContract:
 
         # Test internal model_dump includes all fields
         internal_response = creative.model_dump_internal()
-        for field in ["principal_id", "assets", "status"]:
-            assert field in internal_response, f"Internal field '{field}' missing from internal response"
+        assert "principal_id" in internal_response, "principal_id missing from internal response"
+        assert "status" in internal_response, "status missing from internal response"
 
-        # Verify internal response has more fields than external
+        # Verify internal response has principal_id that external doesn't
         internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
         assert "principal_id" in internal_only_fields, "principal_id should be internal-only"
-        assert "assets" in internal_only_fields, "assets should be internal-only"
-        assert "status" in internal_only_fields, "status should be internal-only"
 
     def test_signal_adcp_compliance(self):
         """Test that Signal model complies with AdCP get-signals-response schema."""

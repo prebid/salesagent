@@ -123,7 +123,6 @@ class TestUpdateMediaBuyDryRunNoPersistence:
             # Execute — impl now accepts identity instead of ctx
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_existing_123",
-                buyer_ref="test-buyer",
                 paused=True,
                 packages=[{"package_id": "pkg_1", "paused": True}],
             )
