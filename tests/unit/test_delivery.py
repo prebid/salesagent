@@ -29,6 +29,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types import MediaBuyStatus
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -37,6 +38,7 @@ from src.core.schemas import (
     DeliveryTotals,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
+    PricingModel,
     ReportingPeriod,
 )
 from src.core.testing_hooks import AdCPTestContext
@@ -545,9 +547,6 @@ class TestDeliveryIdentificationModes:
         assert call_req.buyer_refs is None
         assert len(response.media_buy_deliveries) == 1
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-MAIN-14 -- CONTRADICTS: partial resolution must report errors for missing IDs (salesagent-mexj)"
-    )
     def test_partial_ids_returns_found_and_errors_for_missing(self):
         """UC-004-MAIN-14: partial resolution returns found buys AND errors for missing.
 
@@ -562,12 +561,39 @@ class TestDeliveryIdentificationModes:
         Type: unit
         Source: UC-004, salesagent-mexj
         """
+        # Request 3 IDs, only 1 found
+        buy = _make_mock_media_buy(media_buy_id="mb_found")
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_found",
+            impressions=100,
+            spend=10.0,
+            packages=[{"package_id": "pkg_001", "impressions": 100, "spend": 10.0}],
+        )
 
-        pass
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_found", "mb_missing_1", "mb_missing_2"],
+        )
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-MAIN-15 -- CONTRADICTS: all IDs missing must return errors, not silent empty (salesagent-mexj)"
-    )
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_found", buy)],
+        )
+
+        # Found buy present in deliveries
+        assert len(response.media_buy_deliveries) == 1
+        assert response.media_buy_deliveries[0].media_buy_id == "mb_found"
+
+        # Missing IDs reported as errors
+        assert response.errors is not None
+        assert len(response.errors) == 2
+        error_messages = " ".join(e.message for e in response.errors)
+        assert "mb_missing_1" in error_messages
+        assert "mb_missing_2" in error_messages
+        for err in response.errors:
+            assert err.code == "media_buy_not_found"
+
     def test_all_ids_invalid_returns_empty_with_errors(self):
         """UC-004-MAIN-15: all requested IDs missing returns empty deliveries + errors.
 
@@ -579,7 +605,27 @@ class TestDeliveryIdentificationModes:
         Type: unit
         Source: UC-004, salesagent-mexj
         """
-        pass
+        # Request 2 IDs, none found
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_ghost_1", "mb_ghost_2"],
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            target_buys=[],  # nothing found
+        )
+
+        # No deliveries
+        assert response.media_buy_deliveries == []
+
+        # Both missing IDs reported as errors
+        assert response.errors is not None
+        assert len(response.errors) == 2
+        error_codes = {e.code for e in response.errors}
+        assert error_codes == {"media_buy_not_found"}
+        error_messages = " ".join(e.message for e in response.errors)
+        assert "mb_ghost_1" in error_messages
+        assert "mb_ghost_2" in error_messages
 
 
 # ===========================================================================
@@ -693,28 +739,119 @@ class TestDeliveryStatusFilter:
         assert len(result) == 1
         assert result[0][0] == "mb_active"
 
-    @pytest.mark.skip(reason="STUB: UC-004-FILT-02 -- filter by status completed")
     def test_status_filter_completed(self):
-        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
-        CONFIRMED: status_filter accepts media-buy-status enum including 'completed'."""
-        pass
+        """UC-004-FILT-02: filter by status completed returns only completed buys.
 
-    @pytest.mark.skip(reason="STUB: UC-004-FILT-03 -- filter by status paused")
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: status_filter accepts media-buy-status enum including 'completed'.
+        """
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        ref_date = date(2025, 6, 15)
+        buy_active = _make_mock_media_buy(
+            media_buy_id="mb_active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        buy_completed = _make_mock_media_buy(
+            media_buy_id="mb_done",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 5, 1),
+        )
+
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = None
+        mock_req.buyer_refs = None
+        mock_status = MagicMock()
+        mock_status.value = "completed"
+        mock_req.status_filter = mock_status
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [buy_active, buy_completed]
+        tenant = {"tenant_id": "test_tenant"}
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
+            mock_db.return_value.__enter__.return_value = mock_session
+            result = _get_target_media_buys(mock_req, "test_principal", tenant, ref_date)
+
+        assert len(result) == 1
+        assert result[0][0] == "mb_done"
+
     def test_status_filter_paused(self):
-        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
-        CONFIRMED: status_filter accepts media-buy-status enum including 'paused'."""
-        pass
+        """UC-004-FILT-03: filter by status paused is accepted but returns no buys
+        because current status is derived from dates (ready/active/completed only).
 
-    @pytest.mark.skip(reason="STUB: UC-004-FILT-04 -- no media buys match filter returns empty result")
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: status_filter accepts media-buy-status enum including 'paused'.
+        """
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        ref_date = date(2025, 6, 15)
+        buy_active = _make_mock_media_buy(
+            media_buy_id="mb_active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = None
+        mock_req.buyer_refs = None
+        mock_status = MagicMock()
+        mock_status.value = "paused"
+        mock_req.status_filter = mock_status
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [buy_active]
+        tenant = {"tenant_id": "test_tenant"}
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
+            mock_db.return_value.__enter__.return_value = mock_session
+            result = _get_target_media_buys(mock_req, "test_principal", tenant, ref_date)
+
+        # paused is in valid_internal_statuses but no buy has paused status from dates
+        assert len(result) == 0
+
     def test_status_filter_no_match_returns_empty(self):
-        """Spec: UNSPECIFIED (implementation-defined empty-result behavior)."""
-        pass
+        """UC-004-FILT-04: no media buys match filter returns empty result.
 
-    @pytest.mark.skip(reason="STUB: UC-004-FILT-07 -- valid status enum values accepted by schema")
+        Spec: UNSPECIFIED (implementation-defined empty-result behavior).
+        """
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        ref_date = date(2025, 6, 15)
+        # All buys are active
+        buy_active = _make_mock_media_buy(
+            media_buy_id="mb_active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = None
+        mock_req.buyer_refs = None
+        mock_status = MagicMock()
+        mock_status.value = "completed"
+        mock_req.status_filter = mock_status
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [buy_active]
+        tenant = {"tenant_id": "test_tenant"}
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
+            mock_db.return_value.__enter__.return_value = mock_session
+            result = _get_target_media_buys(mock_req, "test_principal", tenant, ref_date)
+
+        assert len(result) == 0
+
     def test_valid_status_enum_values_accepted(self):
-        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/enums/media-buy-status.json
-        CONFIRMED: enum values are [pending_activation, active, paused, completed]."""
-        pass
+        """UC-004-FILT-07: valid MediaBuyStatus enum values accepted by schema.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/enums/media-buy-status.json
+        CONFIRMED: enum values are [pending_activation, active, paused, completed].
+        """
+        valid_values = {"pending_activation", "active", "paused", "completed"}
+        actual_values = {s.value for s in MediaBuyStatus}
+        assert valid_values.issubset(actual_values)
 
 
 # ===========================================================================
@@ -768,13 +905,25 @@ class TestDeliveryDateRange:
         """Spec: UNSPECIFIED (implementation-defined default for missing start_date)."""
         pass
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-DATE-04 -- custom date range overrides default 30-day window (verify explicitly)"
-    )
     def test_custom_range_overrides_default(self):
-        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
-        CONFIRMED: start_date/end_date are explicit request parameters that define the reporting period."""
-        pass
+        """UC-004-DATE-04: custom date range overrides default 30-day window.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
+        CONFIRMED: start_date/end_date are explicit request parameters that define the reporting period.
+        """
+        req = GetMediaBuyDeliveryRequest(
+            start_date="2025-07-01",
+            end_date="2025-07-15",
+        )
+
+        response = _run_impl_with_patches(req, target_buys=[])
+
+        # Verify the reporting period matches the custom range, not the 30-day default
+        assert response.reporting_period.start == datetime(2025, 7, 1, tzinfo=UTC)
+        assert response.reporting_period.end == datetime(2025, 7, 15, tzinfo=UTC)
+        # Also verify it's NOT near "now" (ruling out 30-day default)
+        now = datetime.now(UTC)
+        assert abs((response.reporting_period.end - now).total_seconds()) > 86400
 
 
 # ===========================================================================
@@ -790,38 +939,175 @@ class TestDeliveryPricingOptionLookup:
     silently fails. These tests validate the fix.
     """
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-UPG-01 -- CRITICAL: pricing_option_id lookup must use string field, not integer PK. See salesagent-mq3n"
-    )
     def test_pricing_option_lookup_uses_string_field_not_integer_pk(self):
         """_get_pricing_options must resolve pricing_option_id through the string field.
 
         Spec: UNSPECIFIED (implementation-defined ID resolution strategy).
-        """
-        pass
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-UPG-02 -- CRITICAL: delivery spend computed correctly when pricing lookup succeeds"
-    )
+        CRITICAL: pricing_option_ids from JSON raw_request are strings (e.g., "42").
+        PricingOption.id is an Integer PK. The query must cast to int before .in_().
+        See salesagent-mq3n.
+        """
+        from src.core.tools.media_buy_delivery import _get_pricing_options
+
+        mock_po1 = MagicMock()
+        mock_po1.id = 42
+        mock_po1.pricing_model = "cpm"
+        mock_po1.rate = Decimal("5.00")
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [mock_po1]
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
+            mock_db.return_value.__enter__.return_value = mock_session
+            result = _get_pricing_options(["42"])
+
+        # Must find the pricing option keyed by string "42"
+        assert "42" in result
+        assert result["42"].id == 42
+
     def test_delivery_spend_correct_with_cpm_pricing(self):
-        """CPM pricing: 10,000 impressions at $5.00 CPM = $50.00 spend.
+        """CPM pricing: adapter returns correct impressions/spend with CPM pricing.
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
         CONFIRMED: spend (type: number, minimum: 0) and impressions (type: number, minimum: 0) are defined.
         """
-        pass
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_cpm",
+            budget=10000.0,
+            raw_request={
+                "packages": [{"package_id": "pkg_cpm", "product_id": "prod_1", "pricing_option_id": "1"}],
+                "buyer_ref": "buyer_cpm",
+            },
+        )
 
-    @pytest.mark.skip(reason="STUB: UC-004-UPG-02 -- CPC pricing: 500 clicks at $0.50 = $250.00 spend")
+        mock_po = MagicMock()
+        mock_po.id = 1
+        mock_po.pricing_model = PricingModel.cpm
+        mock_po.rate = Decimal("5.00")
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_cpm",
+            impressions=10000,
+            spend=50.0,
+            packages=[{"package_id": "pkg_cpm", "impressions": 10000, "spend": 50.0}],
+        )
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_cpm"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_cpm", buy)],
+            pricing_options={"1": mock_po},
+        )
+
+        assert response.aggregated_totals.impressions == 10000.0
+        assert response.aggregated_totals.spend == 50.0
+        delivery = response.media_buy_deliveries[0]
+        assert delivery.totals.impressions == 10000
+        assert delivery.totals.spend == 50.0
+
     def test_delivery_spend_correct_with_cpc_pricing(self):
-        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
-        CONFIRMED: clicks (type: number, minimum: 0) and spend are defined metrics."""
-        pass
+        """CPC pricing: clicks computed from spend / rate.
 
-    @pytest.mark.skip(reason="STUB: UC-004-UPG-02 -- FLAT_RATE pricing: total rate $5,000")
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
+        CONFIRMED: clicks (type: number, minimum: 0) and spend are defined metrics.
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_cpc",
+            budget=5000.0,
+            raw_request={
+                "packages": [{"package_id": "pkg_cpc", "product_id": "prod_1", "pricing_option_id": "2"}],
+                "buyer_ref": "buyer_cpc",
+            },
+        )
+
+        mock_po = MagicMock()
+        mock_po.id = 2
+        mock_po.pricing_model = PricingModel.cpc
+        mock_po.rate = Decimal("0.50")
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_cpc",
+            impressions=5000,
+            spend=250.0,
+            clicks=500,
+            packages=[{"package_id": "pkg_cpc", "impressions": 5000, "spend": 250.0}],
+        )
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_cpc"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_cpc", buy)],
+            pricing_options={"2": mock_po},
+        )
+
+        delivery = response.media_buy_deliveries[0]
+        assert delivery.totals.spend == 250.0
+        # CPC: clicks = floor(spend / rate) = floor(250 / 0.50) = 500
+        pkg = delivery.by_package[0]
+        assert pkg.clicks == 500
+
     def test_delivery_spend_correct_with_flat_rate_pricing(self):
-        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/pricing-option.json
-        CONFIRMED: flat-rate-option is one of the pricing option types."""
-        pass
+        """FLAT_RATE pricing: adapter returns spend, no click computation.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/pricing-option.json
+        CONFIRMED: flat-rate-option is one of the pricing option types.
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_flat",
+            budget=5000.0,
+            raw_request={
+                "packages": [{"package_id": "pkg_flat", "product_id": "prod_1", "pricing_option_id": "3"}],
+                "buyer_ref": "buyer_flat",
+            },
+        )
+
+        mock_po = MagicMock()
+        mock_po.id = 3
+        mock_po.pricing_model = PricingModel.flat_rate
+        mock_po.rate = Decimal("5000.00")
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_flat",
+            impressions=20000,
+            spend=5000.0,
+            clicks=0,
+            packages=[{"package_id": "pkg_flat", "impressions": 20000, "spend": 5000.0}],
+        )
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_flat"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_flat", buy)],
+            pricing_options={"3": mock_po},
+        )
+
+        delivery = response.media_buy_deliveries[0]
+        assert delivery.totals.spend == 5000.0
+        # FLAT_RATE: no click computation (clicks should be None)
+        pkg = delivery.by_package[0]
+        assert pkg.clicks is None
 
 
 # ===========================================================================
@@ -938,9 +1224,6 @@ class TestDeliveryAuthErrors:
 class TestDeliveryMediaBuyNotFound:
     """UC-004-EXT-C: media buy resolution failures."""
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-EXT-C1 -- CONTRADICTS: media_buy_id not found must return media_buy_not_found error (salesagent-mexj)"
-    )
     def test_media_buy_not_found_returns_error(self):
         """UC-004-EXT-C1: single media_buy_id not found returns error in response.
 
@@ -953,11 +1236,21 @@ class TestDeliveryMediaBuyNotFound:
         Type: unit
         Source: UC-004, salesagent-mexj
         """
-        pass
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_nonexistent"],
+        )
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-EXT-C2 -- CONTRADICTS: partial failure must return found buys AND errors for missing (salesagent-mexj)"
-    )
+        response = _run_impl_with_patches(
+            req,
+            target_buys=[],  # nothing found
+        )
+
+        assert response.media_buy_deliveries == []
+        assert response.errors is not None
+        assert len(response.errors) == 1
+        assert response.errors[0].code == "media_buy_not_found"
+        assert "mb_nonexistent" in response.errors[0].message
+
     def test_partial_ids_returns_found_and_errors(self):
         """UC-004-EXT-C2: partial failure returns found buys + errors for missing.
 
@@ -970,11 +1263,35 @@ class TestDeliveryMediaBuyNotFound:
         Type: unit
         Source: UC-004, salesagent-mexj, BR-RULE-030
         """
-        pass
+        buy = _make_mock_media_buy(media_buy_id="mb_exists")
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_exists",
+            impressions=500,
+            spend=25.0,
+            packages=[{"package_id": "pkg_001", "impressions": 500, "spend": 25.0}],
+        )
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-EXT-C3 -- CONTRADICTS: buyer_ref not found must return media_buy_not_found error (salesagent-mexj)"
-    )
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_exists", "mb_gone"],
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_exists", buy)],
+        )
+
+        # Found buy present
+        assert len(response.media_buy_deliveries) == 1
+        assert response.media_buy_deliveries[0].media_buy_id == "mb_exists"
+
+        # Missing ID reported as error
+        assert response.errors is not None
+        assert len(response.errors) == 1
+        assert response.errors[0].code == "media_buy_not_found"
+        assert "mb_gone" in response.errors[0].message
+
     def test_buyer_ref_not_found_returns_error(self):
         """UC-004-EXT-C3: buyer_ref not found returns error in response.
 
@@ -985,7 +1302,20 @@ class TestDeliveryMediaBuyNotFound:
         Type: unit
         Source: UC-004, salesagent-mexj
         """
-        pass
+        req = GetMediaBuyDeliveryRequest(
+            buyer_refs=["buyer_phantom"],
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            target_buys=[],  # nothing found for buyer_ref
+        )
+
+        assert response.media_buy_deliveries == []
+        assert response.errors is not None
+        assert len(response.errors) == 1
+        assert response.errors[0].code == "media_buy_not_found"
+        assert "buyer_phantom" in response.errors[0].message
 
 
 # ===========================================================================
@@ -1311,21 +1641,71 @@ class TestDeliveryProtocol:
         """Spec: UNSPECIFIED (MCP transport-specific implementation detail)."""
         pass
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-MAIN-16 -- delivery metrics include all standard fields (impressions, spend, clicks, ctr, video, conversions, viewability)"
-    )
     def test_delivery_metrics_all_standard_fields(self):
-        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
+        """UC-004-MAIN-16: delivery metrics include standard fields.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
         CONFIRMED: delivery-metrics.json defines impressions, spend, clicks, ctr, views,
         completed_views, completion_rate, conversions, conversion_value, roas, cost_per_acquisition,
-        viewability, engagement_rate, cost_per_click, quartile_data, dooh_metrics, etc."""
-        pass
+        viewability, engagement_rate, cost_per_click, quartile_data, dooh_metrics, etc.
+        """
+        buy = _make_mock_media_buy(media_buy_id="mb_fields")
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_fields",
+            impressions=1000,
+            spend=50.0,
+            clicks=10,
+            packages=[{"package_id": "pkg_001", "impressions": 1000, "spend": 50.0}],
+        )
 
-    @pytest.mark.skip(
-        reason="STUB: UC-004-MAIN-17 -- unpopulated fields (daily_breakdown, effective_rate, viewability, creative_breakdowns) handled gracefully"
-    )
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_fields"])
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_fields", buy)],
+        )
+
+        delivery = response.media_buy_deliveries[0]
+        totals = delivery.totals
+        # Required fields present
+        assert totals.impressions is not None
+        assert totals.spend is not None
+        # Optional fields exist as attributes (may be None)
+        assert hasattr(totals, "clicks")
+        assert hasattr(totals, "ctr")
+        assert hasattr(totals, "video_completions")
+        assert hasattr(totals, "completion_rate")
+
     def test_unpopulated_fields_handled_gracefully(self):
-        """Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
+        """UC-004-MAIN-17: unpopulated optional fields are None, not errors.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
         CONFIRMED: daily_breakdown, effective_rate, viewability, by_creative are all optional
-        fields in the spec (no required constraint)."""
-        pass
+        fields in the spec (no required constraint).
+        """
+        buy = _make_mock_media_buy(media_buy_id="mb_optional")
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_optional",
+            impressions=100,
+            spend=5.0,
+            packages=[{"package_id": "pkg_001", "impressions": 100, "spend": 5.0}],
+        )
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_optional"])
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_optional", buy)],
+        )
+
+        delivery = response.media_buy_deliveries[0]
+        # daily_breakdown is optional and not populated
+        assert delivery.daily_breakdown is None
+        # video_completions is optional
+        assert delivery.totals.video_completions is None
+        # aggregated_totals optional fields
+        assert response.aggregated_totals.video_completions is None

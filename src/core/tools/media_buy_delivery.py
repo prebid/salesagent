@@ -157,6 +157,24 @@ def _get_media_buy_delivery_impl(
     # Determine which media buys to fetch from database
 
     target_media_buys = _get_target_media_buys(req, principal_id, tenant, reference_date)
+
+    # Diff requested IDs vs found IDs to report missing ones (salesagent-mexj)
+    not_found_errors: list[Error] = []
+    found_ids = {buy_id for buy_id, _ in target_media_buys}
+    if req.media_buy_ids:
+        for requested_id in req.media_buy_ids:
+            if requested_id not in found_ids:
+                not_found_errors.append(
+                    Error(code="media_buy_not_found", message=f"Media buy {requested_id} not found")
+                )
+    elif req.buyer_refs:
+        found_buyer_refs = {buy.buyer_ref for _, buy in target_media_buys if buy.buyer_ref}
+        for requested_ref in req.buyer_refs:
+            if requested_ref not in found_buyer_refs:
+                not_found_errors.append(
+                    Error(code="media_buy_not_found", message=f"Buyer ref {requested_ref} not found")
+                )
+
     pricing_option_ids = [
         buy.raw_request.get("pricing_option_id")
         for _, buy in target_media_buys
@@ -406,7 +424,7 @@ def _get_media_buy_delivery_impl(
             media_buy_count=media_buy_count,
         ),
         media_buy_deliveries=deliveries,
-        errors=None,
+        errors=not_found_errors or None,
         context=context_val,
     )
 
@@ -643,8 +661,17 @@ def _get_target_media_buys(
 
 
 def _get_pricing_options(pricing_option_ids: list[Any | None]) -> dict[str, PricingOption]:
-    # FIXME(salesagent-mq3n): pricing_option_ids are strings from JSON but PricingOption.id is Integer PK
+    # Cast string IDs from JSON to int for Integer PK column (Pattern #3: cast at boundary)
+    int_ids = []
+    for pid in pricing_option_ids:
+        if pid is not None:
+            try:
+                int_ids.append(int(pid))
+            except (ValueError, TypeError):
+                logger.warning(f"Skipping non-numeric pricing_option_id: {pid}")
+    if not int_ids:
+        return {}
     with get_db_session() as session:
-        statement = select(PricingOption).where(PricingOption.id.in_(pricing_option_ids))
+        statement = select(PricingOption).where(PricingOption.id.in_(int_ids))
         pricing_options = session.scalars(statement).all()
         return {str(pricing_option.id): pricing_option for pricing_option in pricing_options}

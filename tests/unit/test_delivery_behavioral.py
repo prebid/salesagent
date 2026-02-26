@@ -726,13 +726,16 @@ class TestDeliveryImplIdentificationModes:
             mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
-        # Only 1 delivery returned, no error for the missing ID
+        # Only 1 delivery returned, error reported for missing ID (salesagent-mexj fix)
         assert len(response.media_buy_deliveries) == 1
         assert response.media_buy_deliveries[0].media_buy_id == "mb_valid"
-        assert response.errors is None
+        assert response.errors is not None
+        assert len(response.errors) == 1
+        assert response.errors[0].code == "media_buy_not_found"
+        assert "mb_nonexistent" in response.errors[0].message
 
-    def test_all_ids_invalid_returns_empty_no_error(self):
-        """media_buy_ids=["invalid1", "invalid2"] -> empty array, no error."""
+    def test_all_ids_invalid_returns_empty_with_errors(self):
+        """media_buy_ids=["invalid1", "invalid2"] -> empty array, errors for missing IDs (salesagent-mexj fix)."""
         patches = _standard_patches(
             target_buys=[],  # DB returns nothing
         )
@@ -751,7 +754,10 @@ class TestDeliveryImplIdentificationModes:
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert len(response.media_buy_deliveries) == 0
-        assert response.errors is None
+        assert response.errors is not None
+        assert len(response.errors) == 2
+        error_codes = {e.code for e in response.errors}
+        assert error_codes == {"media_buy_not_found"}
         assert response.aggregated_totals.media_buy_count == 0
         assert response.aggregated_totals.impressions == 0.0
         assert response.aggregated_totals.spend == 0.0
