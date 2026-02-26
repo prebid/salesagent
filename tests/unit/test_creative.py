@@ -1581,3 +1581,385 @@ class TestRESTCreativeRoutes:
     @pytest.mark.skip(reason="GAP: Needs FastAPI TestClient setup for /creatives route test")
     def test_list_creatives_route_exists(self):
         pass
+
+
+# ============================================================================
+# 17. CREATIVE SCHEMA: salesagent-goy2 (Wrong Base Class) -- P0 stubs
+# ============================================================================
+
+
+class TestCreativeWrongBaseClass:
+    """P0 stubs for salesagent-goy2: Creative extends delivery base instead of
+    listing base.  These fail today because the fix is not yet landed.
+
+    Obligation: BR-UC-006 -- Creative Schema Compliance (3.6 Upgrade)
+    """
+
+    @pytest.mark.skip(
+        reason="STUB: salesagent-goy2 P0 -- Creative must extend listing base class "
+        "(adcp.types.generated_poc.media_buy.list_creatives_response.Creative)"
+    )
+    def test_creative_extends_listing_base_not_delivery(self):
+        """Creative base class should be the listing Creative (13 fields),
+        not the delivery Creative (6 fields)."""
+
+    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- list_creatives response must include 'name'")
+    def test_list_creatives_response_includes_name(self):
+        """name is currently exclude=True to work around wrong base class."""
+
+    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- list_creatives response must include 'status'")
+    def test_list_creatives_response_includes_status(self):
+        """status is currently exclude=True to work around wrong base class."""
+
+    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- list_creatives response must include 'created_date'")
+    def test_list_creatives_response_includes_created_date(self):
+        """created_date is currently exclude=True to work around wrong base class."""
+
+    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- list_creatives response must include 'updated_date'")
+    def test_list_creatives_response_includes_updated_date(self):
+        """updated_date is currently exclude=True to work around wrong base class."""
+
+    @pytest.mark.skip(
+        reason="STUB: salesagent-goy2 P0 -- delivery-only fields (variants, variant_count, "
+        "totals, media_buy_id) must NOT appear in list_creatives response"
+    )
+    def test_list_creatives_response_excludes_delivery_fields(self):
+        """variants=[] is currently hardcoded to satisfy wrong delivery base."""
+
+    @pytest.mark.skip(reason="STUB: salesagent-goy2 P0 -- model_dump must produce listing-schema-compliant JSON")
+    def test_model_dump_validates_against_listing_schema(self):
+        """model_dump() output must validate against adcp 3.6.0 listing Creative sub-schema."""
+
+
+# ============================================================================
+# 18. CREATIVE ASSET TYPE COVERAGE -- P1
+# ============================================================================
+
+
+class TestCreativeAssetTypes:
+    """BR-UC-006 schema P1: CreativeAsset must accept all 11 asset types."""
+
+    @pytest.mark.skip(
+        reason="STUB: BR-UC-006 schema P1 -- CreativeAsset must accept all 11 asset types "
+        "(image, video, audio, text, markdown, html, css, javascript, vast, daast, "
+        "promoted_offerings, url, webhook)"
+    )
+    def test_all_11_asset_types_accepted(self):
+        """Each asset type should be accepted without validation error."""
+
+
+# ============================================================================
+# 19. VALIDATION MODE SEMANTICS -- BR-RULE-033
+# ============================================================================
+
+
+class TestValidationModeSemantics:
+    """BR-RULE-033: strict vs lenient validation mode.
+
+    Existing: test_sync_creatives_behavioral.py covers strict/lenient branching.
+    These stubs cover gaps in the per-creative savepoint isolation and default semantics.
+    """
+
+    @pytest.mark.skip(
+        reason="STUB: BR-RULE-033 INV-1 -- per-creative savepoint isolation in lenient mode "
+        "(creative 1 valid, creative 2 invalid, creative 3 valid => 2 created + 1 failed)"
+    )
+    def test_lenient_per_creative_savepoint_isolation(self):
+        """Lenient mode: each creative has independent savepoint, failures don't cascade."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-033 INV-2 -- strict mode aborts remaining assignments on error")
+    def test_strict_mode_aborts_remaining_assignments(self):
+        """Strict mode: first assignment error aborts all remaining assignments."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-033 INV-3 -- lenient mode continues on assignment error")
+    def test_lenient_mode_continues_on_assignment_error(self):
+        """Lenient mode: assignment error logged in assignment_errors, processing continues."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-033 INV-5 -- default validation_mode is strict")
+    def test_default_validation_mode_is_strict(self):
+        """When validation_mode not specified, defaults to strict."""
+
+
+# ============================================================================
+# 20. ASSIGNMENT PACKAGE VALIDATION GAPS -- BR-RULE-038
+# ============================================================================
+
+
+class TestAssignmentPackageValidationGaps:
+    """BR-RULE-038 stubs not covered by existing TestAssignmentProcessing."""
+
+    @pytest.mark.skip(
+        reason="STUB: BR-RULE-038 INV-3 -- idempotent upsert for duplicate assignment "
+        "(weight reset to 100, no duplicate record)"
+    )
+    def test_idempotent_upsert_duplicate_assignment(self):
+        """Same creative-package pair synced twice -> existing record updated, not duplicated."""
+
+    @pytest.mark.skip(
+        reason="STUB: BR-RULE-038 INV-1 -- cross-tenant package isolation "
+        "(package in tenant T1 not visible from tenant T2)"
+    )
+    def test_cross_tenant_package_isolation(self):
+        """Package lookup must be scoped by tenant_id."""
+
+
+# ============================================================================
+# 21. FORMAT COMPATIBILITY -- BR-RULE-039
+# ============================================================================
+
+
+class TestFormatCompatibility:
+    """BR-RULE-039: Assignment format compatibility checks.
+
+    Existing: test_validate_creative_format_against_product.py covers basic checks.
+    These stubs cover normalization, strict/lenient, and edge cases.
+    """
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-039 INV-1/INV-2 -- URL normalization strips trailing '/' and '/mcp'")
+    def test_format_match_after_url_normalization(self):
+        """agent_url trailing slashes and /mcp stripped before comparison."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-039 INV-5 -- format mismatch in strict mode raises ToolError")
+    def test_format_mismatch_strict_raises(self):
+        """Strict mode: incompatible format raises ToolError FORMAT_MISMATCH."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-039 INV-5 -- format mismatch in lenient mode logs assignment_errors")
+    def test_format_mismatch_lenient_logs_error(self):
+        """Lenient mode: incompatible format skipped, added to assignment_errors."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-039 INV-3 -- product with empty format_ids allows all formats")
+    def test_empty_product_format_ids_allows_all(self):
+        """Product.format_ids=[] means no restriction, all creative formats accepted."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-039 INV-4 -- product format_ids accepts both 'id' and 'format_id' keys")
+    def test_product_format_ids_dual_key_support(self):
+        """Format match checks both 'id' and 'format_id' key names."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-039 INV-6 -- package without product_id skips format check")
+    def test_package_without_product_skips_format_check(self):
+        """No product_id on package means format compatibility check is skipped entirely."""
+
+
+# ============================================================================
+# 22. MEDIA BUY STATUS TRANSITION -- BR-RULE-040
+# ============================================================================
+
+
+class TestMediaBuyStatusTransition:
+    """BR-RULE-040: Media buy status transitions on creative assignment.
+
+    Existing: test_sync_creatives_behavioral.py covers basic transitions.
+    These stubs cover guard conditions and upsert triggers.
+    """
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-040 INV-1 -- draft + approved_at => pending_creatives")
+    def test_draft_with_approved_at_transitions(self):
+        """Draft media buy with approved_at transitions to pending_creatives."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-040 INV-2 -- draft + approved_at=null => stays draft")
+    def test_draft_without_approved_at_stays_draft(self):
+        """Draft media buy without approved_at does NOT transition."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-040 INV-3 -- non-draft status unchanged")
+    def test_non_draft_status_unchanged(self):
+        """Active media buy status is not affected by creative assignment."""
+
+    @pytest.mark.skip(reason="STUB: BR-RULE-040 INV-4 -- transition fires on upsert too")
+    def test_transition_fires_on_upsert(self):
+        """Updated (upserted) assignment still triggers status check."""
+
+
+# ============================================================================
+# 23. MAIN FLOW INTEGRATION GAPS
+# ============================================================================
+
+
+class TestSyncCreativesMainFlowGaps:
+    """Main flow scenarios from BR-UC-006-main-mcp/rest not covered elsewhere."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 main P1 -- multiple creatives batch sync (5 creatives => 5 results)")
+    def test_batch_sync_multiple_creatives(self):
+        """Batch of N creatives should produce N per-creative results."""
+
+    @pytest.mark.skip(
+        reason="STUB: BR-UC-006 main P1 -- existing creative upsert by triple key "
+        "(tenant_id + principal_id + creative_id)"
+    )
+    def test_upsert_by_triple_key(self):
+        """Existing creative matched by triple key returns action=updated."""
+
+    @pytest.mark.skip(
+        reason="STUB: BR-UC-006 main P2 -- unchanged creative detection (identical data => action=unchanged)"
+    )
+    def test_unchanged_creative_detection(self):
+        """Re-syncing identical content returns action=unchanged, no DB write."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 main P2 -- format registry pre-fetched once per sync operation")
+    def test_format_registry_cached_per_sync(self):
+        """Format registry fetched once in step 4, reused for all creatives."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 main P0 -- MCP response is valid SyncCreativesResponse")
+    def test_mcp_response_valid_sync_creatives_response(self):
+        """MCP tool returns parseable SyncCreativesResponse with per-creative results."""
+
+
+# ============================================================================
+# 24. EXTENSION GAPS
+# ============================================================================
+
+
+class TestExtensionGaps:
+    """Extension scenarios from BR-UC-006 not covered by existing tests."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-ext-b -- tenant not found returns TENANT_NOT_FOUND error")
+    def test_ext_b_tenant_not_found(self):
+        """Authentication present but tenant unresolvable => TENANT_NOT_FOUND."""
+
+    @pytest.mark.skip(
+        reason="STUB: BR-UC-006-ext-c P1 -- validation failure in strict mode, "
+        "other creatives still processed (per-creative validation always independent)"
+    )
+    def test_ext_c_validation_failure_strict_others_processed(self):
+        """BR-RULE-033 INV-1: per-creative validation independent even in strict."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-ext-c P1 -- validation failure in lenient mode")
+    def test_ext_c_validation_failure_lenient(self):
+        """Lenient mode: invalid creative gets action=failed, valid ones proceed."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-ext-d -- missing name field returns per-creative failure")
+    def test_ext_d_missing_name_field(self):
+        """Creative with no name at all should fail validation."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-ext-h P2 -- media_url fallback when no previews returned")
+    def test_ext_h_media_url_fallback(self):
+        """No previews from agent but media_url provided => creative NOT failed."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-ext-f -- unknown format_id with discovery hint")
+    def test_ext_f_unknown_format_with_hint(self):
+        """Agent reachable but format not in registry => action=failed with discovery suggestion."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-ext-g -- unreachable agent with retry guidance")
+    def test_ext_g_unreachable_agent_retry(self):
+        """Agent unreachable => action=failed with 'try again later' suggestion."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-ext-j P1 -- non-existent package lenient mode => assignment_errors")
+    def test_ext_j_package_not_found_lenient(self):
+        """Lenient mode: missing package logged in assignment_errors, others continue."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-ext-k P1 -- incompatible format strict mode => FORMAT_MISMATCH")
+    def test_ext_k_format_mismatch_strict(self):
+        """Strict mode: format mismatch raises operation-level error."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-ext-k P1 -- incompatible format lenient mode => assignment_errors")
+    def test_ext_k_format_mismatch_lenient(self):
+        """Lenient mode: format mismatch logged in assignment_errors."""
+
+
+# ============================================================================
+# 25. A2A / REST TRANSPORT GAPS
+# ============================================================================
+
+
+class TestA2ATransportGaps:
+    """A2A transport layer tests for creative operations."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-main-rest -- sync_creatives via A2A endpoint")
+    def test_sync_creatives_via_a2a(self):
+        """A2A task response contains valid SyncCreativesResponse payload."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-main-rest -- Slack notification for require-human via A2A")
+    def test_a2a_slack_notification_require_human(self):
+        """A2A path also sends Slack notification for require-human approval."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006-main-rest -- AI review submission via A2A")
+    def test_a2a_ai_review_submission(self):
+        """A2A path submits background AI review for ai-powered approval."""
+
+    @pytest.mark.skip(reason="STUB: list_creatives A2A boundary -- list_creatives_raw forwards all params")
+    def test_list_creatives_raw_boundary(self):
+        """list_creatives_raw must forward all parameters to _impl."""
+
+    @pytest.mark.skip(reason="STUB: list_creative_formats A2A boundary -- forwards filters to _impl")
+    def test_list_creative_formats_raw_boundary(self):
+        """list_creative_formats_raw must forward filter params."""
+
+
+# ============================================================================
+# 26. ASYNC LIFECYCLE
+# ============================================================================
+
+
+class TestAsyncLifecycle:
+    """BR-UC-006 async lifecycle stubs (P3 -- async protocol not yet implemented)."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 async P3 -- SyncCreativesAsyncResponseSubmitted schema")
+    def test_async_submitted_response(self):
+        """Async submitted acknowledgment conforms to adcp 3.6.0 schema."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 async P3 -- SyncCreativesAsyncResponseWorking schema")
+    def test_async_working_response(self):
+        """Async working response includes progress percentage and counts."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 async P3 -- SyncCreativesAsyncResponseInputRequired schema")
+    def test_async_input_required_response(self):
+        """Async input-required response indicates what input is needed."""
+
+
+# ============================================================================
+# 27. REQUEST CONSTRAINT VALIDATION
+# ============================================================================
+
+
+class TestRequestConstraintValidation:
+    """Request-level constraints on sync_creatives input."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 PRE-B2 -- zero creatives rejected (minItems: 1)")
+    def test_zero_creatives_rejected(self):
+        """Empty creatives array should be rejected at schema level."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 P2 -- more than 100 creatives rejected (maxItems: 100)")
+    def test_over_100_creatives_rejected(self):
+        """Creatives array exceeding 100 should be rejected."""
+
+
+# ============================================================================
+# 28. DELETE MISSING DEFAULT BEHAVIOR
+# ============================================================================
+
+
+class TestDeleteMissingDefault:
+    """delete_missing=false default behavior."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 P2 -- delete_missing=false (default) preserves unlisted creatives")
+    def test_delete_missing_false_preserves_unlisted(self):
+        """When delete_missing not set, creatives not in batch remain unchanged."""
+
+
+# ============================================================================
+# 29. ASSIGNMENTS RESPONSE COMPLETENESS
+# ============================================================================
+
+
+class TestAssignmentsResponseCompleteness:
+    """POST-S3, POST-S4: assignment visibility in per-creative results.
+
+    Existing: test_sync_creatives_assignment_reporting.py covers assigned_to/assignment_errors.
+    These stubs cover gaps in warnings visibility.
+    """
+
+    @pytest.mark.skip(reason="STUB: POST-S4 P2 -- warnings array included in per-creative results")
+    def test_warnings_in_per_creative_results(self):
+        """Non-fatal issues in lenient mode appear in creative result warnings array."""
+
+
+# ============================================================================
+# 30. CREATIVE_IDS SCOPE FILTER
+# ============================================================================
+
+
+class TestCreativeIdsScopeFilterGap:
+    """creative_ids scope filter gap."""
+
+    @pytest.mark.skip(reason="STUB: BR-UC-006 P3 -- creative_ids limits which creatives are processed")
+    def test_creative_ids_filter_scope(self):
+        """Sending creatives [C1,C2,C3] with creative_ids=[C1,C3] processes only C1,C3."""
