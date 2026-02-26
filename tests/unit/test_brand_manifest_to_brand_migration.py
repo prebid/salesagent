@@ -27,14 +27,12 @@ class TestGetProductsRawRejectsBrandManifest:
         from src.core.tools.products import get_products_raw
 
         with pytest.raises(TypeError, match="brand_manifest"):
-            # brand_manifest is not a valid parameter — brand is the new name
-            import asyncio
-
-            asyncio.get_event_loop().run_until_complete(
-                get_products_raw(
-                    brand_manifest={"name": "Test Brand"},
-                    brief="",
-                )
+            # brand_manifest is not a valid parameter — brand is the new name.
+            # TypeError is raised at call time (before coroutine creation)
+            # because the function signature has no **kwargs.
+            get_products_raw(
+                brand_manifest={"name": "Test Brand"},
+                brief="",
             )
 
 
