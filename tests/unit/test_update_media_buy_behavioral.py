@@ -634,6 +634,58 @@ def test_pause_completes_workflow_step(standard_mocks):
 
 
 # ---------------------------------------------------------------------------
+# BUG #1041: Manual approval gate creates no ObjectWorkflowMapping
+# Without the mapping, the admin approval flow cannot find the media buy
+# update to execute after approval. The workflow step is orphaned.
+# ---------------------------------------------------------------------------
+
+
+def test_manual_approval_creates_object_workflow_mapping(standard_mocks):
+    """Bug #1041: when manual approval is required, an ObjectWorkflowMapping
+    must be created so the admin approval flow can find the update to execute.
+
+    Currently the manual approval path returns early (line 285) before the
+    ObjectWorkflowMapping is created (line 1264). This means after approval,
+    there is no link between the workflow step and the media buy update.
+    """
+    standard_mocks["adapter_instance"].manual_approval_required = True
+    standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        media_buy_id="mb_approval_mapping",
+        paused=True,
+    )
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+
+    # The DB session should have had an ObjectWorkflowMapping added via session.add()
+    mock_session = standard_mocks["db_session"]
+    add_calls = mock_session.add.call_args_list
+    commit_calls = mock_session.commit.call_args_list
+
+    # Find ObjectWorkflowMapping among session.add() calls
+    from src.core.database.models import ObjectWorkflowMapping
+
+    mapping_adds = [call for call in add_calls if isinstance(call[0][0], ObjectWorkflowMapping)]
+
+    assert len(mapping_adds) >= 1, (
+        f"No ObjectWorkflowMapping was added to the DB session during manual approval. "
+        f"session.add() was called {len(add_calls)} times but none with ObjectWorkflowMapping. "
+        f"Without this mapping, the admin approval flow cannot find the media buy update "
+        f"to execute after approval (workflow step is orphaned)."
+    )
+
+    # Verify the mapping links the workflow step to the media buy update
+    mapping = mapping_adds[0][0][0]
+    assert mapping.step_id == "step_001"
+    assert mapping.object_id == "mb_approval_mapping"
+    assert mapping.object_type == "media_buy"
+    assert mapping.action == "update"
+
+
+# ---------------------------------------------------------------------------
 # BUG: Manual approval gate stores no request data (#1041 Bug 1)
 # ---------------------------------------------------------------------------
 
@@ -678,3 +730,99 @@ def test_manual_approval_stores_raw_request(standard_mocks):
         "After approval, the system has no data to execute the update. "
         "The approval gate must store the original request (like create_media_buy stores raw_request)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: #1039 timezone mismatch in update_media_buy
+# ---------------------------------------------------------------------------
+
+
+class TestTimezoneHandlingRegression:
+    """Regression tests for GitHub #1039: timezone mismatch when updating dates.
+
+    The original bug: updating only end_time caused 'can't subtract
+    offset-naive and offset-aware datetimes' because the DB value for
+    start_time was naive while the request value was aware.
+
+    Fixed by:
+    - Migration 3a16c5fc27ce: all datetime columns → TIMESTAMPTZ
+    - Schema validation: UpdateMediaBuyRequest rejects naive datetimes
+    - Model definition: DateTime(timezone=True) on all datetime columns
+    """
+
+    def test_update_only_end_time_succeeds(self, standard_mocks):
+        """Updating only end_time (start_time from DB) must not raise TypeError.
+
+        Regression for #1039: start_time from DB + end_time from request
+        must both be timezone-aware so flight_days calculation succeeds.
+        """
+        mock_session = _setup_db_session(standard_mocks)
+
+        mock_existing_mb = MagicMock()
+        mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
+        mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
+
+        mock_scalars = MagicMock()
+        mock_scalars.first.side_effect = [
+            _make_mock_media_buy("mb_tz_end"),
+            _make_mock_currency_limit(),
+            mock_existing_mb,
+        ]
+        mock_session.scalars.return_value = mock_scalars
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_tz_end",
+            end_time=datetime(2025, 9, 1, tzinfo=UTC),  # Only end_time
+        )
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        # Must succeed — no TypeError from naive/aware subtraction
+        assert isinstance(result, UpdateMediaBuySuccess)
+
+    def test_update_only_start_time_succeeds(self, standard_mocks):
+        """Updating only start_time (end_time from DB) must not raise TypeError.
+
+        Mirror case of #1039: end_time from DB + start_time from request.
+        """
+        mock_session = _setup_db_session(standard_mocks)
+
+        mock_existing_mb = MagicMock()
+        mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
+        mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
+
+        mock_scalars = MagicMock()
+        mock_scalars.first.side_effect = [
+            _make_mock_media_buy("mb_tz_start"),
+            _make_mock_currency_limit(),
+            mock_existing_mb,
+        ]
+        mock_session.scalars.return_value = mock_scalars
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_tz_start",
+            start_time=datetime(2025, 3, 1, tzinfo=UTC),  # Only start_time
+        )
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuySuccess)
+
+    def test_schema_rejects_naive_start_time(self):
+        """UpdateMediaBuyRequest must reject naive (no tzinfo) start_time.
+
+        This is the schema-level guard that prevents #1039 from recurring.
+        """
+        with pytest.raises(ValidationError, match="start_time must be timezone-aware"):
+            UpdateMediaBuyRequest(
+                media_buy_id="mb_naive",
+                start_time=datetime(2025, 6, 1),  # naive — no tzinfo
+            )
+
+    def test_schema_rejects_naive_end_time(self):
+        """UpdateMediaBuyRequest must reject naive (no tzinfo) end_time."""
+        with pytest.raises(ValidationError, match="end_time must be timezone-aware"):
+            UpdateMediaBuyRequest(
+                media_buy_id="mb_naive",
+                end_time=datetime(2025, 6, 1),  # naive — no tzinfo
+            )
