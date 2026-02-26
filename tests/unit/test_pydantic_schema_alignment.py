@@ -130,6 +130,22 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
         # For unknown refs, return a minimal object
         return {}
 
+    # Handle field-level oneOf (e.g., status_filter: oneOf[enum, array-of-enum])
+    # Pick the first variant and recursively generate a value for it.
+    if field_spec and "oneOf" in field_spec:
+        first_variant = field_spec["oneOf"][0]
+        # The variant might be a $ref (e.g., to an enum schema) or inline type
+        if "$ref" in first_variant:
+            ref = first_variant["$ref"]
+            # Load the referenced schema to get enum values or type info
+            ref_schema = load_json_schema(ref)
+            if "enum" in ref_schema:
+                return ref_schema["enum"][0]
+            variant_type = ref_schema.get("type", "string")
+            return generate_example_value(variant_type, field_name, ref_schema)
+        variant_type = first_variant.get("type", "string")
+        return generate_example_value(variant_type, field_name, first_variant)
+
     if field_type == "string":
         # Check for pattern constraints in schema
         if field_spec and "pattern" in field_spec:
