@@ -244,9 +244,22 @@ iterate:
            the key behavior that this task adds or changes. What should be true
            after implementation that isn't true now?
 
-        2. **Choose test location**:
-           - Unit test: `tests/unit/test_<area>.py` (most common)
-           - Integration test: `tests/integration/test_<area>.py` (if DB-dependent)
+        2. **Choose test location** (entity-suite-aware):
+           - **First, check for an entity test suite**:
+             ```bash
+             ls tests/unit/test_product.py tests/unit/test_media_buy.py \
+                tests/unit/test_creative.py tests/unit/test_delivery.py \
+                tests/unit/test_pricing_option.py tests/unit/test_properties.py \
+                tests/unit/test_creative_formats.py tests/unit/test_capabilities.py \
+                tests/unit/test_performance.py tests/unit/test_audience_signals.py \
+                2>/dev/null
+             ```
+           - If the affected entity has a suite, add your test THERE as a
+             new method in the appropriate test class.
+           - If no entity suite exists, note in the task:
+             "No entity test suite for {entity}. Consider running /surface {entity}."
+           - **Fallback**: `tests/unit/test_<area>.py` (existing file) or
+             `tests/integration/test_<area>.py` (if DB-dependent)
            - Follow existing test file organization
 
         3. **Write the failing test**:
