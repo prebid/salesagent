@@ -282,6 +282,22 @@ def _update_media_buy_impl(
             response_data=approval_data,
             add_comment={"user": "system", "comment": "Publisher requires manual approval for all media buy updates"},
         )
+
+        # Create ObjectWorkflowMapping so the admin approval flow can find
+        # this update and execute it after human approval (#1041).
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import ObjectWorkflowMapping
+
+        with get_db_session() as session:
+            mapping = ObjectWorkflowMapping(
+                step_id=step.step_id,
+                object_type="media_buy",
+                object_id=req.media_buy_id,
+                action="update",
+            )
+            session.add(mapping)
+            session.commit()
+
         return approval_response
 
     # Validate currency limits if flight dates or budget changes
@@ -1329,6 +1345,7 @@ def _build_update_request(
     packages: list | None = None,
     push_notification_config: Any = None,
     context: Any = None,
+    ext: Any = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
@@ -1379,6 +1396,8 @@ def _build_update_request(
         request_params["push_notification_config"] = push_notification_config
     if context is not None:
         request_params["context"] = context
+    if ext is not None:
+        request_params["ext"] = ext
 
     try:
         return UpdateMediaBuyRequest(**request_params)
@@ -1403,6 +1422,7 @@ def update_media_buy(
     creatives: list = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1427,6 +1447,7 @@ def update_media_buy(
         creatives: Add new creatives
         push_notification_config: Push notification config for async notifications (AdCP spec, optional)
         context: Application-level context per adcp spec
+        ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -1449,6 +1470,7 @@ def update_media_buy(
         packages=packages,
         push_notification_config=push_notification_config,
         context=context,
+        ext=ext,
     )
     from src.core.transport_helpers import resolve_identity_from_context
 
@@ -1484,6 +1506,7 @@ def update_media_buy_raw(
     creatives: list = None,
     push_notification_config: dict = None,
     context: dict | None = None,  # payload-level context
+    ext: dict | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1508,6 +1531,7 @@ def update_media_buy_raw(
         creatives: Creative updates
         push_notification_config: Push notification config for status updates
         context: Application level context per adcp spec
+        ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -1529,6 +1553,7 @@ def update_media_buy_raw(
         packages=packages,
         push_notification_config=push_notification_config,
         context=context,
+        ext=ext,
     )
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context

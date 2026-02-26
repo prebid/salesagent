@@ -3575,6 +3575,8 @@ async def create_media_buy(
     strategy_id: str | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
+    buyer_campaign_ref: str | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     webhook_url: str | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -3605,6 +3607,8 @@ async def create_media_buy(
         strategy_id: Optional strategy ID for linking operations
         push_notification_config: Push notification config dict with url, authentication (AdCP spec)
         context: Application level context per adcp spec
+        buyer_campaign_ref: Buyer's campaign reference identifier (optional, per AdCP spec)
+        ext: Extension object for custom fields (optional, per AdCP spec)
         ctx:  FastMCP context (automatically provided) (automatically provided)
 
     Returns:
@@ -3622,6 +3626,8 @@ async def create_media_buy(
             po_number=po_number,
             reporting_webhook=reporting_webhook,
             context=context,
+            buyer_campaign_ref=buyer_campaign_ref,
+            ext=ext,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
@@ -3666,6 +3672,8 @@ async def create_media_buy_raw(
     strategy_id: str | None = None,
     push_notification_config: dict[str, Any] | None = None,
     context: dict[str, Any] | None = None,  # Application level context per adcp spec
+    buyer_campaign_ref: str | None = None,
+    ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -3694,6 +3702,8 @@ async def create_media_buy_raw(
         enable_creative_macro: Enable creative macro
         strategy_id: Strategy ID
         push_notification_config: Push notification config for status updates
+        buyer_campaign_ref: Buyer's campaign reference identifier (optional, per AdCP spec)
+        ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -3712,6 +3722,8 @@ async def create_media_buy_raw(
             po_number=po_number,
             reporting_webhook=to_reporting_webhook(reporting_webhook),
             context=to_context_object(context),
+            buyer_campaign_ref=buyer_campaign_ref,
+            ext=ext,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
