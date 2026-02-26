@@ -46,16 +46,14 @@ def test_create_creative_response_excludes_internal_fields():
     creative_data = result["creative"]
     assert "principal_id" not in creative_data, "Internal field 'principal_id' should be excluded"
 
-    # adcp 3.6.0: name, assets, status, created_date, updated_date are all exclude=True
-    # model_dump() only returns: creative_id, format_id, variants
+    # Listing Creative: model_dump() returns public listing fields
     assert creative_data["creative_id"] == "test_123"
     assert "format_id" in creative_data, "Spec field 'format_id' should be present"
-    assert "variants" in creative_data, "Spec field 'variants' should be present"
+    assert "name" in creative_data, "Listing Creative: name is a public field"
+    assert "status" in creative_data, "Listing Creative: status is a public field"
 
-    # Internal fields are NOT in model_dump() in adcp 3.6.0
-    assert "name" not in creative_data, "adcp 3.6.0: name is internal/exclude=True"
-    assert "assets" not in creative_data, "adcp 3.6.0: assets is internal/exclude=True"
-    assert "status" not in creative_data, "adcp 3.6.0: status is internal/exclude=True"
+    # Delivery-only fields should NOT be present
+    assert "variants" not in creative_data, "Delivery field 'variants' should not be in listing response"
 
 
 def test_get_creatives_response_excludes_internal_fields():
@@ -87,13 +85,11 @@ def test_get_creatives_response_excludes_internal_fields():
     for i, creative_data in enumerate(result["creatives"]):
         assert "principal_id" not in creative_data, f"Creative {i}: principal_id should be excluded"
 
-        # adcp 3.6.0: spec fields in model_dump()
+        # Listing Creative: public fields in model_dump()
         assert creative_data["creative_id"] == f"creative_{i}"
         assert "format_id" in creative_data, f"Creative {i}: format_id should be present"
-
-        # adcp 3.6.0: these are now internal fields, not in model_dump()
-        assert "name" not in creative_data, f"Creative {i}: name is internal in adcp 3.6.0"
-        assert "status" not in creative_data, f"Creative {i}: status is internal in adcp 3.6.0"
+        assert "name" in creative_data, f"Creative {i}: name is a public listing field"
+        assert "status" in creative_data, f"Creative {i}: status is a public listing field"
 
 
 def test_creative_optional_fields_still_included():
@@ -114,8 +110,8 @@ def test_creative_optional_fields_still_included():
     result = response.model_dump()
     creative_data = result["creatives"][0]
 
-    # adcp 3.6.0: tags is internal (exclude=True), not in model_dump()
-    assert "tags" not in creative_data, "adcp 3.6.0: tags is internal/exclude=True"
+    # Listing Creative: tags is a public optional field; present when set
+    assert "tags" in creative_data, "Listing Creative: tags is a public field"
 
     # Internal fields still excluded
     assert "principal_id" not in creative_data, "Internal field principal_id should be excluded"

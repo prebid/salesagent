@@ -13,51 +13,52 @@ import pytest
 from pydantic import ValidationError
 
 
-class TestCreativeVariantsBoundary:
-    """Creative.variants is REQUIRED in adcp 3.6.0 — test all boundary cases."""
+class TestCreativeListingBoundary:
+    """Creative extends listing Creative in adcp 3.6.0 — test boundary cases.
 
-    def test_creative_without_variants_is_rejected(self):
-        """Creative missing variants field must raise ValidationError."""
+    The listing Creative (list_creatives_response.Creative) has required fields:
+    creative_id, format_id, name, status, created_date, updated_date.
+    The delivery-only field 'variants' does not exist on the listing Creative.
+    """
+
+    def test_creative_without_format_id_is_rejected(self):
+        """Creative missing format_id field must raise ValidationError."""
         from src.core.schemas import Creative
 
-        with pytest.raises(ValidationError, match="variants"):
+        with pytest.raises(ValidationError, match="format_id"):
             Creative(creative_id="c1")
 
-    def test_creative_with_empty_variants_is_valid(self):
-        """Empty variants list is valid — library docs: 'Empty when creative has no variants yet'."""
-        from src.core.schemas import Creative
+    def test_creative_with_minimal_fields_is_valid(self):
+        """Creative with creative_id + format_id is valid (other required fields have defaults)."""
+        from src.core.schemas import Creative, FormatId
 
-        c = Creative(creative_id="c1", variants=[])
+        c = Creative(
+            creative_id="c1",
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+        )
         assert c.creative_id == "c1"
-        assert c.variants == []
+        assert c.format_id.id == "display_300x250"
 
-    def test_creative_with_single_variant_is_valid(self):
-        """Minimum valid Creative: one variant with only variant_id (the only required field)."""
-        from adcp.types.generated_poc.core.creative_variant import CreativeVariant
+    def test_creative_variants_silently_stripped(self):
+        """Passing variants= (from old delivery base) is silently stripped, not rejected."""
+        from src.core.schemas import Creative, FormatId
 
-        from src.core.schemas import Creative
-
-        variant = CreativeVariant(variant_id="v1")
-        c = Creative(creative_id="c1", variants=[variant])
-        assert len(c.variants) == 1
-        assert c.variants[0].variant_id == "v1"
-
-    def test_creative_with_multiple_variants_is_valid(self):
-        """Multiple variants are valid."""
-        from adcp.types.generated_poc.core.creative_variant import CreativeVariant
-
-        from src.core.schemas import Creative
-
-        variants = [CreativeVariant(variant_id="v1"), CreativeVariant(variant_id="v2")]
-        c = Creative(creative_id="c1", variants=variants)
-        assert len(c.variants) == 2
+        c = Creative(
+            creative_id="c1",
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+            variants=[],
+        )
+        assert c.creative_id == "c1"
+        assert not hasattr(c, "variants")
 
     def test_creative_without_creative_id_is_rejected(self):
         """creative_id is REQUIRED — missing it must raise ValidationError."""
-        from src.core.schemas import Creative
+        from src.core.schemas import Creative, FormatId
 
         with pytest.raises(ValidationError, match="creative_id"):
-            Creative(variants=[])
+            Creative(
+                format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+            )
 
     def test_creative_variant_without_variant_id_is_rejected(self):
         """CreativeVariant.variant_id is REQUIRED — missing it must raise ValidationError."""
@@ -77,17 +78,25 @@ class TestCreativeVariantsBoundary:
 
     def test_creative_principal_id_still_excluded_from_response(self):
         """principal_id must remain an internal field excluded from model_dump() output."""
-        from src.core.schemas import Creative
+        from src.core.schemas import Creative, FormatId
 
-        c = Creative(creative_id="c1", variants=[], principal_id="p1")
+        c = Creative(
+            creative_id="c1",
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+            principal_id="p1",
+        )
         response = c.model_dump()
         assert "principal_id" not in response, "principal_id must not leak into AdCP response"
 
     def test_creative_principal_id_present_in_internal_dump(self):
         """principal_id must be present in model_dump_internal() for DB storage."""
-        from src.core.schemas import Creative
+        from src.core.schemas import Creative, FormatId
 
-        c = Creative(creative_id="c1", variants=[], principal_id="p1")
+        c = Creative(
+            creative_id="c1",
+            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+            principal_id="p1",
+        )
         internal = c.model_dump_internal()
         assert internal.get("principal_id") == "p1"
 

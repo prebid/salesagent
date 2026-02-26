@@ -1,8 +1,8 @@
 """Test that ListCreativesResponse properly excludes internal fields from nested Creative objects.
 
-adcp 3.6.0: Creative fields moved to internal (exclude=True):
-- name, assets, tags, status, created_date, updated_date are now INTERNAL
-- model_dump() only returns: creative_id, format_id, variants
+Creative extends the listing Creative (list_creatives_response.Creative):
+- Public fields: creative_id, format_id, name, status, created_date, updated_date, assets, tags
+- Internal fields (exclude=True): principal_id
 
 Related:
 - Original bug: SyncCreativesResponse (f5bd7b8a)
@@ -51,18 +51,17 @@ def test_list_creatives_response_excludes_internal_fields_from_nested_creatives(
 
     assert "principal_id" not in creative_in_response, "Internal field 'principal_id' should be excluded"
 
-    # adcp 3.6.0: model_dump() only returns these fields
+    # Listing Creative: public fields in model_dump()
     assert "creative_id" in creative_in_response
     assert creative_in_response["creative_id"] == "test_123"
     assert "format_id" in creative_in_response, "Spec field format_id should be present"
-    assert "variants" in creative_in_response, "Spec field variants should be present"
+    assert "name" in creative_in_response, "Listing Creative: name is a public field"
+    assert "status" in creative_in_response, "Listing Creative: status is a public field"
+    assert "created_date" in creative_in_response, "Listing Creative: created_date is a public field"
+    assert "updated_date" in creative_in_response, "Listing Creative: updated_date is a public field"
 
-    # adcp 3.6.0: these fields are now internal (exclude=True)
-    assert "name" not in creative_in_response, "adcp 3.6.0: name is internal"
-    assert "assets" not in creative_in_response, "adcp 3.6.0: assets is internal"
-    assert "status" not in creative_in_response, "adcp 3.6.0: status is internal"
-    assert "created_date" not in creative_in_response, "adcp 3.6.0: created_date is internal"
-    assert "updated_date" not in creative_in_response, "adcp 3.6.0: updated_date is internal"
+    # Delivery-only fields should NOT be present
+    assert "variants" not in creative_in_response, "Delivery field 'variants' should not be in listing response"
 
 
 def test_list_creatives_response_with_multiple_creatives():
@@ -95,14 +94,13 @@ def test_list_creatives_response_with_multiple_creatives():
     for i, creative_data in enumerate(result["creatives"]):
         assert "principal_id" not in creative_data, f"Creative {i}: principal_id should be excluded"
 
-        # adcp 3.6.0: only creative_id, format_id, variants in model_dump()
+        # Listing Creative: public fields in model_dump()
         assert creative_data["creative_id"] == f"creative_{i}"
         assert "format_id" in creative_data, f"Creative {i}: format_id should be present"
-
-        # adcp 3.6.0: these are internal
-        assert "status" not in creative_data, f"Creative {i}: status is internal in adcp 3.6.0"
-        assert "created_date" not in creative_data, f"Creative {i}: created_date is internal"
-        assert "updated_date" not in creative_data, f"Creative {i}: updated_date is internal"
+        assert "name" in creative_data, f"Creative {i}: name is a public listing field"
+        assert "status" in creative_data, f"Creative {i}: status is a public listing field"
+        assert "created_date" in creative_data, f"Creative {i}: created_date is a public listing field"
+        assert "updated_date" in creative_data, f"Creative {i}: updated_date is a public listing field"
 
 
 def test_list_creatives_response_with_optional_fields():
@@ -128,8 +126,8 @@ def test_list_creatives_response_with_optional_fields():
     result = response.model_dump()
     creative_data = result["creatives"][0]
 
-    # adcp 3.6.0: tags is internal (exclude=True), not in model_dump()
-    assert "tags" not in creative_data, "adcp 3.6.0: tags is internal"
+    # Listing Creative: tags is a public optional field; present when set
+    assert "tags" in creative_data, "Listing Creative: tags is a public field"
 
     # Internal fields always excluded from model_dump()
     assert "principal_id" not in creative_data

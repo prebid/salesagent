@@ -1446,17 +1446,21 @@ class TestAdCPContract:
         assert len(adcp_response["creatives"]) > 0, "Creatives array must not be empty"
 
         # Test creative object structure
-        # adcp 3.6.0: model_dump() only contains creative_id, format_id, variants
-        # name, assets, tags are internal fields (exclude=True)
+        # Creative extends listing Creative: model_dump() contains listing fields
+        # (creative_id, format_id, name, status, created_date, updated_date, assets, tags)
+        # Only principal_id is internal/excluded
         creative_obj = adcp_response["creatives"][0]
-        creative_public_fields = ["creative_id", "format_id", "variants"]
+        creative_public_fields = ["creative_id", "format_id", "name", "status", "created_date", "updated_date"]
         for field in creative_public_fields:
             assert field in creative_obj, f"Creative public field '{field}' missing"
             assert creative_obj[field] is not None, f"Creative public field '{field}' is None"
 
+        # Delivery-only fields should NOT be present
+        for field in ["variants", "variant_count", "totals", "media_buy_id"]:
+            assert field not in creative_obj, f"Delivery field '{field}' should not be in listing response"
+
         # Internal fields should NOT be in the response
-        for field in ["name", "assets", "tags", "status", "principal_id"]:
-            assert field not in creative_obj, f"Internal field '{field}' exposed in response"
+        assert "principal_id" not in creative_obj, "Internal field 'principal_id' exposed in response"
 
         # Verify assignments structure (dict of creative_id → package_ids)
         if adcp_response.get("assignments"):
