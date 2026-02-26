@@ -91,7 +91,7 @@ async def test_get_products_returns_tool_result(mcp_client):
     async with mcp_client as client:
         result = await client.call_tool(
             "get_products",
-            {"brief": "display ads", "brand_manifest": {"name": "Test Brand"}},
+            {"brief": "display ads", "brand": {"domain": "testbrand.com"}},
         )
 
         # Verify ToolResult structure
@@ -169,7 +169,7 @@ async def test_tool_result_content_differs_from_structured(mcp_client):
     async with mcp_client as client:
         result = await client.call_tool(
             "get_products",
-            {"brief": "video ads", "brand_manifest": {"name": "Test Brand"}},
+            {"brief": "video ads", "brand": {"domain": "testbrand.com"}},
         )
 
         text_content = result.content[0].text

@@ -78,7 +78,7 @@ class TestBroadstreetWorkflowManager:
         mock_db_session.return_value.__enter__.return_value = mock_session
 
         request = MagicMock()
-        request.brand_manifest.brand_name = "Test Brand"
+        request.brand.domain = "testbrand.com"
         request.po_number = "PO-12345"
         request.get_total_budget.return_value = 5000.0
 

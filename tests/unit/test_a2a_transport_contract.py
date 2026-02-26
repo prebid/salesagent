@@ -308,7 +308,7 @@ class TestA2AResponseShape:
         payload = _build_jsonrpc(
             "create_media_buy",
             {
-                "brand_manifest": {"name": "Test"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": [{"buyer_ref": "pkg1", "product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm"}],
                 "start_time": "2026-03-01T00:00:00Z",
                 "end_time": "2026-03-31T00:00:00Z",

@@ -36,7 +36,7 @@ class TestMCPToolRoundtripMinimal:
 
     async def test_get_products_minimal(self, mcp_client):
         """Test get_products with only required parameter (promoted_offering)."""
-        result = await mcp_client.call_tool("get_products", {"brand_manifest": {"name": "sustainable products"}})
+        result = await mcp_client.call_tool("get_products", {"brand": {"domain": "testbrand.com"}})
 
         assert result is not None
         # FastMCP call_tool returns structured_content
@@ -47,7 +47,7 @@ class TestMCPToolRoundtripMinimal:
         """Test create_media_buy with minimal required parameters."""
         # Get a product first
         products_result = await mcp_client.call_tool(
-            "get_products", {"brand_manifest": {"name": "test product"}, "brief": "test"}
+            "get_products", {"brand": {"domain": "testbrand.com"}, "brief": "test"}
         )
 
         products = (
@@ -61,7 +61,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "buyer_ref": "test_buyer_minimal",
-                    "brand_manifest": {"name": "Test Product"},
+                    "brand": {"domain": "testbrand.com"},
                     "packages": [
                         {
                             "buyer_ref": "test_buyer_minimal_pkg1",
@@ -87,7 +87,7 @@ class TestMCPToolRoundtripMinimal:
         """
         # Create a media buy first
         products_result = await mcp_client.call_tool(
-            "get_products", {"brand_manifest": {"name": "test product"}, "brief": "test"}
+            "get_products", {"brand": {"domain": "testbrand.com"}, "brief": "test"}
         )
 
         products = (
@@ -100,7 +100,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "buyer_ref": "test_buyer_update",
-                    "brand_manifest": {"name": "Test Product"},
+                    "brand": {"domain": "testbrand.com"},
                     "packages": [
                         {
                             "buyer_ref": "test_buyer_update_pkg1",
@@ -231,7 +231,7 @@ class TestMCPToolRoundtripMinimal:
         """Test update_performance_index with required parameters."""
         # First, create a media buy to update
         products_result = await mcp_client.call_tool(
-            "get_products", {"brand_manifest": {"name": "test product"}, "brief": "test"}
+            "get_products", {"brand": {"domain": "testbrand.com"}, "brief": "test"}
         )
 
         products = (
@@ -245,7 +245,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "buyer_ref": "test_buyer_perf",
-                    "brand_manifest": {"name": "Test Product"},
+                    "brand": {"domain": "testbrand.com"},
                     "packages": [
                         {
                             "buyer_ref": "test_buyer_perf_pkg1",
@@ -311,7 +311,7 @@ class TestSchemaConstructionValidation:
 
         # Test schemas that should work with minimal params
         test_cases = [
-            (schemas.GetProductsRequest, {"brand_manifest": {"name": "test"}}),
+            (schemas.GetProductsRequest, {"brand": {"domain": "testbrand.com"}}),
             (schemas.UpdateMediaBuyRequest, {"media_buy_id": "test"}),
             (schemas.GetMediaBuyDeliveryRequest, {}),
             (schemas.ListCreativesRequest, {}),

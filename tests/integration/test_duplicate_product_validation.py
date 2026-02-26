@@ -82,7 +82,7 @@ class TestDuplicateProductValidation:
             # Should return error response about duplicate products
             req = CreateMediaBuyRequest(
                 buyer_ref="test_media_buy_duplicate",
-                brand_manifest={"name": "Test Brand"},
+                brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
@@ -166,7 +166,7 @@ class TestDuplicateProductValidation:
             # Should return error response listing both duplicate products
             req = CreateMediaBuyRequest(
                 buyer_ref="test_media_buy_multiple_duplicates",
-                brand_manifest={"name": "Test Brand"},
+                brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
@@ -238,7 +238,7 @@ class TestDuplicateProductValidation:
             # but NOT on duplicate product validation
             req = CreateMediaBuyRequest(
                 buyer_ref="test_media_buy_different",
-                brand_manifest={"name": "Test Brand"},
+                brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,

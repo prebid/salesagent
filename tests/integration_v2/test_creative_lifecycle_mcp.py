@@ -1145,7 +1145,7 @@ class TestCreativeLifecycleMCP:
             # Call create_media_buy with packages containing creative_ids
             response = await create_media_buy_raw(
                 buyer_ref="test_buyer",
-                brand_manifest={"name": "Test Campaign"},
+                brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=datetime.now(UTC) + timedelta(days=1),
                 end_time=datetime.now(UTC) + timedelta(days=30),

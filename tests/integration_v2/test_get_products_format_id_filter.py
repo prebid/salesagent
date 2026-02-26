@@ -124,7 +124,7 @@ async def test_filter_by_format_ids_with_formatid_objects(identity):
 
     # Create request with FormatId filter (how the client sends it)
     request = GetProductsRequest(
-        brand_manifest={"name": "Test campaign"},
+        brand={"domain": "testbrand.com"},
         filters=ProductFilters(
             format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")]
         ),
@@ -157,7 +157,7 @@ async def test_filter_by_format_ids_no_matches(identity):
 
     # Request a format that doesn't exist
     request = GetProductsRequest(
-        brand_manifest={"name": "Test campaign"},
+        brand={"domain": "testbrand.com"},
         filters=ProductFilters(
             format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="audio_30s")]
         ),
@@ -175,7 +175,7 @@ async def test_filter_by_format_ids_video_format(identity):
     get_products_impl = _import_get_products_impl()
 
     request = GetProductsRequest(
-        brand_manifest={"name": "Test campaign"},
+        brand={"domain": "testbrand.com"},
         filters=ProductFilters(
             format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720")]
         ),
@@ -194,7 +194,7 @@ async def test_filter_by_multiple_format_ids(identity):
     get_products_impl = _import_get_products_impl()
 
     request = GetProductsRequest(
-        brand_manifest={"name": "Test campaign"},
+        brand={"domain": "testbrand.com"},
         filters=ProductFilters(
             format_ids=[
                 FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),

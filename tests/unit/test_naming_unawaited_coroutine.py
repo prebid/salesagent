@@ -31,9 +31,9 @@ class TestNamingAsyncContext:
 
         request = MagicMock()
         request.buyer_ref = "ACME-001"
-        request.brand_manifest = MagicMock()
-        request.brand_manifest.name = "Test Brand"
-        request.brand_manifest.campaign_objectives = None
+        request.brand = MagicMock()
+        request.brand.domain = "testbrand.com"
+        request.brand.campaign_objectives = None
         request.get_total_budget.return_value = 5000.0
         request.packages = [MagicMock(currency="USD", product_id="prod_1")]
 
@@ -74,9 +74,9 @@ class TestNamingAsyncContext:
 
         request = MagicMock()
         request.buyer_ref = "ACME-001"
-        request.brand_manifest = MagicMock()
-        request.brand_manifest.name = "Test Brand"
-        request.brand_manifest.campaign_objectives = None
+        request.brand = MagicMock()
+        request.brand.domain = "testbrand.com"
+        request.brand.campaign_objectives = None
         request.get_total_budget.return_value = 5000.0
         request.packages = [MagicMock(currency="USD", product_id="prod_1")]
 

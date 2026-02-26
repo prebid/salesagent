@@ -58,7 +58,7 @@ async def get_products(
     def test_validator_passes_with_all_fields(self, tmp_path):
         """Validator should pass when tool has all schema fields."""
 
-        # Create a fixed main.py (includes adcp_version and brand_manifest)
+        # Create a fixed main.py (includes adcp_version and brand)
         main_py = tmp_path / "main.py"
         main_py.write_text(
             '''
@@ -66,16 +66,16 @@ from adcp import GetProductsRequest
 
 @mcp.tool
 async def get_products(
-    brand_manifest: Any | None = None,
+    brand: Any | None = None,
     brief: str = "",
     adcp_version: str = "1.0.0",
     filters: dict | None = None,
     context: Context = None,
 ) -> GetProductsResponse:
-    """Get products - includes adcp_version, brand_manifest, and filters!"""
+    """Get products - includes adcp_version, brand, and filters!"""
     req = GetProductsRequest(
         brief=brief,
-        brand_manifest=brand_manifest,
+        brand=brand,
         adcp_version=adcp_version,
         filters=filters,
     )
@@ -116,7 +116,7 @@ async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetPr
 
 @mcp.tool
 async def get_products(
-    brand_manifest: Any | None = None,
+    brand: Any | None = None,
     brief: str = "",
     adcp_version: str = "1.0.0",
     filters: dict | None = None,
@@ -125,7 +125,7 @@ async def get_products(
     """MCP wrapper - includes all AdCP spec fields!"""
     req = GetProductsRequest(
         brief=brief,
-        brand_manifest=brand_manifest,
+        brand=brand,
         adcp_version=adcp_version,
         filters=filters,
     )

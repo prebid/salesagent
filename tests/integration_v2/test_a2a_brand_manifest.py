@@ -74,9 +74,7 @@ async def test_get_products_with_brand_domain(sample_tenant, sample_principal, s
 
 
 @pytest.mark.asyncio
-async def test_get_products_brand_manifest_without_brief_rejected(
-    sample_tenant, sample_principal, sample_products
-):
+async def test_get_products_brand_manifest_without_brief_rejected(sample_tenant, sample_principal, sample_products):
     """Test that brand_manifest without brief is rejected (brand_manifest is not brief or brand)."""
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
@@ -107,9 +105,7 @@ async def test_get_products_brand_manifest_without_brief_rejected(
 
 
 @pytest.mark.asyncio
-async def test_get_products_neither_brief_nor_brand_rejected(
-    sample_tenant, sample_principal, sample_products
-):
+async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, sample_principal, sample_products):
     """Test that requests with neither brief nor brand are rejected."""
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])

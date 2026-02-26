@@ -109,7 +109,7 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_profile",
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="pkg_profile",
@@ -200,7 +200,7 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
         try:
             req = CreateMediaBuyRequest(
                 buyer_ref="test_buyer_format",
-                brand_manifest={"name": "Test Campaign Format"},
+                brand={"domain": "testbrand.com"},
                 packages=[
                     create_test_package_request(
                         buyer_ref="pkg_format",
@@ -289,7 +289,7 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
         # Use only the first product (AdCP spec: package has singular product_id)
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_shared",
-            brand_manifest={"name": "Test Campaign Shared"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref=f"pkg_shared_{i}",
@@ -397,7 +397,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_updates",
-            brand_manifest={"name": "Test Campaign Updates"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="pkg_updates",

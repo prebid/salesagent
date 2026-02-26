@@ -143,11 +143,11 @@ class TestAdCPSchemaCompliance:
 
         # Test various valid request patterns per AdCP schema
         valid_requests = [
-            {"brand_manifest": {"name": "eco-friendly products"}},  # Minimal valid request
-            {"brief": "display advertising", "brand_manifest": {"name": "eco-friendly products"}},
-            {"brief": "video ads", "brand_manifest": {"name": "premium video"}},
+            {"brand": {"domain": "testbrand.com"}},  # Minimal valid request
+            {"brief": "display advertising", "brand": {"domain": "testbrand.com"}},
+            {"brief": "video ads", "brand": {"domain": "testbrand.com"}},
             {
-                "brand_manifest": {"name": "mobile apps"},
+                "brand": {"domain": "testbrand.com"},
                 "filters": {"format_types": ["video"]},
             },
         ]

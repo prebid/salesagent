@@ -28,45 +28,37 @@ class TestMCPContractValidation:
     """Test MCP tools can be called with minimal required parameters."""
 
     def test_get_products_minimal_call(self):
-        """Test get_products can be called with just brand_manifest.
+        """Test get_products can be called with just brand.
 
         Per AdCP spec, all fields are optional, including brief.
         """
-        request = GetProductsRequest(brand_manifest={"name": "purina cat food"})
+        request = GetProductsRequest(brand={"domain": "testbrand.com"})
 
         assert request.brief is None  # Optional, defaults to None per spec
-        # brand_manifest can be BrandManifest, BrandManifestReference wrapper, or dict
-        if isinstance(request.brand_manifest, dict):
-            assert request.brand_manifest["name"] == "purina cat food"
-        elif hasattr(request.brand_manifest, "name"):
-            assert request.brand_manifest.name == "purina cat food"
-        elif hasattr(request.brand_manifest, "root") and hasattr(request.brand_manifest.root, "name"):
-            assert request.brand_manifest.root.name == "purina cat food"
+        # brand is BrandReference with required domain field
+        assert request.brand is not None
+        assert request.brand.domain == "testbrand.com"
 
     def test_get_products_with_brief(self):
-        """Test get_products works with both brief and brand_manifest."""
-        request = GetProductsRequest(brief="pet supplies campaign", brand_manifest={"name": "purina cat food"})
+        """Test get_products works with both brief and brand."""
+        request = GetProductsRequest(brief="pet supplies campaign", brand={"domain": "testbrand.com"})
 
         assert request.brief == "pet supplies campaign"
-        # brand_manifest can be BrandManifest, BrandManifestReference wrapper, or dict
-        if isinstance(request.brand_manifest, dict):
-            assert request.brand_manifest["name"] == "purina cat food"
-        elif hasattr(request.brand_manifest, "name"):
-            assert request.brand_manifest.name == "purina cat food"
-        elif hasattr(request.brand_manifest, "root") and hasattr(request.brand_manifest.root, "name"):
-            assert request.brand_manifest.root.name == "purina cat food"
+        # brand is BrandReference with required domain field
+        assert request.brand is not None
+        assert request.brand.domain == "testbrand.com"
 
     def test_get_products_accepts_brief_only(self):
-        """Test that GetProductsRequest accepts brief without brand_manifest per AdCP spec.
+        """Test that GetProductsRequest accepts brief without brand per AdCP spec.
 
         Per AdCP spec, all fields in GetProductsRequest are OPTIONAL.
         """
         from src.core.schemas import GetProductsRequest as SchemaGetProductsRequest
 
-        # brand_manifest is optional per spec - brief-only request should succeed
+        # brand is optional per spec - brief-only request should succeed
         request = SchemaGetProductsRequest(brief="just a brief")
         assert request.brief == "just a brief"
-        assert request.brand_manifest is None
+        assert request.brand is None
 
     def test_list_authorized_properties_minimal(self):
         """Test list_authorized_properties can be called with no parameters."""
@@ -90,7 +82,7 @@ class TestMCPContractValidation:
         """Test create_media_buy with minimal required fields per AdCP v2.2.0 spec."""
         request = CreateMediaBuyRequest(
             buyer_ref="test_ref",
-            brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="pkg1", product_id="prod1", budget=1000.0, pricing_option_id="default-pricing-option"
@@ -113,7 +105,7 @@ class TestMCPContractValidation:
         # Test: Multiple packages with product IDs
         request = CreateMediaBuyRequest(
             buyer_ref="test_ref_1",
-            brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
+            brand={"domain": "testbrand.com"},
             po_number="PO-12345",
             packages=[
                 create_test_package_request(
@@ -241,13 +233,13 @@ class TestSchemaDefaultValues:
     def test_optional_fields_have_reasonable_defaults(self):
         """Test that optional fields have defaults that make sense."""
         # GetProductsRequest - per AdCP spec, all fields are optional and default to None
-        req = GetProductsRequest(brand_manifest={"name": "test"})
+        req = GetProductsRequest(brand={"domain": "testbrand.com"})
         assert req.brief is None  # Optional, defaults to None per spec
 
         # CreateMediaBuyRequest (with required fields per AdCP v2.2.0 spec)
         req = CreateMediaBuyRequest(
             buyer_ref="test_ref",
-            brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="pkg1", product_id="prod1", budget=1000.0, pricing_option_id="default-pricing-option"
@@ -268,7 +260,7 @@ class TestSchemaDefaultValues:
         """Test that all required fields are actually necessary."""
 
         # This test documents which fields are required and why
-        # Note: GetProductsRequest.brand_manifest is OPTIONAL per AdCP spec
+        # Note: GetProductsRequest.brand is OPTIONAL per AdCP spec
         required_field_justifications = {
             "ActivateSignalRequest.signal_agent_segment_id": "Must specify which signal to activate",
             "CreateMediaBuyRequest.buyer_ref": "Required per AdCP spec for tracking purchases",
@@ -284,18 +276,14 @@ class TestMCPToolMinimalCalls:
 
     def test_contract_validation_prevents_original_issue(self):
         """Test that GetProductsRequest works with all fields optional per AdCP spec."""
-        # Test that GetProductsRequest can be created with just brand_manifest
+        # Test that GetProductsRequest can be created with just brand
         # (and actually, even empty per spec)
         try:
-            request = GetProductsRequest(brand_manifest={"name": "purina cat food"})
+            request = GetProductsRequest(brand={"domain": "testbrand.com"})
             assert request.brief is None  # Optional, defaults to None per spec
-            # brand_manifest can be BrandManifest, BrandManifestReference wrapper, or dict
-            if isinstance(request.brand_manifest, dict):
-                assert request.brand_manifest["name"] == "purina cat food"
-            elif hasattr(request.brand_manifest, "name"):
-                assert request.brand_manifest.name == "purina cat food"
-            elif hasattr(request.brand_manifest, "root") and hasattr(request.brand_manifest.root, "name"):
-                assert request.brand_manifest.root.name == "purina cat food"
+            # brand is BrandReference with required domain field
+            assert request.brand is not None
+            assert request.brand.domain == "testbrand.com"
         except Exception as e:
             pytest.fail(f"GetProductsRequest creation failed: {e}")
 

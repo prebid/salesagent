@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 def _make_mock_request(
     brief: str = "Athletic footwear",
-    brand_manifest=None,
+    brand=None,
     filters=None,
     context=None,
 ):
@@ -41,7 +41,7 @@ def _make_mock_request(
     """
     mock_request = MagicMock()
     mock_request.brief = brief
-    mock_request.brand_manifest = brand_manifest
+    mock_request.brand = brand
     mock_request.filters = filters
     mock_request.context = context
     # _get_products_impl reads these via getattr() -- avoid truthy MagicMock

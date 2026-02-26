@@ -468,7 +468,7 @@ class TestGenerativeCreatives:
         context = MockContext()
 
         promoted_offerings_data = {
-            "brand_manifest": "https://example.com/brand-manifest.json",
+            "brand": {"domain": "testbrand.com"},
         }
 
         sync_fn(
@@ -493,4 +493,4 @@ class TestGenerativeCreatives:
         # promoted_offerings is passed as a typed PromotedOfferings model after parsing
         po = call_args[1]["promoted_offerings"]
         assert type(po).__name__ == "PromotedOfferings"
-        assert str(po.brand_manifest.root) == "https://example.com/brand-manifest.json"
+        assert po.brand == {"domain": "testbrand.com"}

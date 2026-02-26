@@ -312,7 +312,7 @@ class TestMinimumSpendValidation:
         # Should fail validation and return errors in response
         req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_1",
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="minspend_test_1",
@@ -350,7 +350,7 @@ class TestMinimumSpendValidation:
         # Should fail validation and return errors in response
         req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_2",
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="minspend_test_2",
@@ -388,7 +388,7 @@ class TestMinimumSpendValidation:
         # Should succeed because product override is lower
         req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_3",
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="minspend_test_3",
@@ -422,7 +422,7 @@ class TestMinimumSpendValidation:
         # Create media buy above minimum - should succeed
         req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_4",
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="minspend_test_4",
@@ -457,7 +457,7 @@ class TestMinimumSpendValidation:
         # $100,000 USD is excessive and will be rejected by adapter
         req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_5",
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="minspend_test_5",
@@ -493,7 +493,7 @@ class TestMinimumSpendValidation:
         # Should fail validation and return errors in response
         req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_6",
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="minspend_test_6",
@@ -541,7 +541,7 @@ class TestMinimumSpendValidation:
         # Create media buy with low budget in GBP (should succeed - no minimum)
         req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_7",
-            brand_manifest={"name": "Test Campaign"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
                     buyer_ref="minspend_test_7",

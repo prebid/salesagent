@@ -287,7 +287,7 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -333,7 +333,7 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -377,7 +377,7 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -422,7 +422,7 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",

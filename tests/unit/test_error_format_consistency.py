@@ -134,7 +134,7 @@ class TestA2AErrorShapes:
         with pytest.raises(ServerError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
-                parameters={"brand_manifest": {"name": "Test"}},
+                parameters={"brand": {"domain": "testbrand.com"}},
                 auth_token=None,
             )
 
@@ -165,7 +165,7 @@ class TestA2AErrorShapes:
             with pytest.raises(ServerError) as exc_info:
                 await self.handler._handle_explicit_skill(
                     skill_name="create_media_buy",
-                    parameters={"brand_manifest": {"name": "Test"}},
+                    parameters={"brand": {"domain": "testbrand.com"}},
                     auth_token="invalid_token",
                 )
 
@@ -188,7 +188,7 @@ class TestA2AErrorShapes:
             mock_create.return_value = mock_ctx
 
             result = await self.handler._handle_create_media_buy_skill(
-                parameters={"brand_manifest": {"name": "Test"}},
+                parameters={"brand": {"domain": "testbrand.com"}},
                 auth_token="test_token",
             )
 
@@ -220,7 +220,7 @@ class TestA2AErrorShapes:
             # Provide all required params but with invalid types
             result = await self.handler._handle_create_media_buy_skill(
                 parameters={
-                    "brand_manifest": {"name": "Test"},
+                    "brand": {"domain": "testbrand.com"},
                     "packages": "not_a_list",  # Invalid type
                     "start_time": "2026-01-01T00:00:00Z",
                     "end_time": "2026-02-01T00:00:00Z",
@@ -362,7 +362,7 @@ class TestCrossTransportErrorConsistency:
         try:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
-                parameters={"brand_manifest": {"name": "Test"}},
+                parameters={"brand": {"domain": "testbrand.com"}},
                 auth_token=None,
             )
         except ServerError as e:
@@ -415,7 +415,7 @@ class TestCrossTransportErrorConsistency:
             mock_create.return_value = mock_ctx
 
             a2a_result = await self.handler._handle_create_media_buy_skill(
-                parameters={"brand_manifest": {"name": "Test"}},
+                parameters={"brand": {"domain": "testbrand.com"}},
                 auth_token="test_token",
             )
 
@@ -543,8 +543,8 @@ class TestCrossTransportErrorConsistency:
         error_dict = {
             "success": False,
             "message": "Missing required AdCP parameters: ['packages', 'start_time', 'end_time']",
-            "required_parameters": ["brand_manifest", "packages", "start_time", "end_time"],
-            "received_parameters": ["brand_manifest"],
+            "required_parameters": ["brand", "packages", "start_time", "end_time"],
+            "received_parameters": ["brand"],
             "errors": [
                 {
                     "code": "validation_error",

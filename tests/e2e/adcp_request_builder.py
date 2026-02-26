@@ -48,36 +48,36 @@ def build_adcp_media_buy_request(
     total_budget: float,
     start_time: str | datetime,
     end_time: str | datetime,
-    promoted_offering: str = "Test Campaign Product",  # For backward compat, converted to brand_manifest
+    promoted_offering: str = "Test Campaign Product",  # For backward compat, converted to brand
     buyer_ref: str | None = None,
     targeting_overlay: dict[str, Any] | None = None,
     currency: str = "USD",
     pacing: str = "even",
     webhook_url: str | None = None,
     reporting_frequency: str = "daily",
-    brand_manifest: dict[str, Any] | str | None = None,  # AdCP spec field (preferred)
+    brand: dict[str, Any] | None = None,  # AdCP 3.6.0: BrandReference with domain
     context: dict[str, Any] | None = None,
     creative_ids: list[str] | None = None,
     pricing_option_id: str = "default",
 ) -> dict[str, Any]:
     """
-    Build a valid AdCP V2.3 create_media_buy request.
+    Build a valid AdCP create_media_buy request.
 
     Args:
         product_ids: List of product IDs to include
         total_budget: Total budget for the campaign
         start_time: Campaign start (ISO 8601 string or datetime)
         end_time: Campaign end (ISO 8601 string or datetime)
-        promoted_offering: DEPRECATED - Use brand_manifest instead. Auto-converted if provided.
+        promoted_offering: DEPRECATED - Use brand instead. Auto-converted if provided.
         buyer_ref: Optional buyer reference (generated if not provided)
         targeting_overlay: Optional targeting parameters
         currency: Currency code (default: USD)
         pacing: Budget pacing strategy (default: even)
         webhook_url: Optional webhook for async notifications
-        brand_manifest: Brand information (name, URL, etc.) - AdCP spec field
+        brand: Brand reference dict with required 'domain' field (adcp 3.6.0 BrandReference)
 
     Returns:
-        Valid AdCP V2.3 CreateMediaBuyRequest dict
+        Valid AdCP CreateMediaBuyRequest dict
 
     Example:
         >>> request = build_adcp_media_buy_request(
@@ -85,7 +85,7 @@ def build_adcp_media_buy_request(
         ...     total_budget=5000.0,
         ...     start_time="2025-10-01T00:00:00Z",
         ...     end_time="2025-10-31T23:59:59Z",
-        ...     brand_manifest={"name": "Nike Air Jordan 2025 Basketball Shoes"}
+        ...     brand={"domain": "testbrand.com"}
         ... )
     """
     # Convert datetime to ISO 8601 string if needed
@@ -98,16 +98,16 @@ def build_adcp_media_buy_request(
     if buyer_ref is None:
         buyer_ref = generate_buyer_ref()
 
-    # Convert promoted_offering to brand_manifest if needed (backward compatibility)
-    if brand_manifest is None and promoted_offering:
-        brand_manifest = {"name": promoted_offering}
+    # Convert promoted_offering to brand if needed (backward compatibility)
+    if brand is None and promoted_offering:
+        brand = {"domain": "testbrand.com"}
 
-    # Build the request following AdCP V2.3 spec exactly
+    # Build the request following AdCP spec exactly
     # Note: ALL budgets are plain numbers per spec (currency from pricing_option_id)
     # Per AdCP spec: Package requires product_id (singular) and pricing_option_id
     request: dict[str, Any] = {
         "buyer_ref": buyer_ref,
-        "brand_manifest": brand_manifest,  # AdCP spec field (not promoted_offering)
+        "brand": brand,  # AdCP 3.6.0: BrandReference with domain
         "packages": [
             {
                 "buyer_ref": generate_buyer_ref("pkg"),

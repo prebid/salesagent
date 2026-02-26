@@ -62,7 +62,7 @@ class TestCreativeAssignment:
             products_result = await client.call_tool(
                 "get_products",
                 {
-                    "brand_manifest": {"name": "Test Creative Assignment Brand"},
+                    "brand": {"domain": "testbrand.com"},
                     "brief": "display advertising",
                 },
             )
@@ -113,7 +113,7 @@ class TestCreativeAssignment:
                 total_budget=5000.0,
                 start_time=start_time,
                 end_time=end_time,
-                brand_manifest={"name": "Creative Assignment Test Campaign"},
+                brand={"domain": "testbrand.com"},
                 targeting_overlay={
                     "geo_countries": ["US"],
                 },
@@ -272,7 +272,7 @@ class TestCreativeAssignment:
             products_result = await client.call_tool(
                 "get_products",
                 {
-                    "brand_manifest": {"name": "Multi-Assignment Test Brand"},
+                    "brand": {"domain": "testbrand.com"},
                     "brief": "display advertising",
                 },
             )
@@ -316,7 +316,7 @@ class TestCreativeAssignment:
                 total_budget=10000.0,
                 start_time=start_time,
                 end_time=end_time,
-                brand_manifest={"name": "Multi-Package Assignment Test"},
+                brand={"domain": "testbrand.com"},
             )
 
             # Override packages to have 2 distinct packages

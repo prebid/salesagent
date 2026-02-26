@@ -119,7 +119,7 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
     start, end = _future_dates()
     request = CreateMediaBuyRequest(
         buyer_ref="buyer_overlap",
-        brand_manifest={"name": "https://example.com/brand"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 product_id="prod_display",
@@ -150,7 +150,7 @@ async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
     start, end = _future_dates()
     request = CreateMediaBuyRequest(
         buyer_ref="buyer_metro",
-        brand_manifest={"name": "https://example.com/brand"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 product_id="prod_display",

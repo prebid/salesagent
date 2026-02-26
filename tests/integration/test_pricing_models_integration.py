@@ -243,7 +243,7 @@ def setup_tenant_with_pricing_products(integration_db):
 @pytest.mark.requires_db
 async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_products):
     """Test that get_products returns pricing_options for products."""
-    request = GetProductsRequest(brief="display ads", brand_manifest={"name": "Test Brand"})
+    request = GetProductsRequest(brief="display ads", brand={"domain": "testbrand.com"})
 
     # Create identity
     identity = ResolvedIdentity(
@@ -288,7 +288,7 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -325,7 +325,7 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -363,7 +363,7 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -400,7 +400,7 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -437,7 +437,7 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -473,7 +473,7 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -510,7 +510,7 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",

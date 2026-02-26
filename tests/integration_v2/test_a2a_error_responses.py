@@ -182,7 +182,7 @@ class TestA2AErrorPropagation:
 
             # Create message with INVALID parameters (missing required fields)
             skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
+                "brand": {"domain": "testbrand.com"},
                 # Missing: packages, budget, start_time, end_time
             }
             message = self.create_message_with_skill("create_media_buy", skill_params)
@@ -229,7 +229,7 @@ class TestA2AErrorPropagation:
             end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
 
             skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": [
                     create_test_package_request_dict(
                         buyer_ref="pkg_1",
@@ -278,7 +278,7 @@ class TestA2AErrorPropagation:
             end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
 
             skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": [
                     create_test_package_request_dict(
                         buyer_ref="pkg_1",
@@ -334,7 +334,7 @@ class TestA2AErrorPropagation:
             end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
 
             skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": [
                     create_test_package_request_dict(
                         buyer_ref="pkg_1",
@@ -403,7 +403,7 @@ class TestA2AErrorResponseStructure:
 
             # Call handler directly with invalid params
             result = await handler._handle_create_media_buy_skill(
-                parameters={"brand_manifest": {"name": "test"}},
+                parameters={"brand": {"domain": "testbrand.com"}},
                 auth_token="test_token",  # Missing required fields
             )
 
@@ -428,7 +428,7 @@ class TestA2AErrorResponseStructure:
             # Call with invalid params (missing required fields) - returns immediately without DB
             result = await handler._handle_create_media_buy_skill(
                 parameters={
-                    "brand_manifest": {"name": "test"},
+                    "brand": {"domain": "testbrand.com"},
                     # Missing: packages, budget, start_time, end_time
                 },
                 auth_token="test_token",

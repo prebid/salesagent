@@ -9,17 +9,17 @@ brand information from real adcp 3.6.0 request objects because they still
 look for the removed brand_manifest attribute.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 from adcp.types import PackageRequest as LibraryPackageRequest
 
+from src.adapters.gam.utils.naming import (
+    build_order_name_context as gam_build_order_name_context,
+)
 from src.core.utils.naming import (
     _extract_brand_name,
     build_order_name_context,
-)
-from src.adapters.gam.utils.naming import (
-    build_order_name_context as gam_build_order_name_context,
 )
 
 
@@ -57,15 +57,11 @@ class TestExtractBrandNameFromAdcp360:
 
         # Verify the request has brand but NOT brand_manifest
         assert hasattr(request, "brand"), "adcp 3.6.0 request must have brand field"
-        assert not hasattr(request, "brand_manifest"), (
-            "adcp 3.6.0 request must NOT have brand_manifest"
-        )
+        assert not hasattr(request, "brand_manifest"), "adcp 3.6.0 request must NOT have brand_manifest"
 
         # _extract_brand_name should return the domain as brand name
         brand_name = _extract_brand_name(request)
-        assert brand_name is not None, (
-            "Brand name must not be None when request has brand.domain='nike.com'"
-        )
+        assert brand_name is not None, "Brand name must not be None when request has brand.domain='nike.com'"
         assert brand_name == "nike.com"
 
 
@@ -80,8 +76,8 @@ class TestBuildOrderNameContextFromAdcp360:
         as 'N/A' even though brand.domain='nike.com' is present.
         """
         request = _make_request(domain="nike.com")
-        start_time = datetime(2025, 6, 1, tzinfo=timezone.utc)
-        end_time = datetime(2025, 6, 30, tzinfo=timezone.utc)
+        start_time = datetime(2025, 6, 1, tzinfo=UTC)
+        end_time = datetime(2025, 6, 30, tzinfo=UTC)
 
         context = build_order_name_context(
             request=request,
@@ -90,9 +86,7 @@ class TestBuildOrderNameContextFromAdcp360:
             end_time=end_time,
         )
 
-        assert context["brand_name"] != "N/A", (
-            "brand_name should not be 'N/A' when request.brand.domain is set"
-        )
+        assert context["brand_name"] != "N/A", "brand_name should not be 'N/A' when request.brand.domain is set"
         assert context["brand_name"] == "nike.com"
 
     def test_campaign_name_uses_brand_domain(self):
@@ -102,8 +96,8 @@ class TestBuildOrderNameContextFromAdcp360:
         'Campaign TEST-001' instead of using the brand domain.
         """
         request = _make_request(domain="adidas.com")
-        start_time = datetime(2025, 6, 1, tzinfo=timezone.utc)
-        end_time = datetime(2025, 6, 30, tzinfo=timezone.utc)
+        start_time = datetime(2025, 6, 1, tzinfo=UTC)
+        end_time = datetime(2025, 6, 30, tzinfo=UTC)
 
         context = build_order_name_context(
             request=request,
@@ -112,9 +106,7 @@ class TestBuildOrderNameContextFromAdcp360:
             end_time=end_time,
         )
 
-        assert context["campaign_name"] == "adidas.com", (
-            "campaign_name should be 'adidas.com', not a generic fallback"
-        )
+        assert context["campaign_name"] == "adidas.com", "campaign_name should be 'adidas.com', not a generic fallback"
 
 
 class TestGamBuildOrderNameContextFromAdcp360:
@@ -128,8 +120,8 @@ class TestGamBuildOrderNameContextFromAdcp360:
         campaign_name falls back to 'Campaign TEST-001'.
         """
         request = _make_request(domain="nike.com")
-        start_time = datetime(2025, 6, 1, tzinfo=timezone.utc)
-        end_time = datetime(2025, 6, 30, tzinfo=timezone.utc)
+        start_time = datetime(2025, 6, 1, tzinfo=UTC)
+        end_time = datetime(2025, 6, 30, tzinfo=UTC)
 
         context = gam_build_order_name_context(
             request=request,
@@ -138,7 +130,5 @@ class TestGamBuildOrderNameContextFromAdcp360:
             end_time=end_time,
         )
 
-        assert context["brand_name"] != "N/A", (
-            "GAM brand_name should not be 'N/A' when request.brand.domain is set"
-        )
+        assert context["brand_name"] != "N/A", "GAM brand_name should not be 'N/A' when request.brand.domain is set"
         assert context["brand_name"] == "nike.com"
