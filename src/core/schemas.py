@@ -2084,11 +2084,11 @@ class QuerySummary(LibraryQuerySummary):
 class Pagination(LibraryResponsePagination):
     """Pagination information for list response results.
 
-    Uses page-based pagination (limit, offset, total_pages, current_page, has_more).
+    Uses cursor-based pagination (cursor, has_more, total_count).
     This is the appropriate type for list endpoints like list_creatives.
     """
 
-    pass  # Inherits all fields from library: limit, offset, total_pages, current_page, has_more
+    pass  # Inherits all fields from library: cursor, has_more, total_count
 
 
 class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResponse):

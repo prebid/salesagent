@@ -811,21 +811,21 @@ class TestCreativeLifecycleMCP:
         assert response.query_summary.total_matching == 25
         assert response.query_summary.returned == 10
         assert response.pagination.has_more is True
-        assert response.pagination.current_page == 1
+        assert response.pagination.total_count == 25
 
         # Test second page
         response = core_list_creatives_tool(page=2, limit=10, identity=identity)
         assert len(response.creatives) == 10
         assert response.query_summary.returned == 10
         assert response.pagination.has_more is True
-        assert response.pagination.current_page == 2
+        assert response.pagination.total_count == 25
 
         # Test last page
         response = core_list_creatives_tool(page=3, limit=10, identity=identity)
         assert len(response.creatives) == 5
         assert response.query_summary.returned == 5
         assert response.pagination.has_more is False
-        assert response.pagination.current_page == 3
+        assert response.pagination.total_count == 25
 
         # Test name sorting ascending
         response = core_list_creatives_tool(sort_by="name", sort_order="asc", limit=5, identity=identity)
