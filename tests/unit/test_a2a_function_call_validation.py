@@ -150,8 +150,8 @@ class TestA2AHandlerMethodCalls:
         """Test that skill handler methods have expected parameter signatures."""
         # Note: Signals skills removed - should come from dedicated signals agents
         method_signatures = {
-            "_handle_get_products_skill": ["parameters", "auth_token"],
-            "_handle_create_media_buy_skill": ["parameters", "auth_token"],
+            "_handle_get_products_skill": ["parameters", "identity"],
+            "_handle_create_media_buy_skill": ["parameters", "identity"],
         }
 
         for method_name, expected_params in method_signatures.items():
@@ -178,9 +178,7 @@ class TestFunctionCallIntegration:
         self.handler = AdCPRequestHandler()
 
     def test_tool_context_creation_does_not_fail(self):
-        """Test that ToolContext creation works without errors."""
-        from unittest.mock import patch
-
+        """Test that _make_tool_context creates ToolContext from identity without errors."""
         from src.core.resolved_identity import ResolvedIdentity
 
         mock_identity = ResolvedIdentity(
@@ -190,10 +188,9 @@ class TestFunctionCallIntegration:
             protocol="a2a",
         )
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-            tool_context = self.handler._create_tool_context_from_a2a(
-                auth_token="test_token", tool_name="test_tool", context_id="test_context"
-            )
+        tool_context = self.handler._make_tool_context(
+            identity=mock_identity, tool_name="test_tool", context_id="test_context"
+        )
 
         assert hasattr(tool_context, "tenant_id")
         assert hasattr(tool_context, "principal_id")

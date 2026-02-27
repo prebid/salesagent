@@ -62,7 +62,7 @@ class TestTenantDetectionStrategyOrder:
 
 
 class TestA2ATenantDetectionMatchesCanonical:
-    """A2A's _create_tool_context_from_a2a must use the same strategy order as _detect_tenant.
+    """A2A's _resolve_a2a_identity must use the same strategy order as _detect_tenant.
 
     This test verifies the A2A server delegates to resolve_identity() rather than
     implementing its own tenant detection. If A2A has its own implementation,
@@ -74,7 +74,7 @@ class TestA2ATenantDetectionMatchesCanonical:
     def test_a2a_delegates_to_resolve_identity(self, mock_resolve, mock_headers_var):
         """A2A should delegate to resolve_identity(), not hand-roll tenant detection.
 
-        We verify behaviorally: call _create_tool_context_from_a2a and assert
+        We verify behaviorally: call _resolve_a2a_identity and assert
         resolve_identity() was called with protocol='a2a'. If A2A has its own
         inline tenant detection, resolve_identity() would NOT be called.
         """
@@ -90,13 +90,13 @@ class TestA2ATenantDetectionMatchesCanonical:
         )
 
         handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
-        handler._create_tool_context_from_a2a(auth_token="test-token", tool_name="test_tool")
+        handler._resolve_a2a_identity(auth_token="test-token")
 
         mock_resolve.assert_called_once()
         call_kwargs = mock_resolve.call_args
         assert call_kwargs.kwargs.get("protocol") == "a2a" or (
             len(call_kwargs.args) == 0 and call_kwargs[1].get("protocol") == "a2a"
         ), (
-            "A2A _create_tool_context_from_a2a must call resolve_identity(protocol='a2a'). "
+            "A2A _resolve_a2a_identity must call resolve_identity(protocol='a2a'). "
             "If it uses inline tenant detection, the strategy order diverges (bug salesagent-cvju)."
         )

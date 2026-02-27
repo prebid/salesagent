@@ -49,24 +49,31 @@ class TestA2AMessageFieldValidation:
 
     @pytest.fixture
     def mock_auth_context(self, sample_tenant, sample_principal):
-        """Mock authentication context for all tests."""
+        """Set up authentication context and return a ResolvedIdentity for handler calls.
+
+        Returns a context manager + identity tuple. The identity is passed directly
+        to handler methods (identity parameter), matching the refactored A2A pattern
+        where on_message_send resolves identity at the transport boundary.
+        """
         from src.a2a_server import adcp_a2a_server
+        from src.core.tenant_context import LazyTenantContext
+
+        identity = ResolvedIdentity(
+            principal_id=sample_principal["principal_id"],
+            tenant_id=sample_tenant["tenant_id"],
+            tenant=LazyTenantContext(sample_tenant["tenant_id"]),
+            protocol="a2a",
+        )
 
         def _mock_context(handler):
-            # Set up request context with proper headers for tenant resolution
-            # This will allow _create_tool_context_from_a2a to resolve the tenant from headers
-            # Use ContextVars instead of threading.local()
             adcp_a2a_server._request_headers.set(
                 {
                     "x-adcp-tenant": sample_tenant["tenant_id"],
                     "authorization": f"Bearer {sample_principal['access_token']}",
                 }
             )
-
             handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
-            # Only mock get_principal_from_token - let real tenant lookups happen
-            # since sample_tenant fixture created the tenant in the database
+            handler._identity = identity  # Store for test access
             return patch(
                 "src.core.auth_utils.get_principal_from_token",
                 return_value=sample_principal["principal_id"],
@@ -103,7 +110,7 @@ class TestA2AMessageFieldValidation:
             }
 
             # Call the handler method directly - this is where the bug occurred
-            raw_result = await handler._handle_create_media_buy_skill(params, sample_principal["access_token"])
+            raw_result = await handler._handle_create_media_buy_skill(params, identity=handler._identity)
             result = handler._serialize_for_a2a(raw_result)
 
             # ✅ CRITICAL: Use comprehensive validator to check all fields
@@ -133,7 +140,7 @@ class TestA2AMessageFieldValidation:
 
             # Call handler directly - may fail if external creative agent is unavailable
             try:
-                raw_result = await handler._handle_sync_creatives_skill(params, sample_principal["access_token"])
+                raw_result = await handler._handle_sync_creatives_skill(params, identity=handler._identity)
             except Exception as e:
                 if is_external_service_exception(e):
                     pytest.skip(f"External creative agent unavailable: {e}")
@@ -157,7 +164,7 @@ class TestA2AMessageFieldValidation:
                 "adcp_version": "3.0",
             }
 
-            raw_result = await handler._handle_get_products_skill(params, sample_principal["access_token"])
+            raw_result = await handler._handle_get_products_skill(params, identity=handler._identity)
             result = handler._serialize_for_a2a(raw_result)
 
             # ✅ Validate message field
@@ -174,7 +181,7 @@ class TestA2AMessageFieldValidation:
                 "limit": 10,
             }
 
-            raw_result = await handler._handle_list_creatives_skill(params, sample_principal["access_token"])
+            raw_result = await handler._handle_list_creatives_skill(params, identity=handler._identity)
             result = handler._serialize_for_a2a(raw_result)
 
             # ✅ Validate message field
@@ -193,7 +200,7 @@ class TestA2AMessageFieldValidation:
 
             # Call handler directly - may fail if external creative agent is unavailable
             try:
-                raw_result = await handler._handle_list_creative_formats_skill(params, sample_principal["access_token"])
+                raw_result = await handler._handle_list_creative_formats_skill(params, identity=handler._identity)
             except Exception as e:
                 if is_external_service_exception(e):
                     pytest.skip(f"External creative agent unavailable: {e}")
@@ -343,7 +350,7 @@ class TestA2AErrorHandling:
             }
 
             try:
-                raw_result = await handler._handle_create_media_buy_skill(params, sample_principal["access_token"])
+                raw_result = await handler._handle_create_media_buy_skill(params, identity=_MOCK_IDENTITY)
                 result = handler._serialize_for_a2a(raw_result)
                 # If it doesn't raise, check the error response structure
                 if not result.get("success", True):

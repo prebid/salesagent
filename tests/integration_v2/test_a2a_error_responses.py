@@ -400,37 +400,30 @@ class TestA2AErrorResponseStructure:
 
     async def test_error_response_has_consistent_structure(self, integration_db, handler, mock_identity):
         """Test that all error responses have consistent field structure."""
-        # Mock minimal auth
-        handler._get_auth_token = MagicMock(return_value="test_token")
+        # Call handler directly with invalid params — identity passed directly
+        result = await handler._handle_create_media_buy_skill(
+            parameters={"brand_manifest": {"name": "test"}},
+            identity=mock_identity,  # Missing required fields
+        )
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-            # Call handler directly with invalid params
-            result = await handler._handle_create_media_buy_skill(
-                parameters={"brand_manifest": {"name": "test"}},
-                auth_token="test_token",  # Missing required fields
-            )
-
-            # Verify error response structure
-            assert isinstance(result, dict), "Error response must be dict"
-            assert "success" in result, "Error response must have success field"
-            assert result["success"] is False, "Error response success must be False"
-            assert "message" in result, "Error response must have message field"
-            assert "required_parameters" in result, "Validation error must list required parameters"
+        # Verify error response structure
+        assert isinstance(result, dict), "Error response must be dict"
+        assert "success" in result, "Error response must have success field"
+        assert result["success"] is False, "Error response success must be False"
+        assert "message" in result, "Error response must have message field"
+        assert "required_parameters" in result, "Validation error must list required parameters"
 
     async def test_errors_field_structure_from_validation_error(self, integration_db, handler, mock_identity):
         """Test that validation errors produce properly structured errors field."""
-        handler._get_auth_token = MagicMock(return_value="test_token")
+        # Call with invalid params (missing required fields) - returns immediately without DB
+        result = await handler._handle_create_media_buy_skill(
+            parameters={
+                "brand_manifest": {"name": "test"},
+                # Missing: packages, budget, start_time, end_time
+            },
+            identity=mock_identity,
+        )
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-            # Call with invalid params (missing required fields) - returns immediately without DB
-            result = await handler._handle_create_media_buy_skill(
-                parameters={
-                    "brand_manifest": {"name": "test"},
-                    # Missing: packages, budget, start_time, end_time
-                },
-                auth_token="test_token",
-            )
-
-            # Verify this is a validation error response
-            assert result["success"] is False, "Validation error should have success=False"
-            assert "required_parameters" in result, "Validation error should list required params"
+        # Verify this is a validation error response
+        assert result["success"] is False, "Validation error should have success=False"
+        assert "required_parameters" in result, "Validation error should list required params"

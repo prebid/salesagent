@@ -58,7 +58,7 @@ class TestA2AParameterMapping:
             # Call the skill handler (synchronous wrapper for async method)
             import asyncio
 
-            result = asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, auth_token="test_token"))
+            result = asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, identity=_MOCK_IDENTITY))
 
             # Verify the core function was called with correct parameter name
             mock_update.assert_called_once()
@@ -108,7 +108,7 @@ class TestA2AParameterMapping:
 
             import asyncio
 
-            result = asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, auth_token="test_token"))
+            result = asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, identity=_MOCK_IDENTITY))
 
             # Should extract packages from legacy 'updates' wrapper
             mock_update.assert_called_once()
@@ -140,7 +140,7 @@ class TestA2AParameterMapping:
             # Should raise ServerError for missing required parameter
             with pytest.raises(ServerError) as exc_info:
                 asyncio.run(
-                    handler._handle_update_media_buy_skill(parameters=invalid_parameters, auth_token="test_token")
+                    handler._handle_update_media_buy_skill(parameters=invalid_parameters, identity=_MOCK_IDENTITY)
                 )
 
             # Error message should mention required parameter
@@ -171,7 +171,7 @@ class TestA2AParameterMapping:
             import asyncio
 
             result = asyncio.run(
-                handler._handle_get_media_buy_delivery_skill(parameters=parameters, auth_token="test_token")
+                handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY)
             )
 
             # Verify core function was called with correct parameter
@@ -210,7 +210,7 @@ class TestA2AParameterMapping:
             import asyncio
 
             result = asyncio.run(
-                handler._handle_get_media_buy_delivery_skill(parameters=parameters, auth_token="test_token")
+                handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY)
             )
 
             # Verify core function was called with filters
@@ -243,7 +243,7 @@ class TestA2AParameterMapping:
             import asyncio
 
             result = asyncio.run(
-                handler._handle_create_media_buy_skill(parameters=incomplete_parameters, auth_token="test_token")
+                handler._handle_create_media_buy_skill(parameters=incomplete_parameters, identity=_MOCK_IDENTITY)
             )
 
             # Should reject and list missing required parameters
