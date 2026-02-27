@@ -863,6 +863,7 @@ class TestCreativeLifecycleMCP:
             # Create assignment for only one creative
             assignment = CreativeAssignment(
                 tenant_id=self.test_tenant_id,
+                principal_id=self.test_principal_id,
                 assignment_id=str(uuid.uuid4()),
                 creative_id="assignment_test_1",
                 media_buy_id=self.test_media_buy_id,

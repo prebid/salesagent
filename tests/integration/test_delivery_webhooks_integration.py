@@ -368,6 +368,62 @@ async def test_call_get_media_buy_delivery_for_ended_campaign(integration_db):
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
+async def test_scheduler_status_filter_includes_completed_campaigns(integration_db):
+    """Regression: scheduler delivery query must include ended (completed) campaigns.
+
+    Before the fix, status_filter=None defaulted to ["active"] in
+    _resolve_delivery_status_filter, which silently excluded campaigns whose
+    dynamic status is "completed" (end_date in the past).  The fix passes
+    status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed] so that
+    ended campaigns still appear in media_buy_deliveries.
+
+    Mutation proof: revert status_filter to None → media_buy_deliveries becomes
+    empty (0 items) because the completed campaign is filtered out.
+    """
+    tenant_id, principal_id = _create_test_tenant_and_principal()
+
+    # Campaign ended yesterday → dynamic status = "completed"
+    yesterday = datetime.now(UTC).date() - timedelta(days=1)
+    start_date = yesterday - timedelta(days=14)
+
+    media_buy_id = _create_basic_media_buy_with_webhook(
+        tenant_id, principal_id, start_date=start_date, end_date=yesterday
+    )
+
+    scheduler = DeliveryWebhookScheduler()
+
+    async def fake_send_notification(*args, **kwargs):
+        return True
+
+    with patch.object(
+        scheduler.webhook_service,
+        "send_notification",
+        new_callable=AsyncMock,
+        side_effect=fake_send_notification,
+    ) as mock_send:
+        await scheduler._send_reports()
+
+        # Webhook must be sent
+        assert mock_send.call_count == 1, "Expected exactly 1 webhook call for the ended campaign"
+
+        _, kwargs = mock_send.call_args
+        payload = kwargs.get("payload")
+        result = payload.result
+
+        # Key assertion: the completed campaign MUST appear in media_buy_deliveries.
+        # Before the fix (status_filter=None → default ["active"]), this list was
+        # empty because the dynamic status "completed" was not in ["active"].
+        deliveries = result.get("media_buy_deliveries", [])
+        assert len(deliveries) == 1, (
+            f"Expected 1 delivery for the completed campaign, got {len(deliveries)}. "
+            "This likely means status_filter does not include MediaBuyStatus.completed."
+        )
+        assert deliveries[0]["media_buy_id"] == media_buy_id
+        assert deliveries[0]["status"] == "completed"
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
 async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
     """Test we pick up simulated path when context is in testing mode."""
     tenant_id, principal_id = _create_test_tenant_and_principal()

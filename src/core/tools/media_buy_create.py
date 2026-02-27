@@ -2252,6 +2252,7 @@ async def _create_media_buy_impl(
                                 assignment = DBAssignment(
                                     assignment_id=assignment_id,
                                     tenant_id=tenant["tenant_id"],
+                                    principal_id=principal_id,
                                     media_buy_id=media_buy_id,
                                     package_id=pkg_id,
                                     creative_id=creative_id,
@@ -3207,6 +3208,7 @@ async def _create_media_buy_impl(
                             assignment = DBAssignment(
                                 assignment_id=assignment_id,
                                 tenant_id=tenant["tenant_id"],
+                                principal_id=principal_id,
                                 media_buy_id=response.media_buy_id,
                                 package_id=response_package_id,
                                 creative_id=creative_id,
