@@ -85,12 +85,19 @@ def _make_mock_currency_limit(max_daily=None):
 def standard_mocks():
     """Context manager that patches all common dependencies for _update_media_buy_impl.
 
-    Patches BOTH the module-level import and the canonical source to catch
-    local imports like `from src.core.database.database_session import get_db_session`.
+    Patches MediaBuyUoW to provide a mock session and repository,
+    and patches all other common dependencies.
 
     Yields a dict of mock objects keyed by short name.
     """
     mock_session, mock_cm = _make_mock_db_session()
+
+    # Build a mock UoW that provides session and media_buys repo
+    mock_uow = MagicMock()
+    mock_uow.session = mock_session
+    mock_uow.media_buys = MagicMock()
+    mock_uow.__enter__ = Mock(return_value=mock_uow)
+    mock_uow.__exit__ = Mock(return_value=False)
 
     with (
         patch("src.core.helpers.context_helpers.ensure_tenant_context") as m_tenant,
@@ -99,6 +106,7 @@ def standard_mocks():
         patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
         patch(f"{MODULE}.get_adapter") as m_adapter,
         patch(f"{MODULE}.get_audit_logger") as m_audit,
+        patch(f"{MODULE}.MediaBuyUoW") as m_uow,
         patch(f"{DB_MODULE}.get_db_session") as m_db,
     ):
         # Standard setup: authenticated principal, test tenant, no dry_run
@@ -108,6 +116,9 @@ def standard_mocks():
             name="Test Principal",
             platform_mappings={},
         )
+
+        # UoW mock
+        m_uow.return_value = mock_uow
 
         # Context manager with workflow step
         mock_step = MagicMock()
@@ -138,6 +149,8 @@ def standard_mocks():
             "adapter": m_adapter,
             "adapter_instance": mock_adapter_instance,
             "audit": m_audit,
+            "uow": m_uow,
+            "uow_instance": mock_uow,
             "db": m_db,
             "db_session": mock_session,
             "step": mock_step,
@@ -147,11 +160,14 @@ def standard_mocks():
 def _setup_db_session(standard_mocks):
     """Create a fresh DB session mock and wire it into the fixture.
 
+    Also updates the UoW mock's session to use the new mock session.
     Returns the mock_session for further configuration.
     """
     mock_session, mock_cm = _make_mock_db_session()
     standard_mocks["db"].return_value = mock_cm
     standard_mocks["db_session"] = mock_session
+    # Keep UoW session in sync
+    standard_mocks["uow_instance"].session = mock_session
     return mock_session
 
 
@@ -201,22 +217,27 @@ def test_combined_campaign_and_package_update(standard_mocks):
     mock_session = _setup_db_session(standard_mocks)
 
     # Set up DB return values for the currency validation path:
-    # 1. First scalars().first() -> media_buy (for currency check)
-    # 2. Second scalars().first() -> currency_limit (for daily spend check)
-    # Then for campaign budget persistence and package listing
+    # 1. uow.media_buys.get_by_id() -> media_buy (for currency check)
+    # 2. session.scalars().first() -> currency_limit (for daily spend check)
+    # 3. uow.media_buys.update_fields() -> updated media buy (for budget update)
+    # 4. uow.media_buys.get_packages() -> packages (for affected tracking)
     mock_media_buy = _make_mock_media_buy("mb_combined")
     mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
+
+    # Configure repo mock for media buy lookups and writes
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_media_buy
+    standard_mocks["uow_instance"].media_buys.update_fields.return_value = mock_media_buy
 
     # Mock packages for campaign-level budget affected tracking
     mock_pkg_a = MagicMock()
     mock_pkg_a.package_id = "pkg_A"
     mock_pkg_b = MagicMock()
     mock_pkg_b.package_id = "pkg_B"
+    standard_mocks["uow_instance"].media_buys.get_packages.return_value = [mock_pkg_a, mock_pkg_b]
 
-    # Multiple calls to scalars().first() and scalars().all()
+    # Session scalars for currency limit lookup
     mock_scalars = MagicMock()
-    mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
-    mock_scalars.all.return_value = [mock_pkg_a, mock_pkg_b]
+    mock_scalars.first.side_effect = [mock_currency_limit]
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
@@ -258,11 +279,12 @@ def test_multi_package_update_processes_all_packages(standard_mocks):
 
     mock_session = _setup_db_session(standard_mocks)
 
-    # Currency validation: mock media_buy and currency_limit
+    # Currency validation: media_buy via repo, currency_limit via session
     mock_media_buy = _make_mock_media_buy("mb_multi")
     mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_media_buy
     mock_scalars = MagicMock()
-    mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
+    mock_scalars.first.side_effect = [mock_currency_limit]
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
@@ -295,12 +317,12 @@ def test_multi_package_update_processes_all_packages(standard_mocks):
 def test_buyer_ref_positive_resolution(standard_mocks):
     """When buyer_ref provided, DB lookup resolves to correct media_buy_id,
     and update proceeds successfully."""
-    mock_session = _setup_db_session(standard_mocks)
+    _setup_db_session(standard_mocks)
 
     # The buyer_ref lookup returns a media buy with the resolved ID
     mock_media_buy = MagicMock()
     mock_media_buy.media_buy_id = "mb_resolved_123"
-    mock_session.scalars.return_value.first.return_value = mock_media_buy
+    standard_mocks["uow_instance"].media_buys.get_by_buyer_ref.return_value = mock_media_buy
 
     identity = _make_identity()
     # Use buyer_ref instead of media_buy_id (no packages, no budget = empty update)
@@ -312,7 +334,9 @@ def test_buyer_ref_positive_resolution(standard_mocks):
     assert result.media_buy_id == "mb_resolved_123"
 
     # _verify_principal should have been called with the resolved ID and identity
-    standard_mocks["verify_principal"].assert_called_once_with("mb_resolved_123", identity)
+    standard_mocks["verify_principal"].assert_called_once_with(
+        "mb_resolved_123", identity, standard_mocks["uow_instance"].media_buys
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -333,11 +357,11 @@ def test_main_flow_package_budget_update(standard_mocks):
 
     mock_session = _setup_db_session(standard_mocks)
 
-    # Currency validation path
-    mock_media_buy = _make_mock_media_buy("mb_main")
+    # Currency validation path: media buy via repo, currency limit via session
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = _make_mock_media_buy("mb_main")
     mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
     mock_scalars = MagicMock()
-    mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
+    mock_scalars.first.side_effect = [mock_currency_limit]
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
@@ -377,14 +401,14 @@ class TestFlightDateValidationAndPersistence:
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
-        # Currency validation returns media buy then currency limit
-        mock_currency_limit = _make_mock_currency_limit()
+        # Currency validation: media buy via repo (called twice: currency check + date path)
+        standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_dates"),  # currency validation
+            mock_existing_mb,  # date validation
+        ]
         mock_scalars = MagicMock()
-        # first() calls: currency validation media_buy, currency_limit, then date path existing_mb
         mock_scalars.first.side_effect = [
-            _make_mock_media_buy("mb_dates"),  # currency validation media buy
             _make_mock_currency_limit(),  # currency limit (no max daily)
-            mock_existing_mb,  # date validation existing media buy
         ]
         mock_session.scalars.return_value = mock_scalars
 
@@ -401,9 +425,8 @@ class TestFlightDateValidationAndPersistence:
 
         assert isinstance(result, UpdateMediaBuySuccess)
         assert result.media_buy_id == "mb_dates"
-        # DB should have been committed (dates written)
-        mock_session.execute.assert_called()
-        mock_session.commit.assert_called()
+        # Date update should have been persisted via repository
+        standard_mocks["uow_instance"].media_buys.update_fields.assert_called()
 
     def test_invalid_date_range_returns_error(self, standard_mocks):
         """When end_time <= start_time, returns code='invalid_date_range'."""
@@ -414,11 +437,14 @@ class TestFlightDateValidationAndPersistence:
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
+        # Media buy via repo (called twice: currency check + date path)
+        standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_dates_bad"),
+            mock_existing_mb,
+        ]
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
-            _make_mock_media_buy("mb_dates_bad"),
             _make_mock_currency_limit(),
-            mock_existing_mb,
         ]
         mock_session.scalars.return_value = mock_scalars
 
@@ -448,11 +474,14 @@ class TestFlightDateValidationAndPersistence:
         mock_existing_mb.start_time = same_time
         mock_existing_mb.end_time = same_time
 
+        # Media buy via repo (called twice: currency check + date path)
+        standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_dates_equal"),
+            mock_existing_mb,
+        ]
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
-            _make_mock_media_buy("mb_dates_equal"),
             _make_mock_currency_limit(),
-            mock_existing_mb,
         ]
         mock_session.scalars.return_value = mock_scalars
 
@@ -481,18 +510,18 @@ class TestCampaignBudgetValidationAndPersistence:
         """When total_budget > 0, persisted to DB, all packages affected."""
         mock_session = _setup_db_session(standard_mocks)
 
-        # Currency validation mocks
-        mock_media_buy = _make_mock_media_buy("mb_budget")
-        mock_currency_limit = _make_mock_currency_limit()
+        # Currency validation: media buy via repo
+        standard_mocks["uow_instance"].media_buys.get_by_id.return_value = _make_mock_media_buy("mb_budget")
 
-        # Mock packages for campaign budget affected tracking
+        mock_currency_limit = _make_mock_currency_limit()
+        mock_scalars = MagicMock()
+        mock_scalars.first.side_effect = [mock_currency_limit]
+        mock_session.scalars.return_value = mock_scalars
+
+        # Mock packages for campaign budget affected tracking (via repo)
         mock_pkg = MagicMock()
         mock_pkg.package_id = "pkg_budget_1"
-
-        mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
-        mock_scalars.all.return_value = [mock_pkg]
-        mock_session.scalars.return_value = mock_scalars
+        standard_mocks["uow_instance"].media_buys.get_packages.return_value = [mock_pkg]
 
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
@@ -507,9 +536,9 @@ class TestCampaignBudgetValidationAndPersistence:
         assert len(result.affected_packages) >= 1
         assert result.affected_packages[0].package_id == "pkg_budget_1"
 
-        # DB should have been committed
-        mock_session.execute.assert_called()
-        mock_session.commit.assert_called()
+        # Budget should have been persisted via repository
+        standard_mocks["uow_instance"].media_buys.update_fields.assert_called()
+        standard_mocks["uow_instance"].media_buys.get_packages.assert_called_once_with("mb_budget")
 
     def test_zero_budget_returns_error(self, standard_mocks):
         """When total_budget == 0, rejected at schema level (gt=0) per BR-RULE-008."""
@@ -566,10 +595,10 @@ def test_manual_approval_path_through_impl(standard_mocks):
 def test_package_not_found_returns_error(standard_mocks):
     """When package_id references non-existent package in targeting_overlay
     update path, returns code='package_not_found'."""
-    mock_session = _setup_db_session(standard_mocks)
+    _setup_db_session(standard_mocks)
 
-    # Package lookup returns None
-    mock_session.scalars.return_value.first.return_value = None
+    # Package lookup via repo returns None
+    standard_mocks["uow_instance"].media_buys.get_package.return_value = None
 
     identity = _make_identity()
     req = UpdateMediaBuyRequest(
@@ -761,11 +790,14 @@ class TestTimezoneHandlingRegression:
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
+        # Media buy via repo (called twice: currency check + date path)
+        standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_tz_end"),
+            mock_existing_mb,
+        ]
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
-            _make_mock_media_buy("mb_tz_end"),
             _make_mock_currency_limit(),
-            mock_existing_mb,
         ]
         mock_session.scalars.return_value = mock_scalars
 
@@ -790,11 +822,14 @@ class TestTimezoneHandlingRegression:
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
+        # Media buy via repo (called twice: currency check + date path)
+        standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_tz_start"),
+            mock_existing_mb,
+        ]
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
-            _make_mock_media_buy("mb_tz_start"),
             _make_mock_currency_limit(),
-            mock_existing_mb,
         ]
         mock_session.scalars.return_value = mock_scalars
 

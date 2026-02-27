@@ -2,9 +2,8 @@
 name: executor
 description: >
   Autonomous task executor that runs beads tasks through the mol-execute
-  lifecycle in an isolated worktree with its own Postgres container.
+  lifecycle with its own Postgres container.
   Use this agent for any beads task that requires code changes and testing.
-  Spawn with isolation: "worktree" and pass the beads task ID in the prompt.
 color: blue
 tools:
   - Bash
@@ -20,8 +19,16 @@ tools:
 # Executor Agent
 
 You are an autonomous task executor for the Prebid Sales Agent project. You
-execute beads tasks end-to-end in an isolated git worktree with your own
-PostgreSQL container.
+execute beads tasks end-to-end with your own PostgreSQL container.
+
+## Shared Working Directory
+
+**You run in the same directory and branch as the team lead.** There is no
+worktree isolation — `isolation: "worktree"` is a no-op for team agents.
+Your commits land directly on the current branch.
+
+**Implication:** If other executors run in parallel, you may see their changes.
+Focus on your assigned files and don't modify files outside your task scope.
 
 ## Clean Slate Principle
 
@@ -29,18 +36,16 @@ You start from a **clean slate**. The codebase you receive has zero failures —
 `make quality` passes, integration tests pass, mypy passes. The only expected
 non-passes are `xfailed` and `skipped` markers.
 
-**Your job is to return the same clean slate.** Every failure you see is yours.
-There are no "pre-existing" issues, no "other agent's work." You are in an
-isolated worktree. If something fails, you introduced it and you fix it.
+**Your job is to return the same clean slate.** Every failure you see is yours
+unless another parallel executor is modifying the same files. If you see
+failures in files you did NOT touch, report them but don't block on them.
 
 ## Environment Setup (MANDATORY — do this FIRST, in order)
 
-### Step 1: Create your own virtual environment
+### Step 1: Sync the virtual environment
 ```bash
 uv sync
 ```
-You are in a worktree — you do NOT share the main repo's `.venv`. You must
-create your own. Skip this and you'll get import errors or use stale packages.
 
 ### Step 2: Start your private database
 ```bash

@@ -12,8 +12,11 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 from adcp import PushNotificationConfig
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
@@ -216,7 +219,11 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
         return None
 
 
-def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant_id: str) -> None:
+def _validate_creatives_before_adapter_call(
+    packages: list[MediaPackage],
+    tenant_id: str,
+    session: "Session | None" = None,
+) -> None:
     """Validate all creatives have required fields BEFORE calling adapter.
 
     This prevents GAM order creation when creatives are invalid, enabling
@@ -227,14 +234,17 @@ def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant
     Args:
         packages: List of Package objects with creative_ids
         tenant_id: Tenant ID for database lookup
+        session: SQLAlchemy session (from UoW).
 
     Raises:
-        ToolError: If any creative is missing required fields (URL, dimensions)
+        AdCPValidationError: If any creative is missing required fields (URL, dimensions)
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Creative as DBCreative
+
+    if session is None:
+        raise ValueError("session is required for _validate_creatives_before_adapter_call")
 
     # Collect all creative IDs from all packages
     all_creative_ids = set()
@@ -248,11 +258,10 @@ def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant
         return
 
     # Fetch all creatives in one query
-    with get_db_session() as session:
-        stmt = select(DBCreative).where(
-            DBCreative.tenant_id == tenant_id, DBCreative.creative_id.in_(list(all_creative_ids))
-        )
-        creatives_list = list(session.scalars(stmt).all())
+    stmt = select(DBCreative).where(
+        DBCreative.tenant_id == tenant_id, DBCreative.creative_id.in_(list(all_creative_ids))
+    )
+    creatives_list = list(session.scalars(stmt).all())
 
     # Validate each creative has required fields
     validation_errors = []
@@ -401,9 +410,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy
     from src.core.database.models import MediaPackage as DBMediaPackage
+    from src.core.database.repositories import MediaBuyUoW
 
     logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
 
@@ -412,8 +421,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     from src.core.database.models import Tenant
 
     try:
-        # Load tenant and set context
-        with get_db_session() as session:
+        # Load tenant and set context — single UoW for all reads
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.session is not None
+            session = uow.session
             stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
             tenant_obj = session.scalars(stmt_tenant).first()
 
@@ -722,9 +733,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 f"{len(packages)} packages, start={start_time}, end={end_time}"
             )
 
-        # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
-        # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
-        _validate_creatives_before_adapter_call(packages, tenant_id)
+            # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
+            # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
+            _validate_creatives_before_adapter_call(packages, tenant_id, session=session)
 
         # Execute adapter creation (outside session to avoid conflicts)
         response = _execute_adapter_media_buy_creation(
@@ -750,7 +761,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
         # Upload and associate inline creatives if any exist
         # This handles inline creatives that were uploaded during initial media buy creation
-        with get_db_session() as session:
+        with MediaBuyUoW(tenant_id) as uow2:
+            assert uow2.session is not None
+            session = uow2.session
             from src.core.database.models import Creative as CreativeModel
             from src.core.database.models import CreativeAssignment
 
@@ -932,13 +945,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
         # Update media buy status to 'active' after successful adapter execution
         # (UC-002:437 — "updates the media buy status to active")
-        with get_db_session() as session:
-            stmt_mb = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
-            mb = session.scalars(stmt_mb).first()
-            if mb:
-                mb.status = "active"
-                session.commit()
-                logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
+        with MediaBuyUoW(tenant_id) as uow3:
+            assert uow3.media_buys is not None
+            uow3.media_buys.update_status(media_buy_id, "active")
+            logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
 
         return True, None
 
@@ -1334,8 +1344,8 @@ async def _create_media_buy_impl(
         # Register push notification config if provided (MCP/A2A protocol support)
         # Skip for dry_run mode (no database writes)
         if push_notification_config:
-            from src.core.database.database_session import get_db_session
             from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+            from src.core.database.repositories import MediaBuyUoW
 
             logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
 
@@ -1353,7 +1363,9 @@ async def _create_media_buy_impl(
                 config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
 
                 # Save to database
-                with get_db_session() as db:
+                with MediaBuyUoW(tenant["tenant_id"]) as pnc_uow:
+                    assert pnc_uow.session is not None
+                    db = pnc_uow.session
                     # Check if config already exists
                     from sqlalchemy import select
 
@@ -1382,7 +1394,7 @@ async def _create_media_buy_impl(
                         )
                         db.add(new_config)
 
-                    db.commit()
+                    # UoW auto-commits on clean exit
                     logger.info(
                         f"[MCP/A2A] Push notification config {'updated' if existing_config else 'created'}: {config_id}"
                     )
@@ -1482,12 +1494,14 @@ async def _create_media_buy_impl(
 
         from sqlalchemy import select
 
-        from src.core.database.database_session import get_db_session
         from src.core.database.models import CurrencyLimit
         from src.core.database.models import Product as ProductModel
+        from src.core.database.repositories import MediaBuyUoW
 
         # Get products first to determine currency from pricing options
-        with get_db_session() as session:
+        with MediaBuyUoW(tenant["tenant_id"]) as validation_uow:
+            assert validation_uow.session is not None
+            session = validation_uow.session
             # Get products from database
             from sqlalchemy.orm import selectinload
 
@@ -1991,7 +2005,8 @@ async def _create_media_buy_impl(
 
             # Create media buy record in the database with permanent ID
             # Status is "pending_approval" but the ID is final
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
+                assert pending_uow.session is not None and pending_uow.media_buys is not None
                 pending_buy = MediaBuy(
                     media_buy_id=media_buy_id,
                     buyer_ref=req.buyer_ref,
@@ -2009,8 +2024,7 @@ async def _create_media_buy_impl(
                     raw_request=raw_request_dict,  # Now includes package_id in each package
                     created_at=datetime.now(UTC),
                 )
-                session.add(pending_buy)
-                session.commit()
+                pending_uow.media_buys.create(pending_buy)
                 logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
 
             # Log to activity feed for manual approval case
@@ -2051,7 +2065,9 @@ async def _create_media_buy_impl(
 
             # Create MediaPackage records for structured querying
             # This enables the UI to display packages and creative assignments to work properly
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as pkg_uow:
+                assert pkg_uow.session is not None
+                session = pkg_uow.session
                 from src.core.database.models import MediaPackage as DBMediaPackage
 
                 for pkg_obj in pending_packages:
@@ -2135,24 +2151,27 @@ async def _create_media_buy_impl(
                     )
                     session.add(db_package)
 
-                session.commit()
+                # UoW auto-commits on clean exit
                 logger.info(f"✅ Created {len(pending_packages)} MediaPackage records")
 
             # Link the workflow step to the media buy so the approval button shows in UI
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as wf_uow:
+                assert wf_uow.session is not None
                 from src.core.database.models import ObjectWorkflowMapping
 
                 mapping = ObjectWorkflowMapping(
                     object_type="media_buy", object_id=media_buy_id, step_id=step.step_id, action="create"
                 )
-                session.add(mapping)
-                session.commit()
+                wf_uow.session.add(mapping)
+                # UoW auto-commits on clean exit
                 logger.info(f"✅ Linked workflow step {step.step_id} to media buy")
 
             # Create creative assignments for manual approval flow
             # This must happen AFTER media packages are created so we have package_ids
             if req.packages:
-                with get_db_session() as session:
+                with MediaBuyUoW(tenant["tenant_id"]) as assign_uow:
+                    assert assign_uow.session is not None
+                    session = assign_uow.session
                     from src.core.database.models import Creative as DBCreative
                     from src.core.database.models import CreativeAssignment as DBAssignment
 
@@ -2262,7 +2281,7 @@ async def _create_media_buy_impl(
                                     f"[CREATIVE_ASSIGN_DEBUG] Created assignment {assignment_id} for creative {creative_id}"
                                 )
 
-                            session.commit()
+                            # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
             # Return success response with packages awaiting approval
@@ -2316,12 +2335,13 @@ async def _create_media_buy_impl(
                     )
 
                     # Persist the auto-generated config to database
-                    with get_db_session() as db_session:
+                    with MediaBuyUoW(tenant["tenant_id"]) as gam_uow:
+                        assert gam_uow.session is not None
                         product_stmt = select(ModelProduct).filter_by(product_id=schema_product.product_id)
-                        db_product = db_session.scalars(product_stmt).first()
+                        db_product = gam_uow.session.scalars(product_stmt).first()
                         if db_product:
                             db_product.implementation_config = schema_product.implementation_config
-                            db_session.commit()
+                            # UoW auto-commits on clean exit
                             logger.info(f"Saved auto-generated GAM config for product {schema_product.product_id}")
 
                 # Validate the config (whether existing or auto-generated)
@@ -2745,7 +2765,9 @@ async def _create_media_buy_impl(
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
         try:
-            _validate_creatives_before_adapter_call(packages, tenant["tenant_id"])
+            with MediaBuyUoW(tenant["tenant_id"]) as pre_validate_uow:
+                assert pre_validate_uow.session is not None
+                _validate_creatives_before_adapter_call(packages, tenant["tenant_id"], session=pre_validate_uow.session)
         except AdCPError:
             # Validation failed - creative validation errors already logged
             # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
@@ -2825,7 +2847,8 @@ async def _create_media_buy_impl(
         )
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
-        with get_db_session() as session:
+        with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
+            assert create_uow.media_buys is not None
             new_media_buy = MediaBuy(
                 media_buy_id=response.media_buy_id,
                 tenant_id=tenant["tenant_id"],
@@ -2844,13 +2867,15 @@ async def _create_media_buy_impl(
                 status=media_buy_status,
                 raw_request=req.model_dump(mode="json"),
             )
-            session.add(new_media_buy)
-            session.commit()
+            create_uow.media_buys.create(new_media_buy)
+            # UoW auto-commits on clean exit
 
         # Populate media_packages table for structured querying
         # This enables creative_assignments to work properly
         if req.packages or (response.packages and len(response.packages) > 0):
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as auto_pkg_uow:
+                assert auto_pkg_uow.session is not None
+                session = auto_pkg_uow.session
                 from src.core.database.models import MediaPackage as DBMediaPackage
 
                 # Use response packages if available (has package_ids), otherwise generate from request
@@ -2923,7 +2948,7 @@ async def _create_media_buy_impl(
                     )
                     session.add(db_package)
 
-                session.commit()
+                session.flush()  # Flush so packages are visible for line_item_id queries below
                 logger.info(
                     f"Saved {len(packages_to_save)} packages to media_packages table for media_buy {response.media_buy_id}"
                 )
@@ -2956,14 +2981,16 @@ async def _create_media_buy_impl(
                         else:
                             logger.warning(f"⚠️  Could not find DB package {pkg_id} to save platform_line_item_id")
 
-                    session.commit()
+                    # UoW auto-commits on clean exit
                     logger.info("✓ Saved platform_line_item_ids to database")
                 else:
                     logger.info("[DEBUG] No platform_line_item_ids found on response object")
 
         # Handle creative_ids in packages if provided (immediate association)
         if req.packages:
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as creative_uow:
+                assert creative_uow.session is not None
+                session = creative_uow.session
                 from src.core.database.models import Creative as DBCreative
                 from src.core.database.models import CreativeAssignment as DBAssignment
 
@@ -3215,7 +3242,7 @@ async def _create_media_buy_impl(
                             )
                             session.add(assignment)
 
-                        session.commit()
+                        session.flush()  # Flush assignments before adapter call
 
                         # Associate creatives with line items in ad server immediately
                         if platform_line_item_id and platform_creative_ids:
@@ -3375,11 +3402,12 @@ async def _create_media_buy_impl(
         # Also log specific media buy activity
         try:
             principal_name = "Unknown"
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as log_uow:
+                assert log_uow.session is not None
                 principal_stmt = select(ModelPrincipal).filter_by(
                     principal_id=principal_id, tenant_id=tenant["tenant_id"]
                 )
-                principal_db = session.scalars(principal_stmt).first()
+                principal_db = log_uow.session.scalars(principal_stmt).first()
                 if principal_db:
                     principal_name = principal_db.name
 
@@ -3421,11 +3449,12 @@ async def _create_media_buy_impl(
         try:
             # Get principal name for notification (reuse from activity logging above)
             principal_name = "Unknown"
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as slack_uow:
+                assert slack_uow.session is not None
                 principal_stmt2 = select(ModelPrincipal).filter_by(
                     principal_id=principal_id, tenant_id=tenant["tenant_id"]
                 )
-                principal_db = session.scalars(principal_stmt2).first()
+                principal_db = slack_uow.session.scalars(principal_stmt2).first()
                 if principal_db:
                     principal_name = principal_db.name
 

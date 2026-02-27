@@ -136,23 +136,31 @@ class TestAuthUtilsTenantIsolation:
 
 
 class TestMediaBuyUpdateTenantIsolation:
-    """salesagent-353c: media_buy_update.py MediaBuy queries missing tenant_id."""
+    """salesagent-353c: media_buy_update.py MediaBuy queries missing tenant_id.
 
-    def test_update_impl_mediabuy_queries_scope_by_tenant(self):
-        """_update_media_buy_impl MediaBuy queries must include tenant_id."""
+    After UoW migration (salesagent-4jq2), _update_media_buy_impl uses
+    MediaBuyUoW which provides a tenant-scoped MediaBuyRepository.
+    All MediaBuy queries go through the repository — no raw select(MediaBuy) calls remain.
+    """
+
+    def test_update_impl_uses_repository_not_raw_select(self):
+        """_update_media_buy_impl must use MediaBuyUoW, not raw select(MediaBuy).
+
+        After UoW migration, MediaBuy access goes through tenant-scoped
+        MediaBuyRepository. Verify no raw select(MediaBuy) calls remain
+        in the function (they would bypass tenant isolation).
+        """
         selects = _extract_select_calls(
             "src/core/tools/media_buy_update.py",
             "_update_media_buy_impl",
         )
 
         mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
-        assert mediabuy_selects, "Expected at least one MediaBuy select() call"
-
-        for s in mediabuy_selects:
-            assert s["has_tenant_filter"], (
-                f"MediaBuy query at media_buy_update.py:{s['lineno']} is missing tenant_id filter. "
-                f"This is a cross-tenant data leak (salesagent-353c)."
-            )
+        assert not mediabuy_selects, (
+            f"Found {len(mediabuy_selects)} raw select(MediaBuy) call(s) in _update_media_buy_impl. "
+            f"After UoW migration, all MediaBuy queries should go through MediaBuyRepository. "
+            f"Raw select() calls bypass the tenant-scoped repository."
+        )
 
 
 class TestApproveMediaBuyTenantIsolation:

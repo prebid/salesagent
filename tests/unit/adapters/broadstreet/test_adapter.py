@@ -308,6 +308,7 @@ class TestBroadstreetAdapterUpdates:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         db_pkgs = [_make_mock_db_package()]
@@ -334,6 +335,7 @@ class TestBroadstreetAdapterUpdates:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         db_pkgs = [_make_mock_db_package()]
@@ -360,6 +362,7 @@ class TestBroadstreetAdapterUpdates:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         with _mock_db_session([]):
@@ -383,6 +386,7 @@ class TestBroadstreetAdapterUpdates:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         db_pkgs = [_make_mock_db_package(package_id="pkg_1")]

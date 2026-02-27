@@ -27,34 +27,34 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # FIXME(salesagent-hr8n): All 29 violations need migration to repository pattern.
 KNOWN_VIOLATIONS = {
     # _create_media_buy_impl: 4 violations (DB storage + workflow)
-    ("media_buy_create.py", 1238),  # push_notification_config.model_dump()
-    ("media_buy_create.py", 1316),  # req.model_dump() → request_data_for_workflow
-    ("media_buy_create.py", 1932),  # req.model_dump() → raw_request_dict
-    ("media_buy_create.py", 2845),  # req.model_dump() → raw_request=
+    ("media_buy_create.py", 1248),  # push_notification_config.model_dump()
+    ("media_buy_create.py", 1326),  # req.model_dump() → request_data_for_workflow
+    ("media_buy_create.py", 1946),  # req.model_dump() → raw_request_dict
+    ("media_buy_create.py", 2868),  # req.model_dump() → raw_request=
     # _update_media_buy_impl: 23 violations (workflow step response_data)
-    ("media_buy_update.py", 196),  # req.model_dump() → request_data_for_workflow
-    ("media_buy_update.py", 222),  # response_data.model_dump()
-    ("media_buy_update.py", 277),  # approval_response.model_dump()
-    ("media_buy_update.py", 278),  # req.model_dump() → approval_data
-    ("media_buy_update.py", 348),  # response_data.model_dump()
-    ("media_buy_update.py", 415),  # response_data.model_dump()
-    ("media_buy_update.py", 439),  # error_response.model_dump()
-    ("media_buy_update.py", 473),  # success_response.model_dump()
-    ("media_buy_update.py", 501),  # response_data.model_dump()
-    ("media_buy_update.py", 518),  # response_data.model_dump()
-    ("media_buy_update.py", 551),  # response_data.model_dump()
-    ("media_buy_update.py", 580),  # response_data.model_dump()
-    ("media_buy_update.py", 613),  # response_data.model_dump()
-    ("media_buy_update.py", 639),  # response_data.model_dump()
-    ("media_buy_update.py", 823),  # response_data.model_dump()
-    ("media_buy_update.py", 849),  # response_data.model_dump()
-    ("media_buy_update.py", 878),  # response_data.model_dump()
-    ("media_buy_update.py", 1065),  # response_data.model_dump()
-    ("media_buy_update.py", 1091),  # response_data.model_dump()
-    ("media_buy_update.py", 1138),  # response_data.model_dump()
-    ("media_buy_update.py", 1244),  # response_data.model_dump()
-    ("media_buy_update.py", 1276),  # response_data.model_dump()
-    ("media_buy_update.py", 1349),  # final_response.model_dump()
+    ("media_buy_update.py", 185),  # req.model_dump() → request_data_for_workflow
+    ("media_buy_update.py", 211),  # response_data.model_dump()
+    ("media_buy_update.py", 266),  # approval_response.model_dump()
+    ("media_buy_update.py", 267),  # req.model_dump() → approval_data
+    ("media_buy_update.py", 330),  # response_data.model_dump()
+    ("media_buy_update.py", 397),  # response_data.model_dump()
+    ("media_buy_update.py", 421),  # error_response.model_dump()
+    ("media_buy_update.py", 455),  # success_response.model_dump()
+    ("media_buy_update.py", 483),  # response_data.model_dump()
+    ("media_buy_update.py", 500),  # response_data.model_dump()
+    ("media_buy_update.py", 533),  # response_data.model_dump()
+    ("media_buy_update.py", 564),  # response_data.model_dump()
+    ("media_buy_update.py", 584),  # response_data.model_dump()
+    ("media_buy_update.py", 610),  # response_data.model_dump()
+    ("media_buy_update.py", 790),  # response_data.model_dump()
+    ("media_buy_update.py", 818),  # response_data.model_dump()
+    ("media_buy_update.py", 847),  # response_data.model_dump()
+    ("media_buy_update.py", 1019),  # response_data.model_dump()
+    ("media_buy_update.py", 1037),  # response_data.model_dump()
+    ("media_buy_update.py", 1084),  # response_data.model_dump()
+    ("media_buy_update.py", 1161),  # response_data.model_dump()
+    ("media_buy_update.py", 1193),  # response_data.model_dump()
+    ("media_buy_update.py", 1255),  # final_response.model_dump()
     # _get_products_impl: 1 violation (logging)
     ("products.py", 571),  # req.filters.model_dump() in logger.info
     # _list_creatives_impl: 1 violation (filter dict conversion)

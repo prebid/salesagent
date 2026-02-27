@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
+from src.core.database.repositories import MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
@@ -63,7 +64,9 @@ def _update_performance_index_impl(
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
 
-    _verify_principal(req.media_buy_id, identity)
+    with MediaBuyUoW(tenant["tenant_id"]) as uow:
+        assert uow.media_buys is not None
+        _verify_principal(req.media_buy_id, identity, uow.media_buys)
     principal_id = identity.principal_id
     if principal_id is None:
         raise AdCPAuthenticationError("Principal ID not found in identity - authentication required")

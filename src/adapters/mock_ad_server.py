@@ -1345,21 +1345,19 @@ class MockAdServer(AdServerAdapter):
         """Update media buy in database (Mock adapter implementation)."""
         import logging
 
-        from sqlalchemy import select
         from sqlalchemy.orm import attributes
 
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaPackage
+        from src.core.database.repositories.media_buy import MediaBuyRepository
 
         logger = logging.getLogger(__name__)
 
+        assert self.tenant_id is not None, "tenant_id required for DB operations"
+
         with get_db_session() as session:
             if action == "update_package_budget" and package_id and budget is not None:
-                # Update package budget in MediaPackage.package_config JSON
-                stmt = select(MediaPackage).where(
-                    MediaPackage.package_id == package_id, MediaPackage.media_buy_id == media_buy_id
-                )
-                media_package = session.scalars(stmt).first()
+                repo = MediaBuyRepository(session, self.tenant_id)
+                media_package = repo.get_package(media_buy_id, package_id)
                 if media_package:
                     # Update budget in package_config JSON
                     media_package.package_config["budget"] = float(budget)

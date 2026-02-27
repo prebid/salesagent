@@ -999,8 +999,9 @@ class TestCreativeLifecycleMCP:
         )
 
         with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format):
-            with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call(packages, self.test_tenant_id)
+            with get_db_session() as session:
+                with pytest.raises(AdCPValidationError) as exc_info:
+                    _validate_creatives_before_adapter_call(packages, self.test_tenant_id, session=session)
 
             error_msg = str(exc_info.value).lower()
             assert "validate_test_no_url" in error_msg

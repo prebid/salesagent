@@ -50,7 +50,6 @@ Task:
   team_name: "<team-name>"
   name: "executor-<short-id>"
   subagent_type: "executor"
-  isolation: "worktree"
   prompt: |
     Execute beads task salesagent-<id>.
 
@@ -59,21 +58,21 @@ Task:
     quality gates, commit.
 ```
 
-**Always use `isolation: "worktree"`** — executors modify code and must not
-conflict with each other.
+**NOTE: `isolation: "worktree"` is a no-op for team agents.** All executors
+share the same working directory and branch. Ensure parallel executors touch
+non-overlapping files to avoid conflicts.
 
 ### Step 5: Monitor and coordinate
 - Executors send messages when they complete tasks or get stuck
 - Messages are delivered automatically — no polling needed
 - Use SendMessage to communicate with executors by name
-- When all executors report done, verify worktree branches and merge
+- When all executors report done, review their commits on the current branch
 
-### Step 6: Merge results
+### Step 6: Verify and commit
 After all executors complete:
-1. Check each worktree branch for changes
-2. Merge branches one at a time, resolving any conflicts
-3. Run `make quality` on the merged result
-4. Push if the user requests it
+1. Run `make quality` on the combined result
+2. Squash or organize commits if needed
+3. Push if the user requests it
 
 ## User's Request
 

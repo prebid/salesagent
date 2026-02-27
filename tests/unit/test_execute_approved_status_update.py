@@ -5,7 +5,6 @@ Root cause: execute_approved_media_buy returns (True, None) after successful ada
 execution but never sets media_buy.status = 'active' in the database.
 """
 
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
@@ -127,7 +126,7 @@ class TestExecuteApprovedStatusUpdate:
         mock_adapter = MagicMock()
         mock_adapter.orders_manager = None
 
-        # Set up three DB sessions the function opens:
+        # Set up three UoW instances the function opens:
         # 1. Load tenant, media_buy, packages, products
         # 2. Handle creative uploads
         # 3. Update media buy status to 'active' (the fix)
@@ -147,18 +146,31 @@ class TestExecuteApprovedStatusUpdate:
         # Session 2: creative assignments returns empty
         mock_session_2.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
 
-        # Session 3: status update — returns same media_buy for update
-        mock_session_3.scalars = MagicMock(return_value=MagicMock(first=MagicMock(return_value=media_buy)))
+        # Build mock UoWs — each call to MediaBuyUoW() returns the next one
+        mock_uow_1 = MagicMock()
+        mock_uow_1.__enter__ = MagicMock(return_value=mock_uow_1)
+        mock_uow_1.__exit__ = MagicMock(return_value=None)
+        mock_uow_1.session = mock_session_1
+        mock_uow_1.media_buys = MagicMock()
 
-        # Build a get_db_session that yields sessions in order
-        sessions = iter([mock_session_1, mock_session_2, mock_session_3])
+        mock_uow_2 = MagicMock()
+        mock_uow_2.__enter__ = MagicMock(return_value=mock_uow_2)
+        mock_uow_2.__exit__ = MagicMock(return_value=None)
+        mock_uow_2.session = mock_session_2
+        mock_uow_2.media_buys = MagicMock()
 
-        @contextmanager
-        def fake_get_db_session():
-            yield next(sessions)
+        # UoW 3 uses update_status on the repository — track it was called
+        mock_repo_3 = MagicMock()
+        mock_uow_3 = MagicMock()
+        mock_uow_3.__enter__ = MagicMock(return_value=mock_uow_3)
+        mock_uow_3.__exit__ = MagicMock(return_value=None)
+        mock_uow_3.session = mock_session_3
+        mock_uow_3.media_buys = mock_repo_3
+
+        uow_iter = iter([mock_uow_1, mock_uow_2, mock_uow_3])
 
         with (
-            patch("src.core.database.database_session.get_db_session", side_effect=fake_get_db_session),
+            patch("src.core.database.repositories.MediaBuyUoW", side_effect=lambda _: next(uow_iter)),
             patch("src.core.config_loader.set_current_tenant"),
             patch("src.core.auth.get_principal_object", return_value=principal),
             patch(
@@ -176,9 +188,5 @@ class TestExecuteApprovedStatusUpdate:
         assert success is True, f"Expected success but got error: {error}"
         assert error is None
 
-        # THE KEY ASSERTION: status must be updated to 'active'
-        assert media_buy.status == "active", (
-            f"Bug salesagent-mckm: execute_approved_media_buy returned success "
-            f"but media_buy.status is '{media_buy.status}' instead of 'active'. "
-            f"The function must update status after successful adapter execution."
-        )
+        # THE KEY ASSERTION: update_status must be called with 'active'
+        mock_repo_3.update_status.assert_called_once_with("mb_test_001", "active")
