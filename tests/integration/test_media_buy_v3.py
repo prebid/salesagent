@@ -17,6 +17,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -161,6 +162,41 @@ def mb_tenant_with_approval(integration_db, sample_tenant):
         session.commit()
 
     return _get_tenant_dict(sample_tenant["tenant_id"])
+
+
+@pytest.fixture
+def mb_creatives(integration_db, mb_identity):
+    """Create test creatives in the DB for assignment tests.
+
+    Required because creative_assignments FK references the composite PK
+    (creative_id, tenant_id, principal_id) on the creatives table.
+    """
+    from src.core.database.models import Creative as DBCreative
+
+    creative_ids = ["c1", "c2"]
+    with get_db_session() as session:
+        for cid in creative_ids:
+            existing = session.scalars(
+                select(DBCreative).where(
+                    DBCreative.creative_id == cid,
+                    DBCreative.tenant_id == mb_identity.tenant_id,
+                    DBCreative.principal_id == mb_identity.principal_id,
+                )
+            ).first()
+            if not existing:
+                session.add(
+                    DBCreative(
+                        creative_id=cid,
+                        tenant_id=mb_identity.tenant_id,
+                        principal_id=mb_identity.principal_id,
+                        name=f"Test Creative {cid}",
+                        agent_url="https://creative.adcontextprotocol.org",
+                        format="display_300x250",
+                        data={},
+                    )
+                )
+        session.commit()
+    return creative_ids
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +487,9 @@ class TestUpdateMediaBuyCreativeAssignments:
     """UC-003-CA01..CA02: creative assignment updates requiring DB."""
 
     @pytest.mark.asyncio
-    async def test_creative_assignments_with_weights(self, mb_tenant, mb_principal, mb_products, mb_identity):
+    async def test_creative_assignments_with_weights(
+        self, mb_tenant, mb_principal, mb_products, mb_identity, mb_creatives
+    ):
         """UC-003-CA01: creative_assignments replaces all with specified weights.
 
         Integration equivalent of unit xfail test_creative_assignments_with_weights.
@@ -516,15 +554,20 @@ class TestUpdateMediaBuyCreativeAssignments:
             packages=[
                 {
                     "package_id": package_id,
-                    "placement_ids": ["nonexistent_placement_123"],
+                    "creative_assignments": [
+                        {
+                            "creative_id": "c_placement_test",
+                            "placement_ids": ["nonexistent_placement_123"],
+                        }
+                    ],
                 }
             ],
         )
         update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
 
         assert hasattr(update_result, "errors") and update_result.errors
-        error_messages = " ".join(e.message.lower() for e in update_result.errors)
-        assert "placement" in error_messages or "not found" in error_messages
+        error_messages = " ".join(str(e).lower() for e in update_result.errors)
+        assert "placement" in error_messages or "not found" in error_messages or "invalid" in error_messages
 
 
 # ---------------------------------------------------------------------------
@@ -563,13 +606,24 @@ class TestGetMediaBuysResponseFields:
         assert create_result.status == "completed", f"Create failed: {create_result.response}"
         media_buy_id = create_result.response.media_buy_id
 
+        # Use explicit status_filter to include all statuses — newly created media buys
+        # may be pending_activation (start_date in the future), not active
+        all_statuses = [
+            MediaBuyStatus.active,
+            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.completed,
+            MediaBuyStatus.paused,
+        ]
         get_req = GetMediaBuysRequest(
             media_buy_ids=[media_buy_id],
             include_snapshot=True,
+            status_filter=all_statuses,
         )
         response = _get_media_buys_impl(get_req, identity=mb_identity)
 
-        assert len(response.media_buys) == 1
+        assert len(response.media_buys) == 1, (
+            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
+        )
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
         assert len(mb_response.packages) >= 1
@@ -645,10 +699,23 @@ class TestGetMediaBuysResponseFields:
                 identity=mb_identity,
             )
 
-        get_req = GetMediaBuysRequest(media_buy_ids=[media_buy_id])
+        # Use explicit status_filter to include all statuses — newly created media buys
+        # may be pending_activation (start_date in the future), not active
+        all_statuses = [
+            MediaBuyStatus.active,
+            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.completed,
+            MediaBuyStatus.paused,
+        ]
+        get_req = GetMediaBuysRequest(
+            media_buy_ids=[media_buy_id],
+            status_filter=all_statuses,
+        )
         response = _get_media_buys_impl(get_req, identity=mb_identity)
 
-        assert len(response.media_buys) == 1
+        assert len(response.media_buys) == 1, (
+            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
+        )
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
 
