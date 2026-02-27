@@ -66,14 +66,15 @@ def test_get_creative_reviews_query(integration_db):
     """Test get_creative_reviews helper function filters by creative_id correctly."""
     with get_db_session() as session:
         creative_id = f"creative_{uuid.uuid4().hex[:8]}"
-        _create_test_tenant_with_creative(session, "test_tenant1", creative_id)
+        tenant_id = "test_tenant1"
+        _create_test_tenant_with_creative(session, tenant_id, creative_id)
 
         # Create 3 reviews for this creative
         for i in range(3):
             review = CreativeReview(
                 review_id=f"review_{uuid.uuid4().hex[:8]}",
                 creative_id=creative_id,
-                tenant_id="test_tenant1",
+                tenant_id=tenant_id,
                 principal_id="test_principal",
                 reviewed_at=datetime.now(UTC),
                 review_type="ai",
@@ -117,14 +118,15 @@ def test_get_creative_reviews_filters_by_review_type(integration_db):
     """Test get_creative_reviews returns reviews that can be filtered by type."""
     with get_db_session() as session:
         creative_id = f"creative_{uuid.uuid4().hex[:8]}"
-        _create_test_tenant_with_creative(session, "test_tenant2", creative_id)
+        tenant_id = "test_tenant2"
+        _create_test_tenant_with_creative(session, tenant_id, creative_id)
 
         # Create 2 AI reviews and 1 human review
         for i in range(3):
             review = CreativeReview(
                 review_id=f"review_{uuid.uuid4().hex[:8]}",
                 creative_id=creative_id,
-                tenant_id="test_tenant2",
+                tenant_id=tenant_id,
                 principal_id="test_principal",
                 reviewed_at=datetime.now(UTC),
                 review_type="ai" if i < 2 else "human",
