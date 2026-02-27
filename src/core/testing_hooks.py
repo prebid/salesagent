@@ -79,6 +79,82 @@ class AdCPTestContext(BaseModel):
     debug_mode: bool = False
 
     @classmethod
+    def from_headers(cls, headers: dict[str, str]) -> "AdCPTestContext | None":
+        """Extract testing context from a raw HTTP headers dict.
+
+        Returns None if no test headers are present (avoids creating an empty
+        AdCPTestContext that would be truthy and activate testing behavior).
+
+        Works with both canonical (X-Dry-Run) and lowercase (x-dry-run) keys,
+        since ASGI/FastAPI normalizes headers to lowercase.
+        """
+        if not headers:
+            return None
+
+        # Normalize to case-insensitive lookup
+        lower_headers = {k.lower(): v for k, v in headers.items()}
+
+        # Extract all testing headers
+        test_session_id = lower_headers.get("x-test-session-id")
+        dry_run = lower_headers.get("x-dry-run", "").lower() == "true"
+        auto_advance = lower_headers.get("x-auto-advance", "").lower() == "true"
+        simulated_spend = lower_headers.get("x-simulated-spend", "").lower() == "true"
+        force_error = lower_headers.get("x-force-error")
+        slow_mode = lower_headers.get("x-slow-mode", "").lower() == "true"
+        debug_mode = lower_headers.get("x-debug-mode", "").lower() == "true"
+
+        # Parse mock time
+        mock_time = None
+        mock_time_header = lower_headers.get("x-mock-time")
+        if mock_time_header:
+            try:
+                if mock_time_header.isdigit():
+                    mock_time = datetime.fromtimestamp(int(mock_time_header))
+                else:
+                    time_str = mock_time_header.rstrip("Z")
+                    mock_time = datetime.fromisoformat(time_str)
+            except (ValueError, OverflowError):
+                pass
+
+        # Parse jump to event
+        jump_to_event = None
+        jump_event_header = lower_headers.get("x-jump-to-event")
+        if jump_event_header:
+            try:
+                jump_to_event = CampaignEvent(jump_event_header)
+            except ValueError:
+                pass
+
+        # Return None if no test headers were actually set
+        has_any_test_header = any(
+            [
+                test_session_id,
+                dry_run,
+                auto_advance,
+                simulated_spend,
+                force_error,
+                slow_mode,
+                debug_mode,
+                mock_time,
+                jump_to_event,
+            ]
+        )
+        if not has_any_test_header:
+            return None
+
+        return cls(
+            test_session_id=test_session_id,
+            dry_run=dry_run,
+            mock_time=mock_time,
+            auto_advance=auto_advance,
+            jump_to_event=jump_to_event,
+            simulated_spend=simulated_spend,
+            force_error=force_error,
+            slow_mode=slow_mode,
+            debug_mode=debug_mode,
+        )
+
+    @classmethod
     def from_context(cls, context: Context) -> "TestContext":
         """Extract testing context from FastMCP context headers."""
         if not context:
@@ -96,61 +172,15 @@ class AdCPTestContext(BaseModel):
         if not headers:
             if hasattr(context, "meta") and context.meta and "headers" in context.meta:
                 headers = context.meta["headers"]
-            # Try other possible attributes
             elif hasattr(context, "headers"):
                 headers = context.headers
             elif hasattr(context, "_headers"):
                 headers = context._headers
 
         if not headers:
-            return cls()  # Return default TestContext if no headers available
+            return cls()
 
-        # Extract all testing headers
-        test_session_id = headers.get("X-Test-Session-ID")
-        dry_run = headers.get("X-Dry-Run", "").lower() == "true"
-        auto_advance = headers.get("X-Auto-Advance", "").lower() == "true"
-        simulated_spend = headers.get("X-Simulated-Spend", "").lower() == "true"
-        force_error = headers.get("X-Force-Error")
-        slow_mode = headers.get("X-Slow-Mode", "").lower() == "true"
-        debug_mode = headers.get("X-Debug-Mode", "").lower() == "true"
-
-        # Parse mock time
-        mock_time = None
-        mock_time_header = headers.get("X-Mock-Time")
-        if mock_time_header:
-            try:
-                # Handle both ISO format and timestamp
-                if mock_time_header.isdigit():
-                    mock_time = datetime.fromtimestamp(int(mock_time_header))
-                else:
-                    # Remove 'Z' suffix if present and parse
-                    time_str = mock_time_header.rstrip("Z")
-                    mock_time = datetime.fromisoformat(time_str)
-            except (ValueError, OverflowError):
-                # Invalid time format, ignore
-                pass
-
-        # Parse jump to event
-        jump_to_event = None
-        jump_event_header = headers.get("X-Jump-To-Event")
-        if jump_event_header:
-            try:
-                jump_to_event = CampaignEvent(jump_event_header)
-            except ValueError:
-                # Invalid event, ignore
-                pass
-
-        return cls(
-            test_session_id=test_session_id,
-            dry_run=dry_run,
-            mock_time=mock_time,
-            auto_advance=auto_advance,
-            jump_to_event=jump_to_event,
-            simulated_spend=simulated_spend,
-            force_error=force_error,
-            slow_mode=slow_mode,
-            debug_mode=debug_mode,
-        )
+        return cls.from_headers(headers) or cls()
 
 
 # Backwards compatibility aliases

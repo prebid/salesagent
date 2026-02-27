@@ -153,11 +153,15 @@ class AdCPRequestHandler(RequestHandler):
             ServerError: If require_valid_token=True and authentication fails
         """
         from src.core.resolved_identity import resolve_identity
+        from src.core.testing_hooks import AdCPTestContext
 
         headers = _request_headers.get() or {}
 
         if require_valid_token and not auth_token:
             raise ServerError(InvalidRequestError(message="Missing authentication token"))
+
+        # Extract testing context from A2A request headers (same as MCP does)
+        testing_context = AdCPTestContext.from_headers(headers)
 
         try:
             identity = resolve_identity(
@@ -165,6 +169,7 @@ class AdCPRequestHandler(RequestHandler):
                 auth_token=auth_token,
                 require_valid_token=require_valid_token,
                 protocol="a2a",
+                testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
             raise ServerError(InvalidRequestError(message=str(e))) from e
