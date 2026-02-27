@@ -28,11 +28,7 @@ class TestRestResolveAuthReturnsResolvedIdentity:
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="rest"
         )
 
-        with (
-            patch("src.routes.api_v1.get_principal_from_token", return_value="test_principal"),
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-            patch("src.routes.api_v1.set_current_tenant"),
-        ):
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             principal_id, identity = _resolve_auth(mock_request)
 
         assert principal_id == "test_principal"
@@ -57,11 +53,7 @@ class TestRestResolveAuthReturnsResolvedIdentity:
             principal_id="regular_user", tenant_id="acme", tenant={"tenant_id": "acme"}, protocol="rest"
         )
 
-        with (
-            patch("src.routes.api_v1.get_principal_from_token", return_value="regular_user"),
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-            patch("src.routes.api_v1.set_current_tenant"),
-        ):
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             principal_id, identity = _resolve_auth(mock_request)
 
         assert principal_id == "regular_user"

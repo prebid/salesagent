@@ -18,8 +18,6 @@ from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel
 
-from src.core.auth import get_principal_from_token
-from src.core.config_loader import set_current_tenant
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -50,39 +48,24 @@ def _resolve_auth(request: Request) -> tuple[str | None, ResolvedIdentity | None
     Uses the same resolve_identity() as MCP and A2A transports.
     """
     from src.core.auth_context import AuthContext
-    from src.core.resolved_identity import ResolvedIdentity, resolve_identity
+    from src.core.resolved_identity import resolve_identity
 
     auth_ctx: AuthContext = getattr(request.state, "auth_context", AuthContext.unauthenticated())
 
     if not auth_ctx.auth_token:
         return None, None
 
-    principal_id = get_principal_from_token(auth_ctx.auth_token)
-    if not principal_id:
-        return None, None
-
-    # Use shared resolve_identity with request headers for proper 4-strategy tenant detection
+    # resolve_identity handles token validation, tenant detection, and set_current_tenant
     identity = resolve_identity(
         headers=auth_ctx.headers,
         require_valid_token=False,
         protocol="rest",
     )
-    # Override principal_id from token validation (resolve_identity may not have it if headers lack auth)
-    if identity.principal_id != principal_id:
-        identity = ResolvedIdentity(
-            principal_id=principal_id,
-            tenant_id=identity.tenant_id,
-            tenant=identity.tenant,
-            auth_token=auth_ctx.auth_token,
-            protocol="rest",
-        )
 
-    if identity.tenant:
-        set_current_tenant(identity.tenant)
-    elif identity.tenant_id:
-        set_current_tenant({"tenant_id": identity.tenant_id})
+    if not identity.principal_id:
+        return None, None
 
-    return principal_id, identity
+    return identity.principal_id, identity
 
 
 def _require_auth(request: Request) -> tuple[str, ResolvedIdentity]:
