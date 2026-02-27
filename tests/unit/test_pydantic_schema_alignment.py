@@ -123,6 +123,8 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             return "2025-02-01T00:00:00Z"
         elif "push-notification" in ref.lower():
             return {"url": "https://example.com/notify"}
+        elif "validation-mode" in ref.lower():
+            return "strict"
         elif "context" in ref.lower():
             return {"session_id": "test-session"}
         elif "ext" in ref.lower():
