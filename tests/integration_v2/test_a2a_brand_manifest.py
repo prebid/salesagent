@@ -13,11 +13,19 @@ import pytest
 from a2a.types import MessageSendParams, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.resolved_identity import ResolvedIdentity
 from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 logger = logging.getLogger(__name__)
+
+_MOCK_IDENTITY = ResolvedIdentity(
+    principal_id="test_principal",
+    tenant_id="test_tenant",
+    tenant={"tenant_id": "test_tenant"},
+    protocol="a2a",
+)
 
 
 @pytest.mark.asyncio
@@ -33,10 +41,8 @@ async def test_get_products_with_brand_manifest_dict(sample_tenant, sample_princ
     # Mock auth token
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    # Mock tenant detection using real tenant from database
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
-
+    # Mock identity resolution
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
         # Set request headers for tenant detection
         from src.a2a_server import adcp_a2a_server
 
@@ -93,8 +99,7 @@ async def test_get_products_with_brand_manifest_url_only(sample_tenant, sample_p
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
         from src.a2a_server import adcp_a2a_server
 
         adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
@@ -121,8 +126,7 @@ async def test_get_products_with_brand_manifest_name_only(sample_tenant, sample_
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
         from src.a2a_server import adcp_a2a_server
 
         adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
@@ -148,8 +152,7 @@ async def test_get_products_backward_compat_promoted_offering(sample_tenant, sam
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
         from src.a2a_server import adcp_a2a_server
 
         adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
@@ -175,8 +178,7 @@ async def test_get_products_missing_brand_info_uses_brief_fallback(sample_tenant
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
         from src.a2a_server import adcp_a2a_server
 
         adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})

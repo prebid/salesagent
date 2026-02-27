@@ -179,37 +179,26 @@ class TestFunctionCallIntegration:
 
     def test_tool_context_creation_does_not_fail(self):
         """Test that ToolContext creation works without errors."""
-        # This tests the integration without mocking everything
-        try:
-            # Mock only the external dependencies, not the function calls themselves
-            with (
-                pytest.MonkeyPatch().context() as m,
-            ):
-                # Mock external auth functions (updated signature: token, tenant_id)
-                m.setattr(
-                    "src.a2a_server.adcp_a2a_server.get_principal_from_token",
-                    lambda token, tenant_id=None: "test_principal",
-                )
-                m.setattr("src.a2a_server.adcp_a2a_server.get_current_tenant", lambda: {"tenant_id": "test_tenant"})
-                # Mock tenant resolution functions (return None to use fallback path)
-                m.setattr("src.core.config_loader.get_tenant_by_subdomain", lambda x: None)
-                m.setattr("src.core.config_loader.get_tenant_by_virtual_host", lambda x: None)
-                m.setattr("src.core.config_loader.get_tenant_by_id", lambda x: None)
-                m.setattr("src.core.config_loader.set_current_tenant", lambda x: None)
+        from unittest.mock import patch
 
-                # Test that the method can be called without errors
-                tool_context = self.handler._create_tool_context_from_a2a(
-                    auth_token="test_token", tool_name="test_tool", context_id="test_context"
-                )
+        from src.core.resolved_identity import ResolvedIdentity
 
-                # Should return a ToolContext-like object
-                assert hasattr(tool_context, "tenant_id")
-                assert hasattr(tool_context, "principal_id")
-                assert tool_context.tenant_id == "test_tenant"
-                assert tool_context.principal_id == "test_principal"
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
+            protocol="a2a",
+        )
 
-        except Exception as e:
-            pytest.fail(f"ToolContext creation failed: {e}")
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+            tool_context = self.handler._create_tool_context_from_a2a(
+                auth_token="test_token", tool_name="test_tool", context_id="test_context"
+            )
+
+        assert hasattr(tool_context, "tenant_id")
+        assert hasattr(tool_context, "principal_id")
+        assert tool_context.tenant_id == "test_tenant"
+        assert tool_context.principal_id == "test_principal"
 
     def test_core_function_can_be_called_with_mock_context(self):
         """Test that core functions can actually be called (verifies imports work)."""

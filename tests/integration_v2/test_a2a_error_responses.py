@@ -25,6 +25,7 @@ from src.core.database.models import CurrencyLimit, PricingOption
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
+from src.core.resolved_identity import ResolvedIdentity
 
 # fmt: on
 from tests.helpers.adcp_factories import create_test_package_request_dict
@@ -39,6 +40,13 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # Configure logging for tests
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+_MOCK_IDENTITY = ResolvedIdentity(
+    principal_id="test_principal",
+    tenant_id="test_tenant",
+    tenant={"tenant_id": "test_tenant"},
+    protocol="a2a",
+)
 
 
 @pytest.mark.integration
@@ -173,13 +181,7 @@ class TestA2AErrorPropagation:
         # Mock authentication
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
 
-        with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_get_tenant,
-        ):
-            mock_get_principal.return_value = test_principal["principal_id"]
-            mock_get_tenant.return_value = test_tenant
-
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Create message with INVALID parameters (missing required fields)
             skill_params = {
                 "brand_manifest": {"name": "Test Campaign"},
@@ -216,14 +218,14 @@ class TestA2AErrorPropagation:
         # Mock authentication with INVALID principal
         handler._get_auth_token = MagicMock(return_value="invalid_token")
 
-        with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_get_tenant,
-        ):
-            # Return non-existent principal ID
-            mock_get_principal.return_value = "nonexistent_principal"
-            mock_get_tenant.return_value = test_tenant
+        mock_invalid_identity = ResolvedIdentity(
+            principal_id="nonexistent_principal",
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            protocol="a2a",
+        )
 
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_invalid_identity):
             # Create valid message structure
             start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
             end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
@@ -266,13 +268,7 @@ class TestA2AErrorPropagation:
         # Mock authentication
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
 
-        with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_get_tenant,
-        ):
-            mock_get_principal.return_value = test_principal["principal_id"]
-            mock_get_tenant.return_value = test_tenant
-
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Create VALID message
             start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
             end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
@@ -322,13 +318,7 @@ class TestA2AErrorPropagation:
         # Mock authentication
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
 
-        with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_get_tenant,
-        ):
-            mock_get_principal.return_value = test_principal["principal_id"]
-            mock_get_tenant.return_value = test_tenant
-
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Create valid message
             start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
             end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
@@ -394,13 +384,7 @@ class TestA2AErrorResponseStructure:
         # Mock minimal auth
         handler._get_auth_token = MagicMock(return_value="test_token")
 
-        with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_get_tenant,
-        ):
-            mock_get_principal.return_value = "test_principal"
-            mock_get_tenant.return_value = {"tenant_id": "test_tenant"}
-
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Call handler directly with invalid params
             result = await handler._handle_create_media_buy_skill(
                 parameters={"brand_manifest": {"name": "test"}},
@@ -418,13 +402,7 @@ class TestA2AErrorResponseStructure:
         """Test that validation errors produce properly structured errors field."""
         handler._get_auth_token = MagicMock(return_value="test_token")
 
-        with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_get_tenant,
-        ):
-            mock_get_principal.return_value = "test_principal"
-            mock_get_tenant.return_value = {"tenant_id": "test_tenant"}
-
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Call with invalid params (missing required fields) - returns immediately without DB
             result = await handler._handle_create_media_buy_skill(
                 parameters={

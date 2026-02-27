@@ -20,10 +20,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.resolved_identity import ResolvedIdentity
 from tests.helpers.a2a_response_validator import assert_valid_skill_response
 from tests.helpers.external_service import is_external_service_exception
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+_MOCK_IDENTITY = ResolvedIdentity(
+    principal_id="test_principal",
+    tenant_id="test_tenant",
+    tenant={"tenant_id": "test_tenant"},
+    protocol="a2a",
+)
 
 
 @pytest.mark.integration
@@ -328,9 +336,7 @@ class TestA2AErrorHandling:
         """Test that skill errors return proper message fields."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-            mock_get_principal.return_value = sample_principal["principal_id"]
-
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Force an error by passing invalid parameters
             params = {
                 # Missing required fields - should cause validation error

@@ -20,6 +20,14 @@ import pytest
 from starlette.testclient import TestClient
 
 from src.app import app
+from src.core.resolved_identity import ResolvedIdentity
+
+_MOCK_IDENTITY = ResolvedIdentity(
+    principal_id="test-principal",
+    tenant_id="test-tenant",
+    tenant={"tenant_id": "test-tenant"},
+    protocol="a2a",
+)
 
 # ---------------------------------------------------------------------------
 # All 13 A2A skills from the dispatch map (adcp_a2a_server.py:1416-1438)
@@ -272,10 +280,9 @@ class TestA2AResponseShape:
     testing the full transport chain: middleware → dispatch → serialization.
     """
 
-    @patch("src.a2a_server.adcp_a2a_server.get_principal_from_token", return_value="test-principal")
-    @patch("src.core.config_loader.set_current_tenant")
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.tools.products._get_products_impl")
-    def test_get_products_response_shape(self, mock_impl, mock_tenant, mock_auth, client, auth_headers):
+    def test_get_products_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """get_products response must contain 'products' list."""
         from src.core.schemas import GetProductsResponse
 
@@ -292,10 +299,9 @@ class TestA2AResponseShape:
             assert "products" in data, "get_products response must have 'products' field"
             assert isinstance(data["products"], list)
 
-    @patch("src.a2a_server.adcp_a2a_server.get_principal_from_token", return_value="test-principal")
-    @patch("src.core.config_loader.set_current_tenant")
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.tools.media_buy_create._create_media_buy_impl")
-    def test_create_media_buy_response_shape(self, mock_impl, mock_tenant, mock_auth, client, auth_headers):
+    def test_create_media_buy_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """create_media_buy response must have media_buy_id and buyer_ref."""
         from adcp.types.aliases import CreateMediaBuySuccessResponse
 
@@ -335,10 +341,9 @@ class TestA2AResponseShape:
             assert "code" in body["error"], "JSON-RPC error must have 'code'"
             assert "message" in body["error"], "JSON-RPC error must have 'message'"
 
-    @patch("src.a2a_server.adcp_a2a_server.get_principal_from_token", return_value="test-principal")
-    @patch("src.core.config_loader.set_current_tenant")
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_sync_creatives_tool")
-    def test_sync_creatives_response_shape(self, mock_impl, mock_tenant, mock_auth, client, auth_headers):
+    def test_sync_creatives_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """sync_creatives response must contain 'creatives' or 'synced_creatives'."""
         from src.core.schemas import SyncCreativesResponse
 
@@ -354,10 +359,9 @@ class TestA2AResponseShape:
                 "sync_creatives response must have 'creatives' field"
             )
 
-    @patch("src.a2a_server.adcp_a2a_server.get_principal_from_token", return_value="test-principal")
-    @patch("src.core.config_loader.set_current_tenant")
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_list_creatives_tool")
-    def test_list_creatives_response_shape(self, mock_impl, mock_tenant, mock_auth, client, auth_headers):
+    def test_list_creatives_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """list_creatives response must contain 'creatives' list."""
         from src.core.schemas import ListCreativesResponse
 
@@ -376,10 +380,9 @@ class TestA2AResponseShape:
             assert "creatives" in data, "list_creatives response must have 'creatives' field"
             assert isinstance(data["creatives"], list)
 
-    @patch("src.a2a_server.adcp_a2a_server.get_principal_from_token", return_value="test-principal")
-    @patch("src.core.config_loader.set_current_tenant")
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_update_media_buy_tool")
-    def test_update_media_buy_response_shape(self, mock_impl, mock_tenant, mock_auth, client, auth_headers):
+    def test_update_media_buy_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """update_media_buy response must have media_buy_id."""
         from adcp.types.aliases import UpdateMediaBuySuccessResponse
 
@@ -397,10 +400,9 @@ class TestA2AResponseShape:
             data = _extract_artifact_data(body["result"])
             assert "media_buy_id" in data, "update_media_buy response must have 'media_buy_id'"
 
-    @patch("src.a2a_server.adcp_a2a_server.get_principal_from_token", return_value="test-principal")
-    @patch("src.core.config_loader.set_current_tenant")
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool")
-    def test_get_media_buy_delivery_response_shape(self, mock_impl, mock_tenant, mock_auth, client, auth_headers):
+    def test_get_media_buy_delivery_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """get_media_buy_delivery response must have 'deliveries' or 'media_buys'."""
         from src.core.schemas import GetMediaBuyDeliveryResponse
 
@@ -421,10 +423,9 @@ class TestA2AResponseShape:
                 "get_media_buy_delivery response must have 'media_buy_deliveries' field"
             )
 
-    @patch("src.a2a_server.adcp_a2a_server.get_principal_from_token", return_value="test-principal")
-    @patch("src.core.config_loader.set_current_tenant")
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_update_performance_index_tool")
-    def test_update_performance_index_response_shape(self, mock_impl, mock_tenant, mock_auth, client, auth_headers):
+    def test_update_performance_index_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """update_performance_index response must have acknowledgment fields."""
         from src.core.schemas import UpdatePerformanceIndexResponse
 
@@ -435,7 +436,7 @@ class TestA2AResponseShape:
 
         payload = _build_jsonrpc(
             "update_performance_index",
-            {"media_buy_id": "mb-test-1", "performance_data": {"kpi": 1.0}},
+            {"media_buy_id": "mb-test-1", "performance_data": [{"product_id": "p1", "performance_index": 1.2}]},
         )
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
