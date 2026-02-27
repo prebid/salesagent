@@ -215,19 +215,40 @@ class TestAdminDeliveryTenantIsolation:
             )
 
     def test_review_creatives_mediabuy_queries_scope_by_tenant(self):
-        """review_creatives() MediaBuy queries must include tenant_id."""
+        """review_creatives() MediaBuy queries must be tenant-scoped.
+
+        MediaBuy access was migrated to MediaBuyRepository (salesagent-72dh),
+        which enforces tenant_id on every query by construction.
+        Verify the repository is used rather than raw select() calls.
+        """
+        source_path = ROOT / "src/admin/blueprints/creatives.py"
+        tree = ast.parse(source_path.read_text())
+
+        # Find the review_creatives function
+        func_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "review_creatives":
+                func_node = node
+                break
+
+        assert func_node is not None, "review_creatives function not found"
+
+        # Verify MediaBuyRepository is instantiated (tenant-scoped by construction)
+        source_text = ast.get_source_segment(source_path.read_text(), func_node)
+        assert "MediaBuyRepository" in source_text, (
+            "review_creatives() must use MediaBuyRepository for tenant-scoped MediaBuy access"
+        )
+
+        # Verify no raw select(MediaBuy) calls bypass the repository
         selects = _extract_select_calls(
             "src/admin/blueprints/creatives.py",
             "review_creatives",
         )
-
         mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
-        assert mediabuy_selects, "Expected at least one MediaBuy select() call"
-
-        for s in mediabuy_selects:
-            assert s["has_tenant_filter"], (
-                f"MediaBuy query at creatives.py:{s['lineno']} is missing tenant_id filter. (salesagent-gcjx)"
-            )
+        assert not mediabuy_selects, (
+            f"review_creatives() should use MediaBuyRepository, not raw select(MediaBuy). "
+            f"Found {len(mediabuy_selects)} raw query(ies)."
+        )
 
     def test_review_creatives_product_query_scopes_by_tenant(self):
         """review_creatives() Product query must include tenant_id."""

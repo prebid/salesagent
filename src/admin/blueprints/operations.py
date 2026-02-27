@@ -10,7 +10,8 @@ from flask import Blueprint
 from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
-from src.core.database.models import MediaBuy, MediaPackage, PushNotificationConfig
+from src.core.database.models import MediaBuy, PushNotificationConfig
+from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -94,8 +95,6 @@ def media_buy_detail(tenant_id, media_buy_id):
     from src.core.database.models import (
         Creative,
         CreativeAssignment,
-        MediaBuy,
-        MediaPackage,
         Principal,
         Product,
         WorkflowStep,
@@ -103,9 +102,8 @@ def media_buy_detail(tenant_id, media_buy_id):
 
     try:
         with get_db_session() as db_session:
-            media_buy = db_session.scalars(
-                select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
-            ).first()
+            repo = MediaBuyRepository(db_session, tenant_id)
+            media_buy = repo.get_by_id(media_buy_id)
 
             if not media_buy:
                 return "Media buy not found", 404
@@ -117,8 +115,7 @@ def media_buy_detail(tenant_id, media_buy_id):
                 principal = db_session.scalars(stmt).first()
 
             # Get packages for this media buy from MediaPackage table
-            stmt = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            media_packages = db_session.scalars(stmt).all()
+            media_packages = repo.get_packages(media_buy_id)
 
             packages = []
             for media_pkg in media_packages:
@@ -460,9 +457,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         webhook_config = db_session.scalars(stmt_webhook).first()
 
                     if webhook_config and media_buy_data:
-                        all_packages = db_session.scalars(
-                            select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-                        ).all()
+                        approve_repo = MediaBuyRepository(db_session, tenant_id)
+                        all_packages = approve_repo.get_packages(media_buy_id)
 
                         create_media_buy_approved_result = CreateMediaBuySuccessResponse(
                             media_buy_id=media_buy_id,
@@ -552,7 +548,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     webhook_config = db_session.scalars(stmt_webhook).first()
 
                 if webhook_config and media_buy_data:
-                    all_packages = db_session.scalars(select(MediaPackage).filter_by(media_buy_id=media_buy_id)).all()
+                    reject_repo = MediaBuyRepository(db_session, tenant_id)
+                    all_packages = reject_repo.get_packages(media_buy_id)
 
                     create_media_buy_rejected_result = CreateMediaBuySuccessResponse(
                         media_buy_id=media_buy_id,

@@ -6,12 +6,15 @@ is set at construction time and injected into all queries automatically.
 Cross-tenant queries (for schedulers) use class methods that explicitly accept a
 session and do not enforce tenant isolation — these are system-level operations.
 
-beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-to9i (admin/scheduler migration)
+beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-to9i (admin/scheduler migration),
+       salesagent-dyb6 (write methods)
 """
 
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -20,10 +23,13 @@ from src.core.database.models import MediaBuy, MediaPackage
 
 
 class MediaBuyRepository:
-    """Tenant-scoped read access to MediaBuy and MediaPackage.
+    """Tenant-scoped data access for MediaBuy and MediaPackage.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
     tenant isolation — there is no way to query across tenants.
+
+    Write methods add objects to the session but never commit — the Unit of Work
+    (MediaBuyUoW) handles commit/rollback at the boundary.
 
     Args:
         session: SQLAlchemy session (caller manages lifecycle).
@@ -226,6 +232,168 @@ class MediaBuyRepository:
                 select(MediaBuy).where(MediaBuy.tenant_id == self._tenant_id).order_by(MediaBuy.created_at.desc())
             ).all()
         )
+
+    # ------------------------------------------------------------------
+    # MediaBuy writes
+    # ------------------------------------------------------------------
+
+    def create(self, media_buy: MediaBuy) -> MediaBuy:
+        """Persist a new media buy within this tenant.
+
+        The media_buy.tenant_id must match the repository's tenant_id.
+        Raises ValueError if there is a tenant mismatch.
+
+        Does NOT commit — the UoW handles that.
+        """
+        if media_buy.tenant_id != self._tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: media_buy.tenant_id={media_buy.tenant_id!r} "
+                f"!= repository tenant_id={self._tenant_id!r}"
+            )
+        self._session.add(media_buy)
+        self._session.flush()
+        return media_buy
+
+    def update_status(
+        self,
+        media_buy_id: str,
+        status: str,
+        *,
+        approved_at: datetime.datetime | None = None,
+        approved_by: str | None = None,
+    ) -> MediaBuy | None:
+        """Update the status of a media buy within this tenant.
+
+        Returns the updated MediaBuy, or None if not found in this tenant.
+        """
+        media_buy = self.get_by_id(media_buy_id)
+        if media_buy is None:
+            return None
+        media_buy.status = status
+        if approved_at is not None:
+            media_buy.approved_at = approved_at
+        if approved_by is not None:
+            media_buy.approved_by = approved_by
+        self._session.flush()
+        return media_buy
+
+    def update_fields(self, media_buy_id: str, **kwargs: Any) -> MediaBuy | None:
+        """Update arbitrary fields on a media buy within this tenant.
+
+        Only updates fields that are valid MediaBuy column attributes.
+        Returns the updated MediaBuy, or None if not found in this tenant.
+        Raises ValueError if any kwarg is not a valid MediaBuy attribute.
+        """
+        media_buy = self.get_by_id(media_buy_id)
+        if media_buy is None:
+            return None
+        for key, value in kwargs.items():
+            if not hasattr(media_buy, key):
+                raise ValueError(f"MediaBuy has no attribute {key!r}")
+            setattr(media_buy, key, value)
+        self._session.flush()
+        return media_buy
+
+    # ------------------------------------------------------------------
+    # MediaPackage writes
+    # ------------------------------------------------------------------
+
+    def create_package(
+        self,
+        media_buy_id: str,
+        package_id: str,
+        package_config: dict,
+        *,
+        budget: Decimal | None = None,
+        bid_price: Decimal | None = None,
+        pacing: str | None = None,
+    ) -> MediaPackage:
+        """Create a new package for a media buy within this tenant.
+
+        Verifies the parent media buy belongs to this tenant before creating.
+        Raises ValueError if the media buy is not found in this tenant.
+        """
+        media_buy = self.get_by_id(media_buy_id)
+        if media_buy is None:
+            raise ValueError(f"MediaBuy {media_buy_id!r} not found in tenant {self._tenant_id!r}")
+        package = MediaPackage(
+            media_buy_id=media_buy_id,
+            package_id=package_id,
+            package_config=package_config,
+            budget=budget,
+            bid_price=bid_price,
+            pacing=pacing,
+        )
+        self._session.add(package)
+        self._session.flush()
+        return package
+
+    def update_package_config(
+        self,
+        media_buy_id: str,
+        package_id: str,
+        package_config: dict,
+    ) -> MediaPackage | None:
+        """Update the package_config of a package within this tenant.
+
+        Returns the updated MediaPackage, or None if not found.
+        """
+        package = self.get_package(media_buy_id, package_id)
+        if package is None:
+            return None
+        package.package_config = package_config
+        self._session.flush()
+        return package
+
+    def update_package_fields(
+        self,
+        media_buy_id: str,
+        package_id: str,
+        **kwargs: Any,
+    ) -> MediaPackage | None:
+        """Update arbitrary fields on a package within this tenant.
+
+        Only updates fields that are valid MediaPackage column attributes.
+        Returns the updated MediaPackage, or None if not found.
+        Raises ValueError if any kwarg is not a valid MediaPackage attribute.
+        """
+        package = self.get_package(media_buy_id, package_id)
+        if package is None:
+            return None
+        for key, value in kwargs.items():
+            if not hasattr(package, key):
+                raise ValueError(f"MediaPackage has no attribute {key!r}")
+            setattr(package, key, value)
+        self._session.flush()
+        return package
+
+    # ------------------------------------------------------------------
+    # Bulk operations
+    # ------------------------------------------------------------------
+
+    def create_packages_bulk(
+        self,
+        media_buy_id: str,
+        packages: list[MediaPackage],
+    ) -> list[MediaPackage]:
+        """Create multiple packages for a media buy within this tenant.
+
+        Verifies the parent media buy belongs to this tenant before creating.
+        Each package's media_buy_id must match the provided media_buy_id.
+        Raises ValueError if the media buy is not found or if any package
+        has a mismatched media_buy_id.
+        """
+        media_buy = self.get_by_id(media_buy_id)
+        if media_buy is None:
+            raise ValueError(f"MediaBuy {media_buy_id!r} not found in tenant {self._tenant_id!r}")
+        for pkg in packages:
+            if pkg.media_buy_id != media_buy_id:
+                raise ValueError(
+                    f"Package {pkg.package_id!r} has media_buy_id={pkg.media_buy_id!r} but expected {media_buy_id!r}"
+                )
+            self._session.add(pkg)
+        self._session.flush()
+        return packages
 
     # ------------------------------------------------------------------
     # Cross-tenant queries (for system-level schedulers)

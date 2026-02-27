@@ -45,6 +45,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
+from src.core.database.repositories.media_buy import MediaBuyRepository
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
 # All format-related routes have been removed
@@ -282,9 +283,10 @@ def index(tenant_id, **kwargs):
 @require_tenant_access()
 def review_creatives(tenant_id, **kwargs):
     """Unified creative management: view, review, and manage all creatives."""
-    from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Product
+    from src.core.database.models import Creative, CreativeAssignment, Principal, Product
 
     with get_db_session() as db_session:
+        repo = MediaBuyRepository(db_session, tenant_id)
         # Get tenant
         stmt = select(Tenant).filter_by(tenant_id=tenant_id)
         tenant = db_session.scalars(stmt).first()
@@ -310,8 +312,7 @@ def review_creatives(tenant_id, **kwargs):
             # Get media buy details for each assignment
             media_buys = []
             for assignment in assignments:
-                stmt = select(MediaBuy).filter_by(media_buy_id=assignment.media_buy_id, tenant_id=tenant_id)
-                media_buy = db_session.scalars(stmt).first()
+                media_buy = repo.get_by_id(assignment.media_buy_id)
                 if media_buy:
                     media_buys.append(
                         {
@@ -327,8 +328,7 @@ def review_creatives(tenant_id, **kwargs):
             # Get promoted offering from first media buy (if any)
             promoted_offering = None
             if media_buys and media_buys[0]:
-                stmt = select(MediaBuy).filter_by(media_buy_id=media_buys[0]["media_buy_id"], tenant_id=tenant_id)
-                first_buy = db_session.scalars(stmt).first()
+                first_buy = repo.get_by_id(media_buys[0]["media_buy_id"])
                 if first_buy and first_buy.raw_request:
                     packages = first_buy.raw_request.get("packages", [])
                     if packages:
@@ -515,7 +515,9 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             # Check if this creative approval unblocks any media buys
             # If a media buy was waiting for creatives (status="pending_creatives"),
             # check if all its creatives are now approved
-            from src.core.database.models import CreativeAssignment, MediaBuy
+            from src.core.database.models import CreativeAssignment
+
+            mb_repo = MediaBuyRepository(db_session, tenant_id)
 
             stmt_assignments = select(CreativeAssignment).filter_by(tenant_id=tenant_id, creative_id=creative_id)
             assignments = db_session.scalars(stmt_assignments).all()
@@ -528,8 +530,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 media_buy_id = assignment.media_buy_id
 
                 # Get the media buy
-                stmt_buy = select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant_id)
-                media_buy = db_session.scalars(stmt_buy).first()
+                media_buy = mb_repo.get_by_id(media_buy_id)
 
                 if not media_buy:
                     continue
@@ -1028,10 +1029,10 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
             if promoted_offering is None:
                 promoted_offering = "Unknown"
                 if creative.data.get("media_buy_id"):
-                    from src.core.database.models import MediaBuy, Product
+                    from src.core.database.models import Product
 
-                    stmt = select(MediaBuy).filter_by(media_buy_id=creative.data["media_buy_id"])
-                    media_buy = db_session.scalars(stmt).first()
+                    ai_repo = MediaBuyRepository(db_session, tenant_id)
+                    media_buy = ai_repo.get_by_id(creative.data["media_buy_id"])
                     if media_buy and media_buy.raw_request:
                         packages = media_buy.raw_request.get("packages", [])
                         if packages:

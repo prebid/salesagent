@@ -16,6 +16,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
+from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas import Format
 from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -2183,15 +2184,8 @@ def delete_product(tenant_id, product_id):
             product_name = product.name
 
             # Check if product is used in any active media buys
-            # Import here to avoid circular imports
-            from src.core.database.models import MediaBuy
-
-            stmt = (
-                select(MediaBuy)
-                .filter_by(tenant_id=tenant_id)
-                .filter(MediaBuy.status.in_(["pending", "active", "paused"]))
-            )
-            active_buys = db_session.scalars(stmt).all()
+            mb_repo = MediaBuyRepository(db_session, tenant_id)
+            active_buys = mb_repo.list_by_statuses(["pending", "active", "paused"])
 
             # Check if any active media buys reference this product
             for buy in active_buys:
