@@ -155,6 +155,45 @@ class TestMediaBuyUpdateTenantIsolation:
             )
 
 
+class TestApproveMediaBuyTenantIsolation:
+    """salesagent-snvr: approve_media_buy() raw select(MediaBuy) should use repository."""
+
+    def test_approve_media_buy_uses_repository(self):
+        """approve_media_buy() must use MediaBuyRepository, not raw select(MediaBuy).
+
+        Two raw select(MediaBuy) calls remain at lines ~328 and ~431.
+        Both should be migrated to MediaBuyRepository for pattern consistency.
+        """
+        source_path = ROOT / "src/admin/blueprints/operations.py"
+        tree = ast.parse(source_path.read_text())
+
+        # Find the approve_media_buy function
+        func_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "approve_media_buy":
+                func_node = node
+                break
+
+        assert func_node is not None, "approve_media_buy function not found"
+
+        # Verify MediaBuyRepository is used
+        source_text = ast.get_source_segment(source_path.read_text(), func_node)
+        assert "MediaBuyRepository" in source_text, (
+            "approve_media_buy() must use MediaBuyRepository for tenant-scoped MediaBuy access (salesagent-snvr)"
+        )
+
+        # Verify no raw select(MediaBuy) calls bypass the repository
+        selects = _extract_select_calls(
+            "src/admin/blueprints/operations.py",
+            "approve_media_buy",
+        )
+        mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
+        assert not mediabuy_selects, (
+            f"approve_media_buy() should use MediaBuyRepository, not raw select(MediaBuy). "
+            f"Found {len(mediabuy_selects)} raw query(ies). (salesagent-snvr)"
+        )
+
+
 class TestAdapterTenantIsolation:
     """salesagent-v7lw: adapter queries missing tenant_id (GAM Creative)."""
 

@@ -10,7 +10,7 @@ from flask import Blueprint
 from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
-from src.core.database.models import MediaBuy, PushNotificationConfig
+from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -325,8 +325,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             user_info = flask_session.get("user", {})
             user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-            stmt_buy = select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant_id)
-            media_buy = db_session.scalars(stmt_buy).first()
+            approve_repo = MediaBuyRepository(db_session, tenant_id)
+            media_buy = approve_repo.get_by_id(media_buy_id)
 
             # Extract media_buy data to dict to avoid detached instance errors after commit
             media_buy_data = None
@@ -428,10 +428,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     if not success:
                         # Adapter creation failed - update status and show error
                         with get_db_session() as error_session:
-                            stmt_error = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
-                            error_buy = error_session.scalars(stmt_error).first()
+                            error_repo = MediaBuyRepository(error_session, tenant_id)
+                            error_buy = error_repo.update_status(media_buy_id, "failed")
                             if error_buy:
-                                error_buy.status = "failed"
                                 error_session.commit()
 
                         flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
