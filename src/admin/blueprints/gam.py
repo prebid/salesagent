@@ -9,7 +9,6 @@ from flask import Blueprint, jsonify, render_template, request, session
 from googleads import ad_manager, oauth2
 from sqlalchemy import select
 
-from src.adapters.gam.utils.constants import GAM_API_VERSION
 from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils import require_tenant_access
@@ -181,7 +180,7 @@ def detect_gam_network(tenant_id):
         if network_code_provided:
             try:
                 client.network_code = network_code_provided
-                user_service = client.GetService("UserService", version=GAM_API_VERSION)
+                user_service = client.GetService("UserService")
                 current_user = user_service.getCurrentUser()
 
                 trafficker_id = None
@@ -193,7 +192,7 @@ def detect_gam_network(tenant_id):
                         logger.warning(f"Invalid user response: {error_msg}")
 
                 # Also get network info for currency and timezone
-                network_service = client.GetService("NetworkService", version=GAM_API_VERSION)
+                network_service = client.GetService("NetworkService")
                 current_network = network_service.getCurrentNetwork()
                 currency_code = safe_get(current_network, "currencyCode", "USD") if current_network else "USD"
                 secondary_currencies = (
@@ -215,7 +214,7 @@ def detect_gam_network(tenant_id):
                 return jsonify({"success": False, "error": f"Error getting trafficker ID: {str(e)}"}), 500
 
         # Get network service and retrieve network info
-        network_service = client.GetService("NetworkService", version=GAM_API_VERSION)
+        network_service = client.GetService("NetworkService")
 
         try:
             # Try getAllNetworks first (doesn't require network_code)
@@ -264,7 +263,7 @@ def detect_gam_network(tenant_id):
                     try:
                         # Set the network code in the client so we can get user info
                         client.network_code = str(network["networkCode"])
-                        user_service = client.GetService("UserService", version=GAM_API_VERSION)
+                        user_service = client.GetService("UserService")
                         current_user = user_service.getCurrentUser()
 
                         if current_user:
@@ -960,7 +959,7 @@ def test_gam_connection(tenant_id):
             client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent-Setup")
 
         # Get network service
-        network_service = client.GetService("NetworkService", version=GAM_API_VERSION)
+        network_service = client.GetService("NetworkService")
 
         # Get all networks user has access to
         networks = []
@@ -1081,7 +1080,7 @@ def test_gam_connection(tenant_id):
                 result["companies"] = companies
 
                 # Get current user info
-                user_service = client.GetService("UserService", version=GAM_API_VERSION)
+                user_service = client.GetService("UserService")
                 current_user = user_service.getCurrentUser()
                 result["current_user"] = {
                     "id": current_user.id,

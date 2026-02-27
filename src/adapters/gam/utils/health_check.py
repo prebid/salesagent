@@ -16,7 +16,6 @@ from typing import Any
 
 from googleads import ad_manager
 
-from .constants import GAM_API_VERSION
 from .error_handler import GAMAuthenticationError
 from .logging import logger
 
@@ -111,7 +110,7 @@ class GAMHealthChecker:
 
             # Try a simple API call to verify auth
             assert self.client is not None  # Type narrowing for mypy
-            network_service = self.client.GetService("NetworkService", version=GAM_API_VERSION)
+            network_service = self.client.GetService("NetworkService")
             network = network_service.getCurrentNetwork()
 
             return HealthCheckResult(
@@ -122,9 +121,11 @@ class GAMHealthChecker:
                     "network_code": str(network["networkCode"]),
                     "display_name": str(network["displayName"]),
                     "currency_code": str(network["currencyCode"]),
-                    "secondary_currency_codes": network.get("secondaryCurrencyCodes", [])
-                    if hasattr(network, "get")
-                    else getattr(network, "secondaryCurrencyCodes", []),
+                    "secondary_currency_codes": (
+                        network.get("secondaryCurrencyCodes", [])
+                        if hasattr(network, "get")
+                        else getattr(network, "secondaryCurrencyCodes", [])
+                    ),
                 },
                 duration_ms=(time.time() - start_time) * 1000,
             )
@@ -160,14 +161,11 @@ class GAMHealthChecker:
             missing_permissions = []
 
             # Check if we can access the advertiser
-            company_service = self.client.GetService("CompanyService", version=GAM_API_VERSION)
+            company_service = self.client.GetService("CompanyService")
             from googleads import ad_manager
 
             statement = (
-                ad_manager.StatementBuilder(version=GAM_API_VERSION)
-                .Where("id = :id")
-                .WithBindVariable("id", int(advertiser_id))
-                .ToStatement()
+                ad_manager.StatementBuilder().Where("id = :id").WithBindVariable("id", int(advertiser_id)).ToStatement()
             )
 
             response = company_service.getCompaniesByStatement(statement)
@@ -177,7 +175,7 @@ class GAMHealthChecker:
 
             # Check if we can create orders
             # This is a read-only check, we're not actually creating anything
-            user_service = self.client.GetService("UserService", version=GAM_API_VERSION)
+            user_service = self.client.GetService("UserService")
             current_user = user_service.getCurrentUser()
 
             if not current_user["isActive"]:
@@ -287,7 +285,7 @@ class GAMHealthChecker:
                 raise GAMAuthenticationError("Client not initialized")
 
             assert self.client is not None  # Type narrowing for mypy
-            inventory_service = self.client.GetService("InventoryService", version=GAM_API_VERSION)
+            inventory_service = self.client.GetService("InventoryService")
 
             # Check first few ad units
             accessible_units = []
@@ -296,7 +294,7 @@ class GAMHealthChecker:
             for ad_unit_id in ad_unit_ids[:5]:  # Check first 5 only
                 try:
                     statement = (
-                        ad_manager.StatementBuilder(version=GAM_API_VERSION)
+                        ad_manager.StatementBuilder()
                         .Where("id = :id")
                         .WithBindVariable("id", int(ad_unit_id))
                         .ToStatement()

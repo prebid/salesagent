@@ -1462,13 +1462,15 @@ class ProductFilters(LibraryFilters):
 
 
 class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsRequest with internal-only fields.
+    """Extends library GetProductsRequest with spec and internal fields.
 
     Library provides: account_id, brand_manifest, brief, context, ext, filters,
     property_list, proposal_id — all inherited from AdCP spec.
 
-    Local adds: product_selectors, pagination — internal fields for
-    implementation (excluded from external serialization).
+    Spec fields not yet in library: buying_mode, brand, catalog, account,
+    buyer_campaign_ref, pagination.
+
+    Internal-only: product_selectors (excluded from external serialization).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -1490,6 +1492,10 @@ class GetProductsRequest(LibraryGetProductsRequest):
     catalog: dict[str, Any] | None = Field(
         None,
         description="Catalog of items the buyer wants to promote (spec: catalog.json)",
+    )
+    account: dict[str, Any] | None = Field(
+        None,
+        description="Account for product lookup. Returns products with pricing specific to this account's rate card (spec: account-ref.json)",
     )
     buyer_campaign_ref: str | None = Field(
         None,
@@ -1881,6 +1887,12 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Spec field not yet in adcp library v3.2.0
+    account: dict[str, Any] | None = Field(
+        None,
+        description="Account that owns these creatives (spec: account-ref.json)",
+    )
 
     creatives: list[Creative] = Field(..., description="Array of creative assets to sync (create or update)")  # type: ignore[assignment]
     push_notification_config: dict[str, Any] | None = Field(  # type: ignore[assignment]
@@ -2675,10 +2687,18 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Field in AdCP spec but not yet in library (spec leads library)
+    # Fields in AdCP spec but not yet in adcp library v3.2.0
     account_id: str | None = Field(
         None,
         description="Filter delivery data to a specific account",
+    )
+    account: dict[str, Any] | None = Field(
+        None,
+        description="Filter delivery data to a specific account (spec: account-ref.json)",
+    )
+    reporting_dimensions: dict[str, Any] | None = Field(
+        None,
+        description="Request dimensional breakdowns in delivery reporting (geo, device_type, device_platform, audience, placement)",
     )
 
 

@@ -817,7 +817,7 @@ class GAMOrdersManager:
                 line_item_type = PricingCompatibility.select_line_item_type(pricing_model, is_guaranteed)
                 priority = PricingCompatibility.get_default_priority(line_item_type)
 
-                # Set goal type based on line item type (per GAM API v202411 documentation)
+                # Set goal type based on line item type (per GAM API documentation)
                 # SPONSORSHIP: Only supports DAILY goal type (percentage-based)
                 # NETWORK: Only supports DAILY goal type (percentage-based)
                 # STANDARD: Supports LIFETIME goal type (impression-based)
