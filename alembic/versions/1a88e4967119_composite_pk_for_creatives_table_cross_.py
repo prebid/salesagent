@@ -39,52 +39,23 @@ def upgrade() -> None:
     """
     conn = op.get_bind()
 
-    # --- Step 1: Drop existing FK constraints referencing creatives.creative_id ---
-
-    # creative_reviews -> creatives FK
-    # Find the actual constraint name (may vary between environments)
+    # --- Step 1: Drop ALL FK constraints referencing creatives.creative_id ---
+    # Query ALL tables, not just creative_reviews/creative_assignments.
+    # The legacy creative_associations table also has a FK here.
     result = conn.execute(
         text("""
-            SELECT tc.constraint_name
+            SELECT tc.constraint_name, tc.table_name
             FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-                ON tc.constraint_name = kcu.constraint_name
-                AND tc.table_schema = kcu.table_schema
             JOIN information_schema.constraint_column_usage ccu
                 ON ccu.constraint_name = tc.constraint_name
                 AND ccu.table_schema = tc.table_schema
             WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND tc.table_name = 'creative_reviews'
                 AND ccu.table_name = 'creatives'
                 AND ccu.column_name = 'creative_id'
         """)
     )
     for row in result:
-        op.drop_constraint(row[0], "creative_reviews", type_="foreignkey")
-
-    # creative_assignments -> creatives FK
-    result = conn.execute(
-        text("""
-            SELECT tc.constraint_name
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-                ON tc.constraint_name = kcu.constraint_name
-                AND tc.table_schema = kcu.table_schema
-            JOIN information_schema.constraint_column_usage ccu
-                ON ccu.constraint_name = tc.constraint_name
-                AND ccu.table_schema = tc.table_schema
-            WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND tc.table_name = 'creative_assignments'
-                AND ccu.table_name = 'creatives'
-                AND ccu.column_name = 'creative_id'
-        """)
-    )
-    for row in result:
-        op.drop_constraint(row[0], "creative_assignments", type_="foreignkey")
-
-    # Also drop the inline ForeignKey on creative_reviews.creative_id column
-    # (from the original column-level ForeignKey definition)
-    # This was already handled above via information_schema query
+        op.drop_constraint(row[0], row[1], type_="foreignkey")
 
     # --- Step 2: Drop old sole PK on creatives ---
     # Remove the ForeignKey on creatives.tenant_id column-level FK first
@@ -195,6 +166,15 @@ def downgrade() -> None:
     op.create_foreign_key(
         "creative_assignments_creative_id_fkey",
         "creative_assignments",
+        "creatives",
+        ["creative_id"],
+        ["creative_id"],
+    )
+
+    # Re-create legacy creative_associations FK (from initial_schema)
+    op.create_foreign_key(
+        "creative_associations_creative_id_fkey",
+        "creative_associations",
         "creatives",
         ["creative_id"],
         ["creative_id"],
