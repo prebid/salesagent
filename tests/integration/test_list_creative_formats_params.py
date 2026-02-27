@@ -410,7 +410,7 @@ def test_filtering_by_name_search(integration_db, sample_tenant):
 
 def test_filtering_by_asset_types(integration_db, sample_tenant):
     """Test that asset_types filter returns formats supporting any of the requested types."""
-    from adcp.types.generated_poc.core.format import Assets
+    from adcp.types.generated_poc.core.format import Assets, Assets5, Assets9
 
     context = ToolContext(
         context_id="test",
@@ -422,7 +422,8 @@ def test_filtering_by_asset_types(integration_db, sample_tenant):
         testing_context={},
     )
 
-    # Assets uses Literal discriminators (not enum) in generated_poc
+    # Each asset_type has its own discriminated class in generated_poc:
+    # Assets = image, Assets5 = video, Assets9 = html
     mock_formats = [
         Format(
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="image_banner"),
@@ -436,7 +437,7 @@ def test_filtering_by_asset_types(integration_db, sample_tenant):
             type=FormatCategory.video,
             name="Video Player",
             is_standard=True,
-            assets=[Assets(asset_id="video", asset_type="video", item_type="individual", required=True)],
+            assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         Format(
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="rich_media"),
@@ -445,7 +446,7 @@ def test_filtering_by_asset_types(integration_db, sample_tenant):
             is_standard=True,
             assets=[
                 Assets(asset_id="image", asset_type="image", item_type="individual", required=True),
-                Assets(asset_id="code", asset_type="html", item_type="individual", required=True),
+                Assets9(asset_id="code", asset_type="html", item_type="individual", required=True),
             ],
         ),
         Format(
@@ -586,7 +587,7 @@ def test_filtering_by_dimensions(integration_db, sample_tenant):
 
 def test_new_filters_combined_with_existing(integration_db, sample_tenant):
     """Test that new filters work correctly with existing filters."""
-    from adcp.types.generated_poc.core.format import Assets, Dimensions, Renders
+    from adcp.types.generated_poc.core.format import Assets, Assets5, Dimensions, Renders
 
     context = ToolContext(
         context_id="test",
@@ -622,7 +623,7 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
             name="Video 16:9",
             is_standard=True,
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
-            assets=[Assets(asset_id="video", asset_type="video", item_type="individual", required=True)],
+            assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         Format(
             format_id=FormatId(agent_url="https://custom.example.com", id="custom_display"),

@@ -39,18 +39,47 @@ The `integration_db` pytest fixture handles per-test database creation.
 Follow the **mol-execute** skill (`.claude/skills/mol-execute/SKILL.md`).
 Read that file for the full protocol: cook the molecule, walk atoms, close.
 
-## Running Tests
+## Quality Gates (HARD REQUIREMENTS)
 
+You have a Postgres container. You MUST use it. The quality gates below are
+not optional — failing any one means the task is NOT complete.
+
+### Gate 1: `make quality` (unit tests + lint + types)
 ```bash
-# Unit tests (no DB needed)
-uv run pytest tests/unit/ -x -q
-
-# Integration tests (needs your agent DB — run eval above first)
-uv run pytest tests/integration/ -x -q
-
-# Quality gate (before commit atom)
 make quality
 ```
+
+### Gate 2: Integration tests (MANDATORY — this is why you have a database)
+```bash
+uv run pytest tests/integration/ -x -q
+```
+
+This is the gate that catches real bugs. Unit tests mock away the database
+and cannot catch session lifecycle, ORM detachment, or query correctness
+issues. Integration tests use real Postgres and exercise the actual code path.
+
+**If integration tests fail, your implementation has a bug. Fix it before
+committing.** Do not commit with failing integration tests and claim "those
+are from other agents" or "pre-existing." If they passed before your changes
+and fail after, you broke them.
+
+### Gate 3: Integration V2 tests
+```bash
+uv run pytest tests/integration_v2/ -x -q
+```
+
+### What tests to write
+
+**For repository migrations, data access changes, and session management:**
+Write integration tests, not unit tests. Unit tests that mock the UoW/session
+verify nothing — they test that you called a mock, which is a tautology.
+
+**For pure business logic (calculations, transformations, validation):**
+Unit tests are appropriate.
+
+**Rule of thumb:** If your change touches `get_db_session()`, `Session`,
+`Repository`, `UoW`, or any SQLAlchemy query — the test MUST be an
+integration test that runs against real Postgres.
 
 ## Key Rules
 
@@ -70,8 +99,9 @@ When you remove a violation, also remove it from the guard's allowlist.
 
 When you finish all atoms:
 1. Verify `make quality` passes
-2. Verify your changes are committed
-3. Report back with: files changed, tests added, issues encountered, final commit hash
+2. Verify `uv run pytest tests/integration/ tests/integration_v2/ -x -q` passes
+3. Verify your changes are committed
+4. Report back with: files changed, tests added, integration test results, issues encountered, final commit hash
 
 If you get stuck: report what you tried, why it failed, and the atom/task IDs.
 
