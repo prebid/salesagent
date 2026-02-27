@@ -2939,9 +2939,16 @@ class TestDeliveryImplSingleBuy:
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
             patch(f"{_PATCH}.get_db_session") as mock_db,
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
-            # Inner session for MediaPackage query
+            # Mock UoW context manager
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
+            # Inner session for PricingOption query
             mock_inner_session = MagicMock()
             mock_inner_session.scalars.return_value.all.return_value = []
             mock_db.return_value.__enter__.return_value = mock_inner_session
@@ -2992,12 +2999,14 @@ class TestDeliveryImplSingleBuy:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 buyer_refs=["test-buyer-ref"],
@@ -3058,12 +3067,14 @@ class TestDeliveryImplSingleBuy:
                 return_value=[("mb_1", buy1), ("mb_2", buy2)],
             ),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 start_date="2025-01-01",
@@ -3126,12 +3137,14 @@ class TestDeliveryImplSingleBuy:
                 return_value=[("mb_1", buy1), ("mb_2", buy2)],
             ),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 start_date="2025-01-01",
@@ -3174,12 +3187,14 @@ class TestDeliveryImplSingleBuy:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]) as mock_get_buys,
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3239,12 +3254,14 @@ class TestDeliveryImplStatusFilter:
                 return_value=[("mb_active", active_buy)],
             ) as mock_get_buys,
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 status_filter=MediaBuyStatus.active,
@@ -3313,12 +3330,14 @@ class TestDeliveryImplStatusFilter:
                 return_value=[("mb_active", active_buy), ("mb_done", completed_buy)],
             ) as mock_get_buys,
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             from adcp.types import MediaBuyStatus as MBS
 
@@ -3350,8 +3369,14 @@ class TestDeliveryImplStatusFilter:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]) as mock_get_buys,
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             # No status_filter provided
             req = GetMediaBuyDeliveryRequest(
@@ -3386,8 +3411,14 @@ class TestDeliveryImplStatusFilter:
             # No buys match the status filter — returns empty, not error
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             # No specific IDs — query all, but status filter yields none
             req = GetMediaBuyDeliveryRequest(
@@ -3421,8 +3452,14 @@ class TestDeliveryImplDateRange:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 start_date="2025-03-01",
@@ -3458,8 +3495,14 @@ class TestDeliveryImplDateRange:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             # No start_date or end_date provided
             req = GetMediaBuyDeliveryRequest()
@@ -3554,12 +3597,14 @@ class TestDeliveryImplErrors:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3589,8 +3634,14 @@ class TestDeliveryImplErrors:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="different_principal")
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_owned_by_other"],
@@ -3671,12 +3722,14 @@ class TestDeliveryImplPricingLookup:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={"42": mock_po}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -4211,8 +4264,14 @@ class TestBRRule043ContextEcho:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
+            mock_uow_inst = MagicMock()
+            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
+            mock_uow_inst.__exit__ = MagicMock(return_value=False)
+            mock_uow_inst.media_buys = MagicMock()
+            mock_uow_cls.return_value = mock_uow_inst
 
             req = GetMediaBuyDeliveryRequest(
                 start_date="2025-01-01",

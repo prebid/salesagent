@@ -1097,7 +1097,10 @@ class GoogleAdManager(AdServerAdapter):
 
         # Get media buy from database to find GAM order/line item IDs
         with get_db_session() as session:
-            stmt = select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)
+            stmt = select(MediaBuy).where(
+                MediaBuy.media_buy_id == media_buy_id,
+                MediaBuy.tenant_id == self.tenant_id,
+            )
             media_buy = session.scalars(stmt).first()
 
             if not media_buy:

@@ -23,7 +23,8 @@ workflows_bp = Blueprint("workflows", __name__)
 @require_tenant_access()
 def list_workflows(tenant_id, **kwargs):
     """List all workflows and pending approvals."""
-    from src.core.database.models import AuditLog, MediaBuy, Tenant
+    from src.core.database.models import AuditLog, Tenant
+    from src.core.database.repositories import MediaBuyRepository
 
     with get_db_session() as db:
         # Get tenant
@@ -44,8 +45,8 @@ def list_workflows(tenant_id, **kwargs):
         pending_steps = [s for s in all_steps if s.status == "pending_approval"]
 
         # Get media buys for context
-        stmt = select(MediaBuy).filter_by(tenant_id=tenant_id).order_by(MediaBuy.created_at.desc())
-        media_buys = db.scalars(stmt).all()
+        repo = MediaBuyRepository(db, tenant_id)
+        media_buys = repo.list_all_ordered_by_created()
 
         # Build summary stats
         summary = {
@@ -197,7 +198,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
             # Check if this is a media buy creation workflow step
             # If so, execute the adapter creation (order/line items in GAM)
-            from src.core.database.models import MediaBuy, ObjectWorkflowMapping
+            from src.core.database.models import ObjectWorkflowMapping
 
             stmt_mapping = select(ObjectWorkflowMapping).filter_by(step_id=step_id, object_type="media_buy")
             mapping = db.scalars(stmt_mapping).first()
@@ -215,8 +216,8 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 logger.info(f"[APPROVAL] Workflow step {step_id} approved for media buy {media_buy_id}")
 
                 # Get the media buy
-                stmt_buy = select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant_id)
-                media_buy = db.scalars(stmt_buy).first()
+                approval_repo = MediaBuyRepository(db, tenant_id)
+                media_buy = approval_repo.get_by_id(media_buy_id)
 
                 logger.info(
                     f"[APPROVAL] Media buy lookup: found={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"

@@ -162,16 +162,14 @@ class TestResolveStatusFilter:
 class TestFetchTargetMediaBuys:
     """status_filter applies consistently regardless of which filter key is used."""
 
-    TENANT = {"tenant_id": "tenant_1"}
     TODAY = date(2025, 6, 15)
 
     def _run(self, req, buys):
-        mock_session = MagicMock()
-        mock_session.__enter__ = lambda s: s
-        mock_session.__exit__ = MagicMock(return_value=False)
-        mock_session.scalars.return_value.all.return_value = buys
-        with patch("src.core.tools.media_buy_list.get_db_session", return_value=mock_session):
-            return _fetch_target_media_buys(req, "principal_1", self.TENANT, self.TODAY)
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = buys
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        return _fetch_target_media_buys(req, "principal_1", mock_uow, self.TODAY)
 
     def test_media_buy_ids_with_status_filter_excludes_non_matching(self):
         active = make_media_buy("buy_active", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
@@ -224,6 +222,7 @@ class TestGetMediaBuysImpl:
     def _make_request(self, **kwargs):
         return GetMediaBuysRequest(**kwargs)
 
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
     @patch("src.core.tools.media_buy_list.get_principal_object")
     @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
     @patch("src.core.tools.media_buy_list._fetch_packages")
@@ -234,6 +233,7 @@ class TestGetMediaBuysImpl:
         mock_fetch_packages,
         mock_fetch_buys,
         mock_principal_obj,
+        mock_uow_cls,
     ):
         """Basic happy path: one active media buy returned."""
         mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
@@ -265,6 +265,7 @@ class TestGetMediaBuysImpl:
         assert response.errors is not None
         assert len(response.errors) > 0
 
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
     @patch("src.core.tools.media_buy_list.get_principal_object")
     @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
     @patch("src.core.tools.media_buy_list._fetch_packages")
@@ -275,6 +276,7 @@ class TestGetMediaBuysImpl:
         mock_fetch_packages,
         mock_fetch_buys,
         mock_principal_obj,
+        mock_uow_cls,
     ):
         """When include_snapshot=False, adapter.get_packages_snapshot not called."""
         mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
@@ -294,6 +296,7 @@ class TestGetMediaBuysImpl:
 
         mock_adapter.get_packages_snapshot.assert_not_called()
 
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
     @patch("src.core.tools.media_buy_list.get_principal_object")
     @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
     @patch("src.core.tools.media_buy_list._fetch_packages")
@@ -304,6 +307,7 @@ class TestGetMediaBuysImpl:
         mock_fetch_packages,
         mock_fetch_buys,
         mock_principal_obj,
+        mock_uow_cls,
     ):
         """When include_snapshot=True, adapter.get_packages_snapshot is called."""
         mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
@@ -337,6 +341,7 @@ class TestGetMediaBuysImpl:
         # Response should contain the snapshot
         assert response.media_buys[0].packages[0].snapshot is not None
 
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
     @patch("src.core.tools.media_buy_list.get_principal_object")
     @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
     @patch("src.core.tools.media_buy_list._fetch_packages")
@@ -347,6 +352,7 @@ class TestGetMediaBuysImpl:
         mock_fetch_packages,
         mock_fetch_buys,
         mock_principal_obj,
+        mock_uow_cls,
     ):
         """When include_snapshot=True but adapter lacks get_packages_snapshot, mark as unsupported."""
         mock_principal_obj.return_value = MagicMock(principal_id="principal_1")

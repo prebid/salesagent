@@ -3,13 +3,18 @@
 Core invariant: every query includes tenant_id in the WHERE clause. The tenant_id
 is set at construction time and injected into all queries automatically.
 
-beads: salesagent-t735 (foundation), salesagent-2lp8 (epic)
+Cross-tenant queries (for schedulers) use class methods that explicitly accept a
+session and do not enforce tenant isolation — these are system-level operations.
+
+beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-to9i (admin/scheduler migration)
 """
 
 from __future__ import annotations
 
+import datetime
+
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import MediaBuy, MediaPackage
 
@@ -156,3 +161,81 @@ class MediaBuyRepository:
         for pkg in packages:
             result.setdefault(pkg.media_buy_id, []).append(pkg)
         return result
+
+    # ------------------------------------------------------------------
+    # Tenant-wide list queries (for admin/dashboard)
+    # ------------------------------------------------------------------
+
+    def list_all(self) -> list[MediaBuy]:
+        """Get all media buys for the tenant."""
+        return list(self._session.scalars(select(MediaBuy).where(MediaBuy.tenant_id == self._tenant_id)).all())
+
+    def list_by_statuses(self, statuses: list[str]) -> list[MediaBuy]:
+        """Get media buys for the tenant filtered by status list."""
+        return list(
+            self._session.scalars(
+                select(MediaBuy).where(
+                    MediaBuy.tenant_id == self._tenant_id,
+                    MediaBuy.status.in_(statuses),
+                )
+            ).all()
+        )
+
+    def list_recent(
+        self,
+        limit: int = 10,
+        *,
+        eager_load_principal: bool = False,
+    ) -> list[MediaBuy]:
+        """Get the most recent media buys for the tenant, ordered by created_at desc."""
+        stmt = (
+            select(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id.isnot(None),
+            )
+            .order_by(MediaBuy.created_at.desc())
+            .limit(limit)
+        )
+        if eager_load_principal:
+            stmt = stmt.options(joinedload(MediaBuy.principal))
+        return list(self._session.scalars(stmt).all())
+
+    def list_in_flight_on_date(
+        self,
+        target_date: datetime.date,
+        statuses: list[str] | None = None,
+    ) -> list[MediaBuy]:
+        """Get media buys whose flight period covers target_date.
+
+        Useful for revenue trend calculations.
+        """
+        stmt = select(MediaBuy).where(
+            MediaBuy.tenant_id == self._tenant_id,
+            MediaBuy.start_date <= target_date,
+            MediaBuy.end_date >= target_date,
+        )
+        if statuses:
+            stmt = stmt.where(MediaBuy.status.in_(statuses))
+        return list(self._session.scalars(stmt).all())
+
+    def list_all_ordered_by_created(self) -> list[MediaBuy]:
+        """Get all media buys for the tenant, ordered by created_at desc."""
+        return list(
+            self._session.scalars(
+                select(MediaBuy).where(MediaBuy.tenant_id == self._tenant_id).order_by(MediaBuy.created_at.desc())
+            ).all()
+        )
+
+    # ------------------------------------------------------------------
+    # Cross-tenant queries (for system-level schedulers)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_all_by_statuses(session: Session, statuses: list[str]) -> list[MediaBuy]:
+        """Get media buys across ALL tenants filtered by status.
+
+        This is a system-level query for schedulers that need to process
+        media buys regardless of tenant. Not tenant-scoped.
+        """
+        return list(session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses))).all())

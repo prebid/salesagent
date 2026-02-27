@@ -12,7 +12,8 @@ from typing import Any
 from src.admin.services.business_activity_service import get_business_activities
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative, MediaBuy, Principal, Product, Tenant
+from src.core.database.models import Creative, Principal, Product, Tenant
+from src.core.database.repositories import MediaBuyRepository
 from src.core.schemas import CreativeStatusEnum
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,8 @@ class DashboardService:
 
         try:
             with get_db_session() as db_session:
+                repo = MediaBuyRepository(db_session, self.tenant_id)
+
                 # Get readiness summary (replaces simple status counts)
                 readiness_summary = MediaBuyReadinessService.get_tenant_readiness_summary(self.tenant_id)
 
@@ -68,16 +71,11 @@ class DashboardService:
                 )
 
                 # Calculate total spend from live and completed media buys
-                stmt = (
-                    select(MediaBuy)
-                    .filter_by(tenant_id=self.tenant_id)
-                    .where(MediaBuy.status.in_(["active", "completed"]))
-                )
-                total_spend_buys = db_session.scalars(stmt).all()
+                total_spend_buys = repo.list_by_statuses(["active", "completed"])
                 total_spend_amount = float(sum(buy.budget or 0 for buy in total_spend_buys))
 
                 # Revenue trend data (last 30 days)
-                revenue_data = self._calculate_revenue_trend(db_session)
+                revenue_data = self._calculate_revenue_trend(db_session, repo=repo)
 
                 # Calculate revenue change (last 7 vs previous 7 days)
                 revenue_change = self._calculate_revenue_change(revenue_data)
@@ -139,22 +137,12 @@ class DashboardService:
             logger.error(f"Unexpected error calculating dashboard metrics for {self.tenant_id}: {e}", exc_info=True)
             raise
 
-    def get_recent_media_buys(self, limit: int = 10) -> list[MediaBuy]:
+    def get_recent_media_buys(self, limit: int = 10) -> list:
         """Get recent media buys with relationships loaded and readiness state."""
         try:
             with get_db_session() as db_session:
-                from sqlalchemy import select
-                from sqlalchemy.orm import joinedload
-
-                stmt = (
-                    select(MediaBuy)
-                    .where(MediaBuy.tenant_id == self.tenant_id)
-                    .where(MediaBuy.media_buy_id.isnot(None))  # Defensive: ensure valid ID
-                    .options(joinedload(MediaBuy.principal))  # Eager load to avoid N+1
-                    .order_by(MediaBuy.created_at.desc())
-                    .limit(limit)
-                )
-                recent_buys = db_session.scalars(stmt).all()
+                repo = MediaBuyRepository(db_session, self.tenant_id)
+                recent_buys = repo.list_recent(limit, eager_load_principal=True)
 
                 # Transform for template consumption
                 # Note: Adding dynamic attributes to MediaBuy instances for template rendering
@@ -189,30 +177,24 @@ class DashboardService:
             logger.error(f"Database error getting recent media buys for {self.tenant_id}: {e}", exc_info=True)
             return []
 
-    def _calculate_revenue_trend(self, db_session, days: int = 30) -> list[dict[str, Any]]:
+    def _calculate_revenue_trend(
+        self, db_session, days: int = 30, *, repo: MediaBuyRepository | None = None
+    ) -> list[dict[str, Any]]:
         """Calculate daily revenue for the last N days."""
+        if repo is None:
+            repo = MediaBuyRepository(db_session, self.tenant_id)
         today = datetime.now(UTC).date()
         revenue_data = []
 
         for i in range(days):
             date = today - timedelta(days=days - 1 - i)
 
-            # Calculate revenue for this date
-            from sqlalchemy import select
-
-            stmt = (
-                select(MediaBuy)
-                .filter_by(tenant_id=self.tenant_id)
-                .where(MediaBuy.start_date <= date)
-                .where(MediaBuy.end_date >= date)
-                .where(MediaBuy.status.in_(["active", "completed"]))
-            )
-            daily_buys = db_session.scalars(stmt).all()
+            daily_buys = repo.list_in_flight_on_date(date, statuses=["active", "completed"])
 
             daily_revenue = 0
             for buy in daily_buys:
                 if buy.start_date and buy.end_date:
-                    days_in_flight = (buy.end_date - buy.start_date).days + 1
+                    days_in_flight = (buy.end_date - buy.start_date).days + 1  # type: ignore[operator]
                     if days_in_flight > 0:
                         daily_revenue += float(buy.budget or 0) / days_in_flight
 

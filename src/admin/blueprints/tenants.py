@@ -641,7 +641,8 @@ def deactivate_tenant(tenant_id):
 def media_buys_list(tenant_id):
     """List media buys with optional status filter."""
     from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
-    from src.core.database.models import MediaBuy, Product
+    from src.core.database.models import Product
+    from src.core.database.repositories import MediaBuyRepository
 
     try:
         # Get status filter from query params
@@ -655,8 +656,8 @@ def media_buys_list(tenant_id):
                 return redirect(url_for("core.index"))
 
             # Get all media buys
-            stmt = select(MediaBuy).filter_by(tenant_id=tenant_id).order_by(MediaBuy.created_at.desc())
-            all_media_buys = db_session.scalars(stmt).all()
+            repo = MediaBuyRepository(db_session, tenant_id)
+            all_media_buys = repo.list_all_ordered_by_created()
 
             # Calculate readiness state for each and filter
             media_buys_with_state = []

@@ -48,14 +48,8 @@ IMPL_SESSION_ALLOWLIST = {
     # media_buy_update.py — 2 functions with get_db_session()
     ("src/core/tools/media_buy_update.py", "_update_media_buy_impl"),
     ("src/core/tools/media_buy_update.py", "_verify_principal"),
-    # media_buy_delivery.py — 3 functions with get_db_session()
-    ("src/core/tools/media_buy_delivery.py", "_get_media_buy_delivery_impl"),
-    ("src/core/tools/media_buy_delivery.py", "_get_target_media_buys"),
+    # media_buy_delivery.py — 1 function with get_db_session()
     ("src/core/tools/media_buy_delivery.py", "_get_pricing_options"),
-    # media_buy_list.py — 3 functions with get_db_session()
-    ("src/core/tools/media_buy_list.py", "_fetch_target_media_buys"),
-    ("src/core/tools/media_buy_list.py", "_fetch_packages"),
-    ("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"),
     # products.py — 2 functions with get_db_session()
     ("src/core/tools/products.py", "_get_products_impl"),
     ("src/core/tools/products.py", "get_product_catalog"),

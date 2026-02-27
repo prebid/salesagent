@@ -16,6 +16,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import RootModel, ValidationError
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from src.core.tool_context import ToolContext
 
@@ -54,8 +55,8 @@ from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
 from src.core.auth import get_principal_object
-from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy, MediaPackage
+from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.repositories import MediaBuyUoW
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -108,16 +109,23 @@ def _get_media_buys_impl(
 
     tenant = identity.tenant
     today = datetime.now(UTC).date()
+    tenant_id: str = tenant["tenant_id"]
 
-    # Resolve which media buys to return
-    target_media_buys = _fetch_target_media_buys(req, principal_id, tenant, today)
+    # Single DB session for all reads — ORM objects are converted to plain
+    # dataclasses inside the UoW scope so nothing is accessed after session close.
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        assert uow.session is not None
 
-    # Resolve creative approvals for all packages in one batch query
-    all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
-    creative_approvals_by_package = _fetch_creative_approvals(all_media_buy_ids, tenant["tenant_id"])
+        # Resolve which media buys to return
+        target_media_buys = _fetch_target_media_buys(req, principal_id, uow, today)
 
-    # Resolve package configs for all media buys in one batch query
-    packages_by_media_buy = _fetch_packages(all_media_buy_ids)
+        # Resolve creative approvals for all packages in one batch query
+        all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
+        creative_approvals_by_package = _fetch_creative_approvals(all_media_buy_ids, tenant_id, uow.session)
+
+        # Resolve package configs for all media buys in one batch query
+        packages_by_media_buy = _fetch_packages(all_media_buy_ids, uow)
 
     # Get snapshots from adapter if requested
     snapshot_data: dict[str, dict[str, Snapshot | None]] = {}  # media_buy_id -> package_id -> Snapshot
@@ -293,51 +301,36 @@ def get_media_buys_raw(
 def _fetch_target_media_buys(
     req: GetMediaBuysRequest,
     principal_id: str,
-    tenant: dict[str, Any],
+    uow: MediaBuyUoW,
     today: date,
 ) -> list[_MediaBuyData]:
     """Fetch media buys from database matching the request filters."""
+    assert uow.media_buys is not None
     filter_statuses = _resolve_status_filter(req.status_filter)
 
-    with get_db_session() as session:
-        if req.media_buy_ids:
-            stmt = select(MediaBuy).where(
-                MediaBuy.tenant_id == tenant["tenant_id"],
-                MediaBuy.principal_id == principal_id,
-                MediaBuy.media_buy_id.in_(req.media_buy_ids),
-            )
-            buys = session.scalars(stmt).all()
-        elif req.buyer_refs:
-            stmt = select(MediaBuy).where(
-                MediaBuy.tenant_id == tenant["tenant_id"],
-                MediaBuy.principal_id == principal_id,
-                MediaBuy.buyer_ref.in_(req.buyer_refs),
-            )
-            buys = session.scalars(stmt).all()
-        else:
-            stmt = select(MediaBuy).where(
-                MediaBuy.tenant_id == tenant["tenant_id"],
-                MediaBuy.principal_id == principal_id,
-            )
-            buys = session.scalars(stmt).all()
+    buys = uow.media_buys.get_by_principal(
+        principal_id,
+        media_buy_ids=req.media_buy_ids,
+        buyer_refs=req.buyer_refs,
+    )
 
-        return [
-            _MediaBuyData(
-                media_buy_id=buy.media_buy_id,
-                buyer_ref=buy.buyer_ref,
-                currency=buy.currency,
-                budget=buy.budget,
-                start_date=cast(date, buy.start_date),
-                end_date=cast(date, buy.end_date),
-                start_time=buy.start_time,
-                end_time=buy.end_time,
-                raw_request=buy.raw_request,
-                created_at=buy.created_at,
-                updated_at=buy.updated_at,
-            )
-            for buy in buys
-            if _compute_status(buy, today) in filter_statuses
-        ]
+    return [
+        _MediaBuyData(
+            media_buy_id=buy.media_buy_id,
+            buyer_ref=buy.buyer_ref,
+            currency=buy.currency,
+            budget=buy.budget,
+            start_date=cast(date, buy.start_date),
+            end_date=cast(date, buy.end_date),
+            start_time=buy.start_time,
+            end_time=buy.end_time,
+            raw_request=buy.raw_request,
+            created_at=buy.created_at,
+            updated_at=buy.updated_at,
+        )
+        for buy in buys
+        if _compute_status(buy, today) in filter_statuses
+    ]
 
 
 def _resolve_status_filter(
@@ -369,74 +362,76 @@ def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatu
     return MediaBuyStatus.active
 
 
-def _fetch_packages(media_buy_ids: list[str]) -> dict[str, list[_PackageData]]:
+def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, list[_PackageData]]:
     """Fetch all packages for the given media buy IDs, grouped by media_buy_id."""
+    assert uow.media_buys is not None
     if not media_buy_ids:
         return {}
-    with get_db_session() as session:
-        stmt = select(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids))
-        packages = session.scalars(stmt).all()
-        result: dict[str, list[_PackageData]] = {}
-        for pkg in packages:
-            result.setdefault(pkg.media_buy_id, []).append(
-                _PackageData(
-                    media_buy_id=pkg.media_buy_id,
-                    package_id=pkg.package_id,
-                    package_config=pkg.package_config,
-                    budget=pkg.budget,
-                    bid_price=pkg.bid_price,
-                )
+
+    packages_by_buy = uow.media_buys.get_packages_for_ids(media_buy_ids)
+
+    result: dict[str, list[_PackageData]] = {}
+    for media_buy_id, packages in packages_by_buy.items():
+        result[media_buy_id] = [
+            _PackageData(
+                media_buy_id=pkg.media_buy_id,
+                package_id=pkg.package_id,
+                package_config=pkg.package_config,
+                budget=pkg.budget,
+                bid_price=pkg.bid_price,
             )
-        return result
+            for pkg in packages
+        ]
+    return result
 
 
 def _fetch_creative_approvals(
     media_buy_ids: list[str],
     tenant_id: str,
+    session: Session,
 ) -> dict[tuple[str, str], list[CreativeApproval]]:
     """Fetch creative approvals for all packages, grouped by (media_buy_id, package_id)."""
     if not media_buy_ids:
         return {}
 
-    with get_db_session() as session:
-        # Get all creative assignments for these media buys
-        assignment_stmt = select(CreativeAssignment).where(
-            CreativeAssignment.tenant_id == tenant_id,
-            CreativeAssignment.media_buy_id.in_(media_buy_ids),
-        )
-        assignments: Sequence[CreativeAssignment] = session.scalars(assignment_stmt).all()
+    # Get all creative assignments for these media buys
+    assignment_stmt = select(CreativeAssignment).where(
+        CreativeAssignment.tenant_id == tenant_id,
+        CreativeAssignment.media_buy_id.in_(media_buy_ids),
+    )
+    assignments: Sequence[CreativeAssignment] = session.scalars(assignment_stmt).all()
 
-        if not assignments:
-            return {}
+    if not assignments:
+        return {}
 
-        # Fetch all referenced creatives in one query (scoped to tenant)
-        creative_ids = [a.creative_id for a in assignments]
-        creative_stmt = select(Creative).where(
-            Creative.tenant_id == tenant_id,
-            Creative.creative_id.in_(creative_ids),
-        )
-        creatives = {c.creative_id: c for c in session.scalars(creative_stmt).all()}
+    # Fetch all referenced creatives in one query (scoped to tenant)
+    creative_ids = [a.creative_id for a in assignments]
+    creative_stmt = select(Creative).where(
+        Creative.tenant_id == tenant_id,
+        Creative.creative_id.in_(creative_ids),
+    )
+    creatives = {c.creative_id: c for c in session.scalars(creative_stmt).all()}
 
-        # Build approval objects grouped by (media_buy_id, package_id)
-        result: dict[tuple[str, str], list[CreativeApproval]] = {}
-        for assignment in assignments:
-            creative = creatives.get(assignment.creative_id)
-            if creative is None:
-                continue
+    # Build approval objects grouped by (media_buy_id, package_id)
+    result: dict[tuple[str, str], list[CreativeApproval]] = {}
+    for assignment in assignments:
+        creative = creatives.get(assignment.creative_id)
+        if creative is None:
+            continue
 
-            approval_status = _map_creative_status(creative.status)
-            rejection_reason = None
-            if approval_status == ApprovalStatus.rejected:
-                rejection_reason = creative.data.get("rejection_reason") if creative.data else None
+        approval_status = _map_creative_status(creative.status)
+        rejection_reason = None
+        if approval_status == ApprovalStatus.rejected:
+            rejection_reason = creative.data.get("rejection_reason") if creative.data else None
 
-            key = (assignment.media_buy_id, assignment.package_id)
-            result.setdefault(key, []).append(
-                CreativeApproval(
-                    creative_id=assignment.creative_id,
-                    approval_status=approval_status,
-                    rejection_reason=rejection_reason,
-                )
+        key = (assignment.media_buy_id, assignment.package_id)
+        result.setdefault(key, []).append(
+            CreativeApproval(
+                creative_id=assignment.creative_id,
+                approval_status=approval_status,
+                rejection_reason=rejection_reason,
             )
+        )
 
     return result
 

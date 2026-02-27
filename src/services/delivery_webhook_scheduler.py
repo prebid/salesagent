@@ -18,8 +18,9 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import N
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, WebhookDeliveryLog
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+from src.core.database.models import WebhookDeliveryLog
+from src.core.database.repositories import MediaBuyRepository
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -89,9 +90,8 @@ class DeliveryWebhookScheduler:
 
         try:
             with get_db_session() as session:
-                # Find all active media buys
-                stmt = select(MediaBuy).where(MediaBuy.status.in_(["active", "approved"]))
-                media_buys = session.scalars(stmt).all()
+                # Find all active media buys (cross-tenant scheduler query)
+                media_buys = MediaBuyRepository.get_all_by_statuses(session, ["active", "approved"])
 
                 reports_sent = 0
                 errors = 0
@@ -132,8 +132,8 @@ class DeliveryWebhookScheduler:
         """
         try:
             with get_db_session() as session:
-                stmt = select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant_id)
-                media_buy = session.scalars(stmt).first()
+                repo = MediaBuyRepository(session, tenant_id)
+                media_buy = repo.get_by_id(media_buy_id)
 
                 if not media_buy:
                     logger.warning(f"Cannot trigger report: Media buy {media_buy_id} not found")
