@@ -13,6 +13,59 @@ variables:
 labels:
   - "mol:task-execute"
 
+# ── Setup (runs once before any task iteration) ──────────────────
+setup:
+  - id: "baseline"
+    title: "Establish baseline — zero failures"
+    description: |
+      Run the full quality suite BEFORE any code changes. This establishes the
+      clean slate. Every failure after this point belongs to you.
+
+      ## Instructions
+
+      1. **Run quality gate**:
+         ```bash
+         make quality 2>&1 | tail -5
+         ```
+         Record the exact pass count (e.g., "2973 passed").
+
+      2. **Run integration tests**:
+         ```bash
+         uv run pytest tests/integration/ -x -q 2>&1 | tail -5
+         ```
+         Record the exact pass count.
+
+      3. **Run integration_v2 tests**:
+         ```bash
+         uv run pytest tests/integration_v2/ -x -q 2>&1 | tail -5
+         ```
+         Record the exact pass count.
+
+      ## Gate — HARD STOP on any failure
+
+      If ANY test fails in the baseline:
+      - Do NOT proceed to the next atom.
+      - Do NOT classify failures as "pre-existing" or "from another agent."
+      - Report the exact failures and leave this atom OPEN.
+
+      You are in an isolated worktree. If the baseline fails, your environment
+      setup is wrong (missing `uv sync`, wrong DB, stale cache). Fix it or stop.
+
+      ## Record Baseline
+
+      Write the counts to the epic so the finalize atom can compare:
+
+      ```bash
+      bd update {EPIC_ID} --append-notes "## Baseline (pre-change)
+      - make quality: [N] passed, 0 failed
+      - integration: [N] passed, 0 failed
+      - integration_v2: [N] passed, 0 failed
+      - Total: [sum] passed, 0 failed"
+      ```
+
+    acceptance: "All three gates pass with zero failures. Exact counts recorded in epic notes."
+    labels: ["atom:baseline"]
+
 iterate:
   over: "TASK_IDS"
   item_var: "TASK_ID"
@@ -112,6 +165,7 @@ iterate:
         Do NOT close this atom if blocked — leave it open.
 
       acceptance: "Task has research:complete label. Notes contain Findings + Relevant Code sections. Design contains Core Invariant + Implementation Plan."
+      depends_on: ["baseline"]
       labels: ["atom:research"]
 
     # ── Atom 2: Architect Review ──────────────────────────────────
@@ -499,6 +553,52 @@ iterate:
 
 # ── Finalize (after all tasks) ────────────────────────────────────
 finalize:
+  - id: verify-no-regression
+    title: "Verify zero regressions vs baseline"
+    description: |
+      Compare final test results against the baseline recorded in the setup atom.
+      This is the clean slate verification — you must return what you received.
+
+      ## Instructions
+
+      1. **Read the baseline** from the epic:
+         ```bash
+         bd show {EPIC_ID}
+         ```
+         Find the "## Baseline (pre-change)" section. Note the exact counts.
+
+      2. **Run all three gates**:
+         ```bash
+         make quality 2>&1 | tail -5
+         uv run pytest tests/integration/ -x -q 2>&1 | tail -5
+         uv run pytest tests/integration_v2/ -x -q 2>&1 | tail -5
+         ```
+
+      3. **Compare counts**:
+         - Passes must be >= baseline (new tests are expected)
+         - Failures must be exactly 0
+         - Any new failure means YOUR changes broke something — fix it
+
+      4. **Record final results**:
+         ```bash
+         bd update {EPIC_ID} --append-notes "## Final (post-change)
+         - make quality: [N] passed, 0 failed (baseline: [N])
+         - integration: [N] passed, 0 failed (baseline: [N])
+         - integration_v2: [N] passed, 0 failed (baseline: [N])
+         - Delta: +[N] new tests, 0 regressions"
+         ```
+
+      ## HARD STOP
+
+      If ANY gate has failures that were not in the baseline:
+      - Do NOT close this atom.
+      - Do NOT commit.
+      - Fix the regressions first, then re-run this atom.
+
+    acceptance: "All three gates pass. Zero regressions vs baseline. Final counts recorded in epic notes."
+    depends_on_all_barriers: true
+    labels: ["atom:verify-regression"]
+
   - id: sync-and-verify
     title: "Sync beads and verify clean state"
     description: |
@@ -523,11 +623,6 @@ finalize:
          git log --oneline -20
          ```
 
-      4. Final quality check:
-         ```bash
-         make quality
-         ```
-
-    acceptance: "All {N} tasks closed. bd sync done. make quality passes. git clean."
-    depends_on_all_barriers: true
+    acceptance: "All {N} tasks closed. bd sync done. git clean."
+    depends_on: ["verify-no-regression"]
     labels: ["atom:verify"]
