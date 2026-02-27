@@ -28,10 +28,9 @@ class TestGAMConnection:
 
     def test_network_connection(self, gam_client_manager):
         """Service account can authenticate and retrieve network info."""
-        from src.adapters.gam.utils.constants import GAM_API_VERSION
 
         client = gam_client_manager.get_client()
-        network_service = client.GetService("NetworkService", version=GAM_API_VERSION)
+        network_service = client.GetService("NetworkService")
         network = network_service.getCurrentNetwork()
 
         assert str(network["networkCode"]) == GAM_TEST_NETWORK_CODE
@@ -43,10 +42,9 @@ class TestGAMConnection:
 
     def test_current_user(self, gam_client_manager):
         """Service account can query current user info."""
-        from src.adapters.gam.utils.constants import GAM_API_VERSION
 
         client = gam_client_manager.get_client()
-        user_service = client.GetService("UserService", version=GAM_API_VERSION)
+        user_service = client.GetService("UserService")
         current_user = user_service.getCurrentUser()
 
         assert current_user is not None
@@ -62,10 +60,8 @@ class TestGAMInventory:
         """Can list ad units from the test network."""
         from googleads import ad_manager
 
-        from src.adapters.gam.utils.constants import GAM_API_VERSION
-
         inv_service = gam_client_manager.get_service("InventoryService")
-        sb = ad_manager.StatementBuilder(version=GAM_API_VERSION)
+        sb = ad_manager.StatementBuilder()
         sb.limit = 100
 
         result = inv_service.getAdUnitsByStatement(sb.ToStatement())
@@ -82,10 +78,8 @@ class TestGAMInventory:
         """Ad units have the fields the adapter expects."""
         from googleads import ad_manager
 
-        from src.adapters.gam.utils.constants import GAM_API_VERSION
-
         inv_service = gam_client_manager.get_service("InventoryService")
-        sb = ad_manager.StatementBuilder(version=GAM_API_VERSION)
+        sb = ad_manager.StatementBuilder()
         sb.Where("id = :id").WithBindVariable("id", int(GAM_TEST_AD_UNIT_IDS[0]))
 
         result = inv_service.getAdUnitsByStatement(sb.ToStatement())
@@ -108,10 +102,8 @@ class TestGAMAdvertiser:
         """Can list advertisers from the test network."""
         from googleads import ad_manager
 
-        from src.adapters.gam.utils.constants import GAM_API_VERSION
-
         company_service = gam_client_manager.get_service("CompanyService")
-        sb = ad_manager.StatementBuilder(version=GAM_API_VERSION)
+        sb = ad_manager.StatementBuilder()
         sb.Where("type = :type").WithBindVariable("type", "ADVERTISER")
         sb.limit = 100
 
@@ -128,10 +120,8 @@ class TestGAMAdvertiser:
         """Advertisers have the fields the adapter expects."""
         from googleads import ad_manager
 
-        from src.adapters.gam.utils.constants import GAM_API_VERSION
-
         company_service = gam_client_manager.get_service("CompanyService")
-        sb = ad_manager.StatementBuilder(version=GAM_API_VERSION)
+        sb = ad_manager.StatementBuilder()
         sb.Where("id = :id").WithBindVariable("id", int(GAM_TEST_ADVERTISER_ID))
 
         result = company_service.getCompaniesByStatement(sb.ToStatement())

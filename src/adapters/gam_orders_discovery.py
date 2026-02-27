@@ -16,7 +16,6 @@ from typing import Any
 from googleads import ad_manager
 from zeep.helpers import serialize_object
 
-from src.adapters.gam.utils.constants import GAM_API_VERSION
 from src.adapters.gam.utils.error_handler import with_retry
 from src.adapters.gam.utils.logging import GAMOperation, log_gam_operation, logger
 
@@ -521,10 +520,10 @@ class GAMOrdersDiscovery:
         """
         logger.info(f"Discovering orders for tenant {self.tenant_id}")
 
-        order_service = self.client.GetService("OrderService", version=GAM_API_VERSION)
+        order_service = self.client.GetService("OrderService")
 
         # Build statement to get all orders
-        statement_builder = ad_manager.StatementBuilder(version=GAM_API_VERSION)
+        statement_builder = ad_manager.StatementBuilder()
         if limit:
             statement_builder.limit = limit
 
@@ -575,10 +574,10 @@ class GAMOrdersDiscovery:
             f"Discovering line items for tenant {self.tenant_id}" + (f" (order: {order_id})" if order_id else "")
         )
 
-        line_item_service = self.client.GetService("LineItemService", version=GAM_API_VERSION)
+        line_item_service = self.client.GetService("LineItemService")
 
         # Build statement to get line items
-        statement_builder = ad_manager.StatementBuilder(version=GAM_API_VERSION)
+        statement_builder = ad_manager.StatementBuilder()
         if order_id:
             statement_builder.Where("orderId = :orderId").WithBindVariable("orderId", int(order_id))
         if limit:

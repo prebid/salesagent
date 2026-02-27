@@ -13,7 +13,7 @@ dependencies = [
     "rich>=13.7.1",
     "google-ads>=24.1.0",
     "requests>=2.32.3",
-    "googleads==46.0.0", # Pinned to avoid API deprecation issues
+    "googleads==49.0.0",  # Pinned: library default sets GAM API version
     "flask>=3.1.3",
     "flask-caching>=2.3.0", # Response caching for improved performance
     "psycopg2-binary>=2.9.9",

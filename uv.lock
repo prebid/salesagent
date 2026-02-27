@@ -194,7 +194,7 @@ requires-dist = [
     { name = "google-ads", specifier = ">=24.1.0" },
     { name = "google-cloud-iam", specifier = ">=2.19.1" },
     { name = "google-generativeai", specifier = ">=0.5.4" },
-    { name = "googleads", specifier = "==46.0.0" },
+    { name = "googleads", specifier = "==49.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jaraco-context", specifier = ">=6.1.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
@@ -1524,7 +1524,7 @@ wheels = [
 
 [[package]]
 name = "googleads"
-version = "46.0.0"
+version = "49.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-auth" },
@@ -1535,7 +1535,7 @@ dependencies = [
     { name = "xmltodict" },
     { name = "zeep" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c3/36/18d01088e2ed83b327e7ccb8c7be594eb57f62c5988d77cd672f5b93b2cc/googleads-46.0.0.tar.gz", hash = "sha256:6f13dbbd08f04e05fd96e0a315be0698711091b3779d23f79b1a598475e54581", size = 30724, upload-time = "2025-05-21T18:27:21.524Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/23/b8/5c168e0bfc2cc56f125d5f34fc9b15e9c29c07ca29565e48e76f71b90451/googleads-49.0.0.tar.gz", hash = "sha256:afaf2fad521f47887f3677ccdd18ce8b7b103c5085da8a8d850cf4b32e05e130", size = 30728, upload-time = "2026-02-24T17:30:45.265Z" }
 
 [[package]]
 name = "googleapis-common-protos"

@@ -525,10 +525,8 @@ class TestGAMOrderCreation:
         # has a SOAP response compatibility issue)
         from googleads import ad_manager as gam_module
 
-        from src.adapters.gam.utils.constants import GAM_API_VERSION
-
         order_service = gam_adapter.client_manager.get_service("OrderService")
-        sb = gam_module.StatementBuilder(version=GAM_API_VERSION)
+        sb = gam_module.StatementBuilder()
         sb.Where("id = :id").WithBindVariable("id", int(response.media_buy_id))
         result = order_service.getOrdersByStatement(sb.ToStatement())
 
@@ -580,10 +578,8 @@ class TestGAMOrderCreation:
         # Verify advertiser via direct GAM API
         from googleads import ad_manager
 
-        from src.adapters.gam.utils.constants import GAM_API_VERSION
-
         order_service = gam_adapter.client_manager.get_service("OrderService")
-        sb = ad_manager.StatementBuilder(version=GAM_API_VERSION)
+        sb = ad_manager.StatementBuilder()
         sb.Where("id = :id").WithBindVariable("id", int(response.media_buy_id))
         result = order_service.getOrdersByStatement(sb.ToStatement())
 
@@ -635,7 +631,6 @@ class TestGAMLifecycle:
         """
         from googleads import ad_manager as gam_module
 
-        from src.adapters.gam.utils.constants import GAM_API_VERSION
         from src.core.schemas import CreateMediaBuySuccess, UpdateMediaBuySuccess
 
         request, packages, start_time, end_time, pricing_info = _make_create_request(
@@ -672,7 +667,7 @@ class TestGAMLifecycle:
         assert result is not None, "Archive action should return a result"
 
         # Verify the order is archived
-        sb2 = gam_module.StatementBuilder(version=GAM_API_VERSION)
+        sb2 = gam_module.StatementBuilder()
         sb2.Where("id = :id").WithBindVariable("id", int(order_id))
         check = order_service.getOrdersByStatement(sb2.ToStatement())
 
@@ -710,6 +705,6 @@ class TestGAMLifecycle:
             assert update_response.workflow_step_id is not None, "Guaranteed activation should produce a workflow step"
         else:
             # Error path: activation blocked because of guaranteed items
-            assert any("guaranteed" in str(e.message).lower() for e in update_response.errors), (
-                f"Error should mention guaranteed items: {update_response.errors}"
-            )
+            assert any(
+                "guaranteed" in str(e.message).lower() for e in update_response.errors
+            ), f"Error should mention guaranteed items: {update_response.errors}"
