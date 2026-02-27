@@ -538,7 +538,7 @@ async def _get_products_impl(
                 # Check if product has channels field
                 product_channels: set[str] = set()
                 if product.channels:
-                    product_channels = {c.lower() for c in product.channels}
+                    product_channels = {c.value.lower() for c in product.channels}
 
                 # Extract channel values from filter (enum values)
                 request_channels: set[str] = set()

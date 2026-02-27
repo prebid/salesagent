@@ -22,6 +22,7 @@ from adcp import (
     FlatRatePricingOption,
     VcpmPricingOption,
 )
+from adcp.types._generated import MediaChannel
 from packaging.version import InvalidVersion, Version
 
 # Import our extended Product (includes implementation_config)
@@ -310,12 +311,19 @@ def convert_product_model_to_schema(product_model) -> Product:
     # Note: price_guidance is database metadata, not in AdCP Product schema - omit it
     # Pricing information should be in pricing_options per AdCP spec
 
-    # Filter-related internal fields (not in AdCP spec, but needed for filtering)
-    # These are marked as exclude=True in our extended Product schema
+    # Filter-related internal fields
     if hasattr(product_model, "countries") and product_model.countries:
         product_data["countries"] = product_model.countries
+    # channels: DB stores strings, schema uses MediaChannel enum
     if hasattr(product_model, "channels") and product_model.channels:
-        product_data["channels"] = product_model.channels
+        converted_channels = []
+        for ch in product_model.channels:
+            try:
+                converted_channels.append(MediaChannel(ch))
+            except ValueError:
+                logger.warning("Unknown channel value '%s' in product %s, skipping", ch, product_model.product_id)
+        if converted_channels:
+            product_data["channels"] = converted_channels
 
     if product_model.product_card:
         product_data["product_card"] = product_model.product_card

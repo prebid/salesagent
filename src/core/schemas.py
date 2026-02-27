@@ -1187,11 +1187,7 @@ class Product(LibraryProduct):
         description="Internal: Country codes (ISO 3166-1 alpha-2) where this product is available",
         exclude=True,  # Exclude from serialization by default
     )
-    channels: list[str] | None = Field(  # type: ignore[assignment]
-        default=None,
-        description="Internal: Advertising channels (display, video, audio, native, dooh, ctv, podcast, retail, social)",
-        exclude=True,  # Exclude from serialization by default
-    )
+    # channels: inherited from library Product as list[MediaChannel] | None (public per AdCP spec)
 
     # Principal access control
     allowed_principal_ids: list[str] | None = Field(
