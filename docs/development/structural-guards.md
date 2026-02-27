@@ -247,6 +247,74 @@ The fix is to cast at the boundary: `[int(x) for x in pricing_option_ids]`.
 |------|---------|------------|
 | `media_buy_delivery.py` | `PricingOption.id.in_(string_list)` | salesagent-mq3n |
 
+### Repository Pattern Guard
+
+**File:** `tests/unit/test_architecture_repository_pattern.py`
+
+**What it enforces:** Two invariants:
+
+1. **No `get_db_session()` in business logic.** Functions in `_impl` files must
+   not call `get_db_session()` directly — data access belongs in repository classes.
+2. **No `session.add()` in integration tests.** Test functions must not construct
+   ORM objects inline — use polyfactory-based fixtures instead.
+
+**Why it matters:** When business logic directly opens database sessions, it
+becomes impossible to test without a real database, impossible to swap storage
+backends, and impossible to enforce consistent transaction boundaries. Similarly,
+when tests scatter `session.add()` calls through test bodies, fixture setup is
+duplicated, brittle, and hard to maintain.
+
+#### How it works
+
+The guard scans 14 production files and 10 integration test files using AST:
+
+**Invariant 1** finds function definitions that contain `get_db_session()` calls
+(both `get_db_session()` and `module.get_db_session()` forms):
+
+```python
+# FLAGGED: business logic opens its own session
+async def _create_media_buy_impl(req, identity):
+    with get_db_session() as session:   # ← violation
+        media_buy = MediaBuy(...)
+        session.add(media_buy)
+
+# CORRECT: repository encapsulates data access
+async def _create_media_buy_impl(req, identity, repo: MediaBuyRepository):
+    media_buy = repo.create_from_request(req, identity)
+```
+
+**Invariant 2** finds test functions/fixtures that call `session.add()`,
+`db_session.add()`, or similar patterns:
+
+```python
+# FLAGGED: inline fixture setup
+def test_something(integration_db):
+    with get_db_session() as session:
+        tenant = Tenant(name="test")
+        session.add(tenant)             # ← violation
+
+# CORRECT: factory-based fixture
+def test_something(integration_db, sample_tenant):
+    # sample_tenant created by polyfactory fixture
+    pass
+```
+
+#### Tests
+
+| Test | What It Checks |
+|------|---------------|
+| `test_no_new_get_db_session_in_impl` | No new `get_db_session()` calls outside the allowlist |
+| `test_allowlist_entries_still_exist` (impl) | Stale allowlist detection for impl violations |
+| `test_no_new_session_add_in_tests` | No new `session.add()` calls outside the allowlist |
+| `test_allowlist_entries_still_exist` (tests) | Stale allowlist detection for test violations |
+
+#### Current known violations
+
+- **27 `get_db_session()` calls** across 10 production files (media_buy_create, update, delivery, list, products, creatives, task_management, admin blueprints)
+- **58 `session.add()` calls** across 10 integration test files
+
+All tracked by `salesagent-qo8a`.
+
 ## Adding a New Guard
 
 1. Create `tests/unit/test_architecture_{name}.py`
@@ -276,10 +344,10 @@ uv run pytest tests/unit/test_architecture_schema_inheritance.py -v
 Pre-commit hooks (11)          ← catch formatting, route conflicts, star imports
     │
     ▼
-Structural guards (6)          ← catch architecture violations (THIS FILE)
+Structural guards (7)          ← catch architecture violations (THIS FILE)
     │
     ▼
-Unit tests (~2600)             ← catch behavior bugs
+Unit tests (~2950)             ← catch behavior bugs
     │
     ▼
 Integration tests (PostgreSQL) ← catch data layer bugs

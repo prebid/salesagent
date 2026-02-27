@@ -47,7 +47,7 @@ PR titles should use one of these prefixes:
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
 ### Structural Guards (Automated Architecture Enforcement)
-Six AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+Seven AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
@@ -57,6 +57,7 @@ Six AST-scanning tests enforce architecture invariants on every `make quality` r
 | Schema inheritance | Schemas extend adcp library base types | `test_architecture_schema_inheritance.py` |
 | Boundary completeness | MCP/A2A wrappers pass all _impl parameters | `test_architecture_boundary_completeness.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
+| Repository pattern | No `get_db_session()` in `_impl`; no inline `session.add()` in tests | `test_architecture_repository_pattern.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
@@ -93,14 +94,54 @@ When adding routes:
 - Search existing: `grep -r "@.*route.*your/path"`
 - Deprecate properly with early return, not comments
 
-### 3. Database: PostgreSQL Only
+### 3. Database: Repository Pattern + ORM-First
 **No SQLite support** - Production uses PostgreSQL exclusively.
 
+**ORM-first access (MANDATORY):**
+- All DB reads and writes go through SQLAlchemy ORM models via repository classes
+- Never construct ORM models with raw kwargs scattered in `_impl` functions — use model factory methods or repository `create_from_*()` methods
+- Never pass `json.dumps()` to `JSONType` columns — the column type handles serialization
+- Use SQLAlchemy relationships and cascading — they exist to manage parent/child persistence atomically
 - Use `JSONType` for all JSON columns (not plain `JSON`)
 - Use SQLAlchemy 2.0 patterns: `select()` + `scalars()`, not `query()`
 - Cast IDs at the boundary: JSON gives you strings, but Integer PK columns need `int` values. Write `int(x)` before passing to `.in_()` or `filter_by()`
 - All tests require PostgreSQL: `./run_all_tests.sh` runs Docker + tox (JSON reports in `test-results/`)
-- **Enforced by:** `test_architecture_query_type_safety.py`
+- **Exception:** Bulk imports and complex reporting queries may use Core SQL/raw SQL for performance. Regular CRUD operations are never an exception.
+- **Enforced by:** `test_architecture_query_type_safety.py`, `test_architecture_repository_pattern.py`
+
+**Repository pattern:**
+```python
+# CORRECT: repository encapsulates data access
+class MediaBuyRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def get_by_id(self, media_buy_id: str, tenant_id: str) -> MediaBuy | None:
+        return self.session.scalars(
+            select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant_id)
+        ).first()
+
+    def create_from_request(self, req: CreateMediaBuyRequest, identity: ResolvedIdentity) -> MediaBuy:
+        media_buy = MediaBuy.from_request(req, identity)
+        self.session.add(media_buy)
+        return media_buy
+```
+
+```python
+# WRONG: inline session management and raw model construction in business logic
+def _create_media_buy_impl(req, identity):
+    with get_db_session() as session:
+        mb = MediaBuy(
+            media_buy_id=generate_id(),
+            buyer_ref=req.buyer_ref,      # manual field plucking
+            tenant_id=tenant["tenant_id"], # from a dict, not even a model
+            status="pending_approval",     # magic string
+            ...
+        )
+        session.add(mb)
+```
+
+**`_impl` functions should not contain `get_db_session()` calls.** Data access belongs in the repository layer. `_impl` functions receive repositories (or use them via dependency injection) and call typed methods.
 
 ### 4. Pydantic: Explicit Nested Serialization
 Parent models must override `model_dump()` to serialize nested children:
@@ -173,6 +214,43 @@ Never hardcode `/api/endpoint` - breaks with nginx prefix.
 ### 7. Schema Validation: Environment-Based
 - **Production**: `ENVIRONMENT=production` → `extra="ignore"` (forward compatible)
 - **Development/CI**: Default → `extra="forbid"` (strict validation)
+
+### 8. Test Fixtures: Factory-Based, Not Inline
+**MANDATORY for new integration tests:** Use `polyfactory` factories for test data, not inline `session.add()` boilerplate.
+
+```python
+# CORRECT: factory creates ORM instance with sane defaults
+from tests.factories import TenantFactory, MediaBuyFactory
+
+@pytest.fixture
+def sample_tenant(integration_db):
+    return TenantFactory.create_sync()
+
+@pytest.fixture
+def sample_media_buy(sample_tenant, sample_principal):
+    return MediaBuyFactory.create_sync(
+        tenant_id=sample_tenant.tenant_id,
+        principal_id=sample_principal.principal_id,
+    )
+```
+
+```python
+# WRONG: 20 lines of manual model construction in every test
+with get_db_session() as session:
+    tenant = Tenant(tenant_id="test", name="Test", subdomain="test", ...)
+    session.add(tenant)
+    currency = CurrencyLimit(tenant_id="test", ...)
+    session.add(currency)
+    prop = PropertyTag(tenant_id="test", ...)
+    session.add(prop)
+    session.commit()
+```
+
+**Rules:**
+- Shared fixtures (tenant, principal, products) defined once in `conftest.py` using factories
+- Test-specific data uses factory overrides, not copy-pasted setup blocks
+- Factories live in `tests/factories/` — ORM factories and Pydantic schema factories
+- Never `session.add()` in test bodies — use factories or fixtures that use factories
 
 ---
 
