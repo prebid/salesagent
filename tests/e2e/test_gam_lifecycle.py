@@ -705,6 +705,6 @@ class TestGAMLifecycle:
             assert update_response.workflow_step_id is not None, "Guaranteed activation should produce a workflow step"
         else:
             # Error path: activation blocked because of guaranteed items
-            assert any(
-                "guaranteed" in str(e.message).lower() for e in update_response.errors
-            ), f"Error should mention guaranteed items: {update_response.errors}"
+            assert any("guaranteed" in str(e.message).lower() for e in update_response.errors), (
+                f"Error should mention guaranteed items: {update_response.errors}"
+            )
