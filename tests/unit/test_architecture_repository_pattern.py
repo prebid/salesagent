@@ -133,6 +133,8 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_creative_review_model.py", "_create_test_tenant_with_creative"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_query"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_filters_by_review_type"),
+    ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_tenant_isolation"),
+    ("tests/integration/test_creative_review_model.py", "test_get_creative_with_latest_review_tenant_isolation"),
     # test_media_buy_readiness.py
     ("tests/integration/test_media_buy_readiness.py", "test_tenant"),
     ("tests/integration/test_media_buy_readiness.py", "test_principal"),
