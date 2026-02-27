@@ -167,19 +167,25 @@ class TestMCPContractValidation:
         assert len(request.root.deliver_to.countries) == 3
 
     def test_update_media_buy_minimal(self):
-        """Test update_media_buy identifiers (oneOf enforced at protocol boundary)."""
-        # NOTE: oneOf constraint validation happens at protocol boundary (MCP/A2A)
-        # not in Pydantic model construction. Internal construction is flexible.
-
-        # Internal construction works without identifier (protocol boundary would reject)
-        request_no_id = UpdateMediaBuyRequest(paused=False)  # adcp 2.12.0+
-        assert request_no_id.paused is False
-
-        # Works with minimal identifier
+        """Test update_media_buy identifiers (oneOf enforced in adcp 3.6.0 model)."""
+        # adcp 3.6.0 enforces oneOf at model level: exactly one of media_buy_id or buyer_ref
         request = UpdateMediaBuyRequest(media_buy_id="test_buy_123")
         assert request.media_buy_id == "test_buy_123"
         assert request.buyer_ref is None
         assert request.paused is None
+
+        # buyer_ref alone also works
+        request_br = UpdateMediaBuyRequest(buyer_ref="ref_123")
+        assert request_br.buyer_ref == "ref_123"
+        assert request_br.media_buy_id is None
+
+        # Neither identifier → validation error
+        with pytest.raises(ValueError, match="Either media_buy_id or buyer_ref is required"):
+            UpdateMediaBuyRequest(paused=False)
+
+        # Both identifiers → validation error
+        with pytest.raises(ValueError, match="either media_buy_id or buyer_ref, not both"):
+            UpdateMediaBuyRequest(media_buy_id="buy_1", buyer_ref="ref_1")
 
     def test_get_media_buy_delivery_minimal(self):
         """Test get_media_buy_delivery with no filters."""

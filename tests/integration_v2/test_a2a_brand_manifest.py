@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from a2a.types import MessageSendParams, Task
+from a2a.utils.errors import ServerError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.utils.a2a_helpers import create_a2a_message_with_skill
@@ -75,7 +76,12 @@ async def test_get_products_with_brand_domain(sample_tenant, sample_principal, s
 
 @pytest.mark.asyncio
 async def test_get_products_brand_manifest_without_brief_rejected(sample_tenant, sample_principal, sample_products):
-    """Test that brand_manifest without brief is rejected (brand_manifest is not brief or brand)."""
+    """Test that brand_manifest without brief is rejected (brand_manifest is not brief or brand).
+
+    The handler raises ServerError directly instead of returning an error Task.
+    FIXME(salesagent-k13e): Validation should move to _impl, raise AdCPValidationError,
+    and tests should check error_code not message text.
+    """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
@@ -94,19 +100,19 @@ async def test_get_products_brand_manifest_without_brief_rejected(sample_tenant,
         )
         params = MessageSendParams(message=message)
 
-        # brand_manifest without brief or brand → "Either brief or brand is required" error
-        result = await handler.on_message_send(params)
-
-        assert isinstance(result, Task)
-        # Should be in a failed/error state
-        assert result.status is not None
-        status_str = str(result.status.state).lower()
-        assert "failed" in status_str or "error" in status_str or "completed" in status_str
+        # brand_manifest without brief or brand → ServerError with InvalidParamsError
+        with pytest.raises(ServerError):
+            await handler.on_message_send(params)
 
 
 @pytest.mark.asyncio
 async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, sample_principal, sample_products):
-    """Test that requests with neither brief nor brand are rejected."""
+    """Test that requests with neither brief nor brand are rejected.
+
+    The handler raises ServerError directly instead of returning an error Task.
+    FIXME(salesagent-k13e): Validation should move to _impl, raise AdCPValidationError,
+    and tests should check error_code not message text.
+    """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
@@ -122,8 +128,6 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
         )
         params = MessageSendParams(message=message)
 
-        result = await handler.on_message_send(params)
-
-        # Empty params → "Either brief or brand is required"
-        assert isinstance(result, Task)
-        assert result.status is not None
+        # Empty params → ServerError with InvalidParamsError
+        with pytest.raises(ServerError):
+            await handler.on_message_send(params)

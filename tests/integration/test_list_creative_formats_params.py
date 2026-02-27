@@ -410,7 +410,6 @@ def test_filtering_by_name_search(integration_db, sample_tenant):
 
 def test_filtering_by_asset_types(integration_db, sample_tenant):
     """Test that asset_types filter returns formats supporting any of the requested types."""
-    from adcp.types import AssetContentType
     from adcp.types.generated_poc.core.format import Assets
 
     context = ToolContext(
@@ -423,21 +422,21 @@ def test_filtering_by_asset_types(integration_db, sample_tenant):
         testing_context={},
     )
 
-    # Use assets to specify asset types per AdCP spec (adcp 2.18.0+)
+    # Assets uses Literal discriminators (not enum) in generated_poc
     mock_formats = [
         Format(
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="image_banner"),
             type=FormatCategory.display,
             name="Image Banner",
             is_standard=True,
-            assets=[Assets(asset_id="main", asset_type=AssetContentType.image, item_type="individual", required=True)],
+            assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
         ),
         Format(
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_player"),
             type=FormatCategory.video,
             name="Video Player",
             is_standard=True,
-            assets=[Assets(asset_id="video", asset_type=AssetContentType.video, item_type="individual", required=True)],
+            assets=[Assets(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         Format(
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="rich_media"),
@@ -445,8 +444,8 @@ def test_filtering_by_asset_types(integration_db, sample_tenant):
             name="Rich Media",
             is_standard=True,
             assets=[
-                Assets(asset_id="image", asset_type=AssetContentType.image, item_type="individual", required=True),
-                Assets(asset_id="code", asset_type=AssetContentType.html, item_type="individual", required=True),
+                Assets(asset_id="image", asset_type="image", item_type="individual", required=True),
+                Assets(asset_id="code", asset_type="html", item_type="individual", required=True),
             ],
         ),
         Format(
@@ -587,7 +586,6 @@ def test_filtering_by_dimensions(integration_db, sample_tenant):
 
 def test_new_filters_combined_with_existing(integration_db, sample_tenant):
     """Test that new filters work correctly with existing filters."""
-    from adcp.types import AssetContentType
     from adcp.types.generated_poc.core.format import Assets, Dimensions, Renders
 
     context = ToolContext(
@@ -608,7 +606,7 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
             name="Display 300x250",
             is_standard=True,
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets(asset_id="main", asset_type=AssetContentType.image, item_type="individual", required=True)],
+            assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
         ),
         Format(
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
@@ -616,7 +614,7 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
             name="Display 728x90",
             is_standard=True,
             renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
-            assets=[Assets(asset_id="main", asset_type=AssetContentType.image, item_type="individual", required=True)],
+            assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
         ),
         Format(
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_16x9"),
@@ -624,7 +622,7 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
             name="Video 16:9",
             is_standard=True,
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
-            assets=[Assets(asset_id="video", asset_type=AssetContentType.video, item_type="individual", required=True)],
+            assets=[Assets(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         Format(
             format_id=FormatId(agent_url="https://custom.example.com", id="custom_display"),
@@ -632,7 +630,7 @@ def test_new_filters_combined_with_existing(integration_db, sample_tenant):
             name="Custom Display",
             is_standard=False,
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets(asset_id="main", asset_type=AssetContentType.image, item_type="individual", required=True)],
+            assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
         ),
     ]
 

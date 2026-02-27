@@ -148,7 +148,6 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
     # Test: Call update_media_buy (should not raise "Media buy not found")
     req = UpdateMediaBuyRequest(
         media_buy_id=media_buy_id,
-        buyer_ref="updated_ref",
     )
     response = _update_media_buy_impl(req=req, identity=identity)
 
