@@ -1,11 +1,11 @@
 """Tests for shared AuthContext model and middleware.
 
 Validates that:
-- AuthContext model exists with correct attributes
+- AuthContext model exists with correct attributes (auth_token, headers)
 - Middleware populates request.state.auth_context
 - get_auth_context() dependency reads from request.state
 - Token extraction from Authorization and x-adcp-auth headers
-- Unauthenticated requests get AuthContext with is_authenticated()=False
+- Unauthenticated requests get AuthContext with auth_token=None
 
 beads: salesagent-b61l.12
 """
@@ -21,51 +21,36 @@ class TestAuthContextModel:
     """Verify AuthContext model exists with correct attributes."""
 
     def test_auth_context_exists(self):
-        """AuthContext class must exist."""
+        """AuthContext class must exist with auth_token and headers."""
         from src.core.auth_context import AuthContext
 
         ctx = AuthContext(
-            tenant_id="t1",
-            principal_id="p1",
             auth_token="tok",
             headers={"host": "example.com"},
         )
-        assert ctx.tenant_id == "t1"
-        assert ctx.principal_id == "p1"
         assert ctx.auth_token == "tok"
-
-    def test_is_authenticated_with_principal(self):
-        """is_authenticated() returns True when principal_id is set."""
-        from src.core.auth_context import AuthContext
-
-        ctx = AuthContext(
-            tenant_id="t1",
-            principal_id="p1",
-            auth_token="tok",
-            headers={},
-        )
-        assert ctx.is_authenticated() is True
-
-    def test_is_not_authenticated_without_principal(self):
-        """is_authenticated() returns False when principal_id is None."""
-        from src.core.auth_context import AuthContext
-
-        ctx = AuthContext(
-            tenant_id="t1",
-            principal_id=None,
-            auth_token=None,
-            headers={},
-        )
-        assert ctx.is_authenticated() is False
+        assert ctx.headers == {"host": "example.com"}
 
     def test_unauthenticated_factory(self):
-        """AuthContext.unauthenticated() creates a non-authenticated context."""
+        """AuthContext.unauthenticated() creates a context with no token."""
         from src.core.auth_context import AuthContext
 
         ctx = AuthContext.unauthenticated(headers={"host": "localhost"})
-        assert ctx.is_authenticated() is False
-        assert ctx.principal_id is None
         assert ctx.auth_token is None
+        assert ctx.headers == {"host": "localhost"}
+
+    def test_auth_context_is_frozen(self):
+        """AuthContext should be immutable (frozen dataclass)."""
+        import dataclasses
+
+        from src.core.auth_context import AuthContext
+
+        assert dataclasses.fields(AuthContext), "AuthContext should be a dataclass"
+        ctx = AuthContext(auth_token="tok")
+        import pytest
+
+        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
+            ctx.auth_token = "other"  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -110,19 +95,19 @@ class TestAuthContextMiddleware:
         assert response.status_code == 200
         assert response.json()["token"] == "adcp-token-123"
 
-    def test_no_auth_gives_unauthenticated_context(self):
-        """Requests without auth headers get AuthContext with is_authenticated()=False."""
+    def test_no_auth_gives_none_token(self):
+        """Requests without auth headers get AuthContext with auth_token=None."""
         from src.app import app
         from src.core.auth_context import get_auth_context
 
-        @app.get("/test-auth/noauth-check")
+        @app.get("/test-auth/noauth-check-v2")
         def check_noauth(auth_ctx=get_auth_context):
-            return {"authenticated": auth_ctx.is_authenticated()}
+            return {"has_token": auth_ctx.auth_token is not None}
 
         client = TestClient(app)
-        response = client.get("/test-auth/noauth-check")
+        response = client.get("/test-auth/noauth-check-v2")
         assert response.status_code == 200
-        assert response.json()["authenticated"] is False
+        assert response.json()["has_token"] is False
 
     def test_headers_captured_in_context(self):
         """Middleware captures request headers in AuthContext."""

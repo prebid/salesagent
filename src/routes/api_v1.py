@@ -56,8 +56,10 @@ def _resolve_auth(request: Request) -> tuple[str | None, ResolvedIdentity | None
         return None, None
 
     # resolve_identity handles token validation, tenant detection, and set_current_tenant
+    # Pass pre-extracted auth_token to avoid redundant extraction from headers
     identity = resolve_identity(
         headers=auth_ctx.headers,
+        auth_token=auth_ctx.auth_token,
         require_valid_token=False,
         protocol="rest",
     )

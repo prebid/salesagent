@@ -1,7 +1,8 @@
 """Shared AuthContext populated by middleware, consumed by handlers via FastAPI dependency.
 
-Middleware resolves auth + tenant BEFORE the handler runs. Handlers receive
-AuthContext as a resolved dependency — zero auth logic in handlers.
+Middleware extracts auth_token and headers BEFORE the handler runs.
+Identity resolution (principal, tenant) happens at handler level via
+resolve_identity() — this is intentional to avoid DB calls on every request.
 """
 
 from __future__ import annotations
@@ -14,20 +15,15 @@ from fastapi import Depends, Request
 
 @dataclass(frozen=True)
 class AuthContext:
-    """Immutable per-request authentication context.
+    """Immutable per-request auth token + headers carrier.
 
-    Populated by auth_context_middleware before handlers run.
-    Read by handlers via the get_auth_context() dependency.
+    Populated by auth_context_middleware (extracts token from headers).
+    Identity resolution (principal_id, tenant_id) happens downstream
+    via resolve_identity() at the handler level.
     """
 
-    tenant_id: str | None = None
-    principal_id: str | None = None
     auth_token: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
-
-    def is_authenticated(self) -> bool:
-        """True if a valid principal was resolved."""
-        return self.principal_id is not None
 
     @classmethod
     def unauthenticated(cls, *, headers: dict[str, str] | None = None) -> AuthContext:
