@@ -2876,5 +2876,532 @@ class TestAdCPContract:
         assert full_dump["activation_details"]["platform_id"] == "seg_789"
 
 
+class TestProductV36FieldContract:
+    """Contract tests for Product fields added in adcp v3.4.0-v3.6.0.
+
+    Tests cover:
+    - delivery_measurement (REQUIRED): presence + default behavior
+    - delivery_type (REQUIRED): already tested in TestAdCPContract, verified here for completeness
+    - product_card (optional): presence-when-set + absence-when-null
+    - product_card_detailed (optional): presence-when-set + absence-when-null
+    - placements (optional): presence-when-set + absence-when-null
+    - reporting_capabilities (optional): presence-when-set + absence-when-null
+    - signal_targeting_allowed (optional, default=False): presence + default
+    - property_targeting_allowed (optional, default=False): presence + default
+    - catalog_match (optional): presence-when-set + absence-when-null
+    - catalog_types (optional): presence-when-set + absence-when-null
+    - conversion_tracking (optional): presence-when-set + absence-when-null
+    - data_provider_signals (optional): presence-when-set + absence-when-null
+    - forecast (optional): presence-when-set + absence-when-null
+    - channels (optional): presence-when-set + absence-when-null
+    """
+
+    @staticmethod
+    def _make_base_product(**overrides):
+        """Create a minimal valid Product with required fields only."""
+        from src.core.schemas import Product
+        from tests.helpers.adcp_factories import (
+            create_test_cpm_pricing_option,
+            create_test_publisher_properties_by_tag,
+        )
+
+        defaults = {
+            "product_id": "v36_test",
+            "name": "V3.6 Test Product",
+            "description": "Product for v3.6 field contract tests",
+            "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+            "delivery_type": "guaranteed",
+            "delivery_measurement": {"provider": "publisher", "notes": "Standard measurement"},
+            "publisher_properties": [create_test_publisher_properties_by_tag()],
+            "pricing_options": [create_test_cpm_pricing_option()],
+        }
+        defaults.update(overrides)
+        return Product(**defaults)
+
+    # --- delivery_measurement (REQUIRED) ---
+
+    def test_delivery_measurement_required(self):
+        """delivery_measurement is required per AdCP spec; omitting it fails validation."""
+        from pydantic import ValidationError
+
+        from src.core.schemas import Product
+        from tests.helpers.adcp_factories import (
+            create_test_cpm_pricing_option,
+            create_test_publisher_properties_by_tag,
+        )
+
+        with pytest.raises(ValidationError, match="delivery_measurement"):
+            Product(
+                product_id="no_dm",
+                name="No DM",
+                description="Missing delivery_measurement",
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+                delivery_type="guaranteed",
+                publisher_properties=[create_test_publisher_properties_by_tag()],
+                pricing_options=[create_test_cpm_pricing_option()],
+                # delivery_measurement intentionally omitted
+            )
+
+    def test_delivery_measurement_present_in_dump(self):
+        """delivery_measurement appears in model_dump with correct structure."""
+        product = self._make_base_product(
+            delivery_measurement={"provider": "ias", "notes": "IAS viewability"},
+        )
+        dump = product.model_dump()
+        assert "delivery_measurement" in dump
+        assert dump["delivery_measurement"]["provider"] == "ias"
+        assert dump["delivery_measurement"]["notes"] == "IAS viewability"
+
+    def test_delivery_measurement_provider_only(self):
+        """delivery_measurement with provider only (notes is optional)."""
+        product = self._make_base_product(
+            delivery_measurement={"provider": "moat"},
+        )
+        dump = product.model_dump()
+        assert dump["delivery_measurement"]["provider"] == "moat"
+
+    # --- property_targeting_allowed (optional, default=False) ---
+
+    def test_property_targeting_allowed_default(self):
+        """property_targeting_allowed defaults to False and appears in dump."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "property_targeting_allowed" in dump
+        assert dump["property_targeting_allowed"] is False
+
+    def test_property_targeting_allowed_when_true(self):
+        """property_targeting_allowed=True appears correctly in dump."""
+        product = self._make_base_product(property_targeting_allowed=True)
+        dump = product.model_dump()
+        assert dump["property_targeting_allowed"] is True
+
+    # --- signal_targeting_allowed (optional, default=False) ---
+
+    def test_signal_targeting_allowed_default(self):
+        """signal_targeting_allowed defaults to False and appears in dump."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "signal_targeting_allowed" in dump
+        assert dump["signal_targeting_allowed"] is False
+
+    def test_signal_targeting_allowed_when_true(self):
+        """signal_targeting_allowed=True appears correctly in dump."""
+        product = self._make_base_product(signal_targeting_allowed=True)
+        dump = product.model_dump()
+        assert dump["signal_targeting_allowed"] is True
+
+    # --- channels (optional, default=None) ---
+
+    def test_channels_absent_when_null(self):
+        """channels not in model_dump when not set (None)."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "channels" not in dump
+
+    def test_channels_present_when_set(self):
+        """channels appears in model_dump with MediaChannel enum values."""
+        product = self._make_base_product(channels=["display", "olv", "ctv"])
+        dump = product.model_dump()
+        assert "channels" in dump
+        assert len(dump["channels"]) == 3
+
+        # JSON serialization should produce strings
+        json_dump = product.model_dump(mode="json")
+        assert json_dump["channels"] == ["display", "olv", "ctv"]
+
+    # --- product_card (optional, default=None) ---
+
+    def test_product_card_absent_when_null(self):
+        """product_card not in model_dump when not set."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "product_card" not in dump
+
+    def test_product_card_present_when_set(self):
+        """product_card appears in model_dump with correct structure."""
+        card = {
+            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "product_card_v1"},
+            "manifest": {"headline": "Premium Display", "cta": "Learn More"},
+        }
+        product = self._make_base_product(product_card=card)
+        dump = product.model_dump()
+        assert "product_card" in dump
+        assert dump["product_card"]["manifest"]["headline"] == "Premium Display"
+
+        json_dump = product.model_dump(mode="json")
+        assert json_dump["product_card"]["format_id"]["id"] == "product_card_v1"
+
+    # --- product_card_detailed (optional, default=None) ---
+
+    def test_product_card_detailed_absent_when_null(self):
+        """product_card_detailed not in model_dump when not set."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "product_card_detailed" not in dump
+
+    def test_product_card_detailed_present_when_set(self):
+        """product_card_detailed appears in model_dump with correct structure."""
+        card = {
+            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "detail_card_v1"},
+            "manifest": {"sections": [{"title": "Overview", "body": "Detailed product info"}]},
+        }
+        product = self._make_base_product(product_card_detailed=card)
+        dump = product.model_dump()
+        assert "product_card_detailed" in dump
+        assert dump["product_card_detailed"]["manifest"]["sections"][0]["title"] == "Overview"
+
+    # --- placements (optional, default=None) ---
+
+    def test_placements_absent_when_null(self):
+        """placements not in model_dump when not set."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "placements" not in dump
+
+    def test_placements_present_when_set(self):
+        """placements appears in model_dump with correct Placement structure."""
+        placements = [
+            {"placement_id": "top_banner", "name": "Top Banner", "description": "Above the fold"},
+            {
+                "placement_id": "sidebar",
+                "name": "Sidebar",
+                "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+            },
+        ]
+        product = self._make_base_product(placements=placements)
+        dump = product.model_dump()
+        assert "placements" in dump
+        assert len(dump["placements"]) == 2
+        assert dump["placements"][0]["placement_id"] == "top_banner"
+        assert dump["placements"][0]["name"] == "Top Banner"
+        assert dump["placements"][1]["placement_id"] == "sidebar"
+
+    # --- reporting_capabilities (optional, default=None) ---
+
+    def test_reporting_capabilities_absent_when_null(self):
+        """reporting_capabilities not in model_dump when not set."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "reporting_capabilities" not in dump
+
+    def test_reporting_capabilities_present_when_set(self):
+        """reporting_capabilities appears in model_dump with correct structure."""
+        rc = {
+            "available_metrics": ["impressions", "clicks", "spend"],
+            "available_reporting_frequencies": ["daily", "hourly"],
+            "date_range_support": "date_range",
+            "expected_delay_minutes": 120,
+            "supports_webhooks": True,
+            "timezone": "America/New_York",
+        }
+        product = self._make_base_product(reporting_capabilities=rc)
+        dump = product.model_dump()
+        assert "reporting_capabilities" in dump
+        assert dump["reporting_capabilities"]["expected_delay_minutes"] == 120
+        assert dump["reporting_capabilities"]["supports_webhooks"] is True
+        assert dump["reporting_capabilities"]["timezone"] == "America/New_York"
+
+        # JSON mode should serialize enums to strings
+        json_dump = product.model_dump(mode="json")
+        assert "impressions" in json_dump["reporting_capabilities"]["available_metrics"]
+        assert json_dump["reporting_capabilities"]["date_range_support"] == "date_range"
+
+    # --- catalog_match (optional, default=None) ---
+
+    def test_catalog_match_absent_when_null(self):
+        """catalog_match not in model_dump when not set."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "catalog_match" not in dump
+
+    def test_catalog_match_present_when_set(self):
+        """catalog_match appears in model_dump with correct CatalogMatch structure."""
+        cm = {"submitted_count": 500, "matched_count": 420, "matched_ids": ["sku_001", "sku_002"]}
+        product = self._make_base_product(catalog_match=cm)
+        dump = product.model_dump()
+        assert "catalog_match" in dump
+        assert dump["catalog_match"]["submitted_count"] == 500
+        assert dump["catalog_match"]["matched_count"] == 420
+        assert dump["catalog_match"]["matched_ids"] == ["sku_001", "sku_002"]
+
+    # --- catalog_types (optional, default=None) ---
+
+    def test_catalog_types_absent_when_null(self):
+        """catalog_types not in model_dump when not set."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "catalog_types" not in dump
+
+    def test_catalog_types_present_when_set(self):
+        """catalog_types appears in model_dump with CatalogType enum values."""
+        product = self._make_base_product(catalog_types=["offering", "product", "store"])
+        dump = product.model_dump()
+        assert "catalog_types" in dump
+        assert len(dump["catalog_types"]) == 3
+
+        # JSON mode should serialize enums to strings
+        json_dump = product.model_dump(mode="json")
+        assert json_dump["catalog_types"] == ["offering", "product", "store"]
+
+    # --- conversion_tracking (optional, default=None) ---
+
+    def test_conversion_tracking_absent_when_null(self):
+        """conversion_tracking not in model_dump when not set."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "conversion_tracking" not in dump
+
+    def test_conversion_tracking_present_when_set(self):
+        """conversion_tracking appears in model_dump with correct structure."""
+        ct = {"platform_managed": True, "action_sources": ["website", "app"]}
+        product = self._make_base_product(conversion_tracking=ct)
+        dump = product.model_dump()
+        assert "conversion_tracking" in dump
+        assert dump["conversion_tracking"]["platform_managed"] is True
+
+        json_dump = product.model_dump(mode="json")
+        assert "website" in json_dump["conversion_tracking"]["action_sources"]
+
+    # --- data_provider_signals (optional, default=None) ---
+
+    def test_data_provider_signals_absent_when_null(self):
+        """data_provider_signals not in model_dump when not set."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "data_provider_signals" not in dump
+
+    def test_data_provider_signals_present_when_set(self):
+        """data_provider_signals appears in model_dump with discriminated union structure."""
+        dps = [
+            {"selection_type": "all", "data_provider_domain": "acmedata.com"},
+            {
+                "selection_type": "by_id",
+                "data_provider_domain": "betadata.com",
+                "signal_ids": ["sig_001", "sig_002"],
+            },
+        ]
+        product = self._make_base_product(data_provider_signals=dps)
+        dump = product.model_dump()
+        assert "data_provider_signals" in dump
+        assert len(dump["data_provider_signals"]) == 2
+
+        json_dump = product.model_dump(mode="json")
+        assert json_dump["data_provider_signals"][0]["selection_type"] == "all"
+        assert json_dump["data_provider_signals"][0]["data_provider_domain"] == "acmedata.com"
+        assert json_dump["data_provider_signals"][1]["selection_type"] == "by_id"
+
+    # --- forecast (optional, default=None) ---
+
+    def test_forecast_absent_when_null(self):
+        """forecast not in model_dump when not set."""
+        product = self._make_base_product()
+        dump = product.model_dump()
+        assert "forecast" not in dump
+
+    def test_forecast_present_when_set(self):
+        """forecast appears in model_dump with correct DeliveryForecast structure."""
+        fc = {
+            "method": "estimate",
+            "currency": "USD",
+            "points": [
+                {"budget": 1000.0, "metrics": {"impressions": {"mid": 50000.0, "low": 40000.0, "high": 60000.0}}},
+                {"budget": 5000.0, "metrics": {"impressions": {"mid": 250000.0}}},
+            ],
+        }
+        product = self._make_base_product(forecast=fc)
+        dump = product.model_dump()
+        assert "forecast" in dump
+        assert dump["forecast"]["currency"] == "USD"
+        assert len(dump["forecast"]["points"]) == 2
+        assert dump["forecast"]["points"][0]["budget"] == 1000.0
+        assert dump["forecast"]["points"][0]["metrics"]["impressions"]["mid"] == 50000.0
+
+        json_dump = product.model_dump(mode="json")
+        assert json_dump["forecast"]["method"] == "estimate"
+
+    # --- Roundtrip: DB model -> product_conversion -> schema -> model_dump ---
+
+    def test_v36_fields_roundtrip_conversion(self):
+        """Roundtrip: mock DB model -> convert_product_model_to_schema -> model_dump produces valid AdCP JSON."""
+        from unittest.mock import MagicMock
+
+        from src.core.product_conversion import convert_product_model_to_schema
+
+        m = MagicMock()
+        m.product_id = "rt_v36"
+        m.name = "Roundtrip V36"
+        m.description = "Roundtrip test with all v3.6 fields"
+        m.delivery_type = "guaranteed"
+        m.effective_format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
+        m.effective_properties = [
+            {"selection_type": "by_tag", "publisher_domain": "test.com", "property_tags": ["all_inventory"]}
+        ]
+        m.delivery_measurement = {"provider": "pub_direct", "notes": "Publisher direct measurement"}
+        m.measurement = None
+        m.creative_policy = None
+        m.countries = None
+        m.channels = ["display", "olv"]
+        m.product_card = {
+            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "card"},
+            "manifest": {"headline": "Test"},
+        }
+        m.product_card_detailed = {
+            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "detail"},
+            "manifest": {"body": "Details"},
+        }
+        m.placements = [{"placement_id": "top", "name": "Top Banner"}]
+        m.reporting_capabilities = {
+            "available_metrics": ["impressions", "clicks"],
+            "available_reporting_frequencies": ["daily"],
+            "date_range_support": "date_range",
+            "expected_delay_minutes": 30,
+            "supports_webhooks": False,
+            "timezone": "UTC",
+        }
+        m.is_custom = False
+        m.property_targeting_allowed = True
+        m.signal_targeting_allowed = True
+        m.catalog_match = {"submitted_count": 100, "matched_count": 80}
+        m.catalog_types = ["offering", "product"]
+        m.conversion_tracking = {"platform_managed": True}
+        m.data_provider_signals = [{"selection_type": "all", "data_provider_domain": "data.example.com"}]
+        m.forecast = {
+            "method": "estimate",
+            "currency": "USD",
+            "points": [{"budget": 2000.0, "metrics": {"impressions": {"mid": 100000.0}}}],
+        }
+        m.effective_implementation_config = None
+        m.allowed_principal_ids = None
+
+        # Mock pricing option
+        po = MagicMock()
+        po.pricing_model = "cpm"
+        po.currency = "USD"
+        po.fixed_price = 10.0
+        po.floor_price = None
+        po.price_guidance = None
+        po.min_spend_per_package = None
+        po.parameters = None
+        po.pricing_option_id = "cpm_usd"
+        m.pricing_options = [po]
+
+        # Convert and serialize
+        schema = convert_product_model_to_schema(m)
+        dump = schema.model_dump()
+        json_dump = schema.model_dump(mode="json")
+
+        # Verify all v3.6 fields survived the roundtrip
+        assert dump["property_targeting_allowed"] is True
+        assert dump["signal_targeting_allowed"] is True
+        assert len(dump["channels"]) == 2
+        assert dump["product_card"]["manifest"]["headline"] == "Test"
+        assert dump["product_card_detailed"]["manifest"]["body"] == "Details"
+        assert dump["placements"][0]["placement_id"] == "top"
+        assert dump["reporting_capabilities"]["expected_delay_minutes"] == 30
+        assert dump["catalog_match"]["submitted_count"] == 100
+        assert len(dump["catalog_types"]) == 2
+        assert dump["conversion_tracking"]["platform_managed"] is True
+        assert dump["data_provider_signals"][0]["data_provider_domain"] == "data.example.com"
+        assert dump["forecast"]["currency"] == "USD"
+        assert dump["forecast"]["points"][0]["metrics"]["impressions"]["mid"] == 100000.0
+
+        # Verify JSON serialization produces strings for enums
+        assert json_dump["forecast"]["method"] == "estimate"
+        assert json_dump["channels"] == ["display", "olv"]
+        assert json_dump["catalog_types"] == ["offering", "product"]
+
+        # Verify internal fields are excluded
+        assert "implementation_config" not in dump
+        assert "countries" not in dump
+        assert "allowed_principal_ids" not in dump
+
+    def test_v36_fields_roundtrip_null_omission(self):
+        """Roundtrip: DB model with null v3.6 fields -> model_dump omits them."""
+        from unittest.mock import MagicMock
+
+        from src.core.product_conversion import convert_product_model_to_schema
+
+        m = MagicMock()
+        m.product_id = "rt_null"
+        m.name = "Roundtrip Null"
+        m.description = "Roundtrip test with null v3.6 fields"
+        m.delivery_type = "non_guaranteed"
+        m.effective_format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_15s"}]
+        m.effective_properties = [
+            {"selection_type": "by_tag", "publisher_domain": "test.com", "property_tags": ["all"]}
+        ]
+        m.delivery_measurement = {"provider": "publisher"}
+        m.measurement = None
+        m.creative_policy = None
+        m.countries = None
+        m.channels = None
+        m.product_card = None
+        m.product_card_detailed = None
+        m.placements = None
+        m.reporting_capabilities = None
+        m.is_custom = False
+        m.property_targeting_allowed = None
+        m.signal_targeting_allowed = None
+        m.catalog_match = None
+        m.catalog_types = None
+        m.conversion_tracking = None
+        m.data_provider_signals = None
+        m.forecast = None
+        m.effective_implementation_config = None
+        m.allowed_principal_ids = None
+
+        po = MagicMock()
+        po.pricing_model = "cpm"
+        po.currency = "USD"
+        po.fixed_price = None
+        po.floor_price = 2.0
+        po.price_guidance = {"p75": 5.0}
+        po.min_spend_per_package = None
+        po.parameters = None
+        po.pricing_option_id = "cpm_usd_auction"
+        m.pricing_options = [po]
+
+        schema = convert_product_model_to_schema(m)
+        dump = schema.model_dump()
+
+        # None-valued optional fields should be omitted from dump
+        absent_fields = [
+            "channels",
+            "product_card",
+            "product_card_detailed",
+            "placements",
+            "reporting_capabilities",
+            "catalog_match",
+            "catalog_types",
+            "conversion_tracking",
+            "data_provider_signals",
+            "forecast",
+        ]
+        for field in absent_fields:
+            assert field not in dump, f"Null field '{field}' should not appear in model_dump"
+
+    def test_v36_product_in_get_products_response(self):
+        """Product with v3.6 fields serializes correctly inside GetProductsResponse."""
+        product = self._make_base_product(
+            channels=["display"],
+            signal_targeting_allowed=True,
+            property_targeting_allowed=True,
+            catalog_types=["offering"],
+        )
+
+        response = GetProductsResponse(products=[product])
+        response_dict = response.model_dump()
+
+        product_data = response_dict["products"][0]
+        assert product_data["signal_targeting_allowed"] is True
+        assert product_data["property_targeting_allowed"] is True
+        assert product_data["channels"] is not None
+        assert product_data["catalog_types"] is not None
+
+        # Internal fields must still be excluded
+        assert "implementation_config" not in product_data
+        assert "countries" not in product_data
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
