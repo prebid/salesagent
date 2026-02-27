@@ -51,8 +51,10 @@ collect_reports() {
 if [ "$MODE" = "quick" ]; then
     validate_imports
     echo -e "${BLUE}Running unit + integration + integration_v2 via tox...${NC}"
+    set +e
     tox -e unit,integration,integration_v2 -p 2>&1 | tee "$RESULTS_DIR/tox.log"
     TOX_RC=${PIPESTATUS[0]}
+    set -e
     collect_reports
     [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
 
@@ -71,16 +73,20 @@ elif [ "$MODE" = "ci" ]; then
     if [ -n "$PYTEST_TARGET" ]; then
         # Targeted test run
         echo -e "${BLUE}Running targeted: $PYTEST_TARGET $PYTEST_ARGS${NC}"
+        set +e
         uv run pytest "$PYTEST_TARGET" \
             -m "not requires_server and not skip_ci" \
             --json-report --json-report-file="$RESULTS_DIR/targeted.json" --json-report-indent=2 \
             -q --tb=line $PYTEST_ARGS 2>&1 | tee "$RESULTS_DIR/targeted.log"
         TOX_RC=${PIPESTATUS[0]}
+        set -e
         [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
     else
         echo -e "${BLUE}Running all 5 suites in parallel via tox...${NC}"
+        set +e
         tox -p -o 2>&1 | tee "$RESULTS_DIR/tox.log"
         TOX_RC=${PIPESTATUS[0]}
+        set -e
         collect_reports
         [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
     fi

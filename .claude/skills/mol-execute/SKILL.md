@@ -143,3 +143,10 @@ and rethink. Never adjust tests to fit code without documented justification.
 - Don't skip write-test for tasks — no test = no gate on correctness
 - Don't combine write-test and implement into one step — the test must fail BEFORE implementation starts
 - Don't write tests that pass immediately (unless guarding existing behavior in a refactor)
+
+## See Also
+
+- `/guard` — Create structural guards that prevent architecture violations on `make quality`
+- `/surface` — Create entity test suites with complete obligation mapping (run before remediation)
+- `/remediate` — Fill entity test stubs batch-by-batch with TDD
+- `/audit` — Repeatable code review against #1050/#1066 architecture principles
