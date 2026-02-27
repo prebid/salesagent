@@ -778,9 +778,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         }
                     )
 
-                # Load all creatives
+                # Load all creatives (scoped to tenant)
                 all_creative_ids = list(packages_by_creative.keys())
-                stmt_creatives = select(CreativeModel).filter(CreativeModel.creative_id.in_(all_creative_ids))
+                stmt_creatives = select(CreativeModel).filter(
+                    CreativeModel.tenant_id == tenant_id,
+                    CreativeModel.creative_id.in_(all_creative_ids),
+                )
                 creatives = session.scalars(stmt_creatives).all()
 
                 # Create creative map

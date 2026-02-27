@@ -89,7 +89,7 @@ def test_get_creative_reviews_query(integration_db):
         session.commit()
 
         # TEST: get_creative_reviews returns correct number of reviews
-        reviews = get_creative_reviews(session, creative_id)
+        reviews = get_creative_reviews(session, creative_id, tenant_id)
         assert len(reviews) == 3
         assert all(r.creative_id == creative_id for r in reviews)
 
@@ -140,7 +140,7 @@ def test_get_creative_reviews_filters_by_review_type(integration_db):
         session.commit()
 
         # TEST: get_creative_reviews returns all reviews, filtering works
-        reviews = get_creative_reviews(session, creative_id)
+        reviews = get_creative_reviews(session, creative_id, tenant_id)
 
         assert len(reviews) == 3
         ai_reviews = [r for r in reviews if r.review_type == "ai"]

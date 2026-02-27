@@ -409,9 +409,12 @@ def _fetch_creative_approvals(
         if not assignments:
             return {}
 
-        # Fetch all referenced creatives in one query
+        # Fetch all referenced creatives in one query (scoped to tenant)
         creative_ids = [a.creative_id for a in assignments]
-        creative_stmt = select(Creative).where(Creative.creative_id.in_(creative_ids))
+        creative_stmt = select(Creative).where(
+            Creative.tenant_id == tenant_id,
+            Creative.creative_id.in_(creative_ids),
+        )
         creatives = {c.creative_id: c for c in session.scalars(creative_stmt).all()}
 
         # Build approval objects grouped by (media_buy_id, package_id)

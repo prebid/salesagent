@@ -15,6 +15,7 @@ from src.core.database.models import Creative, CreativeReview
 def get_creative_reviews(
     session: Session,
     creative_id: str,
+    tenant_id: str,
     order_by_newest: bool = True,
 ) -> list[CreativeReview]:
     """Get all reviews for a creative.
@@ -22,12 +23,13 @@ def get_creative_reviews(
     Args:
         session: Database session
         creative_id: Creative ID to query
+        tenant_id: Tenant ID for isolation
         order_by_newest: If True, newest first; if False, oldest first
 
     Returns:
         List of CreativeReview objects
     """
-    stmt = select(CreativeReview).filter_by(creative_id=creative_id)
+    stmt = select(CreativeReview).filter_by(creative_id=creative_id, tenant_id=tenant_id)
 
     if order_by_newest:
         stmt = stmt.order_by(CreativeReview.reviewed_at.desc())
@@ -150,26 +152,31 @@ def get_recent_reviews(
 def get_creative_with_latest_review(
     session: Session,
     creative_id: str,
+    tenant_id: str,
 ) -> tuple[Creative | None, CreativeReview | None]:
     """Get a creative and its most recent review.
 
     Args:
         session: Database session
         creative_id: Creative ID to query
+        tenant_id: Tenant ID for isolation
 
     Returns:
         Tuple of (Creative, CreativeReview) or (Creative, None) or (None, None)
     """
-    # Get creative
-    stmt = select(Creative).filter_by(creative_id=creative_id)
+    # Get creative (scoped to tenant)
+    stmt = select(Creative).filter_by(creative_id=creative_id, tenant_id=tenant_id)
     creative = session.scalars(stmt).first()
 
     if not creative:
         return None, None
 
-    # Get latest review
+    # Get latest review (scoped to tenant)
     review_stmt = (
-        select(CreativeReview).filter_by(creative_id=creative_id).order_by(CreativeReview.reviewed_at.desc()).limit(1)
+        select(CreativeReview)
+        .filter_by(creative_id=creative_id, tenant_id=tenant_id)
+        .order_by(CreativeReview.reviewed_at.desc())
+        .limit(1)
     )
 
     latest_review = session.scalars(review_stmt).first()
