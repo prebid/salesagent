@@ -471,6 +471,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 return False, error_msg
 
             # Load packages from media_packages table
+            # FIXME(salesagent-rva2): migrate to uow.media_buys.get_packages()
             stmt_packages = select(DBMediaPackage).filter_by(media_buy_id=media_buy_id)
             db_packages = session.scalars(stmt_packages).all()
 
@@ -2967,6 +2968,7 @@ async def _create_media_buy_impl(
 
                         from src.core.database.models import MediaPackage as DBMediaPackage
 
+                        # FIXME(salesagent-rva2): migrate to uow.media_buys.get_package()
                         package_stmt = select(DBMediaPackage).filter_by(
                             media_buy_id=response.media_buy_id, package_id=pkg_id
                         )

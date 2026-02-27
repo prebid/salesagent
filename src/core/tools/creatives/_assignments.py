@@ -57,6 +57,7 @@ def _process_assignments(
                     # Note: We need to join with MediaBuy to verify tenant_id
                     from sqlalchemy import join
 
+                    # FIXME(salesagent-rva2): migrate to MediaBuyRepository.get_package()
                     package_stmt = (
                         select(MediaPackage, MediaBuy)
                         .select_from(join(MediaPackage, MediaBuy, MediaPackage.media_buy_id == MediaBuy.media_buy_id))
