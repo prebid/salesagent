@@ -768,6 +768,7 @@ def _update_media_buy_impl(
                         assignment = DBAssignment(
                             assignment_id=assignment_id,
                             tenant_id=tenant["tenant_id"],
+                            principal_id=principal_id,
                             media_buy_id=actual_media_buy_id,
                             package_id=pkg_update.package_id,
                             creative_id=creative_id,
