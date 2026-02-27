@@ -182,7 +182,7 @@ def _get_media_buy_delivery_impl(
         and isinstance(buy.raw_request, dict)
         and buy.raw_request.get("pricing_option_id") is not None
     ]
-    pricing_options = _get_pricing_options(pricing_option_ids)
+    pricing_options = _get_pricing_options(pricing_option_ids, tenant_id=tenant["tenant_id"])
 
     # Collect delivery data for each media buy
     deliveries = []
@@ -683,7 +683,9 @@ def _get_target_media_buys(
         return target_media_buys
 
 
-def _get_pricing_options(pricing_option_ids: list[Any | None]) -> dict[str, PricingOption]:
+def _get_pricing_options(
+    pricing_option_ids: list[Any | None], tenant_id: str | None = None
+) -> dict[str, PricingOption]:
     # Cast string IDs from JSON to int for Integer PK column (Pattern #3: cast at boundary)
     int_ids = []
     for pid in pricing_option_ids:
@@ -695,6 +697,9 @@ def _get_pricing_options(pricing_option_ids: list[Any | None]) -> dict[str, Pric
     if not int_ids:
         return {}
     with get_db_session() as session:
-        statement = select(PricingOption).where(PricingOption.id.in_(int_ids))
+        statement = select(PricingOption).where(
+            PricingOption.id.in_(int_ids),
+            PricingOption.tenant_id == tenant_id,
+        )
         pricing_options = session.scalars(statement).all()
         return {str(pricing_option.id): pricing_option for pricing_option in pricing_options}

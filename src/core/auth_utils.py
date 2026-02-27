@@ -5,7 +5,7 @@ import logging
 from fastmcp.server import Context
 from sqlalchemy import select
 
-from src.core.config_loader import set_current_tenant
+from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.database.database_session import execute_with_retry
 from src.core.database.models import Principal, Tenant
 
@@ -143,11 +143,12 @@ def get_principal_from_context(context: Context | None) -> str | None:
         return None
 
 
-def get_principal_object(principal_id: str) -> Principal | None:
+def get_principal_object(principal_id: str, tenant_id: str | None = None) -> Principal | None:
     """Get the Principal object with platform mappings using retry logic.
 
     Args:
         principal_id: The principal ID to look up
+        tenant_id: Tenant ID for isolation (falls back to current tenant if None)
 
     Returns:
         Principal object or None if not found
@@ -158,8 +159,14 @@ def get_principal_object(principal_id: str) -> Principal | None:
     def _get_principal_object(session):
         from src.core.schemas import Principal as PrincipalSchema
 
-        # Query the database for the principal
-        stmt = select(Principal).filter_by(principal_id=principal_id)
+        # Resolve tenant_id from current context if not provided
+        _tenant_id = tenant_id
+        if _tenant_id is None:
+            current_tenant = get_current_tenant()
+            _tenant_id = current_tenant["tenant_id"]
+
+        # Query the database for the principal (scoped to tenant)
+        stmt = select(Principal).filter_by(principal_id=principal_id, tenant_id=_tenant_id)
         db_principal = session.scalars(stmt).first()
 
         if db_principal:

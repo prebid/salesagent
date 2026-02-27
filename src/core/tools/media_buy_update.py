@@ -311,7 +311,10 @@ def _update_media_buy_impl(
 
         # Get media buy from database to check currency and current dates
         with get_db_session() as session:
-            stmt = select(MediaBuyModel).where(MediaBuyModel.media_buy_id == req.media_buy_id)
+            stmt = select(MediaBuyModel).where(
+                MediaBuyModel.media_buy_id == req.media_buy_id,
+                MediaBuyModel.tenant_id == tenant["tenant_id"],
+            )
             media_buy = session.scalars(stmt).first()
 
             if media_buy:
@@ -1223,7 +1226,10 @@ def _update_media_buy_impl(
                 # Get existing media buy to check date range consistency
                 from sqlalchemy import select as sqlalchemy_select
 
-                existing_mb_stmt = sqlalchemy_select(MediaBuy).where(MediaBuy.media_buy_id == req.media_buy_id)
+                existing_mb_stmt = sqlalchemy_select(MediaBuy).where(
+                    MediaBuy.media_buy_id == req.media_buy_id,
+                    MediaBuy.tenant_id == tenant["tenant_id"],
+                )
                 existing_mb = db_session.scalars(existing_mb_stmt).first()
 
                 if not existing_mb:

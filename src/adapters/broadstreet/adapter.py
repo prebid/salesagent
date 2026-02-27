@@ -207,7 +207,9 @@ class BroadstreetAdapter(AdServerAdapter):
 
         try:
             with get_db_session() as session:
-                stmt = select(DBMediaPackage).where(DBMediaPackage.media_buy_id == media_buy_id)
+                stmt = select(DBMediaPackage).where(
+                    DBMediaPackage.media_buy_id == media_buy_id,
+                )
                 packages = session.scalars(stmt).all()
 
                 for pkg in packages:
@@ -765,7 +767,9 @@ class BroadstreetAdapter(AdServerAdapter):
             action_verb = "Pausing" if is_pause else "Resuming"
 
             with get_db_session() as session:
-                stmt = select(DBMediaPackage).where(DBMediaPackage.media_buy_id == media_buy_id)
+                stmt = select(DBMediaPackage).where(
+                    DBMediaPackage.media_buy_id == media_buy_id,
+                )
                 db_packages = session.scalars(stmt).all()
 
                 if not db_packages:

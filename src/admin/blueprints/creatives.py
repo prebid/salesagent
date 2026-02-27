@@ -146,7 +146,10 @@ async def _call_webhook_for_creative_status(
         from src.core.database.models import Creative
 
         creative_ids = [m.object_id for m in all_mappings]
-        stmt_creatives = select(Creative).filter(Creative.creative_id.in_(creative_ids))
+        stmt_creatives = select(Creative).filter(
+            Creative.tenant_id == tenant_id,
+            Creative.creative_id.in_(creative_ids),
+        )
         all_creatives = db_session.scalars(stmt_creatives).all()
 
         # Check if ANY creative is still pending review
@@ -307,7 +310,7 @@ def review_creatives(tenant_id, **kwargs):
             # Get media buy details for each assignment
             media_buys = []
             for assignment in assignments:
-                stmt = select(MediaBuy).filter_by(media_buy_id=assignment.media_buy_id)
+                stmt = select(MediaBuy).filter_by(media_buy_id=assignment.media_buy_id, tenant_id=tenant_id)
                 media_buy = db_session.scalars(stmt).first()
                 if media_buy:
                     media_buys.append(
@@ -324,14 +327,14 @@ def review_creatives(tenant_id, **kwargs):
             # Get promoted offering from first media buy (if any)
             promoted_offering = None
             if media_buys and media_buys[0]:
-                stmt = select(MediaBuy).filter_by(media_buy_id=media_buys[0]["media_buy_id"])
+                stmt = select(MediaBuy).filter_by(media_buy_id=media_buys[0]["media_buy_id"], tenant_id=tenant_id)
                 first_buy = db_session.scalars(stmt).first()
                 if first_buy and first_buy.raw_request:
                     packages = first_buy.raw_request.get("packages", [])
                     if packages:
                         product_id = packages[0].get("product_id")
                         if product_id:
-                            stmt = select(Product).filter_by(product_id=product_id)
+                            stmt = select(Product).filter_by(product_id=product_id, tenant_id=tenant_id)
                             product = db_session.scalars(stmt).first()
                             if product:
                                 promoted_offering = product.name
@@ -425,7 +428,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             prior_ai_review = None
             stmt = (
                 select(CreativeReview)
-                .filter_by(creative_id=creative_id, review_type="ai")
+                .filter_by(creative_id=creative_id, tenant_id=tenant_id, review_type="ai")
                 .order_by(CreativeReview.reviewed_at.desc())
                 .limit(1)
             )
@@ -536,12 +539,17 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 # Only check if media buy is waiting for creatives
                 if media_buy.status in {"pending_creatives", "draft"}:
                     # Get all creative assignments for this media buy
-                    stmt_all_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
+                    stmt_all_assignments = select(CreativeAssignment).filter_by(
+                        media_buy_id=media_buy_id, tenant_id=tenant_id
+                    )
                     all_assignments = db_session.scalars(stmt_all_assignments).all()
 
                     # Get all creatives for this media buy
                     creative_ids = [a.creative_id for a in all_assignments]
-                    stmt_creatives = select(Creative).filter(Creative.creative_id.in_(creative_ids))
+                    stmt_creatives = select(Creative).filter(
+                        Creative.tenant_id == tenant_id,
+                        Creative.creative_id.in_(creative_ids),
+                    )
                     all_creatives = db_session.scalars(stmt_creatives).all()
 
                     # Check if all creatives are approved
@@ -616,7 +624,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             prior_ai_review = None
             stmt = (
                 select(CreativeReview)
-                .filter_by(creative_id=creative_id, review_type="ai")
+                .filter_by(creative_id=creative_id, tenant_id=tenant_id, review_type="ai")
                 .order_by(CreativeReview.reviewed_at.desc())
                 .limit(1)
             )

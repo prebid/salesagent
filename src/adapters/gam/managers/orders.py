@@ -649,7 +649,10 @@ class GAMOrdersManager:
                 # Get creative sizes from database if using creative_ids
                 if package.creative_ids:
                     with get_db_session() as session:
-                        creative_stmt = select(DBCreative).where(DBCreative.creative_id.in_(package.creative_ids))
+                        creative_stmt = select(DBCreative).where(
+                            DBCreative.tenant_id == tenant_id,
+                            DBCreative.creative_id.in_(package.creative_ids),
+                        )
                         db_creatives = session.scalars(creative_stmt).all()
 
                         for db_creative in db_creatives:
