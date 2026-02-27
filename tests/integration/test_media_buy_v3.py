@@ -315,15 +315,11 @@ class TestCreateMediaBuyManualApproval:
             assert mb.raw_request.get("buyer_ref") == buyer_ref
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="PROD BUG: execute_approved_media_buy returns (True, None) but never updates "
-        "MediaBuy.status from pending_approval to active in the DB",
-        strict=True,
-    )
     async def test_execute_approved_calls_adapter(self, mb_tenant_with_approval, mb_principal, mb_products):
         """UC-002-MA03: approved buy triggers adapter creation.
 
         Integration equivalent of unit xfail test_execute_approved_calls_adapter.
+        Verifies that execute_approved_media_buy updates status to 'active' (UC-002:437).
         """
         from src.core.tools.media_buy_create import (
             _create_media_buy_impl,
@@ -365,7 +361,7 @@ class TestCreateMediaBuyManualApproval:
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
             assert mb is not None
-            assert mb.status != "pending_approval", f"Status should change from pending_approval, got {mb.status}"
+            assert mb.status == "active", f"Status should be 'active' after approval, got {mb.status}"
 
 
 class TestCreateMediaBuyAdapterAtomicity:
@@ -455,11 +451,6 @@ class TestUpdateMediaBuyCreativeAssignments:
     """UC-003-CA01..CA02: creative assignment updates requiring DB."""
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="creative_assignments update path requires full media buy + package + product + "
-        "creative records in DB; complex setup not yet available",
-        strict=False,
-    )
     async def test_creative_assignments_with_weights(self, mb_tenant, mb_principal, mb_products, mb_identity):
         """UC-003-CA01: creative_assignments replaces all with specified weights.
 
@@ -504,10 +495,6 @@ class TestUpdateMediaBuyCreativeAssignments:
         assert not hasattr(update_result, "errors") or not update_result.errors
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="placement_ids validation requires products with placement data in DB",
-        strict=False,
-    )
     async def test_invalid_placement_ids_rejected(self, mb_tenant, mb_principal, mb_products, mb_identity):
         """UC-003-CA02: placement_ids not in product rejected.
 
@@ -548,21 +535,138 @@ class TestUpdateMediaBuyCreativeAssignments:
 class TestGetMediaBuysResponseFields:
     """GMB-RS03..RS04: response population requiring DB."""
 
-    @pytest.mark.xfail(
-        reason="Blocked by H-4: _get_media_buys_impl uses Context not ResolvedIdentity",
-        strict=False,
-    )
-    def test_snapshot_populated_when_requested(self, mb_tenant, mb_principal, mb_products, mb_identity):
-        """GMB-RS03: include_snapshot=true populates snapshot per package."""
-        pytest.fail("Blocked by H-4: _get_media_buys_impl uses Context not ResolvedIdentity")
+    @pytest.mark.asyncio
+    async def test_snapshot_populated_when_requested(self, mb_tenant, mb_principal, mb_products, mb_identity):
+        """GMB-RS03: include_snapshot=true populates snapshot per package.
 
-    @pytest.mark.xfail(
-        reason="Blocked by H-4: _get_media_buys_impl uses Context not ResolvedIdentity",
-        strict=False,
-    )
-    def test_creative_approvals_populated(self, mb_tenant, mb_principal, mb_products, mb_identity):
-        """GMB-RS04: creative approval status per package."""
-        pytest.fail("Blocked by H-4: _get_media_buys_impl uses Context not ResolvedIdentity")
+        Creates a media buy, then calls _get_media_buys_impl with include_snapshot=True.
+        The mock adapter supports realtime reporting, so snapshot or snapshot_unavailable_reason
+        should be populated on each package in the response.
+        """
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+
+        buyer_ref = f"snapshot-{uuid.uuid4().hex[:8]}"
+        create_req = _make_create_request(
+            buyer_ref=buyer_ref,
+            packages=[
+                {
+                    "product_id": "guaranteed_display",
+                    "buyer_ref": "snap-pkg-1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                }
+            ],
+        )
+        create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
+        assert create_result.status == "completed", f"Create failed: {create_result.response}"
+        media_buy_id = create_result.response.media_buy_id
+
+        get_req = GetMediaBuysRequest(
+            media_buy_ids=[media_buy_id],
+            include_snapshot=True,
+        )
+        response = _get_media_buys_impl(get_req, identity=mb_identity)
+
+        assert len(response.media_buys) == 1
+        mb_response = response.media_buys[0]
+        assert mb_response.media_buy_id == media_buy_id
+        assert len(mb_response.packages) >= 1
+
+        # With include_snapshot=True, each package must have either snapshot data
+        # or a snapshot_unavailable_reason explaining why it is missing
+        for pkg in mb_response.packages:
+            has_snapshot = pkg.snapshot is not None
+            has_reason = pkg.snapshot_unavailable_reason is not None
+            assert has_snapshot or has_reason, (
+                f"Package {pkg.package_id}: include_snapshot=True but neither "
+                f"snapshot nor snapshot_unavailable_reason is set"
+            )
+
+    @pytest.mark.asyncio
+    async def test_creative_approvals_populated(self, mb_tenant, mb_principal, mb_products, mb_identity):
+        """GMB-RS04: creative approval status per package.
+
+        Creates a media buy, syncs creatives and assigns them to the package,
+        then calls _get_media_buys_impl and verifies creative_approvals are
+        populated on the matching package.
+        """
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.creatives import sync_creatives_raw
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+        from tests.helpers.adcp_factories import create_test_format
+
+        buyer_ref = f"approvals-{uuid.uuid4().hex[:8]}"
+        create_req = _make_create_request(
+            buyer_ref=buyer_ref,
+            packages=[
+                {
+                    "product_id": "guaranteed_display",
+                    "buyer_ref": "approval-pkg-1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                }
+            ],
+        )
+        create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
+        assert create_result.status == "completed", f"Create failed: {create_result.response}"
+        media_buy_id = create_result.response.media_buy_id
+        package_id = create_result.response.packages[0].package_id
+
+        # Mock the creative agent format registry to avoid real HTTP calls
+        mock_format = create_test_format(
+            format_id="display_300x250",
+            name="Display 300x250",
+            type="display",
+        )
+        with patch(
+            "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
+            return_value=mock_format,
+        ):
+            # Sync a creative and assign it to the package
+            sync_creatives_raw(
+                creatives=[
+                    {
+                        "creative_id": "c_approval_test",
+                        "name": "Approval Test Creative",
+                        "format_id": {
+                            "agent_url": "https://creative.adcontextprotocol.org",
+                            "id": "display_300x250",
+                        },
+                        "assets": {},
+                        "url": "https://example.com/banner.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ],
+                assignments={"c_approval_test": [package_id]},
+                identity=mb_identity,
+            )
+
+        get_req = GetMediaBuysRequest(media_buy_ids=[media_buy_id])
+        response = _get_media_buys_impl(get_req, identity=mb_identity)
+
+        assert len(response.media_buys) == 1
+        mb_response = response.media_buys[0]
+        assert mb_response.media_buy_id == media_buy_id
+
+        # Find the package with our assignment
+        target_pkg = None
+        for pkg in mb_response.packages:
+            if pkg.package_id == package_id:
+                target_pkg = pkg
+                break
+        assert target_pkg is not None, f"Package {package_id} not found in response"
+
+        # Creative approvals should be populated
+        assert target_pkg.creative_approvals is not None, (
+            "creative_approvals should be populated after creative assignment"
+        )
+        assert len(target_pkg.creative_approvals) >= 1
+        approval_ids = {a.creative_id for a in target_pkg.creative_approvals}
+        assert "c_approval_test" in approval_ids
 
 
 # ---------------------------------------------------------------------------

@@ -423,12 +423,8 @@ class TestDeliveryStatusFilterIntegration:
         """UC-004-FILT-06: requesting all buys returns buys of any date-derived status.
 
         Spec: UNSPECIFIED. With real DB, creates buys with different date ranges
-        so they derive ready/active/completed status, then requests all by explicit IDs.
-
-        FINDING: StatusFilter (adcp library RootModel[list]) is not isinstance(list),
-        so the production code's isinstance(req.status_filter, list) check fails.
-        The list-based status_filter path is broken with real adcp types.
-        Using media_buy_ids to explicitly request all buys as a workaround.
+        so they derive ready/active/completed status, then requests all by explicit IDs
+        with status_filter including all possible statuses.
         """
         with get_db_session() as session:
             _setup_base_state(session)
@@ -471,18 +467,21 @@ class TestDeliveryStatusFilterIntegration:
             for mid in ["mb_active", "mb_completed", "mb_ready"]
         ]
 
-        # Use media_buy_ids to request all 3 + status_filter as single "all" mock
-        # to bypass the broken list-based StatusFilter path.
-        # Constructing req then patching status_filter to mock "all":
+        # Use media_buy_ids to request all 3 + status_filter as list of all statuses.
+        # The joxr fix handles RootModel-wrapped StatusFilter properly, so we can
+        # now pass a real list of MediaBuyStatus values instead of a MagicMock.
+        from adcp.types import MediaBuyStatus
+
         req = GetMediaBuyDeliveryRequest(
             media_buy_ids=["mb_ready", "mb_active", "mb_completed"],
+            status_filter=[
+                MediaBuyStatus.pending_activation,
+                MediaBuyStatus.active,
+                MediaBuyStatus.completed,
+            ],
             start_date="2025-01-01",
             end_date="2025-06-15",
         )
-        # Override status_filter to mock "all" (same approach as unit test)
-        mock_all = MagicMock()
-        mock_all.value = "all"
-        req.status_filter = mock_all
 
         identity = _make_identity()
 

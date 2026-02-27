@@ -197,11 +197,6 @@ class TestCrossPrincipalIsolation:
             assert db_row is not None
             assert db_row.principal_id == "principal_1"
 
-    @pytest.mark.xfail(
-        reason="PROD BUG: creative_id is sole PK (no composite with principal_id). "
-        "Same creative_id from different principals hits UniqueViolation. "
-        "Unit stub mocked _create_new_creative so never hit the real constraint."
-    )
     def test_same_creative_id_different_principal_creates_new(self):
         """Same creative_id under different principals creates separate DB records.
 
