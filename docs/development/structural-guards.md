@@ -246,6 +246,45 @@ The fix is to cast at the boundary: `[int(x) for x in pricing_option_ids]`.
 |------|---------|------------|
 | `media_buy_delivery.py` | `PricingOption.id.in_(string_list)` | salesagent-mq3n |
 
+### No model_dump() in _impl Guard
+
+**File:** `tests/unit/test_architecture_no_model_dump_in_impl.py`
+
+**What it enforces:** `_impl` functions must not call `.model_dump()` or
+`.model_dump_internal()`. Serialization is the transport wrapper's job.
+
+**Why it matters:** When business logic calls `model_dump()`, it takes on
+responsibility for serialization format (JSON mode, aliases, exclude rules).
+This couples the _impl layer to a specific output format. The transport
+wrapper should receive a model object and decide how to serialize it.
+
+#### How it works
+
+The guard scans all `*_impl()` functions under `src/core/tools/` using AST,
+looking for method calls where the method name is `model_dump` or
+`model_dump_internal`.
+
+#### Tests
+
+| Test | What It Checks |
+|------|---------------|
+| `test_no_new_model_dump_violations` | No new `.model_dump()` calls beyond the allowlist |
+| `test_known_violations_not_stale` | Allowlisted violations haven't been fixed (stale entry detection) |
+| `test_violation_count_documented` | Total count matches allowlist (catches both directions) |
+
+#### Current known violations (29)
+
+| File | Count | Primary Use |
+|------|-------|-------------|
+| `media_buy_update.py` | 23 | `response_data=X.model_dump()` for workflow step storage |
+| `media_buy_create.py` | 4 | `raw_request=req.model_dump()` for DB storage + workflow |
+| `products.py` | 1 | `filters.model_dump()` in logging |
+| `creatives/listing.py` | 1 | `filters.model_dump()` for dict conversion |
+
+20 of the 29 violations are `response_data=response.model_dump(mode="json")`
+calls that serialize workflow step responses for DB storage. These should be
+replaced with typed repository methods that accept model objects directly.
+
 ### Repository Pattern Guard
 
 **File:** `tests/unit/test_architecture_repository_pattern.py`

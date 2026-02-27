@@ -57,6 +57,7 @@ Seven AST-scanning tests enforce architecture invariants on every `make quality`
 | Schema inheritance | Schemas extend adcp library base types | `test_architecture_schema_inheritance.py` |
 | Boundary completeness | MCP/A2A wrappers pass all _impl parameters | `test_architecture_boundary_completeness.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
+| No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
 | Repository pattern | No `get_db_session()` in `_impl`; no inline `session.add()` in tests | `test_architecture_repository_pattern.py` |
 
 **Rules for guards:**
