@@ -14,8 +14,6 @@ Note: Test networks cannot serve ads, so delivery/reporting data is always empty
 import pytest
 import pytz
 
-from src.adapters.gam.utils.constants import GAM_API_VERSION
-
 
 @pytest.mark.requires_gam
 class TestGAMNetworkTimezone:
@@ -24,7 +22,7 @@ class TestGAMNetworkTimezone:
     def test_network_has_timezone(self, gam_client_manager):
         """Network exposes a timeZone field."""
         client = gam_client_manager.get_client()
-        network_service = client.GetService("NetworkService", version=GAM_API_VERSION)
+        network_service = client.GetService("NetworkService")
         network = network_service.getCurrentNetwork()
 
         assert network["timeZone"] is not None, "Network timeZone field is missing"
@@ -34,7 +32,7 @@ class TestGAMNetworkTimezone:
     def test_network_timezone_is_valid_iana(self, gam_client_manager):
         """Network timezone is a valid IANA timezone that pytz can use."""
         client = gam_client_manager.get_client()
-        network_service = client.GetService("NetworkService", version=GAM_API_VERSION)
+        network_service = client.GetService("NetworkService")
         network = network_service.getCurrentNetwork()
 
         tz_name = network["timeZone"]
@@ -67,6 +65,6 @@ class TestGAMNetworkTimezone:
 def _network_is_eastern(gam_client_manager) -> bool:
     """Check if the network actually IS in Eastern time (not a fallback)."""
     client = gam_client_manager.get_client()
-    network_service = client.GetService("NetworkService", version=GAM_API_VERSION)
+    network_service = client.GetService("NetworkService")
     network = network_service.getCurrentNetwork()
     return network["timeZone"] == "America/New_York"
