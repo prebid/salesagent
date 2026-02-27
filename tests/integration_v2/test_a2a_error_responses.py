@@ -41,13 +41,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-_MOCK_IDENTITY = ResolvedIdentity(
-    principal_id="test_principal",
-    tenant_id="test_tenant",
-    tenant={"tenant_id": "test_tenant"},
-    protocol="a2a",
-)
-
 
 @pytest.mark.integration
 @pytest.mark.requires_db
@@ -149,6 +142,16 @@ class TestA2AErrorPropagation:
             }
 
     @pytest.fixture
+    def mock_identity(self, test_tenant, test_principal):
+        """Build ResolvedIdentity from real test DB fixtures."""
+        return ResolvedIdentity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            protocol="a2a",
+        )
+
+    @pytest.fixture
     def handler(self):
         """Create A2A handler instance."""
         return AdCPRequestHandler()
@@ -176,12 +179,14 @@ class TestA2AErrorPropagation:
 
         return {}
 
-    async def test_create_media_buy_validation_error_includes_errors_field(self, handler, test_tenant, test_principal):
+    async def test_create_media_buy_validation_error_includes_errors_field(
+        self, handler, test_tenant, test_principal, mock_identity
+    ):
         """Test that validation errors include errors field in A2A response."""
         # Mock authentication
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             # Create message with INVALID parameters (missing required fields)
             skill_params = {
                 "brand_manifest": {"name": "Test Campaign"},
@@ -263,12 +268,14 @@ class TestA2AErrorPropagation:
             assert "code" in error, "Error must include code"
             assert error["code"] == "authentication_error"
 
-    async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
+    async def test_create_media_buy_success_has_no_errors_field(
+        self, handler, test_tenant, test_principal, mock_identity
+    ):
         """Test that successful responses don't have errors field (or it's None/empty)."""
         # Mock authentication
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             # Create VALID message
             start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
             end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
@@ -304,7 +311,9 @@ class TestA2AErrorPropagation:
             assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
             assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
-    async def test_create_media_buy_response_includes_all_adcp_fields(self, handler, test_tenant, test_principal):
+    async def test_create_media_buy_response_includes_all_adcp_fields(
+        self, handler, test_tenant, test_principal, mock_identity
+    ):
         """Test that A2A response includes all AdCP domain fields (not just cherry-picked ones).
 
         Per AdCP v2.4 spec and PR #113:
@@ -318,7 +327,7 @@ class TestA2AErrorPropagation:
         # Mock authentication
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             # Create valid message
             start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
             end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
@@ -379,12 +388,22 @@ class TestA2AErrorResponseStructure:
         """Create A2A handler instance."""
         return AdCPRequestHandler()
 
-    async def test_error_response_has_consistent_structure(self, integration_db, handler):
+    @pytest.fixture
+    def mock_identity(self):
+        """Minimal identity for validation error tests (no DB tenant needed)."""
+        return ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="validation_test",
+            tenant={"tenant_id": "validation_test"},
+            protocol="a2a",
+        )
+
+    async def test_error_response_has_consistent_structure(self, integration_db, handler, mock_identity):
         """Test that all error responses have consistent field structure."""
         # Mock minimal auth
         handler._get_auth_token = MagicMock(return_value="test_token")
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             # Call handler directly with invalid params
             result = await handler._handle_create_media_buy_skill(
                 parameters={"brand_manifest": {"name": "test"}},
@@ -398,11 +417,11 @@ class TestA2AErrorResponseStructure:
             assert "message" in result, "Error response must have message field"
             assert "required_parameters" in result, "Validation error must list required parameters"
 
-    async def test_errors_field_structure_from_validation_error(self, integration_db, handler):
+    async def test_errors_field_structure_from_validation_error(self, integration_db, handler, mock_identity):
         """Test that validation errors produce properly structured errors field."""
         handler._get_auth_token = MagicMock(return_value="test_token")
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             # Call with invalid params (missing required fields) - returns immediately without DB
             result = await handler._handle_create_media_buy_skill(
                 parameters={

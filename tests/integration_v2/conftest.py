@@ -346,6 +346,22 @@ def sample_principal(integration_db, sample_tenant):
     return principal_data
 
 
+@pytest.fixture
+def mock_identity(sample_tenant, sample_principal):
+    """Build a ResolvedIdentity from real test DB fixtures.
+
+    Use this with: patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity)
+    """
+    from src.core.resolved_identity import ResolvedIdentity
+
+    return ResolvedIdentity(
+        principal_id=sample_principal["principal_id"],
+        tenant_id=sample_tenant["tenant_id"],
+        tenant=sample_tenant,
+        protocol="a2a",
+    )
+
+
 # ============================================================================
 # Setup Helper Functions
 # ============================================================================

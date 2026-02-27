@@ -13,7 +13,6 @@ import pytest
 from a2a.types import DataPart, Message, MessageSendParams, Part, Role, Task, TaskState, TaskStatus
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, create_a2a_text_message
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -31,13 +30,6 @@ except ImportError:
 # Configure logging for tests
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
-_MOCK_IDENTITY = ResolvedIdentity(
-    principal_id="test_principal",
-    tenant_id="test_tenant",
-    tenant={"tenant_id": "test_tenant"},
-    protocol="a2a",
-)
 
 
 class A2AAdCPValidator:
@@ -187,7 +179,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_natural_language_get_products(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test natural language invocation for get_products with AdCP schema validation."""
         # Mock authentication token
@@ -196,7 +188,7 @@ class TestA2ASkillInvocation:
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -238,7 +230,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test explicit skill invocation for get_products with AdCP schema validation."""
         # Mock authentication token
@@ -247,7 +239,7 @@ class TestA2ASkillInvocation:
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -294,7 +286,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products_a2a_spec(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test explicit skill invocation using A2A spec 'input' field instead of 'parameters'."""
         # Mock authentication token
@@ -303,7 +295,7 @@ class TestA2ASkillInvocation:
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -350,7 +342,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test explicit skill invocation for create_media_buy.
 
@@ -363,7 +355,7 @@ class TestA2ASkillInvocation:
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -417,7 +409,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy_manual_approval(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test create_media_buy returns status=submitted when manual approval required."""
         # Update tenant to require manual approval
@@ -434,7 +426,7 @@ class TestA2ASkillInvocation:
 
         # Mock identity resolution
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             from src.a2a_server import adcp_a2a_server
 
@@ -472,7 +464,9 @@ class TestA2ASkillInvocation:
             assert result.artifacts is None
 
     @pytest.mark.asyncio
-    async def test_hybrid_invocation(self, handler, sample_tenant, sample_principal, sample_products, validator):
+    async def test_hybrid_invocation(
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator
+    ):
         """Test hybrid invocation with both text and skill."""
         # Mock authentication token
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
@@ -480,7 +474,7 @@ class TestA2ASkillInvocation:
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -516,7 +510,9 @@ class TestA2ASkillInvocation:
     # TODO: Needs investigation of proper error handling approach (ServerError not in current a2a library)
 
     @pytest.mark.asyncio
-    async def test_multiple_skill_invocations(self, handler, sample_tenant, sample_principal, sample_products):
+    async def test_multiple_skill_invocations(
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products
+    ):
         """Test multiple skill invocations in a single message."""
         # Mock authentication token
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
@@ -524,7 +520,7 @@ class TestA2ASkillInvocation:
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -689,7 +685,9 @@ class TestA2ASkillInvocation:
     # Phase 2: Tests for previously untested skills
 
     @pytest.mark.asyncio
-    async def test_update_media_buy_skill(self, handler, sample_tenant, sample_principal, sample_products, validator):
+    async def test_update_media_buy_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator
+    ):
         """Test update_media_buy skill invocation."""
         # Create a media buy in database first
         from datetime import UTC, datetime, timedelta
@@ -724,7 +722,7 @@ class TestA2ASkillInvocation:
 
         # Mock identity resolution and adapter
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
             patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         ):
             # Mock request headers to provide Host header for subdomain detection
@@ -763,7 +761,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_list_creative_formats_skill(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test list_creative_formats skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
@@ -771,7 +769,7 @@ class TestA2ASkillInvocation:
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -799,7 +797,9 @@ class TestA2ASkillInvocation:
             assert "formats" in artifact_data
 
     @pytest.mark.asyncio
-    async def test_list_authorized_properties_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_list_authorized_properties_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, validator
+    ):
         """Test list_authorized_properties skill invocation."""
         # Create verified publisher partner for the tenant
         import uuid
@@ -835,7 +835,7 @@ class TestA2ASkillInvocation:
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -863,14 +863,16 @@ class TestA2ASkillInvocation:
             assert len(artifact_data["publisher_domains"]) > 0
 
     @pytest.mark.asyncio
-    async def test_sync_creatives_skill(self, handler, sample_tenant, sample_principal, sample_products, validator):
+    async def test_sync_creatives_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator
+    ):
         """Test sync_creatives skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -906,14 +908,14 @@ class TestA2ASkillInvocation:
             assert "creatives" in artifact_data or "failed_creatives" in artifact_data
 
     @pytest.mark.asyncio
-    async def test_list_creatives_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_list_creatives_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test list_creatives skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -940,14 +942,16 @@ class TestA2ASkillInvocation:
             assert "creatives" in artifact_data
 
     @pytest.mark.asyncio
-    async def test_update_performance_index_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_update_performance_index_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, validator
+    ):
         """Test update_performance_index skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -972,14 +976,16 @@ class TestA2ASkillInvocation:
             assert "update_performance_index" in result.metadata["skills_requested"]
 
     @pytest.mark.asyncio
-    async def test_get_media_buy_delivery_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_get_media_buy_delivery_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, validator
+    ):
         """Test get_media_buy_delivery skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -1004,14 +1010,14 @@ class TestA2ASkillInvocation:
             assert result.artifacts is not None
 
     @pytest.mark.asyncio
-    async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test approve_creative skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -1035,14 +1041,14 @@ class TestA2ASkillInvocation:
             assert "approve_creative" in result.metadata["skills_requested"]
 
     @pytest.mark.asyncio
-    async def test_get_media_buy_status_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_get_media_buy_status_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test get_media_buy_status skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
@@ -1066,14 +1072,14 @@ class TestA2ASkillInvocation:
             assert "get_media_buy_status" in result.metadata["skills_requested"]
 
     @pytest.mark.asyncio
-    async def test_optimize_media_buy_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_optimize_media_buy_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test optimize_media_buy skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
