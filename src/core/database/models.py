@@ -278,6 +278,7 @@ class Product(Base, JSONValidatorMixin):
     reporting_capabilities: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
     # AdCP 3.6.0 product fields
+    property_targeting_allowed: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     signal_targeting_allowed: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     # Type hint: CatalogMatch object (matching criteria for product catalogs)
     catalog_match: Mapped[dict | None] = mapped_column(JSONType, nullable=True)

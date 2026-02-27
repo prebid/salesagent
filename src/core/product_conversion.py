@@ -330,6 +330,8 @@ def convert_product_model_to_schema(product_model) -> Product:
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False
 
     # AdCP 3.6.0 fields
+    if getattr(product_model, "property_targeting_allowed", None) is not None:
+        product_data["property_targeting_allowed"] = product_model.property_targeting_allowed
     if getattr(product_model, "signal_targeting_allowed", None) is not None:
         product_data["signal_targeting_allowed"] = product_model.signal_targeting_allowed
     if getattr(product_model, "catalog_match", None) is not None:
