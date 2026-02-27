@@ -92,6 +92,14 @@ repos:
         always_run: true
 
 
+      # Check migration files have upgrade+downgrade and warn about Docker validation
+      - id: check-migration-completeness
+        name: Check migration completeness (upgrade + downgrade)
+        entry: uv run python .pre-commit-hooks/check_migration_completeness.py
+        language: system
+        files: '^alembic/versions/.*\.py$'
+        pass_filenames: true
+
       # Check for missing imports (prevent NameError bugs)
       - id: check-import-usage
         name: Check for classes/functions used without imports

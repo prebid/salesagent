@@ -35,23 +35,84 @@ iterate:
            - Walk the data through each layer: input → parsing → business logic → output
            - Identify exactly where the bug manifests
            - Use Grep/Read to trace concrete values, not abstract reasoning
-        4. **Write a failing test**:
-           - Place it in the appropriate test file (`tests/unit/test_<area>.py`)
+        4. **Choose test level**: Based on the bug type, decide where the test goes:
+           - **Unit** (`tests/unit/`): Logic bugs, type errors, validation — no DB needed
+           - **Integration** (`tests/integration/`): DB constraint violations, query bugs,
+             cross-tenant leaks, ORM relationship issues — needs real PostgreSQL
+           - If unsure: if the bug involves a database column, FK, NOT NULL, or
+             cross-tenant isolation → it MUST be an integration test
+
+        5. **Start Docker if needed** (integration/e2e tests):
+
+           **Acquire lock** (run in a single Bash call):
+           ```bash
+           LOCKFILE="/tmp/salesagent-docker.lock"
+           while ! mkdir "$LOCKFILE" 2>/dev/null; do
+             if [ -d "$LOCKFILE" ] && [ $(($(date +%s) - $(stat -f %m "$LOCKFILE"))) -gt 600 ]; then
+               rmdir "$LOCKFILE" 2>/dev/null
+             else
+               echo "Docker locked by another agent, waiting..." && sleep 5
+             fi
+           done
+           make test-stack-up 2>/dev/null || true && source .test-stack.env
+           ```
+
+           **IMPORTANT — release lock explicitly** after your tests run (step 6/7):
+           ```bash
+           rmdir /tmp/salesagent-docker.lock 2>/dev/null
+           ```
+           The `trap EXIT` pattern does NOT work in Claude Code agents because each
+           Bash tool call is a separate shell. You MUST release the lock manually
+           in a later Bash call. Do not rely on trap.
+
+        6. **Write a failing test**:
+           - Place it in the appropriate test file based on level chosen in step 4
            - The test should demonstrate the bug clearly and minimally
+           - **Use factories for test data** (CLAUDE.md Pattern #8):
+             - Import from `tests.helpers.adcp_factories` — never inline-construct
+               ORM models or Pydantic schemas with manual field plucking
+             - Available factories: `create_test_db_product`, `create_test_package_request`,
+               `create_test_creative_asset`, `create_test_brand_manifest`,
+               `create_test_media_buy_request_dict`, etc.
+             - See `tests/helpers/adcp_factories.py` for the full list
+             - For DB fixtures (Tenant, Principal, MediaBuy): use existing conftest.py
+               fixtures or extend them — never `session.add(Model(...))` inline
            - Run it and confirm it fails for the RIGHT reason:
              ```bash
+             # Unit tests:
              uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+
+             # Integration tests (requires Docker from step 5):
+             uv run pytest tests/integration/test_<area>.py::test_<name> -x -v
              ```
-        5. **Confirm root cause**: After tracing, state in one sentence what is wrong
+           - **CRITICAL**: The test MUST fail. If it passes, your test doesn't catch the
+             bug. Rethink what the test asserts.
+
+        7. **Factory check**: Verify your test uses factories, not inline construction:
+           ```bash
+           uv run python .pre-commit-hooks/check_test_factories.py tests/<level>/test_<area>.py
+           ```
+           If this reports suggestions for your NEW code, refactor to use factories
+           before proceeding. Existing code suggestions can be ignored.
+
+        8. **Mutation check**: Mentally verify the test catches the right thing:
+           - If you removed the buggy code, would the test fail?
+           - If someone re-introduced the bug, would the test catch it?
+           - If the answer to either is "no", rewrite the test.
+
+        9. **Confirm root cause**: After tracing, state in one sentence what is wrong
            and why. This becomes the basis for the fix.
 
         ## Store Findings in the Bead
 
         ```bash
         bd update {BUG_ID} --append-notes "## Reproduction
-        - Failing test: tests/unit/test_<area>.py::test_<name>
+        - Test level: [unit | integration | e2e]
+        - Failing test: tests/<level>/test_<area>.py::test_<name>
+        - Docker required: [yes | no]
         - Root cause: [one sentence]
         - Data flow trace: [entry point] → [layer] → [bug manifests here]
+        - Mutation check: [what happens if bug is re-introduced]
 
         ## Relevant Code
         - path/to/file.py:line — [description of buggy code]"
@@ -84,7 +145,7 @@ iterate:
         ```
         Do NOT close this atom if not reproducible — leave it open for triage.
 
-      acceptance: "Failing test exists that demonstrates the bug. Root cause identified. reproduce:complete label added. Notes contain Reproduction section. Design contains Root Cause + Fix Approach."
+      acceptance: "Failing test exists AND has been run (not just written). Test level documented (unit/integration/e2e). If integration: Docker started and test run against real PostgreSQL. Root cause identified. reproduce:complete label added. Notes contain Reproduction section with test level + mutation check. Design contains Root Cause + Fix Approach."
       labels: ["atom:reproduce"]
 
     # ── Atom 2: Trace Similar ────────────────────────────────────
@@ -276,25 +337,40 @@ iterate:
         Unlike task-execute, the TDD "red" step is already done (in the reproduce
         atom). The failing test already exists.
 
-        1. **Verify the test still fails**:
+        1. **Find the failing test**: Read the Reproduction section in `bd show {BUG_ID}`.
+           Extract the test path. If there is no concrete test path (just a description),
+           **STOP** — go back and write the test first. A pattern-match fix without a
+           failing test is not acceptable.
+
+        2. **Start Docker if needed**: Check "Docker required" in the Reproduction section.
+           If yes, acquire the lock and start Docker (see reproduce atom for full
+           mutex script). **Remember to release the lock** after tests complete:
            ```bash
-           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           rmdir /tmp/salesagent-docker.lock 2>/dev/null
+           ```
+
+        3. **Verify the test still fails**:
+           ```bash
+           uv run pytest tests/<level>/test_<area>.py::test_<name> -x -v
            ```
            If the test now passes (e.g., someone else fixed it), note this and
            close the atom.
 
-        2. **Apply the fix**: Make the minimal change described in the design field.
+        4. **Apply the fix**: Make the minimal change described in the design field.
            - Follow CLAUDE.md critical patterns
            - Follow existing codebase conventions
            - Don't refactor surrounding code — fix the bug only
 
-        3. **Verify the fix**:
+        5. **Verify the fix**:
            ```bash
-           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           uv run pytest tests/<level>/test_<area>.py::test_<name> -x -v
            ```
            The previously failing test must now pass.
 
-        4. **Run full quality gate**:
+        6. **Mutation verify**: Temporarily revert the fix and confirm the test fails again.
+           Then re-apply the fix. This proves the test actually catches the bug.
+
+        7. **Run full quality gate**:
            ```bash
            make quality
            ```
@@ -328,7 +404,7 @@ iterate:
         bd close {BUG_ID}
         ```
 
-      acceptance: "make quality passes. Failing test from reproduce atom now passes. No existing tests modified without documented justification. Original task {BUG_ID} closed."
+      acceptance: "make quality passes. Failing test from reproduce atom now passes (run against real DB if integration-level). Mutation verified: reverting fix causes test to fail again. No existing tests modified without documented justification. Original task {BUG_ID} closed."
       depends_on: ["triage-{BUG_ID}"]
       depends_on_prev_barrier: true
       labels: ["atom:fix"]
