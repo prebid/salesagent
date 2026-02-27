@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0](https://github.com/prebid/salesagent/compare/v1.3.1...v1.4.0) (2026-02-27)
+
+
+### Features
+
+* Add Broadstreet Ads adapter with template support ([#1013](https://github.com/prebid/salesagent/issues/1013)) ([d7db92e](https://github.com/prebid/salesagent/commit/d7db92e75fd9b62f49647daf8f71728063a817a9))
+* implement get_media_buys tool with delivery snapshots ([#1063](https://github.com/prebid/salesagent/issues/1063)) ([0ebcf93](https://github.com/prebid/salesagent/commit/0ebcf935abe48ed782a859daacb74d9f5e4404a7))
+* Support AdCP v3 structured geo targeting ([#1006](https://github.com/prebid/salesagent/issues/1006)) ([#1024](https://github.com/prebid/salesagent/issues/1024)) ([ec3939a](https://github.com/prebid/salesagent/commit/ec3939af437687903fdb5272202b66961f7e5389))
+
+
+### Bug Fixes
+
+* Add root-level URL fallback for simple creatives ([843ab76](https://github.com/prebid/salesagent/commit/843ab761fb7254f4c3497907805eb3ad6670ccce))
+* bump googleads to 49.0.0 and remove GAM_API_VERSION constant ([#1070](https://github.com/prebid/salesagent/issues/1070)) ([f6ce2a9](https://github.com/prebid/salesagent/commit/f6ce2a94bb7750d413d6d293fe163a14480129cf))
+* handle FormatId objects in format validation during media buy creation ([3e9dcaf](https://github.com/prebid/salesagent/commit/3e9dcaf48ceff522453e00f28367250c3237629a))
+* improve test harness stability and add real GAM e2e tests ([#1062](https://github.com/prebid/salesagent/issues/1062)) ([52dc231](https://github.com/prebid/salesagent/commit/52dc2310410879ad1d8a5962951a7ebd872245d9))
+* propagate delivery_type in GAM products_map for correct line item type selection ([#1058](https://github.com/prebid/salesagent/issues/1058)) ([ff36add](https://github.com/prebid/salesagent/commit/ff36add62ffa59a32db62b7248eb1356cf4b4ce4))
+* resolve property_ids/property_tags authorization in property discovery ([#1054](https://github.com/prebid/salesagent/issues/1054)) ([a188b6a](https://github.com/prebid/salesagent/commit/a188b6aaff9f211e186bf6c1b0fd29a2eb14fd5a))
+* Unify creative URL extraction and update GAM macro mappings ([56cbc6a](https://github.com/prebid/salesagent/commit/56cbc6a2b335f90fe93f32ba5e830901e335621d))
+* Unify creative URL extraction and update GAM macro mappings ([70b04e2](https://github.com/prebid/salesagent/commit/70b04e2e18a266ff94cb0ca9cf46377b6c1f326f))
+* Update vulnerable dependencies (cryptography, pillow) ([4ba6c61](https://github.com/prebid/salesagent/commit/4ba6c612a582a81edb421902cce787ede53a41f5))
+* use attribute access for FormatId in format validation during media buy creation ([502f978](https://github.com/prebid/salesagent/commit/502f97838c3c8f17b6a84ed742c6cbe7dabea02f)), closes [#1019](https://github.com/prebid/salesagent/issues/1019)
+
+
+### Code Refactoring
+
+* eliminate model_dump antipatterns and migrate to adcp library base classes ([#1051](https://github.com/prebid/salesagent/issues/1051)) ([5e6815f](https://github.com/prebid/salesagent/commit/5e6815f53f5ab0fb115b3cd2e88c8a69ab770991))
+* enforce typed model boundaries across serialization and data flow ([#1044](https://github.com/prebid/salesagent/issues/1044)) ([c412ce9](https://github.com/prebid/salesagent/commit/c412ce9e0cd46852511b153f99f43aade759678a))
+
 ## [1.3.1](https://github.com/prebid/salesagent/compare/v1.3.0...v1.3.1) (2026-02-06)
 
 
