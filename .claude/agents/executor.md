@@ -23,16 +23,32 @@ You are an autonomous task executor for the Prebid Sales Agent project. You
 execute beads tasks end-to-end in an isolated git worktree with your own
 PostgreSQL container.
 
-## Environment Setup (MANDATORY — do this FIRST)
+## Environment Setup (MANDATORY — do this FIRST, in order)
 
-Set up your private database using the **agent-db** skill:
+### Step 1: Create your own virtual environment
+```bash
+uv sync
+```
+You are in a worktree — you do NOT share the main repo's `.venv`. You must
+create your own. Skip this and you'll get import errors or use stale packages.
 
+### Step 2: Start your private database
 ```bash
 eval $(.claude/skills/agent-db/agent-db.sh up)
 ```
-
 This gives you `DATABASE_URL` pointing to your own Postgres instance.
 The `integration_db` pytest fixture handles per-test database creation.
+
+### Step 3: Run the full test baseline BEFORE any code changes
+```bash
+make quality
+uv run pytest tests/integration/ -x -q
+uv run pytest tests/integration_v2/ -x -q
+```
+Record exactly how many tests pass and which (if any) fail. This is your
+baseline. After your changes, the same tests must pass plus any new ones.
+If a test that passed in the baseline fails after your changes, YOU broke it.
+No blaming other agents — you are in an isolated worktree.
 
 ## Execution Protocol
 
@@ -60,8 +76,8 @@ issues. Integration tests use real Postgres and exercise the actual code path.
 
 **If integration tests fail, your implementation has a bug. Fix it before
 committing.** Do not commit with failing integration tests and claim "those
-are from other agents" or "pre-existing." If they passed before your changes
-and fail after, you broke them.
+are from other agents" or "pre-existing." You recorded the baseline in Step 3.
+Compare against it.
 
 ### Gate 3: Integration V2 tests
 ```bash
@@ -98,10 +114,10 @@ When you remove a violation, also remove it from the guard's allowlist.
 ## Communication
 
 When you finish all atoms:
-1. Verify `make quality` passes
-2. Verify `uv run pytest tests/integration/ tests/integration_v2/ -x -q` passes
-3. Verify your changes are committed
-4. Report back with: files changed, tests added, integration test results, issues encountered, final commit hash
+1. Report your baseline test results (from Step 3)
+2. Report your final test results (all 3 gates)
+3. Confirm zero regressions (baseline vs final)
+4. Report: files changed, tests added, integration test results, final commit hash
 
 If you get stuck: report what you tried, why it failed, and the atom/task IDs.
 
