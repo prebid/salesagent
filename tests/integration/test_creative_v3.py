@@ -179,6 +179,7 @@ class TestCrossPrincipalIsolation:
     def test_creative_lookup_filters_by_principal(self):
         """Creative upsert lookup uses tenant_id + principal_id + creative_id triple.
 
+        Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-01
         Spec: UNSPECIFIED (implementation-defined multi-tenant isolation).
         Unit stub: TestCrossPrincipalIsolation::test_creative_lookup_filters_by_principal
         """
@@ -200,6 +201,7 @@ class TestCrossPrincipalIsolation:
     def test_same_creative_id_different_principal_creates_new(self):
         """Same creative_id under different principals creates separate DB records.
 
+        Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-02
         Unit stub: TestCrossPrincipalIsolation::test_same_creative_id_different_principal_creates_new
         """
         self._sync_one("principal_1", "c_shared")
@@ -218,6 +220,7 @@ class TestCrossPrincipalIsolation:
     def test_new_creative_stamped_with_principal_id(self):
         """New creative DB record has principal_id from identity.
 
+        Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-03
         Spec: UNSPECIFIED (implementation-defined multi-tenant isolation).
         Unit stub: TestCrossPrincipalIsolation::test_new_creative_stamped_with_principal_id
         """
@@ -301,6 +304,7 @@ class TestApprovalWorkflow:
     def test_auto_approve_sets_approved_status(self):
         """Auto-approve mode sets creative status to approved in DB.
 
+        Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01
         Spec: UNSPECIFIED (implementation-defined approval workflow).
         Unit stub: TestApprovalWorkflow::test_auto_approve_sets_approved_status
         """
@@ -310,6 +314,7 @@ class TestApprovalWorkflow:
     def test_require_human_sets_pending_review(self):
         """Require-human mode sets creative status to pending_review in DB.
 
+        Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-02
         Spec: UNSPECIFIED (implementation-defined approval workflow).
         Unit stub: TestApprovalWorkflow::test_require_human_sets_pending_review
         """
@@ -319,6 +324,7 @@ class TestApprovalWorkflow:
     def test_default_approval_mode_is_require_human(self):
         """Tenant with no approval_mode defaults to require-human.
 
+        Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-04
         Spec: UNSPECIFIED (implementation-defined approval workflow).
         Unit stub: TestApprovalWorkflow::test_default_approval_mode_is_require_human
         """
@@ -390,6 +396,7 @@ class TestBatchSync:
     def test_batch_sync_multiple_creatives(self):
         """Batch of N creatives produces N per-creative results and N DB rows.
 
+        Covers: UC-006-MAIN-MCP-02
         Unit stub: TestSyncCreativesE2E::test_batch_sync_multiple_creatives
         """
         from src.core.tools.creatives import sync_creatives_raw
@@ -411,6 +418,7 @@ class TestBatchSync:
     def test_upsert_by_triple_key(self):
         """First sync creates, second sync updates (action=updated).
 
+        Covers: UC-006-MAIN-MCP-03
         Unit stub: TestSyncCreativesE2E::test_upsert_by_triple_key
         """
         from src.core.tools.creatives import sync_creatives_raw
@@ -534,6 +542,7 @@ class TestFormatCompatibility:
     def test_format_mismatch_strict_raises(self):
         """Strict mode: display creative assigned to video-only package raises error.
 
+        Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-02
         Spec: UNSPECIFIED (implementation-defined format compatibility logic).
         Unit stub: TestFormatCompatibility::test_format_mismatch_strict_raises
         """
@@ -646,6 +655,7 @@ class TestMediaBuyStatusTransition:
     def test_draft_with_approved_at_transitions(self):
         """Draft media buy with approved_at transitions to pending_creatives on assignment.
 
+        Covers: UC-006-MEDIA-BUY-STATUS-01
         Spec: UNSPECIFIED (implementation-defined status machine).
         Unit stub: TestMediaBuyStatusTransition::test_draft_with_approved_at_transitions
         """

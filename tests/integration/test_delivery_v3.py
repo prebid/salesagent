@@ -251,6 +251,7 @@ class TestDeliverySingleBuyIntegration:
     def test_single_buy_delivery_via_media_buy_id(self, integration_db):
         """UC-004-MAIN-01: happy path fetch delivery for single media buy by media_buy_id.
 
+        Covers: UC-004-MAIN-01
         Verifies real DB lookup of media buy, adapter call, and response assembly.
         Corresponds to unit test: TestDeliveryPollingSingleBuy.test_single_buy_returns_complete_response
         """
@@ -330,6 +331,7 @@ class TestDeliveryIdentificationModesIntegration:
     def test_media_buy_ids_precedence_over_buyer_refs(self, integration_db):
         """UC-004-MAIN-05: media_buy_ids takes precedence when both provided.
 
+        Covers: UC-004-MAIN-05
         Spec: UNSPECIFIED. With real DB, verifies that the query uses media_buy_ids
         and ignores buyer_refs.
         """
@@ -379,6 +381,7 @@ class TestDeliveryIdentificationModesIntegration:
     def test_media_buy_ids_lookup(self, integration_db):
         """UC-004-MAIN-01: media_buy_ids resolves correctly from real DB.
 
+        Covers: UC-004-MAIN-01
         Spec: CONFIRMED. Validates that the DB query by media_buy_id works correctly
         with real PostgreSQL and returns the matching buy.
         """
@@ -422,6 +425,7 @@ class TestDeliveryStatusFilterIntegration:
     def test_status_filter_all_via_explicit_ids(self, integration_db):
         """UC-004-FILT-06: requesting all buys returns buys of any date-derived status.
 
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-06
         Spec: UNSPECIFIED. With real DB, creates buys with different date ranges
         so they derive ready/active/completed status, then requests all by explicit IDs
         with status_filter including all possible statuses.
@@ -494,6 +498,7 @@ class TestDeliveryStatusFilterIntegration:
     def test_default_filter_active_only(self, integration_db):
         """UC-004-FILT-01: default filter returns only active buys.
 
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-05
         Spec: UNSPECIFIED. With real DB, verifies that without status_filter,
         only buys whose dates span the reference date are returned.
         """
@@ -542,6 +547,7 @@ class TestDeliveryStatusFilterIntegration:
     def test_status_filter_no_match_returns_empty(self, integration_db):
         """UC-004-FILT-04: no buys match filter returns empty result.
 
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-04
         Spec: UNSPECIFIED. With real DB, all buys are active but filter=completed.
         """
         with get_db_session() as session:
@@ -579,6 +585,7 @@ class TestDeliveryPricingOptionIntegration:
     def test_pricing_option_roundtrip(self, integration_db):
         """_get_pricing_options resolves string pricing_option_id to real PricingOption row.
 
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
         Spec: UNSPECIFIED. CRITICAL: validates the int() cast at the boundary
         (salesagent-mq3n). Creates a PricingOption with auto-increment int PK,
         stores the string ID in raw_request, and verifies delivery resolves it.
@@ -638,6 +645,7 @@ class TestDeliveryOwnershipIntegration:
     def test_ownership_isolation(self, integration_db):
         """UC-004-EXT-D1: principal_id filtering hides other principals' buys.
 
+        Covers: UC-004-EXT-D-01
         Spec: UNSPECIFIED. With real DB, creates buys for two principals.
         Requesting as principal_A should not see principal_B's buys.
         """
@@ -697,6 +705,7 @@ class TestDeliveryOwnershipIntegration:
     def test_ownership_no_info_leakage(self, integration_db):
         """UC-004-EXT-D2: SECURITY: error is media_buy_not_found not ownership_mismatch.
 
+        Covers: UC-004-EXT-D-02
         Spec: UNSPECIFIED. Prevents information leakage about existence of other
         principals' buys. Same error as genuinely nonexistent buy.
         """
@@ -743,6 +752,7 @@ class TestDeliveryOwnershipIntegration:
     def test_mixed_ownership(self, integration_db):
         """UC-004-EXT-D3: mixed ownership: owned returned, non-owned as errors.
 
+        Covers: UC-004-EXT-D-03
         Spec: UNSPECIFIED. With real DB, request 2 IDs: one owned, one not.
         """
         with get_db_session() as session:
@@ -814,6 +824,7 @@ class TestDeliverySerializationIntegration:
     def test_nested_serialization_roundtrip(self, integration_db):
         """UC-004-UPG-04: model_dump() correctly serializes nested delivery response.
 
+        Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-01
         Spec: UNSPECIFIED. With real DB, verifies that the response from _impl
         with real DB objects serializes correctly through model_dump(mode='json').
         """

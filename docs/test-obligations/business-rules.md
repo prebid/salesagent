@@ -19,6 +19,8 @@ The following rules are directly affected by the adcp 3.2.0 -> 3.6.0 upgrade:
 ## Rules
 
 ### BR-RULE-001: Brand Manifest Policy Enforcement
+**Obligation ID** BR-RULE-001-01
+**Layer** behavioral
 **Invariant:** The system enforces `brand_manifest_policy` at product discovery entry. Three levels: `require_auth`, `require_brand`, `public`. Default is `require_auth`.
 **Scenario:**
 ```gherkin
@@ -36,6 +38,8 @@ Then the request proceeds and products are returned
 ---
 
 ### BR-RULE-002: Brief Policy Compliance
+**Obligation ID** BR-RULE-002-01
+**Layer** behavioral
 **Invariant:** When advertising_policy is enabled, the buyer's brief is checked via LLM. BLOCKED briefs are rejected. RESTRICTED briefs with manual review enabled are rejected. Service unavailable fails open.
 **Scenario:**
 ```gherkin
@@ -53,6 +57,8 @@ Then the request proceeds (fail-open)
 ---
 
 ### BR-RULE-003: Principal-Scoped Product Visibility
+**Obligation ID** BR-RULE-003-01
+**Layer** behavioral
 **Invariant:** Products with `allowed_principal_ids` are visible only to listed principals. Products without restrictions are visible to all. Anonymous users cannot see restricted products.
 **Scenario:**
 ```gherkin
@@ -70,6 +76,8 @@ Then the product is included in results
 ---
 
 ### BR-RULE-004: Anonymous Pricing Suppression
+**Obligation ID** BR-RULE-004-01
+**Layer** behavioral
 **Invariant:** Anonymous requests have `pricing_options` set to empty array on every product.
 **Scenario:**
 ```gherkin
@@ -87,6 +95,8 @@ Then the product has all 3 pricing options
 ---
 
 ### BR-RULE-005: AI Ranking Minimum Threshold
+**Obligation ID** BR-RULE-005-01
+**Layer** behavioral
 **Invariant:** When AI ranking is applied, products scoring below 0.1 are filtered out. Products >= 0.1 are sorted descending. Without ranking, no threshold.
 **Scenario:**
 ```gherkin
@@ -104,6 +114,8 @@ Then all products are included regardless of score
 ---
 
 ### BR-RULE-006: PricingOption XOR Constraint
+**Obligation ID** BR-RULE-006-01
+**Layer** behavioral
 **Invariant:** Each pricing option must have exactly one of `fixed_price` or `floor_price`. Both or neither is invalid. CPA always has `fixed_price`.
 **Scenario:**
 ```gherkin
@@ -122,6 +134,8 @@ Then fixed_price is required and floor_price must be null
 ---
 
 ### BR-RULE-007: Product Schema Validity
+**Obligation ID** BR-RULE-007-01
+**Layer** behavioral
 **Invariant:** Each product must have >= 1 format_id, >= 1 publisher_property, >= 1 pricing_option. Conversion failure is treated as data corruption and fails the entire request.
 **Scenario:**
 ```gherkin
@@ -139,6 +153,8 @@ Then conversion succeeds
 ---
 
 ### BR-RULE-008: Budget Positivity
+**Obligation ID** BR-RULE-008-01
+**Layer** behavioral
 **Invariant:** Total budget must be strictly positive (> 0). Schema allows 0 but business rule rejects it.
 **Scenario:**
 ```gherkin
@@ -156,6 +172,8 @@ Then budget validation passes
 ---
 
 ### BR-RULE-009: Single Currency Per Media Buy
+**Obligation ID** BR-RULE-009-01
+**Layer** behavioral
 **Invariant:** All packages must use the same currency. Currency must be in tenant's CurrencyLimit table.
 **Scenario:**
 ```gherkin
@@ -173,6 +191,8 @@ Then currency validation passes
 ---
 
 ### BR-RULE-010: No Duplicate Products Per Media Buy
+**Obligation ID** BR-RULE-010-01
+**Layer** behavioral
 **Invariant:** Each product_id can appear at most once across all packages in a media buy.
 **Scenario:**
 ```gherkin
@@ -190,6 +210,8 @@ Then validation passes
 ---
 
 ### BR-RULE-011: Minimum Spend Per Package
+**Obligation ID** BR-RULE-011-01
+**Layer** behavioral
 **Invariant:** Package budget must meet min_spend from product pricing or tenant currency limit fallback.
 **Scenario:**
 ```gherkin
@@ -211,6 +233,8 @@ Then minimum spend check is skipped
 ---
 
 ### BR-RULE-012: Maximum Daily Spend Cap
+**Obligation ID** BR-RULE-012-01
+**Layer** behavioral
 **Invariant:** Daily budget (package_budget / max(1, flight_days)) must not exceed tenant's max_daily_package_spend.
 **Scenario:**
 ```gherkin
@@ -228,6 +252,8 @@ Then daily cap check is skipped
 ---
 
 ### BR-RULE-013: DateTime Validity
+**Obligation ID** BR-RULE-013-01
+**Layer** behavioral
 **Invariant:** start_time must be in the future, end_time must be after start_time. "asap" (case-sensitive) resolves to current UTC.
 **Scenario:**
 ```gherkin
@@ -249,6 +275,8 @@ Then the request is rejected
 ---
 
 ### BR-RULE-014: Targeting Overlay Validation
+**Obligation ID** BR-RULE-014-01
+**Layer** behavioral
 **Invariant:** Unknown field names rejected, managed-only dimensions cannot be set by buyers, same geo value cannot be in both include and exclude lists.
 **Scenario:**
 ```gherkin
@@ -266,6 +294,8 @@ Then the request is rejected
 ---
 
 ### BR-RULE-015: Creative Asset Validation
+**Obligation ID** BR-RULE-015-01
+**Layer** behavioral
 **Invariant:** Reference creatives must have URL and dimensions. Generative formats are exempt. Errors collected non-fail-fast.
 **Scenario:**
 ```gherkin
@@ -283,6 +313,8 @@ Then the creative passes validation (exempt)
 ---
 
 ### BR-RULE-017: Approval Workflow Determination
+**Obligation ID** BR-RULE-017-01
+**Layer** behavioral
 **Invariant:** If tenant `human_review_required` or adapter `manual_approval_required` is true, media buy enters pending state. Default is human_review_required=true.
 **Scenario:**
 ```gherkin
@@ -300,6 +332,8 @@ Then the media buy enters pending manual approval state
 ---
 
 ### BR-RULE-018: Atomic Response Semantics
+**Obligation ID** BR-RULE-018-01
+**Layer** behavioral
 **Invariant:** Responses contain EITHER success data OR error data, never both. Enforced by oneOf schema.
 **Scenario:**
 ```gherkin
@@ -317,6 +351,8 @@ Then it contains errors array and no success fields
 ---
 
 ### BR-RULE-020: Adapter Atomicity
+**Obligation ID** BR-RULE-020-01
+**Layer** behavioral
 **Invariant:** If adapter call fails on auto-approval path, no DB records are persisted. Manual approval path persists in pending state before adapter.
 **Scenario:**
 ```gherkin
@@ -334,6 +370,8 @@ Then records are persisted in pending state before adapter execution
 ---
 
 ### BR-RULE-021: Dual Identification (XOR)
+**Obligation ID** BR-RULE-021-01
+**Layer** behavioral
 **Invariant:** Update/performance operations must use exactly one of media_buy_id or buyer_ref. Both or neither is invalid.
 **Scenario:**
 ```gherkin
@@ -351,6 +389,8 @@ Then the system resolves the media buy via buyer_ref lookup
 ---
 
 ### BR-RULE-022: Partial Update Semantics
+**Obligation ID** BR-RULE-022-01
+**Layer** behavioral
 **Invariant:** Only fields present in request are modified. Omitted fields unchanged. Empty updates rejected.
 **Scenario:**
 ```gherkin
@@ -368,6 +408,8 @@ Then the request is rejected
 ---
 
 ### BR-RULE-024: Creative Replacement Semantics
+**Obligation ID** BR-RULE-024-01
+**Layer** behavioral
 **Invariant:** creative_ids or creative_assignments completely replaces the existing set. Not a merge.
 **Scenario:**
 ```gherkin
@@ -381,6 +423,8 @@ Then assignments become [B, D]; A and C are deleted
 ---
 
 ### BR-RULE-026: Creative Assignment Validation
+**Obligation ID** BR-RULE-026-01
+**Layer** behavioral
 **Invariant:** Creatives in error/rejected state cannot be assigned. Format must be compatible with product. All errors returned as INVALID_CREATIVES.
 **Scenario:**
 ```gherkin
@@ -398,6 +442,8 @@ Then the request is rejected with INVALID_CREATIVES
 ---
 
 ### BR-RULE-028: Placement ID Validation
+**Obligation ID** BR-RULE-028-01
+**Layer** behavioral
 **Invariant:** placement_ids must be valid for the product. Products without placement support reject placement_ids.
 **Scenario:**
 ```gherkin
@@ -415,6 +461,8 @@ Then the request is rejected
 ---
 
 ### BR-RULE-029: Webhook Delivery Contract
+**Obligation ID** BR-RULE-029-01
+**Layer** behavioral
 **Invariant:** Webhooks use monotonically increasing sequence numbers, typed notifications, and exponential backoff retry for 5xx. 4xx not retried.
 **Scenario:**
 ```gherkin
@@ -436,6 +484,8 @@ Then next_expected_at is omitted
 ---
 
 ### BR-RULE-030: Multi-Entity Identification (OR)
+**Obligation ID** BR-RULE-030-01
+**Layer** behavioral
 **Invariant:** Delivery requests use optional media_buy_ids (priority) and/or buyer_refs. Neither returns all. Partial resolution silently omits missing. Zero results return empty array.
 **Scenario:**
 ```gherkin
@@ -457,6 +507,8 @@ Then results include only found media buys (partial, no error)
 ---
 
 ### BR-RULE-031: Format Discovery Filter Conjunction
+**Obligation ID** BR-RULE-031-01
+**Layer** behavioral
 **Invariant:** All filters combine as AND. Results sorted by type then name.
 **Scenario:**
 ```gherkin
@@ -474,6 +526,8 @@ Then they are sorted by format type then name
 ---
 
 ### BR-RULE-033: Validation Mode Semantics
+**Obligation ID** BR-RULE-033-01
+**Layer** behavioral
 **Invariant:** strict mode aborts on assignment error. lenient mode logs warning and continues. Default is strict. Per-creative failures always produce action=failed regardless of mode.
 **Scenario:**
 ```gherkin
@@ -491,6 +545,8 @@ Then a warning is logged and the remaining assignments continue
 ---
 
 ### BR-RULE-034: Cross-Principal Creative Isolation
+**Obligation ID** BR-RULE-034-01
+**Layer** behavioral
 **Invariant:** Creative lookup always filters by tenant_id + principal_id + creative_id. Cross-principal collision silently creates new creative.
 **Scenario:**
 ```gherkin
@@ -504,6 +560,8 @@ Then a new creative is created for principal_B (no error, no cross-visibility)
 ---
 
 ### BR-RULE-035: Creative Format Validation
+**Obligation ID** BR-RULE-035-01
+**Layer** behavioral
 **Invariant:** format_id is required. Non-HTTP agent_url skips external validation. HTTP agents checked for reachability and format registration.
 **Scenario:**
 ```gherkin
@@ -521,6 +579,8 @@ Then a ValueError with agent-unreachable message is raised
 ---
 
 ### BR-RULE-036: Generative Creative Build
+**Obligation ID** BR-RULE-036-01
+**Layer** behavioral
 **Invariant:** Creative is generative when format has output_format_ids. Prompt priority: asset roles > inputs[0].context_description > name (create only). Update without prompt preserves existing data.
 **Scenario:**
 ```gherkin
@@ -538,6 +598,8 @@ Then the generative build is skipped and existing data is preserved
 ---
 
 ### BR-RULE-037: Creative Approval Workflow
+**Obligation ID** BR-RULE-037-01
+**Layer** behavioral
 **Invariant:** approval_mode determines routing: auto-approve (immediate), require-human (pending + workflow + Slack), ai-powered (pending + workflow + background AI). Default is require-human.
 **Scenario:**
 ```gherkin
@@ -555,6 +617,8 @@ Then status is "pending_review", workflow steps created, Slack notification sent
 ---
 
 ### BR-RULE-038: Assignment Package Validation
+**Obligation ID** BR-RULE-038-01
+**Layer** behavioral
 **Invariant:** Package lookup joins MediaPackage to MediaBuy filtered by tenant_id. Strict/lenient per BR-RULE-033. Existing assignments idempotently updated.
 **Scenario:**
 ```gherkin
@@ -572,6 +636,8 @@ Then the existing assignment is updated (weight reset to 100)
 ---
 
 ### BR-RULE-039: Assignment Format Compatibility
+**Obligation ID** BR-RULE-039-01
+**Layer** behavioral
 **Invariant:** Format compatibility checks normalized agent_url and exact format_id against product's format_ids. Empty format_ids means all allowed.
 **Scenario:**
 ```gherkin
@@ -589,6 +655,8 @@ Then format compatibility passes (all formats allowed)
 ---
 
 ### BR-RULE-040: Media Buy Status Transition on Assignment
+**Obligation ID** BR-RULE-040-01
+**Layer** behavioral
 **Invariant:** Draft media buy with non-null approved_at transitions to pending_creatives on creative assignment. Other statuses unchanged.
 **Scenario:**
 ```gherkin
@@ -606,6 +674,8 @@ Then status remains "draft"
 ---
 
 ### BR-RULE-041: Discovery Endpoint Authentication
+**Obligation ID** BR-RULE-041-01
+**Layer** behavioral
 **Invariant:** Authentication optional for discovery. Invalid tokens treated as missing (MCP). A2A requires valid token if one is provided. Data not scoped by identity.
 **Scenario:**
 ```gherkin
@@ -627,6 +697,8 @@ Then the request is rejected with authentication error
 ---
 
 ### BR-RULE-042: Property Portfolio Assembly
+**Obligation ID** BR-RULE-042-01
+**Layer** behavioral
 **Invariant:** All registered publisher partnerships returned regardless of verification status. Sorted alphabetically. Empty portfolio returns empty array with description.
 **Scenario:**
 ```gherkin
@@ -644,6 +716,8 @@ Then an empty publisher_domains array is returned with a portfolio_description
 ---
 
 ### BR-RULE-043: Context Echo Invariant
+**Obligation ID** BR-RULE-043-01
+**Layer** behavioral
 **Invariant:** Request context is echoed unchanged in the response. Context is opaque. Applies to all response paths.
 **Scenario:**
 ```gherkin
@@ -661,6 +735,8 @@ Then context is absent from the response
 ---
 
 ### BR-RULE-044: Advertising Policy Disclosure
+**Obligation ID** BR-RULE-044-01
+**Layer** behavioral
 **Invariant:** When advertising_policy enabled and at least one policy array non-empty, human-readable summary included. Omitted when disabled or all arrays empty.
 **Scenario:**
 ```gherkin
@@ -678,6 +754,8 @@ Then advertising_policies field is omitted
 ---
 
 ### BR-RULE-045: Publisher Domain Filter Validation
+**Obligation ID** BR-RULE-045-01
+**Layer** behavioral
 **Invariant:** Domain must match lowercase alphanumeric pattern. Filter array must have >= 1 item. Valid but non-matching domains yield empty results (not error).
 **Scenario:**
 ```gherkin
@@ -695,6 +773,8 @@ Then the request succeeds with empty results for that domain
 ---
 
 ### BR-RULE-047: Signal Filter Conjunction & Defaults
+**Obligation ID** BR-RULE-047-01
+**Layer** behavioral
 **Invariant:** Signal filters are optional, combine as AND. max_results limits final count.
 **Scenario:**
 ```gherkin
@@ -712,6 +792,8 @@ Then only 3 signals are included
 ---
 
 ### BR-RULE-048: Signal Activation Validation
+**Obligation ID** BR-RULE-048-01
+**Layer** behavioral
 **Invariant:** Premium signals (IDs starting with "premium_") require manual approval. Response is atomic (success XOR error).
 **Scenario:**
 ```gherkin
@@ -729,6 +811,8 @@ Then activation proceeds and deployments are returned
 ---
 
 ### BR-RULE-049: Per-Filter Format Discovery Semantics
+**Obligation ID** BR-RULE-049-01
+**Layer** behavioral
 **Invariant:** type=exact match, format_ids=id match with silent exclusion, asset_types=OR, dimensions=ANY render, is_responsive=bidirectional, name_search=case-insensitive substring.
 **Scenario:**
 ```gherkin
@@ -750,6 +834,8 @@ Then only formats with no responsive dimensions are returned
 ---
 
 ### BR-RULE-050: Per-Filter Signal Discovery Semantics
+**Obligation ID** BR-RULE-050-01
+**Layer** behavioral
 **Invariant:** catalog_types and data_providers use OR within-filter. max_cpm and min_coverage enforce numeric thresholds. signal_spec is case-insensitive substring.
 **Scenario:**
 ```gherkin
@@ -767,6 +853,8 @@ Then that signal is excluded
 ---
 
 ### BR-RULE-051: Performance Index Scale Semantics
+**Obligation ID** BR-RULE-051-01
+**Layer** behavioral
 **Invariant:** 0.0 = no value, 1.0 = expected, > 1.0 = above expected. Must be >= 0. Scores < 0.8 trigger optimization recommendation.
 **Scenario:**
 ```gherkin
@@ -784,6 +872,8 @@ Then the system flags low performance and recommends optimization
 ---
 
 ### BR-RULE-052: Capabilities Graceful Degradation
+**Obligation ID** BR-RULE-052-01
+**Layer** behavioral
 **Invariant:** When internal deps fail, return valid but degraded response. No tenant = minimal. Adapter failure = default channels/targeting. DB failure = placeholder domain. Never propagate error to caller.
 **Scenario:**
 ```gherkin
@@ -801,6 +891,8 @@ Then channels default to [display] and targeting defaults to geo_countries=true,
 ---
 
 ### BR-RULE-053: Channel Alias Resolution
+**Obligation ID** BR-RULE-053-01
+**Layer** behavioral
 **Invariant:** "video" maps to "olv", "audio" maps to "streaming_audio". Unrecognized channels silently dropped.
 **Scenario:**
 ```gherkin
@@ -818,6 +910,8 @@ Then that channel is silently dropped (not included)
 ---
 
 ### BR-RULE-054: Account Access Scoping
+**Obligation ID** BR-RULE-054-01
+**Layer** behavioral
 **Invariant:** list_accounts returns only accounts accessible to the authenticated agent. No accounts = empty array, not error.
 **Scenario:**
 ```gherkin
@@ -835,6 +929,8 @@ Then an empty accounts array is returned (not an error)
 ---
 
 ### BR-RULE-055: Account Operation Authentication Policy
+**Obligation ID** BR-RULE-055-01
+**Layer** behavioral
 **Invariant:** sync_accounts requires valid auth. list_accounts works without auth but scopes results. Unauthenticated list returns empty array.
 **Scenario:**
 ```gherkin
@@ -852,6 +948,8 @@ Then an empty accounts array is returned (not an error)
 ---
 
 ### BR-RULE-056: Sync Upsert Semantics
+**Obligation ID** BR-RULE-056-01
+**Layer** behavioral
 **Invariant:** sync_accounts creates new or updates existing, returning per-account action (created/updated/unchanged/failed). House is echoed.
 **Scenario:**
 ```gherkin
@@ -869,6 +967,8 @@ Then per-account result has action=unchanged
 ---
 
 ### BR-RULE-057: Sync Atomic Response
+**Obligation ID** BR-RULE-057-01
+**Layer** behavioral
 **Invariant:** Response contains EITHER accounts[] (success) OR errors[] (error), never both. Per-account failures are within the success variant.
 **Scenario:**
 ```gherkin
@@ -886,6 +986,8 @@ Then response is error variant with errors[], no accounts[]
 ---
 
 ### BR-RULE-058: Brand Identity Resolution
+**Obligation ID** BR-RULE-058-01
+**Layer** behavioral
 **Invariant:** Brands identified by house domain + optional brand_id, resolved via /.well-known/brand.json. House echoed in response.
 **Scenario:**
 ```gherkin
@@ -902,6 +1004,8 @@ Then it echoes the same house value from the request
 ---
 
 ### BR-RULE-059: Billing Model Policy
+**Obligation ID** BR-RULE-059-01
+**Layer** behavioral
 **Invariant:** Seller assigns billing model, may override buyer's request with warning. Omitted billing uses seller default.
 **Scenario:**
 ```gherkin
@@ -915,6 +1019,8 @@ Then billing is set to "operator" with a per-account warning explaining the over
 ---
 
 ### BR-RULE-060: Account Approval Workflow
+**Obligation ID** BR-RULE-060-01
+**Layer** behavioral
 **Invariant:** Accounts requiring review enter pending_approval with setup info (message required, optional url/expiry). Push notification webhook for async updates.
 **Scenario:**
 ```gherkin
@@ -932,6 +1038,8 @@ Then per-account result has status=active (no setup)
 ---
 
 ### BR-RULE-061: Delete Missing Deactivation Policy
+**Obligation ID** BR-RULE-061-01
+**Layer** behavioral
 **Invariant:** delete_missing=true deactivates absent accounts scoped to authenticated agent only. Default is false.
 **Scenario:**
 ```gherkin
@@ -949,6 +1057,8 @@ Then X1 is NOT affected (agent-scoped deactivation)
 ---
 
 ### BR-RULE-062: Dry Run Preview Mode
+**Obligation ID** BR-RULE-062-01
+**Layer** behavioral
 **Invariant:** dry_run=true returns what would change without applying modifications. Response includes dry_run=true.
 **Scenario:**
 ```gherkin
@@ -966,6 +1076,8 @@ Then changes are applied normally
 ---
 
 ### BR-RULE-063: Content Standards Authentication
+**Obligation ID** BR-RULE-063-01
+**Layer** behavioral
 **Invariant:** All content standards CRUD operations require valid authentication. No anonymous access.
 **Scenario:**
 ```gherkin
@@ -983,6 +1095,8 @@ Then the operation proceeds under the resolved tenant and principal
 ---
 
 ### BR-RULE-064: Content Standards Scope Requirements
+**Obligation ID** BR-RULE-064-01
+**Layer** behavioral
 **Invariant:** Scope requires languages (minItems: 1). countries_all uses AND logic. channels_any uses OR logic. countries and channels are optional.
 **Scenario:**
 ```gherkin
@@ -1000,6 +1114,8 @@ Then it applies to display OR social channels
 ---
 
 ### BR-RULE-065: Scope Conflict Detection
+**Obligation ID** BR-RULE-065-01
+**Layer** behavioral
 **Invariant:** Create/update that would overlap scope with existing standard for same tenant is rejected with SCOPE_CONFLICT and conflicting_standards_id.
 **Scenario:**
 ```gherkin
@@ -1013,6 +1129,8 @@ Then the operation is rejected with SCOPE_CONFLICT and the existing standard's I
 ---
 
 ### BR-RULE-066: Content Standards Immutable Versioning
+**Obligation ID** BR-RULE-066-01
+**Layer** behavioral
 **Invariant:** Updates create new versions. Partial fields supported. standards_id remains stable across versions.
 **Scenario:**
 ```gherkin
@@ -1026,6 +1144,8 @@ Then a new version is created; previous version preserved; same standards_id ret
 ---
 
 ### BR-RULE-067: Content Standards Referential Integrity
+**Obligation ID** BR-RULE-067-01
+**Layer** behavioral
 **Invariant:** Cannot delete standard referenced by active media buys. Unreferenced delete cascades versions and exemplars.
 **Scenario:**
 ```gherkin
@@ -1043,6 +1163,8 @@ Then the standard, all versions, and calibration exemplars are deleted
 ---
 
 ### BR-RULE-068: Content Standards List Filter Semantics
+**Obligation ID** BR-RULE-068-01
+**Layer** behavioral
 **Invariant:** Within-dimension OR, cross-dimension AND. No filters returns all tenant standards.
 **Scenario:**
 ```gherkin
@@ -1056,6 +1178,8 @@ Then standards matching (display OR social) AND (en) are returned
 ---
 
 ### BR-RULE-069: Calibration Exemplar Polymorphism
+**Obligation ID** BR-RULE-069-01
+**Layer** behavioral
 **Invariant:** Exemplars accept URL references or artifact objects (oneOf). Both may coexist. URL references resolved to artifacts on ingest.
 **Scenario:**
 ```gherkin
@@ -1069,6 +1193,8 @@ Then both formats are accepted in the same collection
 ---
 
 ### BR-RULE-070: Property List Authentication
+**Obligation ID** BR-RULE-070-01
+**Layer** behavioral
 **Invariant:** All property list CRUD operations require authenticated principal. No tenant = rejected.
 **Scenario:**
 ```gherkin
@@ -1086,6 +1212,8 @@ Then the request is rejected with tenant error
 ---
 
 ### BR-RULE-071: Property List Tenant Isolation
+**Obligation ID** BR-RULE-071-01
+**Layer** behavioral
 **Invariant:** Property lists scoped to auth-derived tenant. Cross-tenant access returns NOT_FOUND (not ACCESS_DENIED) to prevent enumeration.
 **Scenario:**
 ```gherkin
@@ -1099,6 +1227,8 @@ Then LIST_NOT_FOUND is returned (prevents information disclosure)
 ---
 
 ### BR-RULE-072: Property Source Validation
+**Obligation ID** BR-RULE-072-01
+**Layer** behavioral
 **Invariant:** base_properties uses discriminated union (publisher_tags/publisher_ids/identifiers). Non-empty selection arrays required. Omitted base_properties = entire catalog.
 **Scenario:**
 ```gherkin
@@ -1116,6 +1246,8 @@ Then the system resolves against the agent's entire property catalog
 ---
 
 ### BR-RULE-073: Property List Filter Requirements
+**Obligation ID** BR-RULE-073-01
+**Layer** behavioral
 **Invariant:** filters object requires both countries_all (AND) and channels_any (OR) as non-empty arrays. Evaluated at resolution time.
 **Scenario:**
 ```gherkin
@@ -1129,6 +1261,8 @@ Then only properties with data in US AND UK that support display are included
 ---
 
 ### BR-RULE-074: Auth Token One-Shot Delivery
+**Obligation ID** BR-RULE-074-01
+**Layer** behavioral
 **Invariant:** auth_token returned exactly once in create response. Not in any subsequent response. No recovery mechanism.
 **Scenario:**
 ```gherkin
@@ -1146,6 +1280,8 @@ Then auth_token is NOT included
 ---
 
 ### BR-RULE-075: Update Replacement Semantics
+**Obligation ID** BR-RULE-075-01
+**Layer** behavioral
 **Invariant:** Update uses full replacement per field. webhook_url only in update (not create). Empty string removes webhook.
 **Scenario:**
 ```gherkin
@@ -1163,6 +1299,8 @@ Then the previously set webhook URL is removed
 ---
 
 ### BR-RULE-076: Property List Referential Integrity
+**Obligation ID** BR-RULE-076-01
+**Layer** behavioral
 **Invariant:** get/update/delete require existing list_id. Missing = LIST_NOT_FOUND. Delete blocked by active media buys (LIST_IN_USE).
 **Scenario:**
 ```gherkin
@@ -1180,6 +1318,8 @@ Then LIST_IN_USE is returned; list is not deleted
 ---
 
 ### BR-RULE-077: Property List Resolution and Pagination
+**Obligation ID** BR-RULE-077-01
+**Layer** behavioral
 **Invariant:** resolve=true (default) resolves filters against current catalog. max_results 1-10000, default 1000. Cursor-based pagination.
 **Scenario:**
 ```gherkin
@@ -1197,6 +1337,8 @@ Then identifiers are not returned; pagination params have no effect
 ---
 
 ### BR-RULE-078: Property List Filtering
+**Obligation ID** BR-RULE-078-01
+**Layer** behavioral
 **Invariant:** list-property-lists supports optional filtering by principal (exact) and name (case-insensitive substring). Unfiltered returns all tenant lists.
 **Scenario:**
 ```gherkin

@@ -211,6 +211,7 @@ class TestCreateMediaBuyCurrencyValidation:
     async def test_unsupported_currency_rejected(self, mb_tenant, mb_principal, mb_products):
         """UC-002-V12: package currency not in tenant limits rejected.
 
+        Covers: UC-002-EXT-D-01
         Integration equivalent of unit xfail test_unsupported_currency_rejected.
         Tenant has CurrencyLimit for USD only. Creating with EUR product
         should fail validation.
@@ -282,6 +283,7 @@ class TestCreateMediaBuyManualApproval:
     ):
         """UC-002-MA01: when human_review_required, status is 'submitted'.
 
+        Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-04
         Integration equivalent of unit xfail test_manual_approval_creates_pending_workflow_step.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -319,6 +321,7 @@ class TestCreateMediaBuyManualApproval:
     async def test_manual_approval_stores_raw_request(self, mb_tenant_with_approval, mb_principal, mb_products):
         """UC-002-MA02: raw_request preserved in DB for deferred adapter call.
 
+        Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-03
         Integration equivalent of unit xfail test_manual_approval_stores_raw_request.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -354,6 +357,7 @@ class TestCreateMediaBuyManualApproval:
     async def test_execute_approved_calls_adapter(self, mb_tenant_with_approval, mb_principal, mb_products):
         """UC-002-MA03: approved buy triggers adapter creation.
 
+        Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-08
         Integration equivalent of unit xfail test_execute_approved_calls_adapter.
         Verifies that execute_approved_media_buy updates status to 'active' (UC-002:437).
         """
@@ -407,6 +411,7 @@ class TestCreateMediaBuyAdapterAtomicity:
     async def test_adapter_success_persists_records(self, mb_tenant, mb_principal, mb_products, mb_identity):
         """BR-020-01: successful adapter call creates DB records.
 
+        Covers: UC-002-CC-ADAPTER-ATOMICITY-01
         Integration equivalent of unit xfail test_adapter_success_persists_records.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -447,6 +452,7 @@ class TestCreateMediaBuyAdapterAtomicity:
     async def test_adapter_failure_no_db_changes(self, mb_tenant, mb_principal, mb_products, mb_identity):
         """BR-020-02: failed adapter call creates no DB records.
 
+        Covers: UC-002-CC-ADAPTER-ATOMICITY-02
         Integration equivalent of unit xfail test_adapter_failure_no_db_changes.
         Inject adapter failure via mock.patch and verify no media buy
         or package records are left in the DB.
@@ -492,6 +498,7 @@ class TestUpdateMediaBuyCreativeAssignments:
     ):
         """UC-003-CA01: creative_assignments replaces all with specified weights.
 
+        Covers: UC-003-ALT-UPDATE-CREATIVE-ASSIGNMENTS-01
         Integration equivalent of unit xfail test_creative_assignments_with_weights.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -536,6 +543,7 @@ class TestUpdateMediaBuyCreativeAssignments:
     async def test_invalid_placement_ids_rejected(self, mb_tenant, mb_principal, mb_products, mb_identity):
         """UC-003-CA02: placement_ids not in product rejected.
 
+        Covers: UC-003-ALT-UPDATE-CREATIVE-ASSIGNMENTS-03
         Integration equivalent of unit xfail test_invalid_placement_ids_rejected.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -748,6 +756,7 @@ class TestCreateMediaBuyPrincipalResolution:
     async def test_principal_not_found_returns_error(self, mb_tenant, mb_principal, mb_products):
         """UC-002-A02: principal not in DB returns error in response.
 
+        Covers: UC-002-EXT-I-02
         Integration equivalent of UNSPECIFIED test_missing_principal_returns_error_response.
         Uses mb_principal to ensure setup is complete (at least one principal exists),
         but passes a different nonexistent principal_id.
@@ -824,6 +833,7 @@ class TestUpdateMediaBuyOwnership:
     async def test_ownership_mismatch_rejected(self, mb_tenant, mb_principal, mb_products, mb_identity, integration_db):
         """UC-003-OW01: non-owner gets permission error.
 
+        Covers: UC-003-EXT-C-01
         Integration equivalent of UNSPECIFIED test_ownership_mismatch_rejected.
         """
         from src.core.database.models import Principal
@@ -873,6 +883,7 @@ class TestUpdateMediaBuyAdapterError:
     async def test_adapter_network_error(self, mb_tenant, mb_principal, mb_products, mb_identity):
         """UC-003-AF01: adapter failure returns error.
 
+        Covers: UC-003-EXT-O-01
         Integration equivalent of UNSPECIFIED test_adapter_network_error.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -913,6 +924,7 @@ class TestDeliveryIdentityValidation:
     def test_missing_identity_raises_error(self, mb_tenant, mb_principal, mb_products):
         """UC-004-E01: None identity raises AdCPValidationError.
 
+        Covers: UC-004-EXT-A-01
         Integration equivalent of UNSPECIFIED test_missing_identity_raises_error.
         """
         from src.core.schemas import GetMediaBuyDeliveryRequest

@@ -23,6 +23,8 @@ The following constraint groups are directly affected by the adcp 3.2.0 -> 3.6.0
 ## Constraints
 
 ### product: Product Entity Schema
+**Obligation ID** CONSTR-PRODUCT-01
+**Layer** behavioral
 **Requirement:** Product must have required fields (product_id, name, description, publisher_properties, format_ids, delivery_type, delivery_measurement, pricing_options). v3 changes `additional_properties` from false to true. New optional fields: channels, catalog_match, catalog_types, conversion_tracking, data_provider_signals, forecast, signal_targeting_allowed.
 **Scenario:**
 ```gherkin
@@ -40,6 +42,8 @@ Then channels array is included with uniqueItems enforcement
 ---
 
 ### pricing-option: Pricing Option Entity Schema
+**Obligation ID** CONSTR-PRICING-OPTION-01
+**Layer** behavioral
 **Requirement:** PricingOption requires pricing_model (enum of 9 models), currency (ISO 4217), and exactly one of fixed_price/floor_price (XOR). v3 adds model-specific sub-schemas under /schemas/pricing/. delivery field is now an object reference, not an integer.
 **Scenario:**
 ```gherkin
@@ -57,6 +61,8 @@ Then the system must handle the delivery field as an object reference, not integ
 ---
 
 ### media-buy: Media Buy Entity Schema
+**Obligation ID** CONSTR-MEDIA-BUY-01
+**Layer** behavioral
 **Requirement:** MediaBuy requires media_buy_id, buyer_ref, status. v3 adds: account_id, buyer_campaign_ref, creative_deadline, ext. additional_properties: true.
 **Scenario:**
 ```gherkin
@@ -74,6 +80,8 @@ Then ext object is preserved unchanged
 ---
 
 ### package: Package Entity Schema
+**Obligation ID** CONSTR-PACKAGE-01
+**Layer** behavioral
 **Requirement:** Package requires product_id, budget, pricing_option. v3 changes: additional_properties: true, delivery is object reference. Targeting overlay is optional.
 **Scenario:**
 ```gherkin
@@ -91,6 +99,8 @@ Then product_id is rejected (immutable field, not in update schema)
 ---
 
 ### targeting: Targeting Schema
+**Obligation ID** CONSTR-TARGETING-01
+**Layer** behavioral
 **Requirement:** Targeting object supports geo_countries, geo_regions, geo_dma, geo_zip, and custom dimensions. v3: additional_properties: true.
 **Scenario:**
 ```gherkin
@@ -104,6 +114,8 @@ Then rejected (same value in include and exclude per BR-RULE-014)
 ---
 
 ### targeting_overlay: Targeting Overlay Validation
+**Obligation ID** CONSTR-TARGETING-OVERLAY-01
+**Layer** behavioral
 **Requirement:** Targeting overlay applied on packages validates: unknown fields rejected, managed-only dimensions rejected, geo overlap rejected. Empty/absent is valid.
 **Scenario:**
 ```gherkin
@@ -121,6 +133,8 @@ Then the overlay passes validation
 ---
 
 ### create-media-buy-request: Create Media Buy Request Schema
+**Obligation ID** CONSTR-CREATE-MEDIA-BUY-REQUEST-01
+**Layer** behavioral
 **Requirement:** Required: buyer_ref, brand, start_time, end_time. v3: packages no longer unconditionally required (conditional on proposal_id). New fields: account_id, proposal_id, artifact_webhook. brand is now BrandReference object.
 **Scenario:**
 ```gherkin
@@ -142,6 +156,8 @@ Then brand is validated as BrandReference, not plain string
 ---
 
 ### create-media-buy-response: Create Media Buy Response Schema
+**Obligation ID** CONSTR-CREATE-MEDIA-BUY-RESPONSE-01
+**Layer** behavioral
 **Requirement:** Atomic: success variant (media_buy_id, buyer_ref, packages, status) OR error variant (errors[]). v3 adds: warnings, ext to success variant.
 **Scenario:**
 ```gherkin
@@ -155,6 +171,8 @@ Then both success fields and warnings are present, no errors field
 ---
 
 ### update-media-buy-request: Update Media Buy Request Schema
+**Obligation ID** CONSTR-UPDATE-MEDIA-BUY-REQUEST-01
+**Layer** behavioral
 **Requirement:** XOR identification (media_buy_id or buyer_ref). Partial update semantics. v3 adds: account_id, buyer_campaign_ref, ext.
 **Scenario:**
 ```gherkin
@@ -172,6 +190,8 @@ Then ext field is preserved
 ---
 
 ### update-media-buy-response: Update Media Buy Response Schema
+**Obligation ID** CONSTR-UPDATE-MEDIA-BUY-RESPONSE-01
+**Layer** behavioral
 **Requirement:** Atomic: success OR error. v3 adds warnings, ext to success variant.
 **Scenario:**
 ```gherkin
@@ -185,6 +205,8 @@ Then warnings array is included alongside success fields
 ---
 
 ### get-products-request: Get Products Request Schema
+**Obligation ID** CONSTR-GET-PRODUCTS-REQUEST-01
+**Layer** behavioral
 **Requirement:** Optional brief, brand, budget, filters. v3 adds channels filter, product-filters object with delivery_type.
 **Scenario:**
 ```gherkin
@@ -198,6 +220,8 @@ Then only products matching those channels are returned
 ---
 
 ### get-products-response: Get Products Response Schema
+**Obligation ID** CONSTR-GET-PRODUCTS-RESPONSE-01
+**Layer** behavioral
 **Requirement:** products array with relevance_score, matching context echo. v3: additional_properties: true on products, proposal_id in response.
 **Scenario:**
 ```gherkin
@@ -211,6 +235,8 @@ Then proposal_id is included for use in create_media_buy proposal mode
 ---
 
 ### protocol-envelope: Protocol Envelope Schema
+**Obligation ID** CONSTR-PROTOCOL-ENVELOPE-01
+**Layer** behavioral
 **Requirement:** Wrapper with status (9-value enum), payload, optional context_id, task_id, message, timestamp, push_notification_config. State machine: submitted/working/input-required are non-terminal; completed/failed/canceled/rejected/auth-required are terminal.
 **Scenario:**
 ```gherkin
@@ -227,6 +253,8 @@ Then no webhook is triggered (terminal state)
 ---
 
 ### async-response-get-products: Get Products Async Responses
+**Obligation ID** CONSTR-ASYNC-RESPONSE-GET-PRODUCTS-01
+**Layer** behavioral
 **Requirement:** Per-status response schemas: submitted (estimated_completion), working (percentage, current_step), input-required (reason, partial_results, suggestions). All include context + ext.
 **Scenario:**
 ```gherkin
@@ -244,6 +272,8 @@ Then partial_results may be included to help inform the clarification
 ---
 
 ### async-response-create-media-buy: Create Media Buy Async Responses
+**Obligation ID** CONSTR-ASYNC-RESPONSE-CREATE-MEDIA-BUY-01
+**Layer** behavioral
 **Requirement:** Per-status schemas: submitted (context, ext), working (percentage, current_step), input-required (reason: APPROVAL_REQUIRED | BUDGET_EXCEEDS_LIMIT, errors).
 **Scenario:**
 ```gherkin
@@ -257,6 +287,8 @@ Then reason="APPROVAL_REQUIRED" maps to HITL pattern
 ---
 
 ### get-media-buy-delivery-request: Delivery Request Schema
+**Obligation ID** CONSTR-GET-MEDIA-BUY-DELIVERY-REQUEST-01
+**Layer** behavioral
 **Requirement:** Optional media_buy_ids (priority), buyer_refs, start_date, end_date, status_filter, account_id. media_buy_ids takes precedence. Neither = all principal's buys.
 **Scenario:**
 ```gherkin
@@ -274,6 +306,8 @@ Then the request is rejected (inverted date range)
 ---
 
 ### reporting-webhook: Webhook Configuration Schema
+**Obligation ID** CONSTR-REPORTING-WEBHOOK-01
+**Layer** behavioral
 **Requirement:** url (URI), authentication (schemes: Bearer|HMAC-SHA256, credentials min 32 chars), reporting_frequency (hourly|daily|monthly), optional requested_metrics, token (min 16 chars). Payload: notification_type, sequence_number, next_expected_at (conditional), partial_data.
 **Scenario:**
 ```gherkin
@@ -291,6 +325,8 @@ Then X-ADCP-Signature and X-ADCP-Timestamp headers are present
 ---
 
 ### brand_manifest_policy: Brand Manifest Policy Gate
+**Obligation ID** CONSTR-BRAND-MANIFEST-POLICY-01
+**Layer** behavioral
 **Requirement:** Enum: public, require_auth, require_brand. Default require_auth. require_brand requires brand field in request.
 **Scenario:**
 ```gherkin
@@ -308,6 +344,8 @@ Then the request proceeds
 ---
 
 ### publisher_domains (response): Portfolio Assembly Output
+**Obligation ID** CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
+**Layer** behavioral
 **Requirement:** Array of domain strings, sorted alphabetically. All partnerships included regardless of verification. Empty = empty array.
 **Scenario:**
 ```gherkin
@@ -321,6 +359,8 @@ Then domains are ["abc.com", "xyz.com"] (alphabetical)
 ---
 
 ### publisher_domains_filter (request): Domain Filter
+**Obligation ID** CONSTR-PUBLISHER-DOMAINS-FILTER-01
+**Layer** behavioral
 **Requirement:** Optional array, minItems: 1. Pattern: lowercase alphanumeric + hyphens + dots. Invalid format = DOMAIN_INVALID_FORMAT. Valid non-matching = empty results.
 **Scenario:**
 ```gherkin
@@ -336,6 +376,8 @@ Then rejected (minItems: 1)
 ---
 
 ### advertising_policies: Policy Disclosure
+**Obligation ID** CONSTR-ADVERTISING-POLICIES-01
+**Layer** behavioral
 **Requirement:** Optional string (minLength: 1, maxLength: 10000). Present only when policy enabled AND at least one array non-empty. Omitted otherwise.
 **Scenario:**
 ```gherkin
@@ -351,6 +393,8 @@ Then advertising_policies field is omitted entirely
 ---
 
 ### validation_mode: Sync Creatives Validation Mode
+**Obligation ID** CONSTR-VALIDATION-MODE-01
+**Layer** behavioral
 **Requirement:** Enum: strict|lenient. Default strict. Strict aborts on assignment error. Lenient logs warning and continues.
 **Scenario:**
 ```gherkin
@@ -363,6 +407,8 @@ Then schema validation error
 ---
 
 ### brief_policy: Brief Policy Compliance
+**Obligation ID** CONSTR-BRIEF-POLICY-01
+**Layer** behavioral
 **Requirement:** Behavioral constraint. Policy disabled = unchecked. BLOCKED = POLICY_VIOLATION. Service unavailable = fail-open.
 **Scenario:**
 ```gherkin
@@ -375,6 +421,8 @@ Then request rejected with POLICY_VIOLATION
 ---
 
 ### principal_visibility: Principal-Scoped Visibility
+**Obligation ID** CONSTR-PRINCIPAL-VISIBILITY-01
+**Layer** behavioral
 **Requirement:** null/empty allowed_principal_ids = visible to all. Non-empty = only listed principals. Anonymous cannot see restricted.
 **Scenario:**
 ```gherkin
@@ -387,6 +435,8 @@ Then product is suppressed
 ---
 
 ### anonymous_pricing: Anonymous Pricing Suppression
+**Obligation ID** CONSTR-ANONYMOUS-PRICING-01
+**Layer** behavioral
 **Requirement:** Authenticated = full pricing. Anonymous = pricing_options=[].
 **Scenario:**
 ```gherkin
@@ -399,6 +449,8 @@ Then every product has pricing_options=[]
 ---
 
 ### relevance_threshold: AI Ranking Threshold
+**Obligation ID** CONSTR-RELEVANCE-THRESHOLD-01
+**Layer** behavioral
 **Requirement:** Score >= 0.1 included, < 0.1 excluded. Range 0.0-1.0. No ranking = no threshold.
 **Scenario:**
 ```gherkin
@@ -414,6 +466,8 @@ Then product included (boundary)
 ---
 
 ### pricing_option_xor: Fixed/Floor Price XOR
+**Obligation ID** CONSTR-PRICING-OPTION-XOR-01
+**Layer** behavioral
 **Requirement:** Exactly one of fixed_price or floor_price. Both = invalid. Neither = invalid. CPA always fixed_price.
 **Scenario:**
 ```gherkin
@@ -426,6 +480,8 @@ Then pricing option is invalid
 ---
 
 ### product_min_cardinality: Product Array Minimums
+**Obligation ID** CONSTR-PRODUCT-MIN-CARDINALITY-01
+**Layer** behavioral
 **Requirement:** format_ids >= 1, publisher_properties >= 1, pricing_options >= 1. Empty = ValueError.
 **Scenario:**
 ```gherkin
@@ -438,6 +494,8 @@ Then conversion fails with ValueError
 ---
 
 ### currency_consistency: Currency Across Packages
+**Obligation ID** CONSTR-CURRENCY-CONSISTENCY-01
+**Layer** behavioral
 **Requirement:** All packages same currency. Currency in tenant CurrencyLimit table.
 **Scenario:**
 ```gherkin
@@ -450,6 +508,8 @@ Then rejected for mixed currencies
 ---
 
 ### product_uniqueness: Product ID Uniqueness
+**Obligation ID** CONSTR-PRODUCT-UNIQUENESS-01
+**Layer** behavioral
 **Requirement:** No duplicate product_id across packages in a media buy.
 **Scenario:**
 ```gherkin
@@ -462,6 +522,8 @@ Then rejected for duplicate product
 ---
 
 ### creative_asset: Creative Asset Conditional Presence
+**Obligation ID** CONSTR-CREATIVE-ASSET-01
+**Layer** behavioral
 **Requirement:** Reference creatives require url+width+height. Generative formats exempt. Errors collected.
 **Scenario:**
 ```gherkin
@@ -474,6 +536,8 @@ Then error collected
 ---
 
 ### budget_amount: Budget Positivity
+**Obligation ID** CONSTR-BUDGET-AMOUNT-01
+**Layer** behavioral
 **Requirement:** amount > 0. Schema minimum: 0 but business rule requires > 0.
 **Scenario:**
 ```gherkin
@@ -486,6 +550,8 @@ Then rejected by business rule (not schema)
 ---
 
 ### daily_spend_cap: Daily Spend Cap
+**Obligation ID** CONSTR-DAILY-SPEND-CAP-01
+**Layer** behavioral
 **Requirement:** daily_budget = budget / max(1, flight_days) <= max_daily_package_spend. Cap not configured = skipped.
 **Scenario:**
 ```gherkin
@@ -498,6 +564,8 @@ Then rejected (5000 > 4000)
 ---
 
 ### start_time: Start Time Validation
+**Obligation ID** CONSTR-START-TIME-01
+**Layer** behavioral
 **Requirement:** Required. "asap" (case-sensitive) = current UTC. Must be future. Naive = UTC.
 **Scenario:**
 ```gherkin
@@ -513,6 +581,8 @@ Then resolves to now
 ---
 
 ### end_time: End Time Validation
+**Obligation ID** CONSTR-END-TIME-01
+**Layer** behavioral
 **Requirement:** Required. Must be strictly after start_time. Naive = UTC.
 **Scenario:**
 ```gherkin
@@ -525,6 +595,8 @@ Then rejected (must be strictly after)
 ---
 
 ### creative_replacement: Creative Replacement Semantics
+**Obligation ID** CONSTR-CREATIVE-REPLACEMENT-01
+**Layer** behavioral
 **Requirement:** creative_ids/creative_assignments replaces all existing. Not a merge.
 **Scenario:**
 ```gherkin
@@ -537,6 +609,8 @@ Then result is [B,D]; A,C deleted
 ---
 
 ### creative_state_validation: Creative State + Format Compatibility
+**Obligation ID** CONSTR-CREATIVE-STATE-VALIDATION-01
+**Layer** behavioral
 **Requirement:** error/rejected state cannot be assigned. Format must be compatible with product.
 **Scenario:**
 ```gherkin
@@ -549,6 +623,8 @@ Then assignment rejected with INVALID_CREATIVES
 ---
 
 ### placement_id_validation: Placement ID Validation
+**Obligation ID** CONSTR-PLACEMENT-ID-VALIDATION-01
+**Layer** behavioral
 **Requirement:** All placement_ids must be valid for product. Product without placement support rejects placement_ids.
 **Scenario:**
 ```gherkin
@@ -561,6 +637,8 @@ Then rejected with invalid_placement_ids
 ---
 
 ### approval_workflow: Approval Workflow Determination
+**Obligation ID** CONSTR-APPROVAL-WORKFLOW-01
+**Layer** behavioral
 **Requirement:** Dual-flag: tenant human_review_required (default true) + adapter manual_approval_required. Either true = pending.
 **Scenario:**
 ```gherkin
@@ -573,6 +651,8 @@ Then auto-approved
 ---
 
 ### media_buy_resolution: Media Buy Resolution (OR)
+**Obligation ID** CONSTR-MEDIA-BUY-RESOLUTION-01
+**Layer** behavioral
 **Requirement:** Optional media_buy_ids (priority), buyer_refs (fallback), neither = all. Partial resolution, zero results = empty array.
 **Scenario:**
 ```gherkin
@@ -585,6 +665,8 @@ Then all principal's media buys returned
 ---
 
 ### delivery_date_range: Delivery Date Range
+**Obligation ID** CONSTR-DELIVERY-DATE-RANGE-01
+**Layer** behavioral
 **Requirement:** start_date < end_date. Both omitted = full campaign range.
 **Scenario:**
 ```gherkin
@@ -597,6 +679,8 @@ Then rejected (zero-length period)
 ---
 
 ### format_type_filter: Format Type Filter
+**Obligation ID** CONSTR-FORMAT-TYPE-FILTER-01
+**Layer** behavioral
 **Requirement:** FormatCategory enum (audio, video, display, native, dooh, rich_media, universal). Exact match.
 **Scenario:**
 ```gherkin
@@ -609,6 +693,8 @@ Then only display formats returned
 ---
 
 ### format_ids_filter: Format IDs Filter
+**Obligation ID** CONSTR-FORMAT-IDS-FILTER-01
+**Layer** behavioral
 **Requirement:** Array of FormatId. Matches on id field. Non-matching silently excluded.
 **Scenario:**
 ```gherkin
@@ -621,6 +707,8 @@ Then only fmt_1 returned (fmt_nonexistent silently excluded)
 ---
 
 ### dimension_filter: Dimension Filter
+**Obligation ID** CONSTR-DIMENSION-FILTER-01
+**Layer** behavioral
 **Requirement:** min/max width/height. ANY render match semantics. Formats without dimension info excluded.
 **Scenario:**
 ```gherkin
@@ -633,6 +721,8 @@ Then formats where ANY render has width in [300,728] are returned
 ---
 
 ### is_responsive_filter: Responsive Filter
+**Obligation ID** CONSTR-IS-RESPONSIVE-FILTER-01
+**Layer** behavioral
 **Requirement:** Boolean. true=only responsive. false=only non-responsive. Omitted=all.
 **Scenario:**
 ```gherkin
@@ -645,6 +735,8 @@ Then only formats with at least one responsive render returned
 ---
 
 ### name_search_filter: Name Search Filter
+**Obligation ID** CONSTR-NAME-SEARCH-FILTER-01
+**Layer** behavioral
 **Requirement:** Case-insensitive substring match on format name.
 **Scenario:**
 ```gherkin
@@ -657,6 +749,8 @@ Then formats with "banner" in name returned (case-insensitive)
 ---
 
 ### asset_types_filter: Asset Types Filter
+**Obligation ID** CONSTR-ASSET-TYPES-FILTER-01
+**Layer** behavioral
 **Requirement:** OR semantics. Checks both individual and group assets. Enum: image, video, audio, text, etc.
 **Scenario:**
 ```gherkin
@@ -669,6 +763,8 @@ Then formats with either image OR video assets returned
 ---
 
 ### signal_catalog_types_filter: Signal Catalog Types Filter
+**Obligation ID** CONSTR-SIGNAL-CATALOG-TYPES-FILTER-01
+**Layer** behavioral
 **Requirement:** Enum: marketplace, custom, owned. OR semantics within filter. minItems: 1.
 **Scenario:**
 ```gherkin
@@ -681,6 +777,8 @@ Then signals of either type returned
 ---
 
 ### signal_max_cpm_filter: Signal Max CPM Filter
+**Obligation ID** CONSTR-SIGNAL-MAX-CPM-FILTER-01
+**Layer** behavioral
 **Requirement:** Number, minimum: 0. Signals with cpm > max_cpm excluded.
 **Scenario:**
 ```gherkin
@@ -696,6 +794,8 @@ Then rejected (minimum: 0)
 ---
 
 ### signal_min_coverage_filter: Signal Min Coverage Filter
+**Obligation ID** CONSTR-SIGNAL-MIN-COVERAGE-FILTER-01
+**Layer** behavioral
 **Requirement:** Number, 0-100. Signals with coverage < threshold excluded.
 **Scenario:**
 ```gherkin
@@ -711,6 +811,8 @@ Then rejected (maximum: 100)
 ---
 
 ### signal_max_results: Signal Max Results
+**Obligation ID** CONSTR-SIGNAL-MAX-RESULTS-01
+**Layer** behavioral
 **Requirement:** Integer, minimum: 1. Applied as array slice after filtering.
 **Scenario:**
 ```gherkin
@@ -726,6 +828,8 @@ Then only 5 returned
 ---
 
 ### signal_agent_segment_id: Signal Agent Segment ID
+**Obligation ID** CONSTR-SIGNAL-AGENT-SEGMENT-ID-01
+**Layer** behavioral
 **Requirement:** Required for activate_signal. Premium IDs (prefix "premium_") trigger APPROVAL_REQUIRED. Auth required.
 **Scenario:**
 ```gherkin
@@ -741,6 +845,8 @@ Then ToolError for missing auth
 ---
 
 ### signal_data_providers_filter: Signal Data Providers Filter
+**Obligation ID** CONSTR-SIGNAL-DATA-PROVIDERS-FILTER-01
+**Layer** behavioral
 **Requirement:** Array of strings. OR semantics. Case-sensitive match.
 **Scenario:**
 ```gherkin
@@ -753,6 +859,8 @@ Then signals from either provider returned
 ---
 
 ### signal_spec: Signal Spec Query
+**Obligation ID** CONSTR-SIGNAL-SPEC-01
+**Layer** behavioral
 **Requirement:** Natural language string. Case-insensitive substring match against name/description/type. Required if signal_ids omitted (anyOf).
 **Scenario:**
 ```gherkin
@@ -768,6 +876,8 @@ Then schema validation rejects (anyOf violation)
 ---
 
 ### signal_deliver_to: Signal Delivery Targets
+**Obligation ID** CONSTR-SIGNAL-DELIVER-TO-01
+**Layer** behavioral
 **Requirement:** Required object with deployments (minItems: 1) and countries (minItems: 1, pattern ^[A-Z]{2}$).
 **Scenario:**
 ```gherkin
@@ -783,6 +893,8 @@ Then rejected (minItems: 1)
 ---
 
 ### format_id_structure: Format ID Object Structure
+**Obligation ID** CONSTR-FORMAT-ID-STRUCTURE-01
+**Layer** behavioral
 **Requirement:** Object with required agent_url (URI) and id (string). Not a plain string.
 **Scenario:**
 ```gherkin
@@ -798,6 +910,8 @@ Then valid
 ---
 
 ### principal_ownership: Principal Ownership Verification
+**Obligation ID** CONSTR-PRINCIPAL-OWNERSHIP-01
+**Layer** behavioral
 **Requirement:** Authenticated principal must match media buy owner. Mismatch = PermissionError or not_found.
 **Scenario:**
 ```gherkin
@@ -810,6 +924,8 @@ Then PermissionError or media_buy_not_found returned
 ---
 
 ### immutable_fields: Immutable Package Fields
+**Obligation ID** CONSTR-IMMUTABLE-FIELDS-01
+**Layer** behavioral
 **Requirement:** product_id, format_ids, pricing_option_id not in update schema. Schema-enforced immutability.
 **Scenario:**
 ```gherkin
@@ -822,6 +938,8 @@ Then rejected by schema (field not present in update schema)
 ---
 
 ### principal_id (sync_creatives): Authentication Context
+**Obligation ID** CONSTR-PRINCIPAL-AUTHENTICATION-CONTEXT-01
+**Layer** behavioral
 **Requirement:** Required non-empty string from auth context. Used for creative isolation.
 **Scenario:**
 ```gherkin
@@ -837,6 +955,8 @@ Then AUTH_REQUIRED error
 ---
 
 ### media_buy_identification: XOR Identification
+**Obligation ID** CONSTR-MEDIA-BUY-IDENTIFICATION-01
+**Layer** behavioral
 **Requirement:** Exactly one of media_buy_id or buyer_ref (oneOf). Both = rejected. Neither = rejected.
 **Scenario:**
 ```gherkin
@@ -852,6 +972,8 @@ Then schema validation rejects
 ---
 
 ### performance_index: Performance Index Scale
+**Obligation ID** CONSTR-PERFORMANCE-INDEX-01
+**Layer** behavioral
 **Requirement:** Number, minimum: 0. 0.0=no value, 1.0=expected, >1.0=above expected. <0.8 triggers optimization.
 **Scenario:**
 ```gherkin
@@ -867,6 +989,8 @@ Then optimization recommendation triggered
 ---
 
 ### measurement_period: Measurement Period
+**Obligation ID** CONSTR-MEASUREMENT-PERIOD-01
+**Layer** behavioral
 **Requirement:** Required object with start (date-time) and end (date-time). No schema-level start < end validation.
 **Scenario:**
 ```gherkin
@@ -882,6 +1006,8 @@ Then accepted
 ---
 
 ### metric_type: Metric Type Enum
+**Obligation ID** CONSTR-METRIC-TYPE-01
+**Layer** behavioral
 **Requirement:** Enum: overall_performance, conversion_rate, brand_lift, click_through_rate, completion_rate, viewability, brand_safety, cost_efficiency. Default: overall_performance.
 **Scenario:**
 ```gherkin
@@ -897,6 +1023,8 @@ Then rejected (not in enum)
 ---
 
 ### feedback_source: Feedback Source Enum
+**Obligation ID** CONSTR-FEEDBACK-SOURCE-01
+**Layer** behavioral
 **Requirement:** Enum: buyer_attribution, third_party_measurement, platform_analytics, verification_partner. Default: buyer_attribution.
 **Scenario:**
 ```gherkin
@@ -909,6 +1037,8 @@ Then defaults to "buyer_attribution"
 ---
 
 ### perf_feedback_package_id: Package ID in Performance Feedback
+**Obligation ID** CONSTR-PERF-FEEDBACK-PACKAGE-ID-01
+**Layer** behavioral
 **Requirement:** Optional string, minLength: 1. When omitted, feedback applies to overall media buy.
 **Scenario:**
 ```gherkin
@@ -924,6 +1054,8 @@ Then feedback applies at media buy level
 ---
 
 ### perf_feedback_creative_id: Creative ID in Performance Feedback
+**Obligation ID** CONSTR-PERF-FEEDBACK-CREATIVE-ID-01
+**Layer** behavioral
 **Requirement:** Optional string, minLength: 1. When omitted, feedback applies at package/media buy level.
 **Scenario:**
 ```gherkin
@@ -936,6 +1068,8 @@ Then rejected (minLength: 1)
 ---
 
 ### status_filter: Delivery Status Filter
+**Obligation ID** CONSTR-STATUS-FILTER-01
+**Layer** behavioral
 **Requirement:** Enum: pending_activation, active, paused, completed. Single string or array (minItems: 1). Omitted = no filter.
 **Scenario:**
 ```gherkin
@@ -951,6 +1085,8 @@ Then rejected (not in enum)
 ---
 
 ### webhook_credentials: Webhook Authentication Credentials
+**Obligation ID** CONSTR-WEBHOOK-CREDENTIALS-01
+**Layer** behavioral
 **Requirement:** schemes: Bearer|HMAC-SHA256, credentials min 32 chars. HMAC signs with X-ADCP-Signature + X-ADCP-Timestamp.
 **Scenario:**
 ```gherkin
@@ -966,6 +1102,8 @@ Then rejected (not in enum)
 ---
 
 ### channels: Advertising Media Channel Enum
+**Obligation ID** CONSTR-CHANNELS-01
+**Layer** behavioral
 **Requirement:** 18 values: display, olv, social, search, ctv, linear_tv, radio, streaming_audio, podcast, dooh, ooh, print, cinema, email, gaming, retail_media, influencer, affiliate, product_placement. Array with minItems: 1.
 **Scenario:**
 ```gherkin
@@ -981,6 +1119,8 @@ Then rejected (minItems: 1)
 ---
 
 ### delivery_type: Delivery Type Enum
+**Obligation ID** CONSTR-DELIVERY-TYPE-01
+**Layer** behavioral
 **Requirement:** Enum: guaranteed, non_guaranteed. Optional filter.
 **Scenario:**
 ```gherkin
@@ -993,6 +1133,8 @@ Then only guaranteed products returned
 ---
 
 ### pacing: Budget Pacing Strategy
+**Obligation ID** CONSTR-PACING-01
+**Layer** behavioral
 **Requirement:** Enum: even, asap, front_loaded. Default: even.
 **Scenario:**
 ```gherkin
@@ -1008,6 +1150,8 @@ Then rejected (not in enum)
 ---
 
 ### delivery_mode: Artifact Webhook Delivery Mode
+**Obligation ID** CONSTR-DELIVERY-MODE-01
+**Layer** behavioral
 **Requirement:** Enum: realtime, batched. Required in artifact_webhook. batched requires batch_frequency.
 **Scenario:**
 ```gherkin
@@ -1020,6 +1164,8 @@ Then rejected (batch_frequency required when batched)
 ---
 
 ### batch_frequency: Artifact Webhook Batch Frequency
+**Obligation ID** CONSTR-BATCH-FREQUENCY-01
+**Layer** behavioral
 **Requirement:** Enum: hourly, daily. Required when delivery_mode=batched.
 **Scenario:**
 ```gherkin
@@ -1035,6 +1181,8 @@ Then valid (not applicable)
 ---
 
 ### reporting_frequency: Reporting Webhook Frequency
+**Obligation ID** CONSTR-REPORTING-FREQUENCY-01
+**Layer** behavioral
 **Requirement:** Enum: hourly, daily, monthly. Required in reporting_webhook. GAP: only daily implemented.
 **Scenario:**
 ```gherkin
@@ -1047,6 +1195,8 @@ Then schema-valid but silently skipped in implementation (GAP)
 ---
 
 ### task_status: Task Status Enum
+**Obligation ID** CONSTR-TASK-STATUS-01
+**Layer** behavioral
 **Requirement:** 9 values: submitted, working, input-required, completed, canceled, failed, rejected, auth-required, unknown. Filter accepts single or array (minItems: 1).
 **Scenario:**
 ```gherkin
@@ -1059,6 +1209,8 @@ Then only tasks in those states returned
 ---
 
 ### task_type: Task Type Enum
+**Obligation ID** CONSTR-TASK-TYPE-01
+**Layer** behavioral
 **Requirement:** 14 values covering all AdCP domains. Filter accepts single or array (minItems: 1).
 **Scenario:**
 ```gherkin
@@ -1074,6 +1226,8 @@ Then rejected (not in enum)
 ---
 
 ### wcag_level: WCAG Accessibility Level
+**Obligation ID** CONSTR-WCAG-LEVEL-01
+**Layer** behavioral
 **Requirement:** Enum: A, AA, AAA. Hierarchical. Optional filter on creative formats.
 **Scenario:**
 ```gherkin
@@ -1086,6 +1240,8 @@ Then formats meeting at least AA returned
 ---
 
 ### adcp_domain: AdCP Domain Enum
+**Obligation ID** CONSTR-ADCP-DOMAIN-01
+**Layer** behavioral
 **Requirement:** Enum: media_buy, governance, signals. Used in capabilities response.
 **Scenario:**
 ```gherkin
@@ -1098,6 +1254,8 @@ Then each domain is from the adcp_domain enum
 ---
 
 ### available_metric: Available Metric Enum
+**Obligation ID** CONSTR-AVAILABLE-METRIC-01
+**Layer** behavioral
 **Requirement:** 10 values: impressions, clicks, conversions, spend, ctr, cpm, viewability, completion_rate, frequency, reach.
 **Scenario:**
 ```gherkin
@@ -1110,6 +1268,8 @@ Then webhook payload includes those metrics
 ---
 
 ### creative_agent_format_type: Creative Agent Format Type
+**Obligation ID** CONSTR-CREATIVE-AGENT-FORMAT-TYPE-01
+**Layer** behavioral
 **Requirement:** FormatCategory enum for creative agent context (same as format_type_filter).
 **Scenario:**
 ```gherkin
@@ -1122,6 +1282,8 @@ Then valid FormatCategory enum value
 ---
 
 ### creative_agent_asset_type: Creative Agent Asset Type
+**Obligation ID** CONSTR-CREATIVE-AGENT-ASSET-TYPE-01
+**Layer** behavioral
 **Requirement:** AssetContentType enum for creative agent context.
 **Scenario:**
 ```gherkin
@@ -1134,6 +1296,8 @@ Then valid AssetContentType enum value
 ---
 
 ### tasks_sort_field: Tasks Sort Field
+**Obligation ID** CONSTR-TASKS-SORT-FIELD-01
+**Layer** behavioral
 **Requirement:** Enum for sorting tasks list results.
 **Scenario:**
 ```gherkin
@@ -1146,6 +1310,8 @@ Then results are sorted accordingly
 ---
 
 ### creative_status: Creative Status Enum
+**Obligation ID** CONSTR-CREATIVE-STATUS-01
+**Layer** behavioral
 **Requirement:** Status values for creative lifecycle: pending_review, approved, rejected, error, etc.
 **Scenario:**
 ```gherkin
@@ -1158,6 +1324,8 @@ Then only creatives in that status returned
 ---
 
 ### sort_direction: Sort Direction Enum
+**Obligation ID** CONSTR-SORT-DIRECTION-01
+**Layer** behavioral
 **Requirement:** Enum: asc, desc. Used with sort fields.
 **Scenario:**
 ```gherkin
@@ -1170,6 +1338,8 @@ Then results sorted ascending
 ---
 
 ### creative_sort_field: Creative Sort Field
+**Obligation ID** CONSTR-CREATIVE-SORT-FIELD-01
+**Layer** behavioral
 **Requirement:** Enum for sorting creatives list results.
 **Scenario:**
 ```gherkin
@@ -1182,6 +1352,8 @@ Then results sorted accordingly
 ---
 
 ### preview_output_format: Preview Output Format
+**Obligation ID** CONSTR-PREVIEW-OUTPUT-FORMAT-01
+**Layer** behavioral
 **Requirement:** Enum for creative preview output format.
 **Scenario:**
 ```gherkin
@@ -1194,6 +1366,8 @@ Then preview is generated in that format
 ---
 
 ### list_creatives_fields: List Creatives Response Fields
+**Obligation ID** CONSTR-LIST-CREATIVES-FIELDS-01
+**Layer** behavioral
 **Requirement:** Defines which fields are included in list_creatives response.
 **Scenario:**
 ```gherkin
@@ -1206,6 +1380,8 @@ Then response includes only requested fields
 ---
 
 ### approval_mode: Approval Mode Enum
+**Obligation ID** CONSTR-APPROVAL-MODE-01
+**Layer** behavioral
 **Requirement:** Enum: auto-approve, require-human, ai-powered. Default: require-human.
 **Scenario:**
 ```gherkin
@@ -1218,6 +1394,8 @@ Then defaults to "require-human"
 ---
 
 ### sampling_method: Sampling Method Enum
+**Obligation ID** CONSTR-SAMPLING-METHOD-01
+**Layer** behavioral
 **Requirement:** Enum for content standards sampling.
 **Scenario:**
 ```gherkin
@@ -1230,6 +1408,8 @@ Then content standard uses that sampling approach
 ---
 
 ### protocols: Supported Protocols Enum
+**Obligation ID** CONSTR-PROTOCOLS-01
+**Layer** behavioral
 **Requirement:** Enum: media_buy, governance, signals. Lists supported protocol areas in capabilities.
 **Scenario:**
 ```gherkin
@@ -1242,6 +1422,8 @@ Then supported_protocols contains valid protocol enum values
 ---
 
 ### context_echo: Context Echo Constraint
+**Obligation ID** CONSTR-CONTEXT-ECHO-01
+**Layer** behavioral
 **Requirement:** Request context echoed unchanged in response. Opaque object. Applies to success, empty, and error paths. GAP: capabilities endpoint does not echo context.
 **Scenario:**
 ```gherkin
@@ -1257,6 +1439,8 @@ Then context is NOT echoed (known GAP)
 ---
 
 ### event_type: Event Type Enum
+**Obligation ID** CONSTR-EVENT-TYPE-01
+**Layer** behavioral
 **Requirement:** Enum for marketing/conversion events (log_event task).
 **Scenario:**
 ```gherkin
@@ -1269,6 +1453,8 @@ Then event is logged
 ---
 
 ### sync_atomic_response: Sync Accounts Atomic Response
+**Obligation ID** CONSTR-SYNC-ATOMIC-RESPONSE-01
+**Layer** behavioral
 **Requirement:** Success variant (accounts[]) XOR error variant (errors[]). Per-account failure is within success variant.
 **Scenario:**
 ```gherkin
@@ -1284,6 +1470,8 @@ Then success variant with accounts[] (including action=failed)
 ---
 
 ### sync_upsert_semantics: Sync Accounts Upsert
+**Obligation ID** CONSTR-SYNC-UPSERT-SEMANTICS-01
+**Layer** behavioral
 **Requirement:** Creates new or updates existing. Per-account action: created/updated/unchanged/failed. House echoed.
 **Scenario:**
 ```gherkin
@@ -1299,6 +1487,8 @@ Then action=unchanged
 ---
 
 ### dry_run_preview: Dry Run Mode
+**Obligation ID** CONSTR-DRY-RUN-PREVIEW-01
+**Layer** behavioral
 **Requirement:** dry_run=true returns what would change without applying. Response includes dry_run=true.
 **Scenario:**
 ```gherkin
@@ -1311,6 +1501,8 @@ Then no state changes; response shows would-be actions
 ---
 
 ### delete_missing_policy: Delete Missing Deactivation
+**Obligation ID** CONSTR-DELETE-MISSING-POLICY-01
+**Layer** behavioral
 **Requirement:** delete_missing=true deactivates absent accounts scoped to agent. Default false.
 **Scenario:**
 ```gherkin
@@ -1326,6 +1518,8 @@ Then absent accounts unchanged
 ---
 
 ### billing: Billing Model
+**Obligation ID** CONSTR-BILLING-01
+**Layer** behavioral
 **Requirement:** Billing model enum for account sync.
 **Scenario:**
 ```gherkin
@@ -1338,6 +1532,8 @@ Then seller assigns or overrides per policy
 ---
 
 ### billing_model_policy: Billing Model Override Policy
+**Obligation ID** CONSTR-BILLING-MODEL-POLICY-01
+**Layer** behavioral
 **Requirement:** Seller may override unsupported billing model with warning. Omitted = seller default.
 **Scenario:**
 ```gherkin
@@ -1350,6 +1546,8 @@ Then overridden with warning in per-account result
 ---
 
 ### brand_identity_resolution: Brand Identity Resolution
+**Obligation ID** CONSTR-BRAND-IDENTITY-RESOLUTION-01
+**Layer** behavioral
 **Requirement:** House domain + optional brand_id. Resolved via /.well-known/brand.json.
 **Scenario:**
 ```gherkin
@@ -1362,6 +1560,8 @@ Then resolved via acme.com/.well-known/brand.json
 ---
 
 ### si_termination_reason: Structured Interaction Termination Reason
+**Obligation ID** CONSTR-SI-TERMINATION-REASON-01
+**Layer** behavioral
 **Requirement:** Enum for why a structured interaction ended.
 **Scenario:**
 ```gherkin
@@ -1374,6 +1574,8 @@ Then reason is from the enum
 ---
 
 ### si_transaction_action: Structured Interaction Transaction Action
+**Obligation ID** CONSTR-SI-TRANSACTION-ACTION-01
+**Layer** behavioral
 **Requirement:** Enum for transaction actions in structured interactions.
 **Scenario:**
 ```gherkin
@@ -1386,6 +1588,8 @@ Then action processed
 ---
 
 ### channel_mapping: Channel Alias Mapping
+**Obligation ID** CONSTR-CHANNEL-MAPPING-01
+**Layer** behavioral
 **Requirement:** "video" -> "olv", "audio" -> "streaming_audio". Case-insensitive matching. Unrecognized channels silently dropped.
 **Scenario:**
 ```gherkin
@@ -1401,6 +1605,8 @@ Then silently dropped
 ---
 
 ### account_access_scoping: Account Access Scoping
+**Obligation ID** CONSTR-ACCOUNT-ACCESS-SCOPING-01
+**Layer** behavioral
 **Requirement:** list_accounts returns only agent-accessible accounts. Status filter narrows within accessible set.
 **Scenario:**
 ```gherkin
@@ -1413,6 +1619,8 @@ Then only active accounts among the 3 are returned
 ---
 
 ### account_approval_workflow: Account Approval Workflow
+**Obligation ID** CONSTR-ACCOUNT-APPROVAL-WORKFLOW-01
+**Layer** behavioral
 **Requirement:** Accounts requiring review enter pending_approval with setup info.
 **Scenario:**
 ```gherkin
@@ -1425,6 +1633,8 @@ Then status=pending_approval with setup.message
 ---
 
 ### account_auth_policy: Account Authentication Policy
+**Obligation ID** CONSTR-ACCOUNT-AUTH-POLICY-01
+**Layer** behavioral
 **Requirement:** sync_accounts requires valid auth. list_accounts allows anonymous (empty results).
 **Scenario:**
 ```gherkin
@@ -1437,6 +1647,8 @@ Then AUTH_TOKEN_INVALID error
 ---
 
 ### account_status: Account Status Enum
+**Obligation ID** CONSTR-ACCOUNT-STATUS-01
+**Layer** behavioral
 **Requirement:** Account lifecycle status values including pending_approval, active, suspended, deactivated.
 **Scenario:**
 ```gherkin
@@ -1449,6 +1661,8 @@ Then only matching accounts returned
 ---
 
 ### capabilities_degradation: Capabilities Graceful Degradation
+**Obligation ID** CONSTR-CAPABILITIES-DEGRADATION-01
+**Layer** behavioral
 **Requirement:** No tenant = minimal response. Adapter failure = default channels/targeting. DB failure = placeholder domain. Never propagate error.
 **Scenario:**
 ```gherkin
@@ -1464,6 +1678,8 @@ Then placeholder domain used
 ---
 
 ### capabilities_features: Capabilities Feature Flags
+**Obligation ID** CONSTR-CAPABILITIES-FEATURES-01
+**Layer** behavioral
 **Requirement:** Boolean feature flags in capabilities response (signals, content_standards, accounts, etc.).
 **Scenario:**
 ```gherkin
@@ -1476,6 +1692,8 @@ Then feature flags reflect tenant configuration
 ---
 
 ### capabilities_targeting: Capabilities Targeting Support
+**Obligation ID** CONSTR-CAPABILITIES-TARGETING-01
+**Layer** behavioral
 **Requirement:** Targeting dimensions supported by the seller. Defaults: geo_countries=true, geo_regions=true.
 **Scenario:**
 ```gherkin
@@ -1491,6 +1709,8 @@ Then defaults to geo_countries=true, geo_regions=true
 ---
 
 ### content_standards_calibration_exemplars: Calibration Exemplars
+**Obligation ID** CONSTR-CONTENT-STANDARDS-CALIBRATION-EXEMPLARS-01
+**Layer** behavioral
 **Requirement:** Optional. Pass/fail arrays of URL references or artifact objects (oneOf polymorphism). URL resolved to artifact on ingest.
 **Scenario:**
 ```gherkin
@@ -1506,6 +1726,8 @@ Then accepted directly
 ---
 
 ### content_standards_list_filters: Content Standards List Filters
+**Obligation ID** CONSTR-CONTENT-STANDARDS-LIST-FILTERS-01
+**Layer** behavioral
 **Requirement:** Optional filters by channels (OR), languages (OR), countries (OR). Cross-dimension AND. No filters = all.
 **Scenario:**
 ```gherkin
@@ -1518,6 +1740,8 @@ Then standards matching display AND en returned
 ---
 
 ### content_standards_policy: Content Standards Policy Text
+**Obligation ID** CONSTR-CONTENT-STANDARDS-POLICY-01
+**Layer** behavioral
 **Requirement:** Required string containing the policy content. Free-form text describing acceptable/unacceptable content.
 **Scenario:**
 ```gherkin
@@ -1530,6 +1754,8 @@ Then stored as current version
 ---
 
 ### content_standards_scope: Content Standards Scope
+**Obligation ID** CONSTR-CONTENT-STANDARDS-SCOPE-01
+**Layer** behavioral
 **Requirement:** languages_any required (minItems: 1). countries_all optional (AND). channels_any optional (OR).
 **Scenario:**
 ```gherkin
@@ -1545,6 +1771,8 @@ Then standard applies in BOTH US AND UK
 ---
 
 ### content_standards_standards_id: Content Standards ID
+**Obligation ID** CONSTR-CONTENT-STANDARDS-STANDARDS-ID-01
+**Layer** behavioral
 **Requirement:** Stable identifier across versions. Same ID through updates. System-assigned on create.
 **Scenario:**
 ```gherkin
@@ -1558,6 +1786,8 @@ Then response still has standards_id="std_1"
 ---
 
 ### auth/principal_id: Discovery Authentication
+**Obligation ID** CONSTR-AUTH-PRINCIPAL-ID-01
+**Layer** behavioral
 **Requirement:** Authentication optional for discovery (require_valid_token=false). Invalid tokens degraded to anonymous (MCP). A2A requires valid token if provided. No data scoping by identity.
 **Scenario:**
 ```gherkin
@@ -1573,6 +1803,8 @@ Then rejected with authentication error
 ---
 
 ### discovery_auth: Discovery Auth Pattern
+**Obligation ID** CONSTR-DISCOVERY-AUTH-01
+**Layer** behavioral
 **Requirement:** Discovery endpoints allow anonymous access. Invalid tokens treated as absent. Identical data regardless of auth state.
 **Scenario:**
 ```gherkin
@@ -1585,6 +1817,8 @@ Then receives same data as anonymous caller
 ---
 
 ### property_type: Property Type Enum
+**Obligation ID** CONSTR-PROPERTY-TYPE-01
+**Layer** behavioral
 **Requirement:** Enum for property types in property list definitions.
 **Scenario:**
 ```gherkin
@@ -1597,6 +1831,8 @@ Then property list entry is valid
 ---
 
 ### property_list_auth_token: Property List Auth Token
+**Obligation ID** CONSTR-PROPERTY-LIST-AUTH-TOKEN-01
+**Layer** behavioral
 **Requirement:** Returned once in create response. Not in get/list/update/delete. min 32 chars. No recovery.
 **Scenario:**
 ```gherkin
@@ -1612,6 +1848,8 @@ Then auth_token NOT in response
 ---
 
 ### property_list_base_properties: Base Properties Source
+**Obligation ID** CONSTR-PROPERTY-LIST-BASE-PROPERTIES-01
+**Layer** behavioral
 **Requirement:** Discriminated union: publisher_tags (domain+tags), publisher_ids (domain+ids), identifiers (ids). Non-empty arrays. Omitted = entire catalog.
 **Scenario:**
 ```gherkin
@@ -1624,6 +1862,8 @@ Then rejected (non-empty required)
 ---
 
 ### property_list_filters: Property List Filters
+**Obligation ID** CONSTR-PROPERTY-LIST-FILTERS-01
+**Layer** behavioral
 **Requirement:** When present, both countries_all and channels_any required as non-empty arrays. Evaluated at resolution time.
 **Scenario:**
 ```gherkin
@@ -1636,6 +1876,8 @@ Then rejected (both required)
 ---
 
 ### property_list_list_id: Property List ID
+**Obligation ID** CONSTR-PROPERTY-LIST-LIST-ID-01
+**Layer** behavioral
 **Requirement:** System-assigned unique identifier. Used for get/update/delete. Must exist within tenant for operations.
 **Scenario:**
 ```gherkin
@@ -1648,6 +1890,8 @@ Then LIST_NOT_FOUND returned
 ---
 
 ### property_list_name: Property List Name
+**Obligation ID** CONSTR-PROPERTY-LIST-NAME-01
+**Layer** behavioral
 **Requirement:** Required string for property list. Used in name_contains search filter.
 **Scenario:**
 ```gherkin
@@ -1660,6 +1904,8 @@ Then only lists with "sports" in name returned
 ---
 
 ### property_list_pagination: Property List Pagination
+**Obligation ID** CONSTR-PROPERTY-LIST-PAGINATION-01
+**Layer** behavioral
 **Requirement:** max_results 1-10000, default 1000. Cursor-based pagination for resolved identifiers.
 **Scenario:**
 ```gherkin
@@ -1675,6 +1921,8 @@ Then rejected (maximum: 10000)
 ---
 
 ### property_list_resolve: Property List Resolution
+**Obligation ID** CONSTR-PROPERTY-LIST-RESOLVE-01
+**Layer** behavioral
 **Requirement:** resolve=true (default) evaluates filters. resolve=false returns metadata only.
 **Scenario:**
 ```gherkin
@@ -1687,6 +1935,8 @@ Then identifiers not resolved, only metadata returned
 ---
 
 ### property_list_webhook_url: Property List Webhook URL
+**Obligation ID** CONSTR-PROPERTY-LIST-WEBHOOK-URL-01
+**Layer** behavioral
 **Requirement:** Only in update (not create). Empty string removes webhook. URI format when set.
 **Scenario:**
 ```gherkin
@@ -1702,6 +1952,8 @@ Then previously set webhook removed
 ---
 
 ### creative_scope: Cross-Principal Creative Isolation
+**Obligation ID** CONSTR-CREATIVE-SCOPE-01
+**Layer** behavioral
 **Requirement:** Triple key: tenant_id + principal_id + creative_id. Cross-principal collision = silent create.
 **Scenario:**
 ```gherkin
@@ -1714,6 +1966,8 @@ Then new creative created silently (no cross-visibility)
 ---
 
 ### format_id_validation: Creative Format Validation
+**Obligation ID** CONSTR-FORMAT-ID-VALIDATION-01
+**Layer** behavioral
 **Requirement:** format_id required. Non-HTTP agent_url skips external validation. HTTP agent checked for reachability + format registration.
 **Scenario:**
 ```gherkin
@@ -1729,6 +1983,8 @@ Then CREATIVE_FORMAT_UNKNOWN error
 ---
 
 ### generative_build: Generative Creative Build
+**Obligation ID** CONSTR-GENERATIVE-BUILD-01
+**Layer** behavioral
 **Requirement:** Generative when output_format_ids truthy. Prompt priority: assets > inputs > name. Update without prompt = skip. GEMINI_API_KEY required.
 **Scenario:**
 ```gherkin
@@ -1741,6 +1997,8 @@ Then CREATIVE_GEMINI_KEY_MISSING error
 ---
 
 ### assignment_package: Assignment Package Validation
+**Obligation ID** CONSTR-ASSIGNMENT-PACKAGE-01
+**Layer** behavioral
 **Requirement:** Package lookup joins MediaPackage to MediaBuy filtered by tenant. Strict/lenient per validation_mode. Idempotent upsert (weight=100).
 **Scenario:**
 ```gherkin
@@ -1756,6 +2014,8 @@ Then weight reset to 100 (idempotent)
 ---
 
 ### assignment_format: Assignment Format Compatibility
+**Obligation ID** CONSTR-ASSIGNMENT-FORMAT-01
+**Layer** behavioral
 **Requirement:** URL normalization (strip trailing "/" and "/mcp"). Both agent_url AND format_id must match. Empty format_ids = all allowed.
 **Scenario:**
 ```gherkin
@@ -1771,6 +2031,8 @@ Then all creative formats allowed
 ---
 
 ### media_buy_status: Media Buy Status Transition
+**Obligation ID** CONSTR-MEDIA-BUY-STATUS-01
+**Layer** behavioral
 **Requirement:** draft + approved_at transitions to pending_creatives on assignment. Draft without approved_at stays draft. Non-draft unchanged.
 **Scenario:**
 ```gherkin
@@ -1784,6 +2046,8 @@ Then status becomes pending_creatives
 ---
 
 ### minimum_spend: Minimum Spend Per Package
+**Obligation ID** CONSTR-MINIMUM-SPEND-01
+**Layer** behavioral
 **Requirement:** Product min_spend_per_package (primary) or tenant min_package_budget (fallback). Neither = skipped.
 **Scenario:**
 ```gherkin
@@ -1796,6 +2060,8 @@ Then rejected (BUDGET_BELOW_MINIMUM)
 ---
 
 ### persistence_timing: Adapter Atomicity Gate
+**Obligation ID** CONSTR-PERSISTENCE-TIMING-01
+**Layer** behavioral
 **Requirement:** Auto-approval: persist only after adapter success. Adapter failure = no records. Manual approval: persist in pending before adapter.
 **Scenario:**
 ```gherkin
@@ -1808,6 +2074,8 @@ Then no database records created
 ---
 
 ### adapter_dispatch: Partial Update Semantics
+**Obligation ID** CONSTR-ADAPTER-DISPATCH-01
+**Layer** behavioral
 **Requirement:** Present fields modified, omitted fields unchanged. At least one field required.
 **Scenario:**
 ```gherkin

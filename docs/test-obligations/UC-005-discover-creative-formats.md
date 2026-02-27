@@ -28,6 +28,8 @@ Key upgrade concerns:
 Source: BR-UC-005-main-mcp.md
 
 #### Scenario: Full catalog returned with no filters (BR-1)
+**Obligation ID** UC-005-MAIN-MCP-01
+**Layer** behavioral
 
 **Given** the Seller Agent is operational and has at least one registered creative agent
 **And** the MCP connection is established
@@ -39,6 +41,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P1 -- core happy path
 
 #### Scenario: Authentication is optional for discovery (BR-2)
+**Obligation ID** UC-005-MAIN-MCP-02
+**Layer** behavioral
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` without authentication credentials
@@ -48,6 +52,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P1 -- security contract
 
 #### Scenario: Formats aggregated from all registered agents (BR-3)
+**Obligation ID** UC-005-MAIN-MCP-03
+**Layer** behavioral
 
 **Given** the tenant has a default creative agent AND at least one tenant-specific creative agent registered
 **When** the Buyer calls `list_creative_formats`
@@ -57,6 +63,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P1 -- aggregation correctness
 
 #### Scenario: Results sorted by format type then name (BR-4)
+**Obligation ID** UC-005-MAIN-MCP-04
+**Layer** behavioral
 
 **Given** the format catalog contains multiple formats of different types
 **When** the Buyer calls `list_creative_formats`
@@ -66,6 +74,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P2 -- ordering contract
 
 #### Scenario: Filter by format category (type)
+**Obligation ID** UC-005-MAIN-MCP-05
+**Layer** behavioral
 
 **Given** the format catalog contains formats of type `display`, `video`, and `audio`
 **When** the Buyer calls `list_creative_formats` with `type=video`
@@ -75,6 +85,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P1 -- filter correctness
 
 #### Scenario: Filter by format_ids
+**Obligation ID** UC-005-MAIN-MCP-06
+**Layer** behavioral
 
 **Given** the format catalog contains formats with known FormatId values
 **When** the Buyer calls `list_creative_formats` with specific `format_ids` list
@@ -83,6 +95,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P1 -- filter correctness
 
 #### Scenario: Filter by asset_types (BR-6)
+**Obligation ID** UC-005-MAIN-MCP-07
+**Layer** behavioral
 
 **Given** the format catalog contains formats with `image` assets and formats with `video` assets
 **When** the Buyer calls `list_creative_formats` with `asset_types=[video]`
@@ -91,6 +105,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P1 -- filter correctness
 
 #### Scenario: Dimension range filter matches ANY render (BR-5)
+**Obligation ID** UC-005-MAIN-MCP-08
+**Layer** behavioral
 
 **Given** a format has renders with widths [320, 728, 970]
 **When** the Buyer calls `list_creative_formats` with `max_width=400`
@@ -99,6 +115,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P2 -- filter nuance
 
 #### Scenario: Dimension filter excludes format when NO render matches
+**Obligation ID** UC-005-MAIN-MCP-09
+**Layer** behavioral
 
 **Given** a format has renders with minimum width 728
 **When** the Buyer calls `list_creative_formats` with `max_width=400`
@@ -107,6 +125,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P2 -- negative filter case
 
 #### Scenario: Filter by is_responsive
+**Obligation ID** UC-005-MAIN-MCP-10
+**Layer** behavioral
 
 **Given** the format catalog contains responsive and non-responsive formats
 **When** the Buyer calls `list_creative_formats` with `is_responsive=true`
@@ -115,6 +135,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P2 -- filter correctness
 
 #### Scenario: Name search is case-insensitive partial match (BR-7)
+**Obligation ID** UC-005-MAIN-MCP-11
+**Layer** behavioral
 
 **Given** the format catalog contains a format named "Standard Banner 728x90"
 **When** the Buyer calls `list_creative_formats` with `name_search="banner"`
@@ -123,6 +145,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P2 -- search semantics
 
 #### Scenario: Filter by WCAG accessibility level
+**Obligation ID** UC-005-MAIN-MCP-12
+**Layer** behavioral
 
 **Given** the format catalog contains formats with WCAG levels A, AA, and AAA
 **When** the Buyer calls `list_creative_formats` with `wcag_level=AA`
@@ -131,6 +155,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P3 -- accessibility filter
 
 #### Scenario: Creative agent referrals included in response (POST-S4)
+**Obligation ID** UC-005-MAIN-MCP-13
+**Layer** behavioral
 
 **Given** the creative agent registry includes referral information for additional agents
 **When** the Buyer calls `list_creative_formats`
@@ -140,6 +166,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P2 -- referral completeness
 
 #### Scenario: Pagination with cursor-based navigation
+**Obligation ID** UC-005-MAIN-MCP-14
+**Layer** behavioral
 
 **Given** the format catalog has more formats than the requested `max_results`
 **When** the Buyer calls `list_creative_formats` with `max_results=10`
@@ -149,6 +177,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P2 -- pagination
 
 #### Scenario: Pagination default (max_results=50)
+**Obligation ID** UC-005-MAIN-MCP-15
+**Layer** behavioral
 
 **Given** the format catalog has 75 formats
 **When** the Buyer calls `list_creative_formats` with no pagination parameters
@@ -158,6 +188,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P2 -- pagination defaults
 
 #### Scenario: Combined filters narrow results
+**Obligation ID** UC-005-MAIN-MCP-16
+**Layer** behavioral
 
 **Given** the format catalog contains diverse formats
 **When** the Buyer calls `list_creative_formats` with `type=display`, `asset_types=[image]`, `max_width=728`
@@ -166,6 +198,8 @@ Source: BR-UC-005-main-mcp.md
 **Priority** P2 -- combined filters
 
 #### Scenario: MCP response is valid ToolResult with structured content
+**Obligation ID** UC-005-MAIN-MCP-17
+**Layer** behavioral
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` via MCP
@@ -181,6 +215,8 @@ Source: BR-UC-005-main-mcp.md
 Source: BR-UC-005-main-rest.md
 
 #### Scenario: Full catalog returned via A2A endpoint
+**Obligation ID** UC-005-MAIN-REST-01
+**Layer** behavioral
 
 **Given** the Seller Agent is operational
 **When** the Buyer sends a `list_creative_formats` task via A2A protocol
@@ -189,6 +225,8 @@ Source: BR-UC-005-main-rest.md
 **Priority** P1 -- REST happy path
 
 #### Scenario: Adapter-specific formats included via REST
+**Obligation ID** UC-005-MAIN-REST-02
+**Layer** behavioral
 
 **Given** the tenant uses an adapter (e.g., Broadstreet) that provides additional format templates
 **When** the Buyer sends `list_creative_formats` via A2A
@@ -197,6 +235,8 @@ Source: BR-UC-005-main-rest.md
 **Priority** P2 -- adapter integration
 
 #### Scenario: Tenant context resolved from request headers (REST)
+**Obligation ID** UC-005-MAIN-REST-03
+**Layer** behavioral
 
 **Given** the Buyer sends `list_creative_formats` via A2A
 **When** the request includes tenant identification in headers
@@ -212,6 +252,8 @@ Source: BR-UC-005-main-rest.md
 Source: BR-UC-005-ext-a.md
 
 #### Scenario: No authentication and no hostname mapping
+**Obligation ID** UC-005-EXT-A-01
+**Layer** behavioral
 
 **Given** the Seller Agent is operational
 **And** the Buyer provides no authentication token
@@ -224,6 +266,8 @@ Source: BR-UC-005-ext-a.md
 **Priority** P1 -- error handling contract
 
 #### Scenario: Error response includes all three failure postconditions
+**Obligation ID** UC-005-EXT-A-02
+**Layer** behavioral
 
 **Given** tenant resolution will fail
 **When** the Buyer calls `list_creative_formats`
@@ -239,6 +283,8 @@ Source: BR-UC-005-ext-a.md
 Source: BR-UC-005-ext-b.md
 
 #### Scenario: Invalid format category enum value
+**Obligation ID** UC-005-EXT-B-01
+**Layer** behavioral
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with `type="invalid_category"`
@@ -248,6 +294,8 @@ Source: BR-UC-005-ext-b.md
 **Priority** P1 -- validation error contract
 
 #### Scenario: Malformed FormatId objects
+**Obligation ID** UC-005-EXT-B-02
+**Layer** behavioral
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with malformed `format_ids` (e.g., missing `agent_url`)
@@ -256,6 +304,8 @@ Source: BR-UC-005-ext-b.md
 **Priority** P2 -- structural validation
 
 #### Scenario: Non-integer dimension values
+**Obligation ID** UC-005-EXT-B-03
+**Layer** behavioral
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with `max_width="not_a_number"`
@@ -264,6 +314,8 @@ Source: BR-UC-005-ext-b.md
 **Priority** P2 -- type coercion
 
 #### Scenario: Invalid WCAG level
+**Obligation ID** UC-005-EXT-B-04
+**Layer** behavioral
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with `wcag_level="INVALID"`
@@ -273,6 +325,8 @@ Source: BR-UC-005-ext-b.md
 **Priority** P2 -- enum validation
 
 #### Scenario: Validation errors are detailed per field
+**Obligation ID** UC-005-EXT-B-05
+**Layer** behavioral
 
 **Given** the Buyer sends a request with multiple invalid parameters
 **When** the system validates the request
@@ -288,6 +342,8 @@ Source: BR-UC-005-ext-b.md
 These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 schemas.
 
 #### Scenario: ListCreativeFormatsResponse conforms to adcp 3.6.0 schema
+**Obligation ID** UC-005-EXT-B-06
+**Layer** behavioral
 
 **Given** a valid `ListCreativeFormatsResponse` constructed by the system
 **When** serialized via `model_dump()`
@@ -296,6 +352,8 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 **Priority** P0 -- schema contract (adcp compliance test)
 
 #### Scenario: ListCreativeFormatsRequest accepts all valid filter combinations
+**Obligation ID** UC-005-EXT-B-07
+**Layer** behavioral
 
 **Given** a request with every optional filter provided and valid
 **When** parsed by Pydantic model
@@ -303,6 +361,8 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 **Priority** P1 -- request schema coverage
 
 #### Scenario: Format objects include all required fields
+**Obligation ID** UC-005-EXT-B-08
+**Layer** behavioral
 
 **Given** a `ListCreativeFormatsResponse` with formats
 **When** the Buyer inspects any format in the response
@@ -311,6 +371,8 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 **Priority** P1 -- response completeness (POST-S2)
 
 #### Scenario: FormatId is a structured object with agent_url and id
+**Obligation ID** UC-005-EXT-B-09
+**Layer** behavioral
 
 **Given** any format in the response
 **When** the Buyer inspects its format_id

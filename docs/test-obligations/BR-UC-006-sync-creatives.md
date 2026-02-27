@@ -75,6 +75,8 @@ MediaBuy boundary layer drops fields during serialization. Affects media buy sta
 Source: BR-UC-006-main-mcp.md
 
 #### Scenario: Single static creative created successfully
+**Obligation ID** UC-006-MAIN-MCP-01
+**Layer** behavioral
 
 **Given** the Buyer is authenticated with a valid principal_id
 **And** the tenant exists and is resolvable from MCP session
@@ -87,6 +89,8 @@ Source: BR-UC-006-main-mcp.md
 **Priority** P0 -- core happy path
 
 #### Scenario: Multiple static creatives created in batch
+**Obligation ID** UC-006-MAIN-MCP-02
+**Layer** behavioral
 
 **Given** the Buyer is authenticated
 **And** the tenant exists
@@ -96,6 +100,8 @@ Source: BR-UC-006-main-mcp.md
 **Priority** P1 -- batch processing
 
 #### Scenario: Existing creative updated (upsert by triple key)
+**Obligation ID** UC-006-MAIN-MCP-03
+**Layer** behavioral
 
 **Given** the Buyer is authenticated with principal_id "P1"
 **And** a creative with creative_id "C1" already exists for tenant "T1" and principal "P1"
@@ -106,6 +112,8 @@ Source: BR-UC-006-main-mcp.md
 **Priority** P1 -- upsert semantics
 
 #### Scenario: Unchanged creative detection
+**Obligation ID** UC-006-MAIN-MCP-04
+**Layer** behavioral
 
 **Given** a creative with creative_id "C1" exists with identical data
 **When** the Buyer invokes `sync_creatives` with the same creative_id and identical content
@@ -114,6 +122,8 @@ Source: BR-UC-006-main-mcp.md
 **Priority** P2 -- idempotency
 
 #### Scenario: Per-creative savepoint isolation (lenient mode)
+**Obligation ID** UC-006-MAIN-MCP-05
+**Layer** behavioral
 
 **Given** the Buyer sends 3 creatives: valid, invalid (bad format), valid
 **And** validation_mode is lenient
@@ -125,6 +135,8 @@ Source: BR-UC-006-main-mcp.md
 **Priority** P0 -- partial success
 
 #### Scenario: Strict mode aborts on assignment error
+**Obligation ID** UC-006-MAIN-MCP-06
+**Layer** behavioral
 
 **Given** the Buyer sends 2 creatives with assignments
 **And** validation_mode is strict (default)
@@ -136,6 +148,8 @@ Source: BR-UC-006-main-mcp.md
 **Priority** P1 -- strict mode semantics
 
 #### Scenario: Lenient mode continues on assignment error
+**Obligation ID** UC-006-MAIN-MCP-07
+**Layer** behavioral
 
 **Given** the Buyer sends 2 creatives with assignments
 **And** validation_mode is lenient
@@ -147,6 +161,8 @@ Source: BR-UC-006-main-mcp.md
 **Priority** P1 -- lenient mode semantics
 
 #### Scenario: Default validation_mode is strict
+**Obligation ID** UC-006-MAIN-MCP-08
+**Layer** behavioral
 
 **Given** the Buyer invokes `sync_creatives` without specifying validation_mode
 **When** the system checks the validation_mode
@@ -155,6 +171,8 @@ Source: BR-UC-006-main-mcp.md
 **Priority** P1 -- default contract
 
 #### Scenario: Format registry pre-fetched once per sync operation
+**Obligation ID** UC-006-MAIN-MCP-09
+**Layer** behavioral
 
 **Given** the Buyer sends multiple creatives referencing different formats
 **When** the system processes the batch
@@ -164,6 +182,8 @@ Source: BR-UC-006-main-mcp.md
 **Priority** P2 -- performance optimization
 
 #### Scenario: MCP response is valid SyncCreativesResponse
+**Obligation ID** UC-006-MAIN-MCP-10
+**Layer** behavioral
 
 **Given** the Buyer invokes `sync_creatives` via MCP
 **When** the system returns results
@@ -179,6 +199,8 @@ Source: BR-UC-006-main-mcp.md
 Source: BR-UC-006-main-rest.md
 
 #### Scenario: Creatives synced via A2A endpoint
+**Obligation ID** UC-006-MAIN-REST-01
+**Layer** behavioral
 
 **Given** the Buyer is authenticated via A2A context
 **And** the tenant is resolvable
@@ -188,6 +210,8 @@ Source: BR-UC-006-main-rest.md
 **Priority** P1 -- REST happy path
 
 #### Scenario: Slack notification for require-human approval (REST)
+**Obligation ID** UC-006-MAIN-REST-02
+**Layer** behavioral
 
 **Given** the tenant has `approval_mode=require-human` and a configured `slack_webhook_url`
 **When** the Buyer syncs creatives via A2A
@@ -196,6 +220,8 @@ Source: BR-UC-006-main-rest.md
 **Priority** P2 -- notification integration
 
 #### Scenario: AI review submission for ai-powered approval (REST)
+**Obligation ID** UC-006-MAIN-REST-03
+**Layer** behavioral
 
 **Given** the tenant has `approval_mode=ai-powered`
 **When** the Buyer syncs creatives via A2A
@@ -211,6 +237,8 @@ Source: BR-UC-006-main-rest.md
 These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: Creative extends correct listing base class (P0)
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
+**Layer** behavioral
 
 **Given** the salesagent `Creative` class in `src/core/schemas.py`
 **When** inspected for its base class lineage
@@ -220,6 +248,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- 3.6 upgrade blocker
 
 #### Scenario: list_creatives response includes name field (P0)
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-02
+**Layer** behavioral
 
 **Given** a creative exists in the database with name "Test Banner Ad"
 **When** `list_creatives` is called and the response is serialized
@@ -229,6 +259,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- 3.6 regression fix
 
 #### Scenario: list_creatives response includes status field (P0)
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-03
+**Layer** behavioral
 
 **Given** a creative exists with status "approved"
 **When** `list_creatives` is called and the response is serialized
@@ -238,6 +270,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- 3.6 regression fix
 
 #### Scenario: list_creatives response includes created_date field (P0)
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-04
+**Layer** behavioral
 
 **Given** a creative exists with created_date "2026-01-15T10:00:00Z"
 **When** `list_creatives` is called and the response is serialized
@@ -246,6 +280,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- 3.6 regression fix
 
 #### Scenario: list_creatives response includes updated_date field (P0)
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-05
+**Layer** behavioral
 
 **Given** a creative exists with updated_date "2026-02-20T14:30:00Z"
 **When** `list_creatives` is called and the response is serialized
@@ -254,6 +290,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- 3.6 regression fix
 
 #### Scenario: list_creatives response does NOT include delivery-only fields (P0)
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-06
+**Layer** behavioral
 
 **Given** creatives exist in the database
 **When** `list_creatives` is called and the response is serialized
@@ -265,6 +303,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- 3.6 schema correctness
 
 #### Scenario: Creative model_dump produces listing-schema-compliant JSON
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-07
+**Layer** behavioral
 
 **Given** a fully populated Creative instance
 **When** `model_dump()` is called
@@ -274,6 +314,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- schema contract (adcp compliance test)
 
 #### Scenario: SyncCreativesResponse conforms to adcp 3.6.0 schema
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-08
+**Layer** behavioral
 
 **Given** a sync operation completes with mixed results (created, updated, failed)
 **When** the response is serialized
@@ -282,6 +324,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- response schema compliance
 
 #### Scenario: CreativeAction enum values match 3.6.0
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-09
+**Layer** behavioral
 
 **Given** the system reports creative actions
 **When** any action is serialized
@@ -290,6 +334,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- enum compliance
 
 #### Scenario: CreativeAsset schema accepts all 11 asset types
+**Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
+**Layer** behavioral
 
 **Given** a creative submitted with assets of each type (image, video, audio, text, markdown, html, css, javascript, vast, daast, promoted_offerings, url, webhook)
 **When** the system validates the creative
@@ -301,6 +347,8 @@ These scenarios directly test the salesagent-goy2 fix.
 ### Cross-Principal Creative Isolation (BR-RULE-034)
 
 #### Scenario: Creative lookup filters by triple key (INV-1)
+**Obligation ID** UC-006-CROSS-PRINCIPAL-CREATIVE-01
+**Layer** behavioral
 
 **Given** principal "P1" has creative "C1" in tenant "T1"
 **And** principal "P2" also has creative "C1" in tenant "T1"
@@ -311,6 +359,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- security isolation
 
 #### Scenario: Same creative_id under different principal creates new creative (INV-2)
+**Obligation ID** UC-006-CROSS-PRINCIPAL-CREATIVE-02
+**Layer** behavioral
 
 **Given** principal "P1" has creative "C1" in tenant "T1"
 **When** principal "P2" syncs creative "C1" in tenant "T1"
@@ -321,6 +371,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P0 -- security: no information leakage
 
 #### Scenario: New creative always stamped with authenticated principal_id (INV-3)
+**Obligation ID** UC-006-CROSS-PRINCIPAL-CREATIVE-03
+**Layer** behavioral
 
 **Given** the Buyer is authenticated as principal "P1"
 **When** the Buyer creates a new creative
@@ -333,6 +385,8 @@ These scenarios directly test the salesagent-goy2 fix.
 ### Creative Format Validation (BR-RULE-035)
 
 #### Scenario: Missing format_id raises CREATIVE_FORMAT_REQUIRED (INV-1)
+**Obligation ID** UC-006-CREATIVE-FORMAT-VALIDATION-01
+**Layer** behavioral
 
 **Given** a creative with format_id set to None
 **When** the system validates the creative
@@ -342,6 +396,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- validation
 
 #### Scenario: Adapter format (non-HTTP agent_url) skips external validation (INV-2)
+**Obligation ID** UC-006-CREATIVE-FORMAT-VALIDATION-02
+**Layer** behavioral
 
 **Given** a creative with format_id having agent_url "adapter://gam"
 **When** the system validates the format
@@ -351,6 +407,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P2 -- adapter shortcut
 
 #### Scenario: Unreachable creative agent returns retry suggestion (INV-3)
+**Obligation ID** UC-006-CREATIVE-FORMAT-VALIDATION-03
+**Layer** behavioral
 
 **Given** a creative with format_id having agent_url "https://agent.example.com"
 **And** the agent at that URL is unreachable (timeout, connection error)
@@ -361,6 +419,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- transient failure handling
 
 #### Scenario: Reachable agent but unknown format returns discovery suggestion (INV-4)
+**Obligation ID** UC-006-CREATIVE-FORMAT-VALIDATION-04
+**Layer** behavioral
 
 **Given** a creative with format_id having agent_url "https://agent.example.com" and id "nonexistent_format"
 **And** the agent is reachable but does not have that format in its registry
@@ -375,6 +435,8 @@ These scenarios directly test the salesagent-goy2 fix.
 ### Generative Creative Build (BR-RULE-036)
 
 #### Scenario: Format with output_format_ids classified as generative (INV-1)
+**Obligation ID** UC-006-GENERATIVE-CREATIVE-BUILD-01
+**Layer** behavioral
 
 **Given** a creative whose format has `output_format_ids` = ["banner_300x250"]
 **When** the system processes the creative
@@ -384,6 +446,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- classification
 
 #### Scenario: Prompt extracted from message asset role (INV-2)
+**Obligation ID** UC-006-GENERATIVE-CREATIVE-BUILD-02
+**Layer** behavioral
 
 **Given** a generative creative with assets containing a `message` role text "Create a holiday banner"
 **When** the system extracts the prompt
@@ -392,6 +456,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P2 -- prompt extraction
 
 #### Scenario: Prompt extracted from brief asset role (INV-2)
+**Obligation ID** UC-006-GENERATIVE-CREATIVE-BUILD-03
+**Layer** behavioral
 
 **Given** a generative creative with no `message` asset but a `brief` role text "Promote summer sale"
 **When** the system extracts the prompt
@@ -400,6 +466,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P2 -- prompt extraction fallback
 
 #### Scenario: Prompt extracted from prompt asset role (INV-2)
+**Obligation ID** UC-006-GENERATIVE-CREATIVE-BUILD-04
+**Layer** behavioral
 
 **Given** a generative creative with no `message` or `brief` assets but a `prompt` role text
 **When** the system extracts the prompt
@@ -408,6 +476,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P2 -- prompt extraction fallback
 
 #### Scenario: Prompt from inputs[0].context_description (INV-3)
+**Obligation ID** UC-006-GENERATIVE-CREATIVE-BUILD-05
+**Layer** behavioral
 
 **Given** a generative creative with no message/brief/prompt assets
 **And** inputs[0].context_description = "Design for Q4 campaign"
@@ -417,6 +487,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P2 -- prompt extraction fallback
 
 #### Scenario: Creative name as fallback prompt on create (INV-4)
+**Obligation ID** UC-006-GENERATIVE-CREATIVE-BUILD-06
+**Layer** behavioral
 
 **Given** a NEW generative creative with no assets and no inputs
 **And** the creative name is "Holiday Sale Banner"
@@ -426,6 +498,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P2 -- prompt extraction last resort
 
 #### Scenario: Update without prompt preserves existing data (INV-5)
+**Obligation ID** UC-006-GENERATIVE-CREATIVE-BUILD-07
+**Layer** behavioral
 
 **Given** an EXISTING generative creative with previously generated content
 **And** the update request has no prompt in assets or inputs
@@ -436,6 +510,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P2 -- data preservation
 
 #### Scenario: User assets take priority over generative output (INV-6)
+**Obligation ID** UC-006-GENERATIVE-CREATIVE-BUILD-08
+**Layer** behavioral
 
 **Given** a generative creative with user-provided image assets AND a generative prompt
 **When** the system processes the creative
@@ -448,6 +524,8 @@ These scenarios directly test the salesagent-goy2 fix.
 ### Creative Approval Workflow (BR-RULE-037)
 
 #### Scenario: Auto-approve sets status=approved with no workflow steps (INV-2)
+**Obligation ID** UC-006-CREATIVE-APPROVAL-WORKFLOW-01
+**Layer** behavioral
 
 **Given** the tenant has `approval_mode=auto-approve`
 **When** a creative is synced
@@ -458,6 +536,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- approval routing
 
 #### Scenario: Require-human sets pending_review with immediate Slack (INV-3)
+**Obligation ID** UC-006-CREATIVE-APPROVAL-WORKFLOW-02
+**Layer** behavioral
 
 **Given** the tenant has `approval_mode=require-human`
 **And** the tenant has a configured `slack_webhook_url`
@@ -469,6 +549,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- human review workflow
 
 #### Scenario: AI-powered sets pending_review with deferred Slack (INV-4)
+**Obligation ID** UC-006-CREATIVE-APPROVAL-WORKFLOW-03
+**Layer** behavioral
 
 **Given** the tenant has `approval_mode=ai-powered`
 **When** a creative is synced
@@ -480,6 +562,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- AI review workflow
 
 #### Scenario: Default approval_mode is require-human (INV-1)
+**Obligation ID** UC-006-CREATIVE-APPROVAL-WORKFLOW-04
+**Layer** behavioral
 
 **Given** the tenant has no `approval_mode` setting
 **When** a creative is synced
@@ -488,6 +572,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- default contract
 
 #### Scenario: Slack notification only sent when webhook configured (INV-6)
+**Obligation ID** UC-006-CREATIVE-APPROVAL-WORKFLOW-05
+**Layer** behavioral
 
 **Given** the tenant has `approval_mode=require-human`
 **And** the tenant has NO `slack_webhook_url` configured
@@ -502,6 +588,8 @@ These scenarios directly test the salesagent-goy2 fix.
 ### Assignment Package Validation (BR-RULE-038)
 
 #### Scenario: Package resolved by joining MediaPackage to MediaBuy with tenant filter (INV-1)
+**Obligation ID** UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01
+**Layer** behavioral
 
 **Given** a creative assignment references package_id "PKG-1"
 **And** PKG-1 exists in a MediaBuy for the current tenant
@@ -512,6 +600,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- assignment happy path
 
 #### Scenario: Package not found in strict mode raises ToolError (INV-2)
+**Obligation ID** UC-006-ASSIGNMENT-PACKAGE-VALIDATION-02
+**Layer** behavioral
 
 **Given** a creative assignment references package_id "PKG-MISSING"
 **And** validation_mode is strict
@@ -522,6 +612,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- strict assignment error
 
 #### Scenario: Package not found in lenient mode logs warning (INV-2)
+**Obligation ID** UC-006-ASSIGNMENT-PACKAGE-VALIDATION-03
+**Layer** behavioral
 
 **Given** a creative assignment references package_id "PKG-MISSING"
 **And** validation_mode is lenient
@@ -534,6 +626,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- lenient assignment error
 
 #### Scenario: Idempotent upsert for duplicate assignment (INV-3)
+**Obligation ID** UC-006-ASSIGNMENT-PACKAGE-VALIDATION-04
+**Layer** behavioral
 
 **Given** creative "C1" is already assigned to package "PKG-1"
 **When** the Buyer syncs creative "C1" with assignment to package "PKG-1" again
@@ -543,6 +637,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- idempotent upsert
 
 #### Scenario: Cross-tenant package isolation
+**Obligation ID** UC-006-ASSIGNMENT-PACKAGE-VALIDATION-05
+**Layer** behavioral
 
 **Given** package "PKG-1" exists in tenant "T1" but not in tenant "T2"
 **When** a Buyer in tenant "T2" tries to assign to "PKG-1"
@@ -556,6 +652,8 @@ These scenarios directly test the salesagent-goy2 fix.
 ### Assignment Format Compatibility (BR-RULE-039)
 
 #### Scenario: Format compatible -- exact match after URL normalization (INV-1, INV-2)
+**Obligation ID** UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01
+**Layer** behavioral
 
 **Given** a creative has format_id with agent_url "https://agent.example.com/mcp/" and id "banner_300x250"
 **And** the product has format_ids containing agent_url "https://agent.example.com" and id "banner_300x250"
@@ -566,6 +664,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- URL normalization
 
 #### Scenario: Format incompatible in strict mode raises ToolError
+**Obligation ID** UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-02
+**Layer** behavioral
 
 **Given** a creative with format_id "video_preroll" assigned to a product that only accepts "banner_300x250"
 **And** validation_mode is strict
@@ -575,6 +675,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- strict format mismatch
 
 #### Scenario: Format incompatible in lenient mode logs warning
+**Obligation ID** UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-03
+**Layer** behavioral
 
 **Given** a creative with format_id "video_preroll" assigned to a product that only accepts "banner_300x250"
 **And** validation_mode is lenient
@@ -586,6 +688,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- lenient format mismatch
 
 #### Scenario: Product with no format_ids allows all formats (INV-3)
+**Obligation ID** UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-04
+**Layer** behavioral
 
 **Given** a creative with any format_id assigned to a product with empty format_ids
 **When** the system checks format compatibility
@@ -594,6 +698,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- open format policy
 
 #### Scenario: Product format_ids accepts both "id" and "format_id" keys (INV-4)
+**Obligation ID** UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-05
+**Layer** behavioral
 
 **Given** a product with format_ids entries using the key "id" (not "format_id")
 **And** a creative with a matching format
@@ -603,6 +709,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P2 -- key flexibility
 
 #### Scenario: Package without product_id skips format check (INV-6)
+**Obligation ID** UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-06
+**Layer** behavioral
 
 **Given** a package that has no product_id associated
 **When** a creative is assigned to that package
@@ -616,6 +724,8 @@ These scenarios directly test the salesagent-goy2 fix.
 ### Media Buy Status Transition on Assignment (BR-RULE-040)
 
 #### Scenario: Draft media buy with approved_at transitions to pending_creatives (INV-1)
+**Obligation ID** UC-006-MEDIA-BUY-STATUS-01
+**Layer** behavioral
 
 **Given** a media buy with status "draft" and approved_at = "2026-01-15T10:00:00Z"
 **When** a creative is assigned to a package in that media buy
@@ -624,6 +734,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- lifecycle transition
 
 #### Scenario: Draft media buy without approved_at does NOT transition (INV-2)
+**Obligation ID** UC-006-MEDIA-BUY-STATUS-02
+**Layer** behavioral
 
 **Given** a media buy with status "draft" and approved_at = null
 **When** a creative is assigned to a package in that media buy
@@ -632,6 +744,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- guard condition
 
 #### Scenario: Non-draft media buy does NOT transition (INV-3)
+**Obligation ID** UC-006-MEDIA-BUY-STATUS-03
+**Layer** behavioral
 
 **Given** a media buy with status "active" (not "draft")
 **When** a creative is assigned to a package in that media buy
@@ -640,6 +754,8 @@ These scenarios directly test the salesagent-goy2 fix.
 **Priority** P1 -- guard condition
 
 #### Scenario: Transition fires for both new and updated assignments (INV-4)
+**Obligation ID** UC-006-MEDIA-BUY-STATUS-04
+**Layer** behavioral
 
 **Given** a media buy with status "draft" and approved_at set
 **When** an existing creative assignment is updated (upsert)
@@ -655,6 +771,8 @@ These scenarios directly test the salesagent-goy2 fix.
 Source: BR-UC-006-ext-a.md
 
 #### Scenario: Missing principal_id returns AUTH_REQUIRED error
+**Obligation ID** UC-006-EXT-A-01
+**Layer** behavioral
 
 **Given** the Buyer sends `sync_creatives` without authentication context
 **When** the system attempts to extract principal_id
@@ -665,6 +783,8 @@ Source: BR-UC-006-ext-a.md
 **Priority** P0 -- authentication gate
 
 #### Scenario: AUTH_REQUIRED is an operation-level error (not per-creative)
+**Obligation ID** UC-006-EXT-A-02
+**Layer** behavioral
 
 **Given** the Buyer sends `sync_creatives` without authentication
 **When** the system responds
@@ -679,6 +799,8 @@ Source: BR-UC-006-ext-a.md
 Source: BR-UC-006-ext-b.md
 
 #### Scenario: Authentication present but tenant unresolvable
+**Obligation ID** UC-006-EXT-B-01
+**Layer** behavioral
 
 **Given** the Buyer is authenticated (principal_id present)
 **But** no tenant can be determined from the auth context
@@ -690,6 +812,8 @@ Source: BR-UC-006-ext-b.md
 **Priority** P1 -- tenant resolution failure
 
 #### Scenario: TENANT_NOT_FOUND is an operation-level error
+**Obligation ID** UC-006-EXT-B-02
+**Layer** behavioral
 
 **Given** tenant resolution fails
 **When** the system responds
@@ -704,6 +828,8 @@ Source: BR-UC-006-ext-b.md
 Source: BR-UC-006-ext-c.md
 
 #### Scenario: Invalid creative structure returns per-creative failure
+**Obligation ID** UC-006-EXT-C-01
+**Layer** behavioral
 
 **Given** a creative with invalid structure (e.g., invalid field types, extra required fields missing)
 **When** the system validates against CreativeAsset schema
@@ -714,6 +840,8 @@ Source: BR-UC-006-ext-c.md
 **Priority** P1 -- validation failure
 
 #### Scenario: Validation failure in strict mode -- other creatives still processed
+**Obligation ID** UC-006-EXT-C-02
+**Layer** behavioral
 
 **Given** creative 1 is invalid, creative 2 is valid
 **And** validation_mode is strict
@@ -724,6 +852,8 @@ Source: BR-UC-006-ext-c.md
 **Priority** P1 -- strict mode does NOT abort on validation failure
 
 #### Scenario: Validation failure in lenient mode -- other creatives still processed
+**Obligation ID** UC-006-EXT-C-03
+**Layer** behavioral
 
 **Given** creative 1 is invalid, creative 2 is valid
 **And** validation_mode is lenient
@@ -740,6 +870,8 @@ Source: BR-UC-006-ext-c.md
 Source: BR-UC-006-ext-d.md
 
 #### Scenario: Empty string name returns per-creative failure
+**Obligation ID** UC-006-EXT-D-01
+**Layer** behavioral
 
 **Given** a creative with name = "" (empty string)
 **When** the system validates the creative
@@ -749,6 +881,8 @@ Source: BR-UC-006-ext-d.md
 **Priority** P1 -- field validation
 
 #### Scenario: Missing name field returns per-creative failure
+**Obligation ID** UC-006-EXT-D-02
+**Layer** behavioral
 
 **Given** a creative with no name field at all
 **When** the system validates the creative
@@ -763,6 +897,8 @@ Source: BR-UC-006-ext-d.md
 Source: BR-UC-006-ext-e.md
 
 #### Scenario: Missing format_id returns per-creative failure
+**Obligation ID** UC-006-EXT-E-01
+**Layer** behavioral
 
 **Given** a creative with no format_id field
 **When** the system validates the creative
@@ -779,6 +915,8 @@ Source: BR-UC-006-ext-e.md
 Source: BR-UC-006-ext-f.md
 
 #### Scenario: Unknown format_id returns per-creative failure with agent info
+**Obligation ID** UC-006-EXT-F-01
+**Layer** behavioral
 
 **Given** a creative with format_id having agent_url "https://agent.example.com" and id "nonexistent_format"
 **And** the agent is reachable but does not list that format
@@ -796,6 +934,8 @@ Source: BR-UC-006-ext-f.md
 Source: BR-UC-006-ext-g.md
 
 #### Scenario: Unreachable agent returns per-creative failure with retry guidance
+**Obligation ID** UC-006-EXT-G-01
+**Layer** behavioral
 
 **Given** a creative with format_id having agent_url "https://unreachable-agent.example.com"
 **And** the agent is down or timing out
@@ -813,6 +953,8 @@ Source: BR-UC-006-ext-g.md
 Source: BR-UC-006-ext-h.md
 
 #### Scenario: No previews and no media_url returns per-creative failure
+**Obligation ID** UC-006-EXT-H-01
+**Layer** behavioral
 
 **Given** a static creative submitted to the creative agent for preview
 **And** the agent returns no previews
@@ -825,6 +967,8 @@ Source: BR-UC-006-ext-h.md
 **Priority** P2 -- preview failure
 
 #### Scenario: media_url fallback when no previews returned
+**Obligation ID** UC-006-EXT-H-02
+**Layer** behavioral
 
 **Given** a static creative that the agent returns no previews for
 **But** the creative has a user-provided media_url
@@ -840,6 +984,8 @@ Source: BR-UC-006-ext-h.md
 Source: BR-UC-006-ext-i.md
 
 #### Scenario: Generative creative without GEMINI_API_KEY returns failure
+**Obligation ID** UC-006-EXT-I-01
+**Layer** behavioral
 
 **Given** a creative with a generative format (output_format_ids present)
 **And** the Seller Agent does NOT have GEMINI_API_KEY configured
@@ -857,6 +1003,8 @@ Source: BR-UC-006-ext-i.md
 Source: BR-UC-006-ext-j.md
 
 #### Scenario: Non-existent package in strict mode -- operation-level error
+**Obligation ID** UC-006-EXT-J-01
+**Layer** behavioral
 
 **Given** an assignment references package_id "PKG-GONE"
 **And** "PKG-GONE" does not exist in any media buy
@@ -870,6 +1018,8 @@ Source: BR-UC-006-ext-j.md
 **Priority** P1 -- strict assignment error
 
 #### Scenario: Non-existent package in lenient mode -- assignment_errors
+**Obligation ID** UC-006-EXT-J-02
+**Layer** behavioral
 
 **Given** an assignment references package_id "PKG-GONE"
 **And** validation_mode is lenient
@@ -886,6 +1036,8 @@ Source: BR-UC-006-ext-j.md
 Source: BR-UC-006-ext-k.md
 
 #### Scenario: Incompatible format in strict mode -- operation-level error
+**Obligation ID** UC-006-EXT-K-01
+**Layer** behavioral
 
 **Given** an assignment links a creative with format "video_preroll" to a package whose product only accepts "banner_300x250"
 **And** validation_mode is strict
@@ -898,6 +1050,8 @@ Source: BR-UC-006-ext-k.md
 **Priority** P1 -- strict format mismatch
 
 #### Scenario: Incompatible format in lenient mode -- assignment_errors
+**Obligation ID** UC-006-EXT-K-02
+**Layer** behavioral
 
 **Given** an assignment links a creative with incompatible format
 **And** validation_mode is lenient
@@ -912,6 +1066,8 @@ Source: BR-UC-006-ext-k.md
 ### Assignments Response Completeness (POST-S3, POST-S4)
 
 #### Scenario: Successful assignment shows assigned_to array
+**Obligation ID** UC-006-ASSIGNMENTS-RESPONSE-COMPLETENESS-01
+**Layer** behavioral
 
 **Given** a creative is synced with assignment to package "PKG-1"
 **And** the package exists and format is compatible
@@ -921,6 +1077,8 @@ Source: BR-UC-006-ext-k.md
 **Priority** P1 -- assignment visibility
 
 #### Scenario: Warnings included in per-creative results
+**Obligation ID** UC-006-ASSIGNMENTS-RESPONSE-COMPLETENESS-02
+**Layer** behavioral
 
 **Given** a creative sync encounters non-fatal issues (e.g., lenient mode assignment warning)
 **When** the system returns per-creative results
@@ -929,6 +1087,8 @@ Source: BR-UC-006-ext-k.md
 **Priority** P2 -- warning visibility
 
 #### Scenario: assignment_errors included in per-creative results
+**Obligation ID** UC-006-ASSIGNMENTS-RESPONSE-COMPLETENESS-03
+**Layer** behavioral
 
 **Given** an assignment fails in lenient mode
 **When** the system returns per-creative results
@@ -941,6 +1101,8 @@ Source: BR-UC-006-ext-k.md
 ### Delete Missing (delete_missing flag)
 
 #### Scenario: delete_missing=true archives creatives not in batch
+**Obligation ID** UC-006-DELETE-MISSING-01
+**Layer** behavioral
 
 **Given** principal "P1" has creatives C1, C2, C3 in the tenant
 **When** the Buyer syncs only [C1, C2] with `delete_missing=true`
@@ -950,6 +1112,8 @@ Source: BR-UC-006-ext-k.md
 **Priority** P2 -- delete semantics
 
 #### Scenario: delete_missing=false (default) preserves unlisted creatives
+**Obligation ID** UC-006-DELETE-MISSING-02
+**Layer** behavioral
 
 **Given** principal "P1" has creatives C1, C2, C3
 **When** the Buyer syncs only [C1, C2] without delete_missing flag
@@ -962,6 +1126,8 @@ Source: BR-UC-006-ext-k.md
 ### Dry Run (dry_run flag)
 
 #### Scenario: dry_run=true validates without persisting
+**Obligation ID** UC-006-DRY-RUN-01
+**Layer** behavioral
 
 **Given** the Buyer sends `sync_creatives` with `dry_run=true`
 **When** the system processes the request
@@ -975,6 +1141,8 @@ Source: BR-UC-006-ext-k.md
 ### creative_ids Scope Filter
 
 #### Scenario: creative_ids limits which creatives in request are processed
+**Obligation ID** UC-006-CREATIVE-IDS-SCOPE-01
+**Layer** behavioral
 
 **Given** the Buyer sends creatives [C1, C2, C3] with `creative_ids=[C1, C3]`
 **When** the system processes the request
@@ -987,6 +1155,8 @@ Source: BR-UC-006-ext-k.md
 ### Async Lifecycle
 
 #### Scenario: Async submitted acknowledgment
+**Obligation ID** UC-006-ASYNC-LIFECYCLE-01
+**Layer** behavioral
 
 **Given** the system supports async creative sync
 **When** a sync operation is queued
@@ -995,6 +1165,8 @@ Source: BR-UC-006-ext-k.md
 **Priority** P3 -- async protocol
 
 #### Scenario: Async working progress
+**Obligation ID** UC-006-ASYNC-LIFECYCLE-02
+**Layer** behavioral
 
 **Given** an async sync operation is in progress
 **When** the Buyer checks status
@@ -1003,6 +1175,8 @@ Source: BR-UC-006-ext-k.md
 **Priority** P3 -- async protocol
 
 #### Scenario: Async input required
+**Obligation ID** UC-006-ASYNC-LIFECYCLE-03
+**Layer** behavioral
 
 **Given** an async sync operation requires Buyer input (approval, asset confirmation)
 **When** the system pauses
@@ -1015,6 +1189,8 @@ Source: BR-UC-006-ext-k.md
 ### Request Constraint Validation
 
 #### Scenario: Request with zero creatives is rejected
+**Obligation ID** UC-006-REQUEST-CONSTRAINT-VALIDATION-01
+**Layer** behavioral
 
 **Given** the Buyer sends `sync_creatives` with an empty creatives array
 **When** the system validates the request
@@ -1023,6 +1199,8 @@ Source: BR-UC-006-ext-k.md
 **Priority** P1 -- input constraint
 
 #### Scenario: Request with more than 100 creatives is rejected
+**Obligation ID** UC-006-REQUEST-CONSTRAINT-VALIDATION-02
+**Layer** behavioral
 
 **Given** the Buyer sends `sync_creatives` with 101 creatives
 **When** the system validates the request
