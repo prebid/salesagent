@@ -132,7 +132,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         # Call update_media_buy with creative assignment
         req = UpdateMediaBuyRequest(
             media_buy_id="test_buy_123",
-            buyer_ref="buyer_ref_123",
             packages=[
                 {
                     "package_id": "pkg_default",
@@ -145,7 +144,9 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
     # Verify response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.media_buy_id == "test_buy_123"
-    assert response.buyer_ref == "buyer_ref_123"
+    # buyer_ref is empty because the request uses media_buy_id (oneOf constraint)
+    # and the response reflects req.buyer_ref which is None
+    assert response.buyer_ref == ""
     assert response.affected_packages is not None
     assert len(response.affected_packages) == 1
 
@@ -315,7 +316,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
         # Call update_media_buy to replace creative_1 with creative_2 and creative_3
         req = UpdateMediaBuyRequest(
             media_buy_id="test_buy_456",
-            buyer_ref="buyer_ref_456",
             packages=[
                 {
                     "package_id": "pkg_default",
@@ -447,7 +447,6 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
         # Call update_media_buy with non-existent creative IDs
         req = UpdateMediaBuyRequest(
             media_buy_id="test_buy_789",
-            buyer_ref="buyer_ref_789",
             packages=[
                 {
                     "package_id": "pkg_default",
@@ -559,13 +558,15 @@ def test_creative_assignments_with_weights(integration_db):
         session.add_all([creative1, creative2])
         session.commit()
 
-    # Mock context and tenant resolution
-    mock_context = MagicMock()
-    mock_context.headers = {"x-adcp-auth": "test_token"}
+    # Create ResolvedIdentity for transport-agnostic _impl call
+    identity = ResolvedIdentity(
+        principal_id="test_principal",
+        tenant_id="test_tenant",
+        tenant={"tenant_id": "test_tenant"},
+        protocol="mcp",
+    )
 
     with (
-        patch("src.core.helpers.get_principal_id_from_context", return_value="test_principal"),
-        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
         patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
@@ -594,7 +595,7 @@ def test_creative_assignments_with_weights(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, ctx=mock_context)
+        response = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response is successful (not an error)
     assert isinstance(response, UpdateMediaBuyResponse)
@@ -699,6 +700,7 @@ def test_creative_assignments_replaces_all(integration_db):
             DBAssignment(
                 assignment_id="assign_c1",
                 tenant_id="test_tenant",
+                principal_id="test_principal",
                 media_buy_id="test_buy_replace",
                 package_id="pkg_default",
                 creative_id="c1",
@@ -709,6 +711,7 @@ def test_creative_assignments_replaces_all(integration_db):
             DBAssignment(
                 assignment_id="assign_c2",
                 tenant_id="test_tenant",
+                principal_id="test_principal",
                 media_buy_id="test_buy_replace",
                 package_id="pkg_default",
                 creative_id="c2",
@@ -717,13 +720,15 @@ def test_creative_assignments_replaces_all(integration_db):
         )
         session.commit()
 
-    # Mock context and tenant resolution
-    mock_context = MagicMock()
-    mock_context.headers = {"x-adcp-auth": "test_token"}
+    # Create ResolvedIdentity for transport-agnostic _impl call
+    identity = ResolvedIdentity(
+        principal_id="test_principal",
+        tenant_id="test_tenant",
+        tenant={"tenant_id": "test_tenant"},
+        protocol="mcp",
+    )
 
     with (
-        patch("src.core.helpers.get_principal_id_from_context", return_value="test_principal"),
-        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
         patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
@@ -750,7 +755,7 @@ def test_creative_assignments_replaces_all(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, ctx=mock_context)
+        response = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response is successful
     assert isinstance(response, UpdateMediaBuyResponse)
