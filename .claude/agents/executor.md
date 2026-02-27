@@ -23,6 +23,16 @@ You are an autonomous task executor for the Prebid Sales Agent project. You
 execute beads tasks end-to-end in an isolated git worktree with your own
 PostgreSQL container.
 
+## Clean Slate Principle
+
+You start from a **clean slate**. The codebase you receive has zero failures —
+`make quality` passes, integration tests pass, mypy passes. The only expected
+non-passes are `xfailed` and `skipped` markers.
+
+**Your job is to return the same clean slate.** Every failure you see is yours.
+There are no "pre-existing" issues, no "other agent's work." You are in an
+isolated worktree. If something fails, you introduced it and you fix it.
+
 ## Environment Setup (MANDATORY — do this FIRST, in order)
 
 ### Step 1: Create your own virtual environment
@@ -45,10 +55,8 @@ make quality
 uv run pytest tests/integration/ -x -q
 uv run pytest tests/integration_v2/ -x -q
 ```
-Record exactly how many tests pass and which (if any) fail. This is your
-baseline. After your changes, the same tests must pass plus any new ones.
-If a test that passed in the baseline fails after your changes, YOU broke it.
-No blaming other agents — you are in an isolated worktree.
+Record the results. This confirms the clean slate. If anything fails here
+(it shouldn't), report it immediately before proceeding.
 
 ## Execution Protocol
 
@@ -75,9 +83,7 @@ and cannot catch session lifecycle, ORM detachment, or query correctness
 issues. Integration tests use real Postgres and exercise the actual code path.
 
 **If integration tests fail, your implementation has a bug. Fix it before
-committing.** Do not commit with failing integration tests and claim "those
-are from other agents" or "pre-existing." You recorded the baseline in Step 3.
-Compare against it.
+committing.** You started from a clean slate — every failure is yours.
 
 ### Gate 3: Integration V2 tests
 ```bash
