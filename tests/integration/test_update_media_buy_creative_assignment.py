@@ -699,6 +699,7 @@ def test_creative_assignments_replaces_all(integration_db):
             DBAssignment(
                 assignment_id="assign_c1",
                 tenant_id="test_tenant",
+                principal_id="test_principal",
                 media_buy_id="test_buy_replace",
                 package_id="pkg_default",
                 creative_id="c1",
@@ -709,6 +710,7 @@ def test_creative_assignments_replaces_all(integration_db):
             DBAssignment(
                 assignment_id="assign_c2",
                 tenant_id="test_tenant",
+                principal_id="test_principal",
                 media_buy_id="test_buy_replace",
                 package_id="pkg_default",
                 creative_id="c2",
