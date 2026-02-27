@@ -618,7 +618,7 @@ class TestResponseShapeCapabilities:
         features = response.media_buy.features
         assert features.content_standards is False
         assert features.inline_creative_management is True
-        assert features.property_list_filtering is False
+        assert features.property_list_filtering is True
 
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""

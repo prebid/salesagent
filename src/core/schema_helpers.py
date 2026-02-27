@@ -13,6 +13,7 @@ Philosophy:
 from typing import Any
 
 from adcp import GetProductsRequest, GetProductsResponse, Product
+from adcp.types import PropertyListReference
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.product_filters import ProductFilters
@@ -73,10 +74,31 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | None) -> BrandRe
     return None  # Fallback for unexpected types
 
 
+def to_property_list_reference(
+    property_list: dict[str, Any] | PropertyListReference | None,
+) -> PropertyListReference | None:
+    """Convert dict to PropertyListReference for adcp compatibility.
+
+    Args:
+        property_list: Property list reference as dict or PropertyListReference or None
+
+    Returns:
+        PropertyListReference or None
+    """
+    if property_list is None:
+        return None
+    if isinstance(property_list, PropertyListReference):
+        return property_list
+    if isinstance(property_list, dict):
+        return PropertyListReference(**property_list)
+    return None  # Fallback for unexpected types
+
+
 def create_get_products_request(
     brief: str = "",
     brand: dict[str, Any] | BrandReference | None = None,
     filters: dict[str, Any] | ProductFilters | None = None,
+    property_list: dict[str, Any] | PropertyListReference | None = None,
     context: dict[str, Any] | ContextObject | None = None,
 ) -> GetProductsRequest:
     """Create GetProductsRequest aligned with adcp v3.6.0 spec.
@@ -86,6 +108,7 @@ def create_get_products_request(
         brand: Brand reference per adcp 3.6.0 (BrandReference or dict with domain field).
                Example: BrandReference(domain="acme.com") or {"domain": "acme.com"}
         filters: Structured filters for product discovery (dict or ProductFilters)
+        property_list: Property list reference for filtering by buyer's property list
         context: Application-level context (dict or ContextObject)
 
     Returns:
@@ -109,6 +132,7 @@ def create_get_products_request(
         brand=to_brand_reference(brand),
         brief=brief or None,
         filters=filters_obj,
+        property_list=to_property_list_reference(property_list),
         context=to_context_object(context),
     )
 

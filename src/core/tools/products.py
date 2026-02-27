@@ -13,7 +13,7 @@ from typing import Any, cast
 from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
-from adcp.types import PushNotificationConfig
+from adcp.types import PropertyListReference, PushNotificationConfig
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
@@ -115,6 +115,86 @@ def get_recommended_cpm(product: Product) -> float | None:
 
 # Import conversion utilities from dedicated module to avoid circular imports
 from src.core.product_conversion import convert_product_model_to_schema
+
+
+def extract_product_property_ids(
+    publisher_properties: list,
+) -> set[str] | None:
+    """Extract property IDs from a product's publisher_properties list.
+
+    Args:
+        publisher_properties: List of PublisherPropertySelector objects.
+
+    Returns:
+        Set of property ID strings, or None if any selector is selection_type="all"
+        (meaning the product covers all properties). Returns empty set for empty input.
+    """
+    if not publisher_properties:
+        return set()
+
+    property_ids: set[str] = set()
+    for selector in publisher_properties:
+        inner = selector.root
+        if inner.selection_type == "all":
+            # Product covers ALL properties for this domain
+            return None
+        elif inner.selection_type == "by_id":
+            for pid in inner.property_ids:
+                property_ids.add(pid.root)
+        # by_tag: we don't resolve tags to IDs here; tags are excluded from matching
+
+    return property_ids
+
+
+def should_include_product_for_property_list(
+    product: Any,
+    allowed_properties: set[str],
+) -> bool:
+    """Determine if a product should be included based on property list filtering.
+
+    Args:
+        product: Product object with publisher_properties and property_targeting_allowed.
+        allowed_properties: Set of allowed property ID strings from the buyer's property list.
+
+    Returns:
+        True if the product should be included, False otherwise.
+    """
+    product_property_ids = extract_product_property_ids(product.publisher_properties)
+
+    # None means product has selection_type="all" — always include
+    if product_property_ids is None:
+        return True
+
+    # No property IDs on the product — exclude (can't determine overlap)
+    if not product_property_ids:
+        return False
+
+    intersection = product_property_ids & allowed_properties
+    if not intersection:
+        return False
+
+    if not product.property_targeting_allowed:
+        # Strict: ALL product properties must be in allowed set
+        return product_property_ids <= allowed_properties
+
+    # Permissive: any intersection is enough
+    return True
+
+
+def filter_products_by_property_list(
+    products: list,
+    allowed_properties: set[str],
+) -> list:
+    """Filter a list of products based on allowed property IDs.
+
+    Args:
+        products: List of product objects.
+        allowed_properties: Set of allowed property ID strings.
+
+    Returns:
+        Filtered list of products that match the property list criteria.
+    """
+    return [p for p in products if should_include_product_for_property_list(p, allowed_properties)]
 
 
 async def _get_products_impl(
@@ -376,6 +456,28 @@ async def _get_products_impl(
                 logger.debug(f"Product {product.product_id} hidden from anonymous user (has access restrictions)")
         products = filtered_by_access
         logger.info(f"[GET_PRODUCTS] After anonymous access filtering: {len(products)} products")
+
+    # Filter products by buyer property list (if provided)
+    # Use isinstance check to safely handle mock objects in tests
+    _property_list_ref = getattr(req, "property_list", None)
+    if isinstance(_property_list_ref, PropertyListReference):
+        try:
+            from src.core.property_list_resolver import resolve_property_list
+
+            allowed_property_ids = await resolve_property_list(_property_list_ref)
+            allowed_set = set(allowed_property_ids)
+            products = filter_products_by_property_list(products, allowed_set)
+            logger.info(
+                f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
+                f"(allowed {len(allowed_set)} properties)"
+            )
+        except Exception as e:
+            from src.core.exceptions import AdCPAdapterError
+
+            if isinstance(e, AdCPAdapterError):
+                raise
+            logger.error(f"Property list resolution failed: {e}")
+            raise AdCPValidationError(f"Failed to resolve property list: {e}") from e
 
     # Generate dynamic product variants from signals agents
     try:
@@ -741,6 +843,7 @@ async def get_products(
     brief: str = "",
     adcp_version: str = "1.0.0",
     filters: ProductFilters | None = None,
+    property_list: dict | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
@@ -754,6 +857,7 @@ async def get_products(
         brief: Brief description of the advertising campaign or requirements (optional)
         adcp_version: Client's AdCP version (default: 1.0.0). V3+ clients get clean responses.
         filters: Structured filters for product discovery (optional)
+        property_list: Property list reference for filtering by buyer's property list (optional)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
         push_notification_config: Optional webhook configuration (accepted, ignored by this operation)
@@ -767,6 +871,7 @@ async def get_products(
             brief=brief,
             brand=brand,
             filters=filters,
+            property_list=property_list,
             context=context,
         )
 
@@ -799,6 +904,7 @@ async def get_products_raw(
     brand: dict[str, Any] | BrandReference | None = None,
     min_exposures: int | None = None,
     filters: dict | None = None,
+    property_list: dict | None = None,
     strategy_id: str | None = None,
     context: dict | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
@@ -816,6 +922,7 @@ async def get_products_raw(
                Dict is accepted since A2A passes JSON-deserialized dicts.
         min_exposures: Minimum impressions needed for measurement validity (optional)
         filters: Structured filters for product discovery (optional)
+        property_list: Property list reference for filtering by buyer's property list (optional)
         strategy_id: Optional strategy ID for linking operations (optional)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
@@ -835,6 +942,7 @@ async def get_products_raw(
         brief=brief or "",
         brand=brand,
         filters=filters,
+        property_list=property_list,
         context=context,
     )
 
