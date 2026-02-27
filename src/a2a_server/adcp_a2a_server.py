@@ -1496,9 +1496,7 @@ class AdCPRequestHandler(RequestHandler):
 
             # Require either brief OR brand
             if not brief and not brand:
-                raise ServerError(
-                    InvalidParamsError(message="Either 'brief' or 'brand' parameter is required")
-                )
+                raise ServerError(InvalidParamsError(message="Either 'brief' or 'brand' parameter is required"))
 
             # Call core function with identity — _raw handles full schema validation
             response = await core_get_products_tool(
