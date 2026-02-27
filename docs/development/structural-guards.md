@@ -136,7 +136,7 @@ The guard maintains a registry of all `_impl` functions:
 IMPL_REGISTRY = [
     ("src.core.tools.media_buy_create", "_create_media_buy_impl"),
     ("src.core.tools.creatives._sync", "_sync_creatives_impl"),
-    # ... 12 total
+    # ... 13 total
 ]
 ```
 
@@ -177,14 +177,13 @@ async def create_media_buy(...):
 | `test_a2a_wrappers_pass_all_impl_params` | Every A2A wrapper passes all `_impl` parameters |
 | `test_known_violations_are_still_violations` | Allowlisted violations haven't been fixed (stale entry detection) |
 
-#### Current known violations (8)
+#### Current known violations (3)
 
 | Wrapper | Missing Parameter | Tracked By |
 |---------|------------------|------------|
 | `create_media_buy` (MCP) | `push_notification_config` | salesagent-v0kb |
 | `create_media_buy_raw` (A2A) | `context_id` | salesagent-v0kb |
 | `update_media_buy_raw` (A2A) | `context_id` | salesagent-v0kb |
-| `list_creatives_raw` (A2A) | `filters`, `fields`, `include_performance`, `include_assignments`, `include_sub_assets` | salesagent-v0kb |
 
 ### Query Type Safety Guard
 

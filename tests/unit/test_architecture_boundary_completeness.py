@@ -30,6 +30,7 @@ IMPL_REGISTRY = [
     ("src.core.tools.performance", "_update_performance_index_impl"),
     ("src.core.tools.creatives._sync", "_sync_creatives_impl"),
     ("src.core.tools.creatives.listing", "_list_creatives_impl"),
+    ("src.core.tools.media_buy_list", "_get_media_buys_impl"),
     ("src.core.tools.signals", "_get_signals_impl"),
     ("src.core.tools.signals", "_activate_signal_impl"),
 ]
