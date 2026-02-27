@@ -47,14 +47,59 @@ failures in files you did NOT touch, report them but don't block on them.
 uv sync
 ```
 
-### Step 2: Start your private database
+### Step 2: Set up .env with unique CONDUCTOR_PORT
+
+`.env` is gitignored — worktrees don't get it automatically. Copy it from
+the main repo and assign a free port so your `docker compose` stack doesn't
+conflict with other executors or the main repo:
+```bash
+# Find main repo root (first line of git worktree list)
+MAIN_REPO=$(git worktree list | head -1 | awk '{print $1}')
+
+# Copy .env if missing
+if [ ! -f .env ] && [ -f "$MAIN_REPO/.env" ]; then
+    cp "$MAIN_REPO/.env" .env
+    echo "Copied .env from $MAIN_REPO"
+fi
+
+# Assign a unique CONDUCTOR_PORT
+if ! grep -q '^CONDUCTOR_PORT=' .env 2>/dev/null; then
+    PORT=$(python3 -c "
+import socket
+for p in range(8001, 8100):
+    try:
+        s = socket.socket(); s.bind(('127.0.0.1', p)); s.close(); print(p); break
+    except OSError:
+        s.close()
+")
+    echo "CONDUCTOR_PORT=$PORT" >> .env
+    echo "Set CONDUCTOR_PORT=$PORT"
+fi
+```
+If you're in the main repo (not a worktree), `.env` already exists — just
+ensure `CONDUCTOR_PORT` is set so you don't collide with the default port 8000.
+
+### Step 3: Start your private database
 ```bash
 eval $(.claude/skills/agent-db/agent-db.sh up)
 ```
 This gives you `DATABASE_URL` pointing to your own Postgres instance.
 The `integration_db` pytest fixture handles per-test database creation.
 
-### Step 3: Run the full test baseline BEFORE any code changes
+### Step 4: Verify docker-compose stack (optional but recommended)
+
+Each worktree has its own `CONDUCTOR_PORT`, so you can run the full stack
+independently without conflicting with other worktrees:
+```bash
+docker compose up -d
+docker compose ps          # Verify services started
+curl -f http://localhost:$(grep CONDUCTOR_PORT .env | cut -d= -f2)/health
+docker compose down
+```
+This verifies migrations, nginx, and the MCP server all work. For most
+tasks, the bare Postgres from Step 3 is sufficient for integration tests.
+
+### Step 5: Run the full test baseline BEFORE any code changes
 ```bash
 make quality
 uv run pytest tests/integration/ -x -q
