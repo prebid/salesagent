@@ -888,6 +888,7 @@ class MediaBuy(Base):
         overlaps="media_buys,tenant",
     )
     strategy = relationship("Strategy", back_populates="media_buys")
+    packages = relationship("MediaPackage", back_populates="media_buy", cascade="all, delete-orphan")
     # Removed tasks and context relationships - using ObjectWorkflowMapping instead
 
     __table_args__ = (
@@ -950,6 +951,9 @@ class MediaPackage(Base):
 
     # Full package configuration (includes all AdCP fields + internal fields)
     package_config: Mapped[dict] = mapped_column(JSONType, nullable=False)
+
+    # Relationships
+    media_buy = relationship("MediaBuy", back_populates="packages")
 
     __table_args__ = (
         Index("idx_media_packages_media_buy", "media_buy_id"),
