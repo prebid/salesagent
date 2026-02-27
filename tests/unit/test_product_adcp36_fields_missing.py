@@ -9,7 +9,7 @@ After upgrading adcp from 3.2.0 to 3.6.0, the Product Pydantic schema inherits
 - conversion_tracking (ConversionTracking | None)
 - data_provider_signals (list[DataProviderSignalSelector] | None)
 - forecast (DeliveryForecast | None)
-- property_targeting_allowed (bool | None)
+- property_targeting_allowed (bool)
 - signal_targeting_allowed (bool | None)
 
 Without DB columns, these fields:
@@ -18,11 +18,13 @@ Without DB columns, these fields:
 3. Will silently drop data on schema → DB → schema roundtrip
 """
 
-from unittest.mock import MagicMock
+from decimal import Decimal
 
+from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product as ProductSchema
+from tests.helpers.adcp_factories import create_test_db_product
 
 ADCP_36_PRODUCT_FIELDS = {
     "catalog_match",
@@ -126,66 +128,44 @@ class TestProductAdcp36FieldsPersistence:
         assert product.property_targeting_allowed is False
 
 
+def _make_db_product_for_conversion(**overrides) -> ProductModel:
+    """Create a DB Product instance with pricing, suitable for conversion tests.
+
+    Uses the project factory (create_test_db_product) and attaches a PricingOption
+    to the relationship list so convert_product_model_to_schema() can iterate it
+    without a database session.
+    """
+    product = create_test_db_product(
+        tenant_id="conv_test",
+        product_id="conv_test_001",
+        name="Conversion Test",
+        delivery_type="non_guaranteed",
+        delivery_measurement={"provider": "publisher"},
+        **overrides,
+    )
+    pricing = PricingOption(
+        tenant_id="conv_test",
+        product_id="conv_test_001",
+        pricing_model="cpm",
+        rate=Decimal("10.0"),
+        currency="USD",
+        is_fixed=True,
+    )
+    product.pricing_options = [pricing]
+    return product
+
+
 class TestPropertyTargetingAllowedConversion:
     """Verify property_targeting_allowed survives DB model → schema conversion."""
 
-    def _make_product_model(self, **overrides):
-        """Create a mock product model with required fields."""
-        model = MagicMock()
-        model.product_id = "conv_test_001"
-        model.name = "Conversion Test"
-        model.description = "Testing conversion"
-        model.delivery_type = "non_guaranteed"
-        model.effective_format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
-        model.effective_properties = [
-            {
-                "selection_type": "by_id",
-                "publisher_domain": "example.com",
-                "property_ids": ["all_inventory"],
-            }
-        ]
-        model.pricing_options = [
-            MagicMock(
-                pricing_model="cpm",
-                is_fixed=True,
-                currency="USD",
-                rate=10.0,
-                price_guidance=None,
-                min_spend_per_package=None,
-                parameters=None,
-            )
-        ]
-        model.delivery_measurement = {"provider": "publisher"}
-        model.measurement = None
-        model.creative_policy = None
-        model.countries = None
-        model.channels = None
-        model.product_card = None
-        model.product_card_detailed = None
-        model.placements = None
-        model.reporting_capabilities = None
-        model.is_custom = False
-        model.signal_targeting_allowed = None
-        model.catalog_match = None
-        model.catalog_types = None
-        model.conversion_tracking = None
-        model.data_provider_signals = None
-        model.forecast = None
-        model.effective_implementation_config = None
-        model.allowed_principal_ids = None
-        # Apply overrides
-        for k, v in overrides.items():
-            setattr(model, k, v)
-        return model
-
     def test_conversion_includes_property_targeting_allowed_true(self):
         """property_targeting_allowed=True on DB model should appear in converted schema."""
-        model = self._make_product_model(property_targeting_allowed=True)
-        product = convert_product_model_to_schema(model)
+        product_model = _make_db_product_for_conversion(property_targeting_allowed=True)
+        product = convert_product_model_to_schema(product_model)
         assert product.property_targeting_allowed is True
 
-    def test_conversion_omits_property_targeting_allowed_when_none(self):
-        """property_targeting_allowed=None on DB model should result in False (library default)."""
-        model = self._make_product_model(property_targeting_allowed=None)
-        product = convert_product_model_to_schema(model)
+    def test_conversion_defaults_to_false_when_not_set(self):
+        """property_targeting_allowed=False on DB model results in False (library default)."""
+        product_model = _make_db_product_for_conversion()
+        product = convert_product_model_to_schema(product_model)
         assert product.property_targeting_allowed is False

@@ -1,13 +1,6 @@
-"""Add property_targeting_allowed column to products
+"""Merge heads: adcp 3.6.0 fields + creative composite PK
 
-Add the 7th adcp 3.6.0 product field: property_targeting_allowed (Boolean).
-This was missed in the original add_adcp36_product_fields migration.
-
-When False (default), the product is "all or nothing" — buyers must accept
-all properties. When True, buyers can filter to a subset via property_list
-targeting.
-
-Task: salesagent-kntn
+Merge point for the two concurrent migration branches.
 
 Revision ID: b8e5f3a2c7d9
 Revises: a7d4e2f1b3c5, 1a88e4967119
@@ -15,9 +8,6 @@ Create Date: 2026-02-27
 """
 
 from typing import Sequence, Union
-
-import sqlalchemy as sa
-from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b8e5f3a2c7d9"
@@ -27,11 +17,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "products",
-        sa.Column("property_targeting_allowed", sa.Boolean(), nullable=True, server_default="false"),
-    )
+    """Merge point — no DDL."""
+    pass
 
 
 def downgrade() -> None:
-    op.drop_column("products", "property_targeting_allowed")
+    """Merge point — no DDL."""
+    pass
