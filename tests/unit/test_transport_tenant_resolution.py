@@ -143,8 +143,11 @@ class TestLazyTenantContext:
         assert lazy.tenant_id == "test_tenant"
         assert mode == "require-human"  # default
 
-    def test_sets_current_tenant_on_resolve(self):
-        """set_current_tenant() is called when full tenant is loaded."""
+    def test_resolve_does_not_set_current_tenant(self):
+        """Property access (_resolve) must NOT mutate the ContextVar.
+
+        ContextVar mutation only happens via explicit ensure_resolved() at boundaries.
+        """
         lazy = LazyTenantContext("test_tenant")
 
         with (
@@ -154,7 +157,22 @@ class TestLazyTenantContext:
             ),
             patch("src.core.config_loader.set_current_tenant") as mock_set,
         ):
-            _ = lazy.name  # trigger resolve
+            _ = lazy.name  # trigger resolve via property access
+
+        mock_set.assert_not_called()
+
+    def test_ensure_resolved_sets_current_tenant(self):
+        """ensure_resolved() is the boundary call that sets the ContextVar."""
+        lazy = LazyTenantContext("test_tenant")
+
+        with (
+            patch(
+                "src.core.config_loader.get_tenant_by_id",
+                return_value=FULL_TENANT_DICT,
+            ),
+            patch("src.core.config_loader.set_current_tenant") as mock_set,
+        ):
+            lazy.ensure_resolved()
 
         mock_set.assert_called_once()
         assert mock_set.call_args[0][0]["tenant_id"] == "test_tenant"
