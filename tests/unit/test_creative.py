@@ -2216,9 +2216,6 @@ class TestDryRun:
     Spec: CONFIRMED -- sync-creatives-request.json defines dry_run (boolean, default: false).
     """
 
-    @pytest.mark.xfail(
-        reason="dry_run=True is passed through to response but DB write is not skipped — needs implementation"
-    )
     def test_dry_run_does_not_persist(self):
         """When dry_run=True, no creatives are persisted to DB."""
         from src.core.tools.creatives._sync import _sync_creatives_impl

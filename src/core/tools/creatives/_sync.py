@@ -178,6 +178,50 @@ def _sync_creatives_impl(
                     )
                     continue  # Skip to next creative
 
+                # dry_run: build simulated results without DB writes
+                if dry_run:
+                    creative_id = creative.creative_id or "unknown"
+                    # Check if creative exists (read-only) to determine would-create vs would-update
+                    existing_creative = None
+                    if creative.creative_id:
+                        from src.core.database.models import Creative as DBCreative
+
+                        stmt = select(DBCreative).filter_by(
+                            tenant_id=tenant["tenant_id"],
+                            principal_id=principal_id,
+                            creative_id=creative.creative_id,
+                        )
+                        existing_creative = session.scalars(stmt).first()
+
+                    if existing_creative:
+                        updated_count += 1
+                        results.append(
+                            SyncCreativeResult(
+                                creative_id=creative_id,
+                                action=CreativeAction.updated,
+                                status=existing_creative.status,
+                                platform_id=None,
+                                review_feedback=None,
+                                assigned_to=None,
+                                assignment_errors=None,
+                            )
+                        )
+                    else:
+                        created_count += 1
+                        results.append(
+                            SyncCreativeResult(
+                                creative_id=creative_id,
+                                action=CreativeAction.created,
+                                status=None,
+                                platform_id=None,
+                                review_feedback=None,
+                                assigned_to=None,
+                                assignment_errors=None,
+                            )
+                        )
+                    synced_creatives.append(creative)
+                    continue
+
                 # Use savepoint for individual creative transaction isolation
                 with session.begin_nested():
                     # Check if creative already exists (always check for upsert/patch behavior)
@@ -350,8 +394,9 @@ def _sync_creatives_impl(
                         )
                     )
 
-        # Commit all successful creative operations
-        session.commit()
+        # Commit all successful creative operations (skip in dry_run mode)
+        if not dry_run:
+            session.commit()
 
     # Process assignments (spec-compliant: creative_id → package_ids mapping)
     assignment_list = _process_assignments(
@@ -363,7 +408,8 @@ def _sync_creatives_impl(
     )
 
     # Create workflow steps and send notifications for creatives requiring approval
-    if creatives_needing_approval:
+    # Skip in dry_run mode — no side effects
+    if creatives_needing_approval and not dry_run:
         _create_sync_workflow_steps(
             creatives_needing_approval=creatives_needing_approval,
             principal_id=principal_id,
