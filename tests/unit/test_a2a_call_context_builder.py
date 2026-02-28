@@ -122,20 +122,6 @@ class TestHandlerReadsFromContext:
         token = handler._get_auth_token(context=context)
         assert token == "context-token", f"Expected 'context-token' from context.state, got {token!r}"
 
-    def test_get_auth_token_falls_back_to_contextvar(self):
-        """_get_auth_token should fall back to ContextVar when context is None."""
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.auth_context import _auth_context_var
-
-        handler = AdCPRequestHandler()
-        auth_ctx = AuthContext(auth_token="cv-token", headers={})
-        token = _auth_context_var.set(auth_ctx)
-        try:
-            result = handler._get_auth_token(context=None)
-            assert result == "cv-token"
-        finally:
-            _auth_context_var.reset(token)
-
     def test_resolve_identity_accepts_context_parameter(self):
         """_resolve_a2a_identity must accept an optional context parameter."""
         import inspect

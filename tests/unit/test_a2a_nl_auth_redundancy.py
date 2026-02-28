@@ -14,8 +14,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.auth_context import AuthContext, _auth_context_var
 from src.core.resolved_identity import ResolvedIdentity
+from tests.a2a_helpers import make_a2a_context
 
 _MOCK_IDENTITY = ResolvedIdentity(
     principal_id="test-principal",
@@ -47,7 +47,7 @@ async def test_nl_product_query_calls_resolve_identity_once():
     """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
-    _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "test.example.com"}))
+    ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
     params = _make_nl_message("Show me available products in the catalog")
 
@@ -55,7 +55,7 @@ async def test_nl_product_query_calls_resolve_identity_once():
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_products:
             mock_products.return_value = {"products": [], "message": "No products found"}
 
-            await handler.on_message_send(params)
+            await handler.on_message_send(params, context=ctx)
 
     # BUG: Currently called 2x — once in _get_products():2046 and once for logging:649
     # FIX target: should be called exactly 1x
@@ -74,7 +74,7 @@ async def test_nl_pricing_query_calls_resolve_identity_once():
     """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
-    _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "test.example.com"}))
+    ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
     params = _make_nl_message("What is the pricing for CPM ads?")
 
@@ -83,7 +83,7 @@ async def test_nl_pricing_query_calls_resolve_identity_once():
             # Return a dict to bypass model_dump() path
             mock_products.return_value = {"products": [], "message": "No products found"}
 
-            await handler.on_message_send(params)
+            await handler.on_message_send(params, context=ctx)
 
     assert mock_resolve.call_count == 1, (
         f"resolve_identity called {mock_resolve.call_count} times for pricing NL request. Expected 1."
@@ -99,7 +99,7 @@ async def test_nl_targeting_query_calls_resolve_identity_once():
     """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
-    _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "test.example.com"}))
+    ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
     params = _make_nl_message("Show me audience targeting options")
 
@@ -108,7 +108,7 @@ async def test_nl_targeting_query_calls_resolve_identity_once():
         with patch("src.core.tools.capabilities.get_adcp_capabilities_raw") as mock_caps:
             mock_caps.return_value = {"protocols": [], "targeting": {}}
 
-            await handler.on_message_send(params)
+            await handler.on_message_send(params, context=ctx)
 
     assert mock_resolve.call_count == 1, (
         f"resolve_identity called {mock_resolve.call_count} times for targeting NL request. Expected 1."
@@ -124,14 +124,14 @@ async def test_nl_media_buy_query_calls_resolve_identity_once():
     """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
-    _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "test.example.com"}))
+    ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
     params = _make_nl_message("Create a campaign for Nike")
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
         # Let _create_media_buy run naturally — it calls _create_tool_context_from_a2a
         # internally, then the logging code calls it again
-        await handler.on_message_send(params)
+        await handler.on_message_send(params, context=ctx)
 
     assert mock_resolve.call_count == 1, (
         f"resolve_identity called {mock_resolve.call_count} times for media buy NL request. Expected 1."

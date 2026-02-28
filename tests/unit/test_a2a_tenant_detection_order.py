@@ -78,10 +78,10 @@ class TestA2ATenantDetectionMatchesCanonical:
         inline tenant detection, resolve_identity() would NOT be called.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.auth_context import AuthContext, _auth_context_var
         from src.core.resolved_identity import ResolvedIdentity
+        from tests.a2a_helpers import make_a2a_context
 
-        _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "acme.example.com"}))
+        ctx = make_a2a_context(auth_token="test-token", headers={"host": "acme.example.com"})
         mock_resolve.return_value = ResolvedIdentity(
             principal_id="test-principal",
             tenant_id="acme",
@@ -90,7 +90,7 @@ class TestA2ATenantDetectionMatchesCanonical:
         )
 
         handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
-        handler._resolve_a2a_identity(auth_token="test-token")
+        handler._resolve_a2a_identity(auth_token="test-token", context=ctx)
 
         mock_resolve.assert_called_once()
         call_kwargs = mock_resolve.call_args

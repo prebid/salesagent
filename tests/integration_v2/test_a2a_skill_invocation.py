@@ -190,18 +190,17 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create natural language message
             message = create_a2a_text_message("What video products do you have available?")
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result
             assert isinstance(result, Task)
@@ -241,11 +240,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create explicit skill invocation message
             skill_params = {
@@ -256,7 +254,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result
             assert isinstance(result, Task)
@@ -297,11 +295,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create explicit skill invocation message using A2A spec 'input' field
             skill_params = {
@@ -312,7 +309,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result
             assert isinstance(result, Task)
@@ -357,11 +354,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create explicit skill invocation message using AdCP spec format
             from datetime import UTC, datetime, timedelta
@@ -386,7 +382,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes REAL _create_media_buy_impl with mock adapter
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result
             assert isinstance(result, Task)
@@ -428,9 +424,9 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            from src.core.auth_context import AuthContext, _auth_context_var
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create explicit skill invocation message
             from datetime import UTC, datetime, timedelta
@@ -455,7 +451,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result has status=submitted (manual approval required)
             assert isinstance(result, Task)
@@ -476,11 +472,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create hybrid message (text + explicit skill)
             skill_params = {"brief": "Sports video advertising", "brand_manifest": {"name": "Sports brand"}}
@@ -490,7 +485,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify explicit skill took precedence
             assert isinstance(result, Task)
@@ -522,11 +517,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create message with multiple skill invocations
             # Note: get_signals removed - should come from dedicated signals agents
@@ -558,7 +552,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify both skills were processed
             assert isinstance(result, Task)
@@ -726,9 +720,9 @@ class TestA2ASkillInvocation:
             patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         ):
             # Mock request headers to provide Host header for subdomain detection
-            from src.core.auth_context import AuthContext, _auth_context_var
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Mock adapter - must return UpdateMediaBuySuccessResponse, not dict
             from adcp.types.aliases import UpdateMediaBuySuccessResponse
@@ -752,7 +746,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the skill was invoked
             assert isinstance(result, Task)
@@ -771,11 +765,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {"brief": "display formats"}
@@ -783,7 +776,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -837,11 +830,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {}
@@ -849,7 +841,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -874,11 +866,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation with creatives
             skill_params = {
@@ -895,7 +886,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -917,11 +908,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {}
@@ -929,7 +919,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -953,11 +943,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {
@@ -968,7 +957,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # This will likely fail because media_buy doesn't exist, but tests the code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the skill was invoked
             assert isinstance(result, Task)
@@ -987,11 +976,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {
@@ -1001,7 +989,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -1019,11 +1007,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {
@@ -1033,7 +1020,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -1050,11 +1037,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {
@@ -1064,7 +1050,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -1081,11 +1067,10 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.core.auth_context import AuthContext, _auth_context_var
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {
@@ -1095,7 +1080,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)

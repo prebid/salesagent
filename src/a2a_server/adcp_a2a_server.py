@@ -130,18 +130,14 @@ class AdCPRequestHandler(RequestHandler):
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
-        """Extract Bearer token — prefers SDK context, falls back to ContextVar.
+        """Extract Bearer token from ServerCallContext.
 
         Args:
             context: ServerCallContext from SDK (None when called directly in tests).
         """
-        auth_ctx = None
-        if context is not None:
-            auth_ctx = context.state.get("auth_context")
-        if auth_ctx is None:
-            from src.core.auth_context import get_current_auth_context
-
-            auth_ctx = get_current_auth_context()
+        if context is None:
+            return None
+        auth_ctx = context.state.get("auth_context")
         return auth_ctx.auth_token if auth_ctx else None
 
     def _resolve_a2a_identity(
@@ -170,13 +166,7 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.resolved_identity import resolve_identity
         from src.core.testing_hooks import AdCPTestContext
 
-        auth_ctx = None
-        if context is not None:
-            auth_ctx = context.state.get("auth_context")
-        if auth_ctx is None:
-            from src.core.auth_context import get_current_auth_context
-
-            auth_ctx = get_current_auth_context()
+        auth_ctx = context.state.get("auth_context") if context is not None else None
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:

@@ -65,17 +65,6 @@ class TestA2AMessageFieldValidation:
         )
 
         def _mock_context(handler):
-            from src.core.auth_context import AuthContext, _auth_context_var
-
-            _auth_context_var.set(
-                AuthContext(
-                    auth_token=sample_principal["access_token"],
-                    headers={
-                        "x-adcp-tenant": sample_tenant["tenant_id"],
-                        "authorization": f"Bearer {sample_principal['access_token']}",
-                    },
-                )
-            )
             handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
             handler._identity = identity  # Store for test access
             return patch(

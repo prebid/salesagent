@@ -3,8 +3,7 @@
 Replaces the fragile 3-middleware chain (auth_context_middleware +
 a2a_auth_middleware + ordering dependency) with a single middleware that:
 - Extracts token from Authorization: Bearer or x-adcp-auth headers
-- Dual-writes to scope["state"] (backs request.state) and ContextVar
-- Guarantees cleanup via try/finally with ContextVar.reset()
+- Writes to scope["state"] (backs request.state)
 
 This is a pure ASGI class, NOT BaseHTTPMiddleware, avoiding ContextVar
 propagation bugs (Starlette issue #1729).
@@ -15,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.core.auth_context import AuthContext, _auth_context_var
+from src.core.auth_context import AuthContext
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +22,9 @@ logger = logging.getLogger(__name__)
 class UnifiedAuthMiddleware:
     """Pure ASGI middleware that extracts auth token and populates AuthContext.
 
-    Sets AuthContext in both:
-    - scope["state"]["auth_context"] — backs request.state for FastAPI routes
-    - _auth_context_var ContextVar — accessible anywhere via get_current_auth_context()
+    Sets AuthContext in scope["state"]["auth_context"], which backs
+    request.state for FastAPI routes and is read by AdCPCallContextBuilder
+    for A2A.
     """
 
     def __init__(self, app: Any) -> None:
@@ -53,12 +52,7 @@ class UnifiedAuthMiddleware:
 
         auth_ctx = AuthContext(auth_token=token, headers=headers)
 
-        # Dual-write: scope["state"] (backs request.state) + ContextVar
         scope.setdefault("state", {})
         scope["state"]["auth_context"] = auth_ctx
-        cv_token = _auth_context_var.set(auth_ctx)
 
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            _auth_context_var.reset(cv_token)
+        await self.app(scope, receive, send)

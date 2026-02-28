@@ -35,10 +35,10 @@ async def test_get_products_with_brand_manifest_dict(sample_tenant, sample_princ
 
     # Mock identity resolution
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-        # Set request headers for tenant detection
-        from src.core.auth_context import AuthContext, _auth_context_var
+        # Build ServerCallContext with Host header for tenant detection
+        from tests.a2a_helpers import make_a2a_context
 
-        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         # Create A2A message with brand_manifest as dict
         message = create_a2a_message_with_skill(
@@ -51,7 +51,7 @@ async def test_get_products_with_brand_manifest_dict(sample_tenant, sample_princ
         params = MessageSendParams(message=message)
 
         # Call handler using correct A2A SDK API
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         # Verify we got a Task with artifacts
         assert isinstance(result, Task)
@@ -94,9 +94,9 @@ async def test_get_products_with_brand_manifest_url_only(
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-        from src.core.auth_context import AuthContext, _auth_context_var
+        from tests.a2a_helpers import make_a2a_context
 
-        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -107,7 +107,7 @@ async def test_get_products_with_brand_manifest_url_only(
         )
         params = MessageSendParams(message=message)
 
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         assert isinstance(result, Task)
         assert result.artifacts is not None
@@ -123,9 +123,9 @@ async def test_get_products_with_brand_manifest_name_only(
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-        from src.core.auth_context import AuthContext, _auth_context_var
+        from tests.a2a_helpers import make_a2a_context
 
-        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -136,7 +136,7 @@ async def test_get_products_with_brand_manifest_name_only(
         )
         params = MessageSendParams(message=message)
 
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         assert isinstance(result, Task)
         assert result.artifacts is not None
@@ -151,9 +151,9 @@ async def test_get_products_backward_compat_promoted_offering(
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-        from src.core.auth_context import AuthContext, _auth_context_var
+        from tests.a2a_helpers import make_a2a_context
 
-        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -164,7 +164,7 @@ async def test_get_products_backward_compat_promoted_offering(
         )
         params = MessageSendParams(message=message)
 
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         assert isinstance(result, Task)
         assert result.artifacts is not None
@@ -179,9 +179,9 @@ async def test_get_products_missing_brand_info_uses_brief_fallback(
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-        from src.core.auth_context import AuthContext, _auth_context_var
+        from tests.a2a_helpers import make_a2a_context
 
-        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -191,7 +191,7 @@ async def test_get_products_missing_brand_info_uses_brief_fallback(
         )
         params = MessageSendParams(message=message)
 
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         # Should complete (uses brief as fallback for promoted_offering)
         assert isinstance(result, Task)

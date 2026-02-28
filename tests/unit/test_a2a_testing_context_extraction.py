@@ -12,8 +12,8 @@ Beads: salesagent-2yt6
 from unittest.mock import patch
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.auth_context import AuthContext, _auth_context_var
 from src.core.resolved_identity import ResolvedIdentity
+from tests.a2a_helpers import make_a2a_context
 
 
 class TestA2ATestingContextExtraction:
@@ -32,9 +32,7 @@ class TestA2ATestingContextExtraction:
             "x-adcp-tenant": "test-tenant",
             "x-dry-run": "true",
         }
-        _auth_context_var.set(
-            AuthContext(auth_token=headers.get("authorization", "").replace("Bearer ", "") or None, headers=headers)
-        )
+        ctx = make_a2a_context(auth_token="test-token", headers=headers)
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal",
@@ -44,7 +42,7 @@ class TestA2ATestingContextExtraction:
         )
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
-            handler._resolve_a2a_identity("test-token", require_valid_token=True)
+            handler._resolve_a2a_identity("test-token", require_valid_token=True, context=ctx)
 
         mock_resolve.assert_called_once()
         call_kwargs = mock_resolve.call_args.kwargs
@@ -63,9 +61,7 @@ class TestA2ATestingContextExtraction:
             "x-adcp-tenant": "test-tenant",
             "x-test-session-id": "session-abc-123",
         }
-        _auth_context_var.set(
-            AuthContext(auth_token=headers.get("authorization", "").replace("Bearer ", "") or None, headers=headers)
-        )
+        ctx = make_a2a_context(auth_token="test-token", headers=headers)
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal",
@@ -75,7 +71,7 @@ class TestA2ATestingContextExtraction:
         )
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
-            handler._resolve_a2a_identity("test-token", require_valid_token=True)
+            handler._resolve_a2a_identity("test-token", require_valid_token=True, context=ctx)
 
         call_kwargs = mock_resolve.call_args.kwargs
         testing_ctx = call_kwargs.get("testing_context")
@@ -92,9 +88,7 @@ class TestA2ATestingContextExtraction:
             "authorization": "Bearer test-token",
             "x-adcp-tenant": "test-tenant",
         }
-        _auth_context_var.set(
-            AuthContext(auth_token=headers.get("authorization", "").replace("Bearer ", "") or None, headers=headers)
-        )
+        ctx = make_a2a_context(auth_token="test-token", headers=headers)
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal",
@@ -104,7 +98,7 @@ class TestA2ATestingContextExtraction:
         )
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
-            handler._resolve_a2a_identity("test-token", require_valid_token=True)
+            handler._resolve_a2a_identity("test-token", require_valid_token=True, context=ctx)
 
         call_kwargs = mock_resolve.call_args.kwargs
         testing_ctx = call_kwargs.get("testing_context")
