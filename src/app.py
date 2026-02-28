@@ -76,6 +76,7 @@ from src.a2a_server.adcp_a2a_server import (  # noqa: E402
     AdCPRequestHandler,
     create_agent_card,
 )
+from src.a2a_server.context_builder import AdCPCallContextBuilder  # noqa: E402
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain  # noqa: E402
 
 # Create the A2A application and add routes
@@ -85,6 +86,7 @@ _request_handler = AdCPRequestHandler()
 a2a_app = A2AStarletteApplication(
     agent_card=_agent_card,
     http_handler=_request_handler,
+    context_builder=AdCPCallContextBuilder(),
 )
 
 # Add A2A SDK routes directly to the FastAPI app.

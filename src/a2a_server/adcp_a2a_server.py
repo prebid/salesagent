@@ -129,14 +129,27 @@ class AdCPRequestHandler(RequestHandler):
         self.tasks = {}  # In-memory task storage
         logger.info("AdCP Request Handler initialized for direct function calls")
 
-    def _get_auth_token(self) -> str | None:
-        """Extract Bearer token from current request context via unified middleware."""
-        from src.core.auth_context import get_current_auth_context
+    def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
+        """Extract Bearer token — prefers SDK context, falls back to ContextVar.
 
-        auth_ctx = get_current_auth_context()
+        Args:
+            context: ServerCallContext from SDK (None when called directly in tests).
+        """
+        auth_ctx = None
+        if context is not None:
+            auth_ctx = context.state.get("auth_context")
+        if auth_ctx is None:
+            from src.core.auth_context import get_current_auth_context
+
+            auth_ctx = get_current_auth_context()
         return auth_ctx.auth_token if auth_ctx else None
 
-    def _resolve_a2a_identity(self, auth_token: str | None, require_valid_token: bool = True) -> ResolvedIdentity:
+    def _resolve_a2a_identity(
+        self,
+        auth_token: str | None,
+        require_valid_token: bool = True,
+        context: ServerCallContext | None = None,
+    ) -> ResolvedIdentity:
         """Resolve identity at the A2A transport boundary — called ONCE per request.
 
         This is the A2A equivalent of REST's _resolve_auth(). It calls
@@ -146,6 +159,7 @@ class AdCPRequestHandler(RequestHandler):
         Args:
             auth_token: Bearer token from Authorization header (None for unauthenticated)
             require_valid_token: If True, auth failures raise ServerError
+            context: ServerCallContext from SDK (None when called directly in tests).
 
         Returns:
             ResolvedIdentity with tenant and (optionally) principal info
@@ -153,11 +167,16 @@ class AdCPRequestHandler(RequestHandler):
         Raises:
             ServerError: If require_valid_token=True and authentication fails
         """
-        from src.core.auth_context import get_current_auth_context
         from src.core.resolved_identity import resolve_identity
         from src.core.testing_hooks import AdCPTestContext
 
-        auth_ctx = get_current_auth_context()
+        auth_ctx = None
+        if context is not None:
+            auth_ctx = context.state.get("auth_context")
+        if auth_ctx is None:
+            from src.core.auth_context import get_current_auth_context
+
+            auth_ctx = get_current_auth_context()
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
@@ -490,7 +509,7 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             # Get authentication token
-            auth_token = self._get_auth_token()
+            auth_token = self._get_auth_token(context)
 
             # Check if any requested skills require authentication
             # Default to not requiring auth - only require if we have non-discovery skills
@@ -515,10 +534,10 @@ class AdCPRequestHandler(RequestHandler):
             # to all downstream handlers. No handler should call resolve_identity().
             identity: ResolvedIdentity | None = None
             if auth_token:
-                identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth)
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
             elif not requires_auth:
                 # Unauthenticated discovery request — resolve tenant from headers only
-                identity = self._resolve_a2a_identity(None, require_valid_token=False)
+                identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
 
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
@@ -946,10 +965,10 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             # Get authentication token and resolve identity at transport boundary
-            auth_token = self._get_auth_token()
+            auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise ServerError(InvalidRequestError(message="Missing authentication token"))
-            identity = self._resolve_a2a_identity(auth_token)
+            identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "get_push_notification_config")
 
             # Extract config_id from params
@@ -1008,10 +1027,10 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             # Get authentication token and resolve identity at transport boundary
-            auth_token = self._get_auth_token()
+            auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise ServerError(InvalidRequestError(message="Missing authentication token"))
-            identity = self._resolve_a2a_identity(auth_token)
+            identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "set_push_notification_config")
 
             # Extract parameters (A2A spec format)
@@ -1125,10 +1144,10 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             # Get authentication token and resolve identity at transport boundary
-            auth_token = self._get_auth_token()
+            auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise ServerError(InvalidRequestError(message="Missing authentication token"))
-            identity = self._resolve_a2a_identity(auth_token)
+            identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "list_push_notification_configs")
 
             # Query database for all active configs
@@ -1183,10 +1202,10 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             # Get authentication token and resolve identity at transport boundary
-            auth_token = self._get_auth_token()
+            auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise ServerError(InvalidRequestError(message="Missing authentication token"))
-            identity = self._resolve_a2a_identity(auth_token)
+            identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "delete_push_notification_config")
 
             # Extract config_id from params
