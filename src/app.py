@@ -237,31 +237,20 @@ async def a2a_auth_middleware(request: Request, call_next):
     is_a2a_request = request.url.path in ["/a2a", "/a2a/"] and request.method == "POST"
 
     if is_a2a_request:
-        token = None
-        auth_source = None
-
-        for key, value in request.headers.items():
-            if key.lower() == "authorization":
-                auth_header = value.strip()
-                if auth_header.startswith("Bearer "):
-                    token = auth_header[7:]
-                    auth_source = "Authorization"
-                    break
-            elif key.lower() == "x-adcp-auth":
-                token = value.strip()
-                auth_source = "x-adcp-auth"
+        # Read token from request.state.auth_context (already extracted by auth_context_middleware)
+        # instead of re-parsing headers — single extraction point per request
+        auth_ctx = getattr(request.state, "auth_context", None)
+        token = auth_ctx.auth_token if auth_ctx else None
+        headers = auth_ctx.headers if auth_ctx else dict(request.headers)
 
         if token:
             _request_auth_token.set(token)
-            _request_headers.set(dict(request.headers))
-            logger.debug(f"Extracted token from {auth_source} header for A2A request: {token[:10]}...")
+            _request_headers.set(headers)
+            logger.debug(f"Transferred auth token to A2A context: {token[:10]}...")
         else:
-            logger.warning(
-                f"A2A request to {request.url.path} missing authentication "
-                "(checked Authorization and x-adcp-auth headers)"
-            )
+            logger.warning(f"A2A request to {request.url.path} missing authentication (no token in auth_context)")
             _request_auth_token.set(None)
-            _request_headers.set(dict(request.headers))
+            _request_headers.set(headers)
 
     response = await call_next(request)
 
