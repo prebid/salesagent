@@ -141,8 +141,15 @@ class TestSchemaMatchesLibrary:
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
         # TODO(adcp-lib): Remove allowlist when adcp library adds these fields
-        # account_id, account, reporting_dimensions — spec fields not yet in adcp library v3.2.0
-        local_extensions = {"account_id", "account", "reporting_dimensions"}
+        # account_id, account, reporting_dimensions, include_package_daily_breakdown,
+        # attribution_window — spec fields not yet in adcp library v3.2.0
+        local_extensions = {
+            "account_id",
+            "account",
+            "reporting_dimensions",
+            "include_package_daily_breakdown",
+            "attribution_window",
+        }
         assert lib_fields == local_fields - local_extensions, (
             f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
         )

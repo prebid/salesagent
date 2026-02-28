@@ -2700,6 +2700,14 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
         None,
         description="Request dimensional breakdowns in delivery reporting (geo, device_type, device_platform, audience, placement)",
     )
+    include_package_daily_breakdown: bool | None = Field(
+        None,
+        description="When true, include daily_breakdown arrays within each package in by_package",
+    )
+    attribution_window: dict[str, Any] | None = Field(
+        None,
+        description="Attribution window to apply for conversion metrics (post_click, post_view, model)",
+    )
 
 
 # AdCP-compliant delivery models
