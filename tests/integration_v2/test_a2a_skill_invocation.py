@@ -999,93 +999,60 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
-        """Test approve_creative skill invocation."""
+        """Test approve_creative skill raises UnsupportedOperationError."""
+        from a2a.utils.errors import ServerError
+
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
-            # Build ServerCallContext with Host header for subdomain detection
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             from tests.a2a_helpers import make_a2a_context
 
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
-            # Create skill invocation
-            skill_params = {
-                "creative_id": "creative_test_123",
-            }
+            skill_params = {"creative_id": "creative_test_123"}
             message = create_a2a_message_with_skill("approve_creative", skill_params)
             params = MessageSendParams(message=message)
 
-            # Process the message - executes real code path
-            result = await handler.on_message_send(params, context=ctx)
-
-            # Verify result
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "approve_creative" in result.metadata["skills_requested"]
+            with pytest.raises(ServerError):
+                await handler.on_message_send(params, context=ctx)
 
     @pytest.mark.asyncio
     async def test_get_media_buy_status_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
-        """Test get_media_buy_status skill invocation."""
+        """Test get_media_buy_status skill raises UnsupportedOperationError."""
+        from a2a.utils.errors import ServerError
+
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
-            # Build ServerCallContext with Host header for subdomain detection
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             from tests.a2a_helpers import make_a2a_context
 
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
-            # Create skill invocation
-            skill_params = {
-                "media_buy_id": "mb_test_123",
-            }
+            skill_params = {"media_buy_id": "mb_test_123"}
             message = create_a2a_message_with_skill("get_media_buy_status", skill_params)
             params = MessageSendParams(message=message)
 
-            # Process the message - executes real code path
-            result = await handler.on_message_send(params, context=ctx)
-
-            # Verify result
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "get_media_buy_status" in result.metadata["skills_requested"]
+            with pytest.raises(ServerError):
+                await handler.on_message_send(params, context=ctx)
 
     @pytest.mark.asyncio
     async def test_optimize_media_buy_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
-        """Test optimize_media_buy skill invocation."""
+        """Test optimize_media_buy skill raises UnsupportedOperationError."""
+        from a2a.utils.errors import ServerError
+
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
-            # Build ServerCallContext with Host header for subdomain detection
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             from tests.a2a_helpers import make_a2a_context
 
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
-            # Create skill invocation
-            skill_params = {
-                "media_buy_id": "mb_test_123",
-            }
+            skill_params = {"media_buy_id": "mb_test_123"}
             message = create_a2a_message_with_skill("optimize_media_buy", skill_params)
             params = MessageSendParams(message=message)
 
-            # Process the message - executes real code path
-            result = await handler.on_message_send(params, context=ctx)
-
-            # Verify result
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "optimize_media_buy" in result.metadata["skills_requested"]
+            with pytest.raises(ServerError):
+                await handler.on_message_send(params, context=ctx)
 
 
 if __name__ == "__main__":

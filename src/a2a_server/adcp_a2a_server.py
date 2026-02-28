@@ -461,7 +461,7 @@ class AdCPRequestHandler(RequestHandler):
         combined_text = " ".join(text_parts).strip().lower()
 
         # Create task for tracking
-        task_id = f"task_{len(self.tasks) + 1}"
+        task_id = f"task_{uuid.uuid4().hex[:12]}"
         # Handle message_id being a number or string
         msg_id = str(params.message.message_id) if hasattr(params.message, "message_id") else None
         context_id = params.message.context_id or msg_id or f"ctx_{task_id}"
@@ -1026,12 +1026,8 @@ class AdCPRequestHandler(RequestHandler):
             # Extract parameters (A2A spec format)
             # Params structure: {task_id, push_notification_config: {url, authentication}}
             # Note: params comes as Pydantic object with snake_case attributes
-            logger.info(f"[DEBUG] Received params type: {type(params)}, value: {params}")
-
             task_id = getattr(params, "task_id", None)
             push_config = getattr(params, "push_notification_config", None)
-
-            logger.info(f"[DEBUG] task_id: {task_id}, push_config: {push_config}, type: {type(push_config)}")
 
             # Extract URL and authentication from push_config object
             url = getattr(push_config, "url", None) if push_config else None
@@ -1658,32 +1654,23 @@ class AdCPRequestHandler(RequestHandler):
 
     async def _handle_approve_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit approve_creative skill invocation."""
-        # TODO: Implement full approve_creative skill handler
-        return {
-            "success": False,
-            "message": "approve_creative skill not yet implemented in explicit invocation",
-            "parameters_received": parameters,
-        }
+        from a2a.types import UnsupportedOperationError
+
+        raise ServerError(UnsupportedOperationError(message="approve_creative skill not yet implemented"))
 
     # Signals skill handlers removed - should come from dedicated signals agents
 
     async def _handle_get_media_buy_status_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_status skill invocation."""
-        # TODO: Implement full get_media_buy_status skill handler
-        return {
-            "success": False,
-            "message": "get_media_buy_status skill not yet implemented in explicit invocation",
-            "parameters_received": parameters,
-        }
+        from a2a.types import UnsupportedOperationError
+
+        raise ServerError(UnsupportedOperationError(message="get_media_buy_status skill not yet implemented"))
 
     async def _handle_optimize_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit optimize_media_buy skill invocation."""
-        # TODO: Implement full optimize_media_buy skill handler
-        return {
-            "success": False,
-            "message": "optimize_media_buy skill not yet implemented in explicit invocation",
-            "parameters_received": parameters,
-        }
+        from a2a.types import UnsupportedOperationError
+
+        raise ServerError(UnsupportedOperationError(message="optimize_media_buy skill not yet implemented"))
 
     async def _handle_get_adcp_capabilities_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_adcp_capabilities skill invocation (CRITICAL AdCP discovery endpoint).
