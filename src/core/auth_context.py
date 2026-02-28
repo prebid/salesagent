@@ -14,7 +14,10 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.core.resolved_identity import ResolvedIdentity
 
 from fastapi import Depends, Request
 
@@ -60,3 +63,65 @@ def _get_auth_context(request: Request) -> AuthContext:
 # Export as a FastAPI Depends for use in route signatures:
 #   def my_route(auth_ctx: AuthContext = get_auth_context):
 get_auth_context: Any = Depends(_get_auth_context)
+
+
+# ---------------------------------------------------------------------------
+# Identity resolution dependencies (REST routes)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> ResolvedIdentity | None:
+    """FastAPI dependency: resolve identity (auth-optional, for discovery endpoints).
+
+    Returns ResolvedIdentity if a valid token is present, None otherwise.
+    Does not raise on missing or invalid tokens.
+    """
+    if not auth_ctx.auth_token:
+        return None
+
+    from src.core.resolved_identity import resolve_identity
+
+    identity = resolve_identity(
+        headers=auth_ctx.headers,
+        auth_token=auth_ctx.auth_token,
+        require_valid_token=False,
+        protocol="rest",
+    )
+
+    if not identity.principal_id:
+        return None
+
+    return identity
+
+
+def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> ResolvedIdentity:
+    """FastAPI dependency: resolve identity (auth-required, raises 401 if missing).
+
+    Returns ResolvedIdentity on success. Raises AdCPAuthenticationError if
+    no token is present or the token is invalid.
+    """
+    from src.core.exceptions import AdCPAuthenticationError
+
+    if not auth_ctx.auth_token:
+        raise AdCPAuthenticationError("Authentication required")
+
+    from src.core.resolved_identity import resolve_identity
+
+    identity = resolve_identity(
+        headers=auth_ctx.headers,
+        auth_token=auth_ctx.auth_token,
+        require_valid_token=True,
+        protocol="rest",
+    )
+
+    if not identity.principal_id:
+        raise AdCPAuthenticationError("Authentication required")
+
+    return identity
+
+
+# Export as FastAPI Depends for use in route signatures:
+#   def my_route(identity: ResolvedIdentity | None = resolve_auth):
+#   def my_route(identity: ResolvedIdentity = require_auth):
+resolve_auth: Any = Depends(_resolve_auth_dep)
+require_auth: Any = Depends(_require_auth_dep)

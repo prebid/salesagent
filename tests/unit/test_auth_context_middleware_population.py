@@ -1,42 +1,35 @@
-"""Regression tests for AuthContext dead fields and _resolve_auth token passthrough.
+"""Regression tests for AuthContext dead fields and resolve_auth token passthrough.
 
 Bug: AuthContext declares tenant_id and principal_id fields that are never
 populated by anyone. The middleware correctly extracts auth_token + headers
 (cheap, no DB), and handler-level resolve_identity() is the intentional pattern.
 But:
 1. Dead fields mislead readers into thinking they're populated
-2. _resolve_auth doesn't pass the pre-extracted auth_token to resolve_identity(),
-   causing redundant token re-extraction from headers
+2. _resolve_auth_dep must pass the pre-extracted auth_token to resolve_identity()
 3. is_authenticated() always returns False (principal_id never set)
-4. get_auth_context FastAPI Depends is exported but never used
+4. get_auth_context FastAPI Depends is now used by resolve_auth/require_auth deps
 
 Regression prevention: https://github.com/prebid/salesagent/pull/1066
 Beads: salesagent-6931
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from src.core.auth_context import AuthContext
 from src.core.resolved_identity import ResolvedIdentity
 
 
 class TestResolveAuthTokenPassthrough:
-    """_resolve_auth should pass the pre-extracted token to resolve_identity."""
+    """_resolve_auth_dep should pass the pre-extracted token to resolve_identity."""
 
     def test_resolve_auth_passes_extracted_token(self):
-        """_resolve_auth should pass auth_ctx.auth_token to resolve_identity().
+        """_resolve_auth_dep should pass auth_ctx.auth_token to resolve_identity()."""
+        from src.core.auth_context import _resolve_auth_dep
 
-        Currently FAILS: _resolve_auth calls resolve_identity(headers=...) without
-        auth_token kwarg, so the token gets re-extracted from headers redundantly.
-        """
-        from src.routes.api_v1 import _resolve_auth
-
-        mock_request = MagicMock()
         auth_ctx = AuthContext(
             auth_token="pre-extracted-token",
             headers={"authorization": "Bearer pre-extracted-token"},
         )
-        mock_request.state.auth_context = auth_ctx
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal",
@@ -46,7 +39,7 @@ class TestResolveAuthTokenPassthrough:
         )
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
-            _resolve_auth(mock_request)
+            _resolve_auth_dep(auth_ctx)
 
         # resolve_identity should receive the pre-extracted token
         mock_resolve.assert_called_once()
@@ -54,7 +47,7 @@ class TestResolveAuthTokenPassthrough:
         assert call_kwargs.kwargs.get("auth_token") == "pre-extracted-token" or (
             len(call_kwargs.args) > 1 and call_kwargs.args[1] == "pre-extracted-token"
         ), (
-            "_resolve_auth should pass auth_ctx.auth_token to resolve_identity() "
+            "_resolve_auth_dep should pass auth_ctx.auth_token to resolve_identity() "
             "to avoid redundant token extraction from headers."
         )
 
