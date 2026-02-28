@@ -125,7 +125,7 @@ class TestListCreativeFormatsMCPToolSignature:
     that the tool function signature accepts the types that clients actually send.
     """
 
-    def test_mcp_tool_accepts_format_ids_as_typed_objects(self):
+    async def test_mcp_tool_accepts_format_ids_as_typed_objects(self):
         """Test that list_creative_formats MCP tool accepts format_ids as FormatId objects.
 
         MCP tools use typed signatures for proper schema exposure in tools/list.
@@ -150,7 +150,7 @@ class TestListCreativeFormatsMCPToolSignature:
             mock_impl.return_value = ListCreativeFormatsResponse(formats=[])
 
             # This should NOT raise a validation error
-            result = list_creative_formats(format_ids=format_ids)
+            result = await list_creative_formats(format_ids=format_ids)
 
             # Verify the impl was called with FormatId objects
             call_args = mock_impl.call_args

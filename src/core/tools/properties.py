@@ -199,7 +199,7 @@ def _list_authorized_properties_impl(
         )
 
 
-def list_authorized_properties(
+async def list_authorized_properties(
     req: ListAuthorizedPropertiesRequest | None = None,
     webhook_url: str | None = None,
     ctx: Context | ToolContext | None = None,
@@ -218,8 +218,6 @@ def list_authorized_properties(
     Returns:
         ToolResult with human-readable text and structured data
     """
-    from src.core.transport_helpers import resolve_identity_from_context
-
     # Inject payload-level context into the request object so _impl can echo it back
     # (follows the same pattern as list_creative_formats and all other MCP wrappers)
     if context is not None:
@@ -229,7 +227,7 @@ def list_authorized_properties(
             req = cast(ListAuthorizedPropertiesRequest, req)
             req.context = context
 
-    identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_authorized_properties_impl(cast(ListAuthorizedPropertiesRequest | None, req), identity)
 
     return ToolResult(content=str(response), structured_content=response)

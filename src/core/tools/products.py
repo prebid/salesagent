@@ -784,10 +784,8 @@ async def get_products(
         # Convert ValueError from helper to ToolError with clear message
         raise AdCPValidationError(f"Invalid get_products request: {e}") from e
 
-    # Resolve identity from transport context
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    # Read identity pre-resolved by MCPAuthMiddleware
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Call shared implementation
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly

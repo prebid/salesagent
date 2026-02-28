@@ -320,7 +320,7 @@ def _list_creative_formats_impl(
     return response
 
 
-def list_creative_formats(
+async def list_creative_formats(
     type: FormatCategory | None = None,
     format_ids: list[FormatId] | None = None,
     is_responsive: bool | None = None,
@@ -374,9 +374,7 @@ def list_creative_formats(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="list_creative_formats request")) from e
 
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_creative_formats_impl(req, identity)
     return ToolResult(content=str(response), structured_content=response)
 

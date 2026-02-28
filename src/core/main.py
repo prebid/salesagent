@@ -132,6 +132,13 @@ mcp = FastMCP(
     lifespan=lifespan_context,
 )
 
+# Centralized identity resolution — runs before every tool call.
+# Tools read identity via ctx.get_state('identity') instead of calling
+# resolve_identity_from_context() directly.
+from src.core.mcp_auth_middleware import MCPAuthMiddleware
+
+mcp.add_middleware(MCPAuthMiddleware())
+
 # Initialize creative engine with minimal config (will be tenant-specific later)
 creative_engine_config: dict[str, Any] = {}
 creative_engine = MockCreativeEngine(creative_engine_config)

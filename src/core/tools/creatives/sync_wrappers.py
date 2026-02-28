@@ -43,9 +43,7 @@ async def sync_creatives(
     Returns:
         ToolResult with SyncCreativesResponse data
     """
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Phase 1a: Pass typed models directly to impl (no more model_dump conversion)
     validation_mode_str = validation_mode.value if validation_mode else "strict"

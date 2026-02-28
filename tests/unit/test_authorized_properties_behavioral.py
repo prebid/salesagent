@@ -455,73 +455,54 @@ class TestAdvertisingPolicyEnforcementFooter:
 
 
 class TestMCPWrapperIdentityResolution:
-    """The MCP wrapper list_authorized_properties resolves identity via resolve_identity_from_context."""
+    """The MCP wrapper list_authorized_properties reads identity from ctx.get_state (set by middleware)."""
 
     _stub_response = ListAuthorizedPropertiesResponse(publisher_domains=["stub.com"])
 
-    def test_resolves_identity_from_context(self):
-        """H7: MCP wrapper calls resolve_identity_from_context and passes identity to _impl."""
+    async def test_resolves_identity_from_context(self):
+        """H7: MCP wrapper reads identity from ctx.get_state and passes it to _impl."""
+        from unittest.mock import AsyncMock
+
         from fastmcp.server.context import Context
 
         from src.core.tools.properties import list_authorized_properties
 
         mock_ctx = MagicMock(spec=Context)
         mock_identity = _make_identity(_make_mock_tenant(), principal_id="user-1")
+        mock_ctx.get_state = AsyncMock(return_value=mock_identity)
 
-        with (
-            patch(
-                "src.core.transport_helpers.resolve_identity_from_context",
-                return_value=mock_identity,
-            ) as mock_resolve,
-            patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl,
-        ):
+        with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
             mock_impl.return_value = self._stub_response
-            list_authorized_properties(req=None, ctx=mock_ctx)
+            await list_authorized_properties(req=None, ctx=mock_ctx)
 
-            # Verify resolve_identity_from_context was called with the ctx
-            mock_resolve.assert_called_once_with(mock_ctx, require_valid_token=False)
+            # Verify get_state was called to retrieve identity
+            mock_ctx.get_state.assert_called_once_with("identity")
             # Verify _impl received the resolved identity
             mock_impl.assert_called_once()
-            # The wrapper passes identity as positional arg (2nd arg)
             passed_identity = mock_impl.call_args[0][1]
             assert passed_identity is mock_identity
 
-    def test_passes_none_identity_when_no_ctx(self):
-        """H7: MCP wrapper handles ctx=None by resolving identity as None."""
+    async def test_passes_none_identity_when_no_ctx(self):
+        """H7: MCP wrapper handles ctx=None by passing None identity."""
         from src.core.tools.properties import list_authorized_properties
 
-        with (
-            patch(
-                "src.core.transport_helpers.resolve_identity_from_context",
-                return_value=None,
-            ) as mock_resolve,
-            patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl,
-        ):
+        with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
             mock_impl.return_value = self._stub_response
-            list_authorized_properties(req=None, ctx=None)
+            await list_authorized_properties(req=None, ctx=None)
 
-            mock_resolve.assert_called_once_with(None, require_valid_token=False)
             mock_impl.assert_called_once()
             passed_identity = mock_impl.call_args[0][1]
             assert passed_identity is None
 
-    def test_wrapper_returns_tool_result(self):
+    async def test_wrapper_returns_tool_result(self):
         """H7: MCP wrapper returns a ToolResult with structured_content."""
         from fastmcp.tools.tool import ToolResult
 
         from src.core.tools.properties import list_authorized_properties
 
-        mock_identity = _make_identity(_make_mock_tenant())
-
-        with (
-            patch(
-                "src.core.transport_helpers.resolve_identity_from_context",
-                return_value=mock_identity,
-            ),
-            patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl,
-        ):
+        with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
             mock_impl.return_value = self._stub_response
-            result = list_authorized_properties(req=None, ctx=None)
+            result = await list_authorized_properties(req=None, ctx=None)
 
             assert isinstance(result, ToolResult)
             # structured_content may be the response object or its dict representation
@@ -545,13 +526,17 @@ class TestMCPWrapperContextEcho:
     which is None, violating the AdCP spec requirement to echo context back.
     """
 
-    def test_mcp_wrapper_propagates_context_to_impl(self):
+    async def test_mcp_wrapper_propagates_context_to_impl(self):
         """Bug salesagent-pdnu: context passed to MCP wrapper must appear in response.
 
         This is the actual bug path: MCP client sends context={...} as a top-level
         parameter. The wrapper receives it but does not inject it into req before
         calling _impl. Result: response.context is None instead of the caller's context.
         """
+        from unittest.mock import AsyncMock
+
+        from fastmcp.server.context import Context
+
         from src.core.tools.properties import list_authorized_properties
 
         test_context = ContextObject(e2e="list_authorized_properties", session="test-456")
@@ -559,17 +544,17 @@ class TestMCPWrapperContextEcho:
         tenant = _make_mock_tenant()
         publishers = [_make_publisher("example.com")]
 
+        # Provide identity via mock ctx (as middleware would)
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=mock_identity)
+
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
             patches["db"],
             patches["audit"],
             patches["log_activity"],
-            patch(
-                "src.core.transport_helpers.resolve_identity_from_context",
-                return_value=mock_identity,
-            ),
         ):
-            result = list_authorized_properties(req=None, context=test_context, ctx=None)
+            result = await list_authorized_properties(req=None, context=test_context, ctx=mock_ctx)
 
             # The structured_content in the ToolResult should contain the echoed context
             sc = result.structured_content
@@ -579,8 +564,12 @@ class TestMCPWrapperContextEcho:
                 assert sc.context is not None, "Context should be echoed back in response. Got context=None"
                 assert sc.context == test_context
 
-    def test_mcp_wrapper_context_with_existing_req(self):
+    async def test_mcp_wrapper_context_with_existing_req(self):
         """When both req and context are provided, context should override req.context."""
+        from unittest.mock import AsyncMock
+
+        from fastmcp.server.context import Context
+
         from src.core.tools.properties import list_authorized_properties
 
         # req has no context, but wrapper receives context as separate param
@@ -590,17 +579,17 @@ class TestMCPWrapperContextEcho:
         tenant = _make_mock_tenant()
         publishers = [_make_publisher("example.com")]
 
+        # Provide identity via mock ctx (as middleware would)
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=mock_identity)
+
         patches = _patch_impl_dependencies(tenant=tenant, publishers=publishers)
         with (
             patches["db"],
             patches["audit"],
             patches["log_activity"],
-            patch(
-                "src.core.transport_helpers.resolve_identity_from_context",
-                return_value=mock_identity,
-            ),
         ):
-            result = list_authorized_properties(req=req, context=test_context, ctx=None)
+            result = await list_authorized_properties(req=req, context=test_context, ctx=mock_ctx)
 
             sc = result.structured_content
             if isinstance(sc, dict):

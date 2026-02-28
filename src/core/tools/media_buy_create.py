@@ -3616,19 +3616,9 @@ async def create_media_buy(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
 
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    # Extract x-context-id at transport boundary
-    _ctx_id = None
-    try:
-        from fastmcp.server.dependencies import get_http_headers
-
-        http_headers = get_http_headers(include_all=True)
-        if http_headers:
-            _ctx_id = http_headers.get("x-context-id")
-    except Exception:
-        pass
+    # Read identity and context_id pre-resolved by MCPAuthMiddleware
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
     result = await _create_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
     return ToolResult(content=str(result), structured_content=result)
 

@@ -434,7 +434,7 @@ def _get_media_buy_delivery_impl(
     return response
 
 
-def get_media_buy_delivery(
+async def get_media_buy_delivery(
     media_buy_ids: list[str] | None = None,
     buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -459,9 +459,7 @@ def get_media_buy_delivery(
     Returns:
         ToolResult with GetMediaBuyDeliveryResponse data
     """
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Create AdCP-compliant request object
     try:
