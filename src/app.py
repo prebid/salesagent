@@ -66,7 +66,7 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
 
 # ---------------------------------------------------------------------------
 # A2A Integration — add routes directly to the FastAPI app (not as sub-app)
-# so ContextVars propagate correctly within the same ASGI scope.
+# so middleware and scope["state"] propagate correctly within the same ASGI app.
 # ---------------------------------------------------------------------------
 
 from a2a.server.apps.jsonrpc.starlette_app import A2AStarletteApplication  # noqa: E402
@@ -235,7 +235,7 @@ app.include_router(health_debug_router)
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):
 #   1. CORSMiddleware (outermost — adds CORS headers to all responses)
-#   2. UnifiedAuthMiddleware (extracts auth token, sets ContextVar + scope state)
+#   2. UnifiedAuthMiddleware (extracts auth token, sets scope["state"]["auth_context"])
 # ---------------------------------------------------------------------------
 
 from src.core.auth_middleware import UnifiedAuthMiddleware  # noqa: E402

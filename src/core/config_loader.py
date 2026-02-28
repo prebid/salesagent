@@ -38,14 +38,14 @@ def validate_multi_tenant_config() -> list[str]:
 
 
 def safe_json_loads(value, default=None):
-    """Safely load JSON value that might already be deserialized (SQLite vs PostgreSQL)."""
+    """Safely load JSON value that might already be deserialized (e.g. JSONB) or a JSON string."""
     if value is None:
         return default
     if isinstance(value, list | dict):
-        # Already deserialized (SQLite)
+        # Already deserialized (JSONB column)
         return value
     if isinstance(value, str):
-        # JSON string (PostgreSQL)
+        # JSON string
         try:
             return json.loads(value)
         except json.JSONDecodeError:
