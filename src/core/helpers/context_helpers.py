@@ -4,12 +4,11 @@ import logging
 from typing import Any
 
 from fastmcp.server.context import Context
-from sqlalchemy.exc import SQLAlchemyError
 
-from src.core.auth import get_principal_from_context
 from src.core.config_loader import get_current_tenant, get_tenant_by_id, set_current_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +17,7 @@ def get_principal_id_from_context(context: Context | ToolContext | None) -> str 
     """Extract principal ID from context.
 
     Handles both FastMCP Context (from MCP protocol) and ToolContext (from A2A protocol).
-    Wrapper around get_principal_from_context that returns just the principal_id
-    and sets the tenant context.
+    Uses the unified resolve_identity path shared with A2A and REST.
 
     Args:
         context: FastMCP Context or ToolContext
@@ -27,32 +25,13 @@ def get_principal_id_from_context(context: Context | ToolContext | None) -> str 
     Returns:
         Principal ID string, or None if not authenticated
     """
-    # Handle ToolContext (from A2A server) - it already has principal_id and tenant_id
-    if isinstance(context, ToolContext):
-        # Try to load full tenant from database to get all fields (human_review_required, etc.)
-        tenant = None
-        try:
-            from src.core.config_loader import get_tenant_by_id
-
-            tenant = get_tenant_by_id(context.tenant_id)
-        except (SQLAlchemyError, RuntimeError) as e:
-            # Database not available (e.g., in unit tests where RuntimeError is raised,
-            # or connection errors as SQLAlchemyError) - fall back to minimal tenant
-            logger.debug(f"Could not load tenant from database: {e}")
-
-        if tenant:
-            set_current_tenant(tenant)
+    identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
+    if identity and identity.tenant_id:
+        if identity.tenant and isinstance(identity.tenant, dict):
+            set_current_tenant(identity.tenant)
         else:
-            # Fallback to minimal tenant dict if not found in database or DB unavailable
-            set_current_tenant({"tenant_id": context.tenant_id})
-        return context.principal_id
-
-    # Handle FastMCP Context (from MCP protocol)
-    principal_id, tenant = get_principal_from_context(context)
-    # Set tenant context if found
-    if tenant:
-        set_current_tenant(tenant)
-    return principal_id
+            set_current_tenant({"tenant_id": identity.tenant_id})
+    return identity.principal_id if identity else None
 
 
 def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str, Any]:

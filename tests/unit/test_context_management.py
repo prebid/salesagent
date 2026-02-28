@@ -8,6 +8,7 @@ from fastmcp.server import Context as FastMCPContext
 from pydantic import BaseModel
 
 from src.core.mcp_context_wrapper import MCPContextWrapper
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
 
@@ -53,6 +54,12 @@ class MockSetup:
             "tenant": {"tenant_id": "tenant_test", "name": "Test Tenant"},
             "principal_id": "principal_test",
             "context_manager": mock_context_manager,
+            "identity": ResolvedIdentity(
+                principal_id="principal_test",
+                tenant_id="tenant_test",
+                tenant={"tenant_id": "tenant_test", "name": "Test Tenant"},
+                protocol="mcp",
+            ),
         }
 
 
@@ -119,7 +126,7 @@ class TestToolContext:
         assert "timestamp" in context.conversation_history[0]
 
 
-@patch("src.core.main.get_principal_from_context")
+@patch("src.core.transport_helpers.resolve_identity_from_context")
 @patch("src.core.config_loader.set_current_tenant")
 @patch("src.core.mcp_context_wrapper.get_context_manager")
 class TestMCPContextWrapper:
@@ -135,11 +142,10 @@ class TestMCPContextWrapper:
         self,
         mock_get_context_manager,
         mock_set_tenant,
-        mock_get_principal,
+        mock_resolve_identity,
     ):
         """Test wrapping a synchronous tool."""
-        # Setup mocks with test data - mock now returns tuple (principal_id, tenant)
-        mock_get_principal.return_value = (self.test_data["principal_id"], self.test_data["tenant"])
+        mock_resolve_identity.return_value = self.test_data["identity"]
         mock_get_context_manager.return_value = self.test_data["context_manager"]
 
         wrapper = MCPContextWrapper()
@@ -161,11 +167,10 @@ class TestMCPContextWrapper:
         self,
         mock_get_context_manager,
         mock_set_tenant,
-        mock_get_principal,
+        mock_resolve_identity,
     ):
         """Test wrapping an asynchronous tool."""
-        # Setup mocks with test data - mock now returns tuple (principal_id, tenant)
-        mock_get_principal.return_value = (self.test_data["principal_id"], self.test_data["tenant"])
+        mock_resolve_identity.return_value = self.test_data["identity"]
         mock_get_context_manager.return_value = self.test_data["context_manager"]
 
         wrapper = MCPContextWrapper()
@@ -187,8 +192,8 @@ class TestMCPContextWrapper:
     def test_context_extraction(
         self,
         mock_get_context_manager,
-        mock_get_tenant,
-        mock_get_principal,
+        mock_set_tenant,
+        mock_resolve_identity,
     ):
         """Test extracting context from FastMCP context."""
         wrapper = MCPContextWrapper()
@@ -207,11 +212,10 @@ class TestMCPContextWrapper:
         self,
         mock_get_context_manager,
         mock_set_tenant,
-        mock_get_principal,
+        mock_resolve_identity,
     ):
         """Test creating ToolContext from FastMCP context."""
-        # Mock now returns tuple (principal_id, tenant)
-        mock_get_principal.return_value = (self.test_data["principal_id"], self.test_data["tenant"])
+        mock_resolve_identity.return_value = self.test_data["identity"]
         mock_context_manager = self.test_data["context_manager"]
         mock_context_manager.get_or_create_context.return_value = None
         mock_get_context_manager.return_value = mock_context_manager
@@ -230,11 +234,10 @@ class TestMCPContextWrapper:
         self,
         mock_get_context_manager,
         mock_set_tenant,
-        mock_get_principal,
+        mock_resolve_identity,
     ):
         """Test that context_id is stored for protocol layer."""
-        # Mock now returns tuple (principal_id, tenant)
-        mock_get_principal.return_value = (self.test_data["principal_id"], self.test_data["tenant"])
+        mock_resolve_identity.return_value = self.test_data["identity"]
         mock_get_context_manager.return_value = self.test_data["context_manager"]
 
         wrapper = MCPContextWrapper()

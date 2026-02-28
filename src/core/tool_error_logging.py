@@ -43,13 +43,14 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
     # Try to extract from FastMCP Context
     if isinstance(context, FastMCPContext):
         try:
-            from src.core.auth import get_principal_from_context
+            from src.core.transport_helpers import resolve_identity_from_context
 
-            principal_id_result, tenant = get_principal_from_context(context, require_valid_token=False)
-            if tenant:
-                tenant_id = tenant.get("tenant_id")
-            if principal_id_result:
-                principal_id = principal_id_result
+            identity = resolve_identity_from_context(context, require_valid_token=False, protocol="mcp")
+            if identity:
+                if identity.tenant_id:
+                    tenant_id = identity.tenant_id
+                if identity.principal_id:
+                    principal_id = identity.principal_id
         except Exception:
             pass
 

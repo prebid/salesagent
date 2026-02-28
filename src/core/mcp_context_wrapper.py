@@ -27,7 +27,6 @@ from rich.console import Console
 
 from src.core.config_loader import set_current_tenant
 from src.core.context_manager import get_context_manager
-from src.core.testing_hooks import get_testing_context
 from src.core.tool_context import ToolContext
 
 console = Console()
@@ -183,6 +182,8 @@ class MCPContextWrapper:
     def _create_tool_context(self, fastmcp_context: FastMCPContext, tool_name: str) -> ToolContext:
         """Create a ToolContext from FastMCP context.
 
+        Uses the unified resolve_identity path (shared with A2A and REST).
+
         Args:
             fastmcp_context: The FastMCP context object
             tool_name: Name of the tool being called
@@ -190,39 +191,40 @@ class MCPContextWrapper:
         Returns:
             A populated ToolContext object
         """
-        # Import here to avoid circular dependency
-        from src.core.main import get_principal_from_context as get_principal_with_tenant
+        from src.core.transport_helpers import resolve_identity_from_context
 
-        # Get authentication info and tenant context (returns tuple)
-        # This uses the main.py version which properly detects tenant from subdomain/virtual host
-        principal_id, tenant = get_principal_with_tenant(fastmcp_context, require_valid_token=True)
+        # Resolve identity via the unified path (same as A2A and REST)
+        identity = resolve_identity_from_context(fastmcp_context, require_valid_token=True, protocol="mcp")
 
-        # Extract headers for debugging
+        # Extract headers for debugging and context management
         headers = fastmcp_context.meta.get("headers", {}) if hasattr(fastmcp_context, "meta") else {}
         auth_header = headers.get("x-adcp-auth", "NOT_PRESENT")
         apx_host = headers.get("apx-incoming-host", "NOT_PRESENT")
 
-        if not principal_id:
+        if not identity or not identity.is_authenticated:
             # Determine if header is missing or just invalid
             if auth_header == "NOT_PRESENT":
                 raise ValueError(f"Missing x-adcp-auth header. Apx-Incoming-Host: {apx_host}")
             else:
-                # Header present but invalid (token not found in DB)
                 raise ValueError(
                     f"Invalid x-adcp-auth token (not found in database). "
                     f"Token: {auth_header[:20]}..., "
                     f"Apx-Incoming-Host: {apx_host}"
                 )
 
-        # Set tenant context (tenant was returned from get_principal_with_tenant)
-        if not tenant:
-            raise ValueError(f"No tenant context available. Principal: {principal_id}, Apx-Incoming-Host: {apx_host}")
+        if not identity.tenant_id:
+            raise ValueError(
+                f"No tenant context available. Principal: {identity.principal_id}, Apx-Incoming-Host: {apx_host}"
+            )
 
-        # Set the tenant context in the ContextVar
-        set_current_tenant(tenant)
+        # Set the tenant context in the ContextVar (resolve_identity sets it internally,
+        # but we need it in this async context boundary too)
+        if identity.tenant:
+            set_current_tenant(
+                identity.tenant if isinstance(identity.tenant, dict) else {"tenant_id": identity.tenant_id}
+            )
 
         # Extract or generate context_id
-        headers = fastmcp_context.meta.get("headers", {}) if hasattr(fastmcp_context, "meta") else {}
         context_id = headers.get("x-context-id")
 
         # Determine if this is an async operation
@@ -239,20 +241,18 @@ class MCPContextWrapper:
                 context_id = f"ctx_{uuid.uuid4().hex[:12]}"
 
             persistent_context = self.context_manager.get_or_create_context(
-                tenant_id=tenant["tenant_id"], principal_id=principal_id, context_id=context_id, is_async=is_async
+                tenant_id=identity.tenant_id,
+                principal_id=identity.principal_id,
+                context_id=context_id,
+                is_async=is_async,
             )
 
             if persistent_context:
                 conversation_history = persistent_context.conversation_history or []
-                # Check if there's an associated workflow
-                # This would need to be implemented based on your workflow tracking
                 workflow_id = None  # TODO: Get from workflow mappings if exists
         else:
             # Synchronous operation without context
             context_id = f"ctx_{uuid.uuid4().hex[:12]}"
-
-        # Extract testing context (preserves typed AdCPTestContext)
-        testing_context = get_testing_context(fastmcp_context) or None
 
         # Build metadata
         metadata = {
@@ -262,13 +262,13 @@ class MCPContextWrapper:
 
         return ToolContext(
             context_id=context_id,
-            tenant_id=tenant["tenant_id"],
-            principal_id=principal_id,
+            tenant_id=identity.tenant_id,
+            principal_id=identity.principal_id,
             conversation_history=conversation_history,
             tool_name=tool_name,
             request_timestamp=datetime.now(UTC),
             metadata=metadata,
-            testing_context=testing_context,
+            testing_context=identity.testing_context,
             workflow_id=workflow_id,
         )
 
