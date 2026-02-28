@@ -14,8 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.auth import get_principal_from_context
 from src.core.config_loader import get_current_tenant, set_current_tenant
-from src.core.main import get_principal_from_context
 
 
 @pytest.mark.requires_db

@@ -415,15 +415,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 logger.error(f"[APPROVAL] {error_msg}")
                 return False, error_msg
 
-            # Set tenant context (converts ORM object to dict)
-            tenant_dict = {
-                "tenant_id": tenant_obj.tenant_id,
-                "name": tenant_obj.name,
-                "subdomain": tenant_obj.subdomain,
-                "ad_server": tenant_obj.ad_server,
-                "virtual_host": tenant_obj.virtual_host,
-            }
-            set_current_tenant(tenant_dict)
+            # Set tenant ContextVar via standard config_loader boundary
+            from src.core.config_loader import get_tenant_by_id
+
+            tenant_config = get_tenant_by_id(tenant_id)
+            if tenant_config:
+                set_current_tenant(tenant_config)
             logger.info(f"[APPROVAL] Set tenant context: {tenant_id}")
 
             # Load media buy
@@ -728,7 +725,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             package_pricing_info,
             principal,
             testing_ctx,
-            tenant=tenant_dict,
+            tenant=tenant_obj,
         )
 
         # Check if adapter returned an error response
@@ -862,7 +859,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
 
                     # Get adapter and upload creatives
-                    adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_dict)
+                    adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
 
                     # Call adapter's add_creative_assets method
                     # For GAM, the media_buy_id is the GAM order ID
@@ -898,7 +895,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         # 2. Creatives may have been uploaded after the initial approval attempt
         logger.info(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM")
         try:
-            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_dict)
+            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
             if hasattr(adapter, "orders_manager") and adapter.orders_manager:
                 approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
                 if approval_success:

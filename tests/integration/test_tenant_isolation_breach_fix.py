@@ -17,7 +17,7 @@ def test_tenant_isolation_with_valid_subdomain(integration_db):
     from src.core.config_loader import current_tenant, get_current_tenant
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal, Tenant
-    from src.core.main import get_principal_from_context
+    from src.core.auth import get_principal_from_context
 
     # Clear tenant context
     current_tenant.set(None)
@@ -105,7 +105,7 @@ def test_cross_tenant_token_rejected(integration_db):
     from src.core.config_loader import current_tenant
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal, Tenant
-    from src.core.main import get_principal_from_context
+    from src.core.auth import get_principal_from_context
 
     # Clear tenant context
     current_tenant.set(None)
