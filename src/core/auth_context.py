@@ -10,13 +10,8 @@ Identity resolution (principal, tenant) happens at handler level via
 resolve_identity() — this is intentional to avoid DB calls on every request.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from src.core.resolved_identity import ResolvedIdentity
+from typing import Annotated, Any
 
 from fastapi import Depends, Request
 
@@ -34,7 +29,7 @@ class AuthContext:
     headers: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def unauthenticated(cls, *, headers: dict[str, str] | None = None) -> AuthContext:
+    def unauthenticated(cls, *, headers: "dict[str, str] | None" = None) -> "AuthContext":
         """Factory for unauthenticated request context."""
         return cls(headers=headers or {})
 
@@ -48,8 +43,11 @@ def _get_auth_context(request: Request) -> AuthContext:
     return getattr(request.state, "auth_context", AuthContext.unauthenticated())
 
 
-# Export as a FastAPI Depends for use in route signatures:
-#   def my_route(auth_ctx: AuthContext = get_auth_context):
+# Annotated type aliases for route signatures (modern FastAPI pattern):
+#   def my_route(auth_ctx: GetAuthContext):
+GetAuthContext = Annotated[AuthContext, Depends(_get_auth_context)]
+
+# Backward-compatible Depends instance (for dependency chaining):
 get_auth_context: Any = Depends(_get_auth_context)
 
 
@@ -58,7 +56,7 @@ get_auth_context: Any = Depends(_get_auth_context)
 # ---------------------------------------------------------------------------
 
 
-def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> ResolvedIdentity | None:
+def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity | None":
     """FastAPI dependency: resolve identity (auth-optional, for discovery endpoints).
 
     Returns ResolvedIdentity if a valid token is present, None otherwise.
@@ -82,7 +80,7 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> ResolvedIdent
     return identity
 
 
-def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> ResolvedIdentity:
+def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity":
     """FastAPI dependency: resolve identity (auth-required, raises 401 if missing).
 
     Returns ResolvedIdentity on success. Raises AdCPAuthenticationError if
@@ -108,8 +106,16 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> ResolvedIdent
     return identity
 
 
-# Export as FastAPI Depends for use in route signatures:
-#   def my_route(identity: ResolvedIdentity | None = resolve_auth):
-#   def my_route(identity: ResolvedIdentity = require_auth):
+# Annotated type aliases for route signatures (modern FastAPI pattern):
+#   def my_route(identity: ResolveAuth):
+#   def my_route(identity: RequireAuth):
+# Import at module level for Annotated (cannot be deferred — Annotated
+# needs the real type at alias definition time).
+from src.core.resolved_identity import ResolvedIdentity  # noqa: E402
+
+ResolveAuth = Annotated[ResolvedIdentity | None, Depends(_resolve_auth_dep)]
+RequireAuth = Annotated[ResolvedIdentity, Depends(_require_auth_dep)]
+
+# Backward-compatible Depends instances (for dependency chaining):
 resolve_auth: Any = Depends(_resolve_auth_dep)
 require_auth: Any = Depends(_require_auth_dep)

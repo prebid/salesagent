@@ -10,6 +10,7 @@ import logging
 
 from a2a.server.apps.jsonrpc.jsonrpc_app import CallContextBuilder
 from a2a.server.context import ServerCallContext
+from starlette.requests import Request
 
 from src.core.auth_context import AuthContext
 
@@ -24,7 +25,7 @@ class AdCPCallContextBuilder(CallContextBuilder):
     places it into ServerCallContext.state for handler methods.
     """
 
-    def build(self, request: object) -> ServerCallContext:
+    def build(self, request: Request) -> ServerCallContext:
         """Build ServerCallContext from a Starlette Request.
 
         Args:

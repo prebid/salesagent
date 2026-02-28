@@ -240,8 +240,8 @@ class AdCPRequestHandler(RequestHandler):
         tenant_id: str,
         principal_id: str,
         success: bool = True,
-        details: dict = None,
-        error: str = None,
+        details: dict[str, Any] | None = None,
+        error: str | None = None,
     ):
         """Log A2A operations to audit system for visibility in activity feed."""
         try:
