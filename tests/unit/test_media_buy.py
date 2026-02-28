@@ -95,6 +95,7 @@ def _make_identity(
     principal_id: str = "test_principal",
     tenant_id: str = "test_tenant",
     testing_context: AdCPTestContext | None = None,
+    dry_run: bool = False,
 ) -> ResolvedIdentity:
     """Build a ResolvedIdentity with default test values."""
     return ResolvedIdentity(
@@ -104,7 +105,7 @@ def _make_identity(
         protocol="mcp",
         testing_context=testing_context
         or AdCPTestContext(
-            dry_run=False,
+            dry_run=dry_run,
             mock_time=None,
             jump_to_event=None,
             test_session_id=None,
@@ -1271,7 +1272,6 @@ class TestCreateMediaBuyAdapterInteraction:
                 )
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="dry_run currently still calls adapter — should skip adapter entirely")
     async def test_dry_run_skips_adapter(self):
         """UC-002-AD03: testing context dry_run=True never calls adapter.
 
@@ -1279,32 +1279,112 @@ class TestCreateMediaBuyAdapterInteraction:
         Priority: P1
         Type: unit
         Source: UC-002
+
+        When dry_run=True, _create_media_buy_impl must NOT call
+        _execute_adapter_media_buy_creation. It should return a simulated
+        CreateMediaBuySuccess with a dry_run_ prefixed media_buy_id.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         identity = _make_identity(dry_run=True)
         req = _make_request()
 
-        # Build a mock UoW that provides session via context manager
+        # Build mock adapter that should NEVER be called
+        mock_adapter = MagicMock()
+        mock_adapter.manual_approval_required = False
+        mock_adapter.manual_approval_operations = []
+        mock_adapter.__class__.__name__ = "MockAdapter"
+
+        # Build mock product catalog matching the request's prod_1
+        mock_delivery_type = MagicMock()
+        mock_delivery_type.value = "guaranteed"
+
+        mock_schema_product = MagicMock()
+        mock_schema_product.product_id = "prod_1"
+        mock_schema_product.name = "Test Product"
+        mock_schema_product.delivery_type = mock_delivery_type
+        mock_schema_product.format_ids = []
+        mock_schema_product.auto_create = True
+        mock_schema_product.channels = []
+        mock_schema_product.property_list_id = None
+
+        # Build mock pricing option (shared between schema product and DB product)
+        mock_pricing_option = MagicMock()
+        mock_pricing_option.pricing_model = "cpm"
+        mock_pricing_option.currency = "USD"
+        mock_pricing_option.is_fixed = True
+        mock_pricing_option.rate = Decimal("5.00")
+        mock_pricing_option.min_spend_per_package = None
+        mock_pricing_option.root = mock_pricing_option
+
+        # Set pricing_options on schema product for CPM calculation
+        mock_schema_product.pricing_options = [mock_pricing_option]
+
+        mock_db_product = MagicMock()
+        mock_db_product.product_id = "prod_1"
+        mock_db_product.pricing_options = [mock_pricing_option]
+        mock_db_product.auto_create = True
+        mock_db_product.channels = []
+        mock_db_product.property_list_id = None
+
+        mock_currency_limit = MagicMock()
+        mock_currency_limit.max_budget = Decimal("100000")
+        mock_currency_limit.currency_code = "USD"
+        mock_currency_limit.min_package_budget = None
+        mock_currency_limit.max_daily_package_spend = None
+
+        # Mock session with sequential query results
+        call_count = {"n": 0}
+
+        def scalars_side_effect(stmt):
+            result = MagicMock()
+            call_count["n"] += 1
+            n = call_count["n"]
+            if n == 1:
+                # Product query
+                result.all.return_value = [mock_db_product]
+                result.first.return_value = mock_db_product
+            elif n == 2:
+                # Currency limit query
+                result.all.return_value = [mock_currency_limit]
+                result.first.return_value = mock_currency_limit
+            else:
+                # Adapter config and others -> None
+                result.all.return_value = []
+                result.first.return_value = None
+            return result
+
         mock_session = MagicMock()
+        mock_session.scalars.side_effect = scalars_side_effect
+
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = mock_session
-        mock_uow.media_buys = MagicMock()
 
         with (
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=MagicMock()),
-            patch("src.core.tools.media_buy_create.get_adapter") as mock_get_adapter,
+            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
+            patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+            patch(
+                "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
+                side_effect=AssertionError("adapter must not be called in dry_run mode"),
+            ),
+            patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
+            patch(
+                "src.core.tools.media_buy_create.process_and_upload_package_creatives", return_value=(req.packages, [])
+            ),
         ):
-            mock_adapter = MagicMock()
-            mock_get_adapter.return_value = mock_adapter
+            result = await _create_media_buy_impl(req, identity=identity)
 
-            await _create_media_buy_impl(req, identity=identity)
-            # In dry_run mode, adapter should NEVER be called
-            mock_adapter.create_media_buy.assert_not_called()
+            # Should return a simulated success without calling adapter
+            assert result is not None
+            response, status = result
+            assert status == "completed"
+            assert response.media_buy_id is not None
+            assert response.media_buy_id.startswith("dry_run_")
 
 
 # ===========================================================================

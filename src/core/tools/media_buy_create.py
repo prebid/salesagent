@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 from adcp import PushNotificationConfig
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
+from adcp.types.aliases import Package as ResponsePackage
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
@@ -2778,6 +2779,27 @@ async def _create_media_buy_impl(
                 )
             raise
 
+        # Dry-run mode: skip adapter call entirely, return simulated response
+        # All validation (products, pricing, budgets, creatives) has passed above.
+        if testing_ctx.dry_run:
+            logger.info("[DRY_RUN] Validation passed, returning simulated response without adapter call")
+            simulated_packages = [
+                ResponsePackage(
+                    package_id=pkg.package_id,
+                    product_id=pkg.product_id,
+                    buyer_ref=pkg.buyer_ref,
+                    budget=pkg.budget,
+                )
+                for pkg in packages
+            ]
+            simulated_response = CreateMediaBuySuccess(
+                media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
+                buyer_ref=req.buyer_ref or "",
+                packages=simulated_packages,
+                context=req.context,
+            )
+            return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
+
         # Call adapter using shared creation logic
         # Note: start_time variable already resolved from 'asap' to actual datetime if needed
         # This uses the same function as manual approval to ensure consistency across adapters
@@ -2805,12 +2827,6 @@ async def _create_media_buy_impl(
             for i, pkg_item in enumerate(response.packages):
                 # pkg_item is dict[str, Any] here (response.packages), different scope from earlier Package usage
                 logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
-
-        # Dry-run mode: Return adapter response without database writes
-        # Adapter validation has run, so errors (like unsupported pricing) are already caught above
-        if testing_ctx.dry_run:
-            logger.info("[DRY_RUN] Adapter validation passed, returning response without database writes")
-            return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.completed.value)
 
         # Type narrowing: after dry_run return, step and persistent_ctx are guaranteed to exist
         # This is needed for mypy to understand these won't be None in the code below
