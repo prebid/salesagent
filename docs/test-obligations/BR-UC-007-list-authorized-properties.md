@@ -15,7 +15,7 @@ Low direct impact. This use case is a read-only discovery endpoint. The primary 
 
 #### Scenario: Successful discovery with publishers configured
 **Obligation ID** UC-007-MAIN-MCP-01
-**Layer** behavioral
+**Layer** schema
 **Given** a tenant with 3 PublisherPartner records (cnn.com, bbc.com, nytimes.com) and advertising_policy enabled
 **When** the buyer agent invokes `list_authorized_properties` MCP tool without filters
 **Then** the response contains `publisher_domains` array with all 3 domains sorted alphabetically: ["bbc.com", "cnn.com", "nytimes.com"]
@@ -42,7 +42,7 @@ Low direct impact. This use case is a read-only discovery endpoint. The primary 
 
 #### Scenario: Empty portfolio returns descriptive message
 **Obligation ID** UC-007-MAIN-MCP-04
-**Layer** behavioral
+**Layer** schema
 **Given** a tenant with no PublisherPartner records configured
 **When** the buyer agent invokes `list_authorized_properties`
 **Then** the response contains `publisher_domains: []`
@@ -185,7 +185,7 @@ Low direct impact. This use case is a read-only discovery endpoint. The primary 
 
 #### Scenario: Invalid domain format in filter (uppercase)
 **Obligation ID** UC-007-EXT-C-01
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer agent invokes `list_authorized_properties` with `publisher_domains: ["CNN.COM"]`
 **Then** the system returns a validation error with code DOMAIN_INVALID_FORMAT (if schema validation is enforced)
@@ -212,7 +212,7 @@ Low direct impact. This use case is a read-only discovery endpoint. The primary 
 
 #### Scenario: Empty publisher_domains array is rejected
 **Obligation ID** UC-007-EXT-C-04
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer agent provides `publisher_domains: []` (empty array)
 **Then** the request is rejected (minItems: 1 constraint)
@@ -223,7 +223,7 @@ Low direct impact. This use case is a read-only discovery endpoint. The primary 
 
 #### Scenario: Response conforms to list-authorized-properties-response.json
 **Obligation ID** UC-007-SCHEMA-01
-**Layer** behavioral
+**Layer** schema
 **Given** any successful response
 **When** the response is serialized to JSON
 **Then** it validates against the `list-authorized-properties-response.json` schema
@@ -233,7 +233,7 @@ Low direct impact. This use case is a read-only discovery endpoint. The primary 
 
 #### Scenario: MediaChannel enum values are valid
 **Obligation ID** UC-007-SCHEMA-02
-**Layer** behavioral
+**Layer** schema
 **Given** a response that includes `primary_channels`
 **When** the channels are serialized
 **Then** each value is one of the 18 standardized media-channel enum values

@@ -51,7 +51,7 @@ Medium impact. The `provide-performance-feedback-request.json` and `provide-perf
 
 #### Scenario: Default metric_type is overall_performance
 **Obligation ID** UC-009-MAIN-MCP-05
-**Layer** behavioral
+**Layer** schema
 **Given** a request without explicit `metric_type`
 **When** the system processes the request
 **Then** the metric_type defaults to `overall_performance`
@@ -60,7 +60,7 @@ Medium impact. The `provide-performance-feedback-request.json` and `provide-perf
 
 #### Scenario: Default feedback_source is buyer_attribution
 **Obligation ID** UC-009-MAIN-MCP-06
-**Layer** behavioral
+**Layer** schema
 **Given** a request without explicit `feedback_source`
 **When** the system processes the request
 **Then** the feedback_source defaults to `buyer_attribution`
@@ -236,7 +236,7 @@ Medium impact. The `provide-performance-feedback-request.json` and `provide-perf
 
 #### Scenario: measurement_period has valid start < end
 **Obligation ID** UC-009-SCHEMA-03
-**Layer** behavioral
+**Layer** schema
 **Given** a performance feedback request
 **When** the measurement_period is validated
 **Then** `start` and `end` are ISO 8601 timestamps and `start` < `end`

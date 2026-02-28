@@ -164,7 +164,7 @@ High impact. Property lists is a targeting/governance feature introduced in adcp
 
 #### Scenario: Filters countries_all and channels_any need minItems: 1
 **Obligation ID** UC-013-EXT-A-08
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer
 **When** the buyer provides `filters: {countries_all: [], channels_any: ["display"]}`
 **Then** the request is rejected (countries_all minItems: 1)
@@ -200,7 +200,7 @@ High impact. Property lists is a targeting/governance feature introduced in adcp
 
 #### Scenario: Get with resolution (default behavior)
 **Obligation ID** UC-013-EXT-B-01
-**Layer** behavioral
+**Layer** schema
 **Given** a property list "pl_123" with base_properties and filters
 **When** the buyer invokes `get_property_list` with `list_id: "pl_123"` (resolve defaults to true)
 **Then** the response contains `list` metadata
@@ -274,7 +274,7 @@ High impact. Property lists is a targeting/governance feature introduced in adcp
 
 #### Scenario: Coverage gaps reported when if_not_covered=include
 **Obligation ID** UC-013-EXT-B-09
-**Layer** behavioral
+**Layer** schema
 **Given** a property list with feature_requirements using if_not_covered: "include"
 **When** resolution is performed and some properties lack the required feature
 **Then** the response includes `coverage_gaps` indicating properties without full feature coverage
@@ -531,7 +531,7 @@ High impact. Property lists is a targeting/governance feature introduced in adcp
 
 #### Scenario: base-property-source discriminated union
 **Obligation ID** UC-013-SCHEMA-06
-**Layer** behavioral
+**Layer** schema
 **Given** a property list with base_properties
 **When** serialized
 **Then** the source matches exactly one of: publisher_tags, publisher_ids, or identifiers

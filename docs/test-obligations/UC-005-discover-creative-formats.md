@@ -106,7 +106,7 @@ Source: BR-UC-005-main-mcp.md
 
 #### Scenario: Dimension range filter matches ANY render (BR-5)
 **Obligation ID** UC-005-MAIN-MCP-08
-**Layer** behavioral
+**Layer** schema
 
 **Given** a format has renders with widths [320, 728, 970]
 **When** the Buyer calls `list_creative_formats` with `max_width=400`
@@ -116,7 +116,7 @@ Source: BR-UC-005-main-mcp.md
 
 #### Scenario: Dimension filter excludes format when NO render matches
 **Obligation ID** UC-005-MAIN-MCP-09
-**Layer** behavioral
+**Layer** schema
 
 **Given** a format has renders with minimum width 728
 **When** the Buyer calls `list_creative_formats` with `max_width=400`
@@ -136,7 +136,7 @@ Source: BR-UC-005-main-mcp.md
 
 #### Scenario: Name search is case-insensitive partial match (BR-7)
 **Obligation ID** UC-005-MAIN-MCP-11
-**Layer** behavioral
+**Layer** schema
 
 **Given** the format catalog contains a format named "Standard Banner 728x90"
 **When** the Buyer calls `list_creative_formats` with `name_search="banner"`
@@ -156,7 +156,7 @@ Source: BR-UC-005-main-mcp.md
 
 #### Scenario: Creative agent referrals included in response (POST-S4)
 **Obligation ID** UC-005-MAIN-MCP-13
-**Layer** behavioral
+**Layer** schema
 
 **Given** the creative agent registry includes referral information for additional agents
 **When** the Buyer calls `list_creative_formats`
@@ -167,7 +167,7 @@ Source: BR-UC-005-main-mcp.md
 
 #### Scenario: Pagination with cursor-based navigation
 **Obligation ID** UC-005-MAIN-MCP-14
-**Layer** behavioral
+**Layer** schema
 
 **Given** the format catalog has more formats than the requested `max_results`
 **When** the Buyer calls `list_creative_formats` with `max_results=10`
@@ -267,7 +267,7 @@ Source: BR-UC-005-ext-a.md
 
 #### Scenario: Error response includes all three failure postconditions
 **Obligation ID** UC-005-EXT-A-02
-**Layer** behavioral
+**Layer** schema
 
 **Given** tenant resolution will fail
 **When** the Buyer calls `list_creative_formats`
@@ -284,7 +284,7 @@ Source: BR-UC-005-ext-b.md
 
 #### Scenario: Invalid format category enum value
 **Obligation ID** UC-005-EXT-B-01
-**Layer** behavioral
+**Layer** schema
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with `type="invalid_category"`
@@ -315,7 +315,7 @@ Source: BR-UC-005-ext-b.md
 
 #### Scenario: Invalid WCAG level
 **Obligation ID** UC-005-EXT-B-04
-**Layer** behavioral
+**Layer** schema
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with `wcag_level="INVALID"`
@@ -326,7 +326,7 @@ Source: BR-UC-005-ext-b.md
 
 #### Scenario: Validation errors are detailed per field
 **Obligation ID** UC-005-EXT-B-05
-**Layer** behavioral
+**Layer** schema
 
 **Given** the Buyer sends a request with multiple invalid parameters
 **When** the system validates the request
@@ -343,7 +343,7 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 
 #### Scenario: ListCreativeFormatsResponse conforms to adcp 3.6.0 schema
 **Obligation ID** UC-005-EXT-B-06
-**Layer** behavioral
+**Layer** schema
 
 **Given** a valid `ListCreativeFormatsResponse` constructed by the system
 **When** serialized via `model_dump()`
@@ -362,7 +362,7 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 
 #### Scenario: Format objects include all required fields
 **Obligation ID** UC-005-EXT-B-08
-**Layer** behavioral
+**Layer** schema
 
 **Given** a `ListCreativeFormatsResponse` with formats
 **When** the Buyer inspects any format in the response

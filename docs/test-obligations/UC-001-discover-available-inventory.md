@@ -203,7 +203,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product conversion to AdCP schema -- valid product (Step 8)
 **Obligation ID** UC-001-MAIN-14
-**Layer** behavioral
+**Layer** schema
 **Given** a product in the database has >= 1 format_id, >= 1 publisher_property, >= 1 pricing_option
 **When** the system converts the product to AdCP schema
 **Then** the conversion succeeds
@@ -213,7 +213,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product conversion to AdCP schema -- missing format_ids (Step 8)
 **Obligation ID** UC-001-MAIN-15
-**Layer** behavioral
+**Layer** schema
 **Given** a product in the database has 0 format_ids
 **When** the system converts the product to AdCP schema
 **Then** the conversion fails with a ValueError
@@ -223,7 +223,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product conversion to AdCP schema -- missing publisher_properties (Step 8)
 **Obligation ID** UC-001-MAIN-16
-**Layer** behavioral
+**Layer** schema
 **Given** a product in the database has 0 publisher_properties
 **When** the system converts the product to AdCP schema
 **Then** the conversion fails with a ValueError
@@ -232,7 +232,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product conversion to AdCP schema -- missing pricing_options (Step 8)
 **Obligation ID** UC-001-MAIN-17
-**Layer** behavioral
+**Layer** schema
 **Given** a product in the database has 0 pricing_options
 **When** the system converts the product to AdCP schema
 **Then** the conversion fails with a ValueError
@@ -241,7 +241,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product conversion includes 3.6 fields (Step 8, qo8a fix)
 **Obligation ID** UC-001-MAIN-18
-**Layer** behavioral
+**Layer** schema
 **Given** a product in the database has `catalog_match`, `catalog_types`, `conversion_tracking`, `data_provider_signals`, `forecast`, and `signal_targeting_allowed` fields populated
 **When** the system converts the product to AdCP schema
 **Then** all 6 fields are present in the converted Product object
@@ -250,7 +250,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product conversion -- 3.6 fields are optional (Step 8, qo8a fix)
 **Obligation ID** UC-001-MAIN-19
-**Layer** behavioral
+**Layer** schema
 **Given** a product in the database has none of the 6 new fields populated (all null)
 **When** the system converts the product to AdCP schema
 **Then** the conversion succeeds
@@ -288,7 +288,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Property list filtering -- external list applied (Step 10)
 **Obligation ID** UC-001-MAIN-23
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes a `property_list` reference with `agent_url` and `list_id`
 **And** the external property list agent is reachable
 **When** the system resolves the property list
@@ -315,7 +315,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Pricing enrichment -- forecast field from DB (Step 12, qo8a fix)
 **Obligation ID** UC-001-MAIN-26
-**Layer** behavioral
+**Layer** schema
 **Given** a product has a `forecast` field populated in the database
 **When** the system enriches and converts the product
 **Then** the `forecast` field is included in the product response
@@ -407,7 +407,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Response assembly with confirmation flags (Step 19)
 **Obligation ID** UC-001-MAIN-36
-**Layer** behavioral
+**Layer** schema
 **Given** the pipeline completes successfully
 **When** the system assembles the response
 **Then** the response includes `products[]` (required)
@@ -595,7 +595,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Discovery without brief returns all eligible products unranked
 **Obligation ID** UC-001-ALT-NO-BRIEF-01
-**Layer** behavioral
+**Layer** schema
 **Given** a Buyer Agent is authenticated
 **And** the tenant has products in its catalog
 **When** the Buyer Agent sends a `get_products` request without a `brief` field
@@ -606,7 +606,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: No brief -- offering text defaults to "Generic product inquiry"
 **Obligation ID** UC-001-ALT-NO-BRIEF-02
-**Layer** behavioral
+**Layer** schema
 **Given** a request is sent without a `brief` and without a brand manifest `name` or `url`
 **When** the system extracts offering text
 **Then** the offering text defaults to "Generic product inquiry"
@@ -782,7 +782,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Valid request with no matching products returns empty list
 **Obligation ID** UC-001-ALT-EMPTY-RESULTS-01
-**Layer** behavioral
+**Layer** schema
 **Given** a Buyer Agent sends a valid authenticated request
 **And** no products survive the filtering and ranking pipeline
 **When** the system processes the request
@@ -793,7 +793,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Empty results -- tenant has no products defined
 **Obligation ID** UC-001-ALT-EMPTY-RESULTS-02
-**Layer** behavioral
+**Layer** schema
 **Given** a tenant has zero products in its catalog
 **When** the Buyer Agent sends a `get_products` request
 **Then** the response includes an empty `products[]` array
@@ -951,7 +951,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by regions -- ISO 3166-2 intersection
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-10
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { regions: ["US-NY", "US-CA"] }`
 **And** a product covers region "US-NY"
 **When** the system applies the filter
@@ -1166,7 +1166,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: max_results bounds -- minimum 1
 **Obligation ID** UC-001-ALT-PAGINATED-DISCOVERY-07
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `pagination: { max_results: 0 }`
 **When** the system validates the request
 **Then** the request is rejected (max_results must be >= 1)
@@ -1174,7 +1174,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: max_results bounds -- maximum 100
 **Obligation ID** UC-001-ALT-PAGINATED-DISCOVERY-08
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `pagination: { max_results: 200 }`
 **When** the system validates the request
 **Then** the request is rejected or max_results is clamped to 100
@@ -1202,7 +1202,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Response includes proposals with allocations
 **Obligation ID** UC-001-ALT-DISCOVERY-WITH-PROPOSALS-01
-**Layer** behavioral
+**Layer** schema
 **Given** a Buyer Agent sends a `get_products` request with `brief` and `brand`
 **And** proposal generation is triggered
 **When** the system processes the request
@@ -1238,7 +1238,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Proposal includes expires_at
 **Obligation ID** UC-001-ALT-DISCOVERY-WITH-PROPOSALS-05
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal is generated with an expiration
 **When** the response is returned
 **Then** `expires_at` is a valid ISO 8601 datetime
@@ -1364,7 +1364,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product with all required arrays populated
 **Obligation ID** UC-001-BR-PRODUCT-SCHEMA-VALIDITY-01
-**Layer** behavioral
+**Layer** schema
 **Given** a product has format_ids: ["display_300x250"], publisher_properties: [{...}], pricing_options: [{...}]
 **When** the system converts it to AdCP schema
 **Then** conversion succeeds
@@ -1373,7 +1373,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product conversion failure is fatal
 **Obligation ID** UC-001-BR-PRODUCT-SCHEMA-VALIDITY-02
-**Layer** behavioral
+**Layer** schema
 **Given** a product fails AdCP schema conversion (e.g., 0 format_ids)
 **When** the system processes the get_products request
 **Then** the entire request fails (not just that product)
@@ -1387,7 +1387,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product response includes all mandatory AdCP fields
 **Obligation ID** UC-001-PRODUCT-RESPONSE-SCHEMA-01
-**Layer** behavioral
+**Layer** schema
 **Given** a product is returned in the response
 **When** the product is serialized
 **Then** it includes all required AdCP fields: `product_id`, `name`, `description`, `delivery_type`, `format_ids`, `publisher_properties`, `pricing_options`
@@ -1395,7 +1395,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product response includes new 3.6 optional fields when populated
 **Obligation ID** UC-001-PRODUCT-RESPONSE-SCHEMA-02
-**Layer** behavioral
+**Layer** schema
 **Given** a product has the following fields populated in the database:
   - `catalog_match`
   - `catalog_types`
@@ -1409,7 +1409,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product response omits 3.6 optional fields when not populated
 **Obligation ID** UC-001-PRODUCT-RESPONSE-SCHEMA-03
-**Layer** behavioral
+**Layer** schema
 **Given** a product has none of the 6 new fields populated
 **When** the product is serialized in the response
 **Then** the serialized product either omits the fields or includes them as null

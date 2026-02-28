@@ -98,7 +98,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: Step 1 -- Request Contains All Required Fields
 **Obligation ID** UC-002-MAIN-02
-**Layer** behavioral
+**Layer** schema
 **Given** a well-formed `create_media_buy` request
 **When** the request is submitted
 **Then** the system accepts the request with `buyer_ref`, `packages`, `brand`, `start_time`, `end_time`
@@ -149,7 +149,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: Step 6 -- DateTime Valid (Future Start, End After Start)
 **Obligation ID** UC-002-MAIN-08
-**Layer** behavioral
+**Layer** schema
 **Given** `start_time` is a future ISO 8601 datetime and `end_time` is after `start_time`
 **When** the system validates timing
 **Then** validation passes
@@ -178,7 +178,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: Step 9 -- Pricing Model Resolution
 **Obligation ID** UC-002-MAIN-11
-**Layer** behavioral
+**Layer** schema
 **Given** each package has a `pricing_option_id` that matches a pricing option on its product
 **When** the system resolves pricing
 **Then** the pricing model is selected for each package
@@ -188,7 +188,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: Step 10 -- Minimum Spend Validation
 **Obligation ID** UC-002-MAIN-12
-**Layer** behavioral
+**Layer** schema
 **Given** each package budget >= the product's `min_spend_per_package`
 **When** the system validates minimum spend
 **Then** validation passes
@@ -197,7 +197,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: Step 11 -- Maximum Daily Spend Validation
 **Obligation ID** UC-002-MAIN-13
-**Layer** behavioral
+**Layer** schema
 **Given** each package's daily budget (budget / flight_days) <= `max_daily_package_spend`
 **When** the system validates daily spend
 **Then** validation passes
@@ -342,7 +342,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: creative_deadline in Success Response
 **Obligation ID** UC-002-UPG-08
-**Layer** behavioral
+**Layer** schema
 **Given** an adapter that sets `creative_deadline` on the success response
 **When** the response is serialized at the MCP/A2A boundary
 **Then** `creative_deadline` is present in the response as an ISO 8601 datetime
@@ -391,7 +391,7 @@ Source: UC-002-alt-asap.md
 
 #### Scenario: ASAP Case Sensitivity -- Wrong Case Rejected
 **Obligation ID** UC-002-ALT-ASAP-START-TIMING-04
-**Layer** behavioral
+**Layer** schema
 **Given** a request with `start_time: "ASAP"` (uppercase)
 **When** the system validates timing
 **Then** it does NOT resolve as ASAP
@@ -443,7 +443,7 @@ Source: UC-002-alt-creatives.md
 
 #### Scenario: Three Mutually Exclusive Creative Modes
 **Obligation ID** UC-002-ALT-WITH-INLINE-CREATIVES-04
-**Layer** behavioral
+**Layer** schema
 **Given** a package
 **When** it specifies creatives
 **Then** only ONE of `creative_ids`, `creatives`, or `creative_assignments` should be provided
@@ -622,7 +622,7 @@ Source: UC-002-alt-proposal.md
 
 #### Scenario: Step 9 -- Derived Package Minimum Spend
 **Obligation ID** UC-002-ALT-PROPOSAL-BASED-MEDIA-07
-**Layer** behavioral
+**Layer** schema
 **Given** derived packages with budgets calculated from allocation percentages
 **When** the system validates minimum spend
 **Then** each derived package budget >= product's `min_spend_per_package`
@@ -631,7 +631,7 @@ Source: UC-002-alt-proposal.md
 
 #### Scenario: Step 10 -- Derived Package Maximum Daily Spend
 **Obligation ID** UC-002-ALT-PROPOSAL-BASED-MEDIA-08
-**Layer** behavioral
+**Layer** schema
 **Given** derived packages
 **When** the system validates daily spend caps
 **Then** each derived package's daily budget <= `max_daily_package_spend`
@@ -690,7 +690,7 @@ Source: UC-002-ext-a.md, BR-RULE-008
 
 #### Scenario: Budget Schema vs Code Strictness (G10)
 **Obligation ID** UC-002-EXT-A-03
-**Layer** behavioral
+**Layer** schema
 **Given** a total budget of exactly 0 (allowed by schema `minimum: 0`)
 **When** the system validates
 **Then** the system rejects it (code enforces > 0, stricter than schema)
@@ -735,7 +735,7 @@ Source: UC-002-ext-c.md, BR-RULE-013
 
 #### Scenario: Start Time in the Past
 **Obligation ID** UC-002-EXT-C-01
-**Layer** behavioral
+**Layer** schema
 **Given** `start_time` is an ISO 8601 datetime that is in the past
 **When** the system validates timing
 **Then** it returns error: "Invalid start time: {value}. Start time cannot be in the past."
@@ -971,7 +971,7 @@ Source: UC-002-ext-h.md
 
 #### Scenario: FormatId Object Missing Required Fields
 **Obligation ID** UC-002-EXT-H-04
-**Layer** behavioral
+**Layer** schema
 **Given** a FormatId object where `agent_url` or `id` is missing/empty
 **When** the system validates format IDs
 **Then** it returns error: "FormatId object missing required fields. Both agent_url and id are required."
@@ -1051,7 +1051,7 @@ Source: UC-002-ext-k.md, BR-RULE-012
 
 #### Scenario: Daily Budget Exceeds Max Daily Cap
 **Obligation ID** UC-002-EXT-K-01
-**Layer** behavioral
+**Layer** schema
 **Given** a package where `budget / flight_days` exceeds `max_daily_package_spend`
 **When** the system validates daily spend
 **Then** it returns error with the computed daily budget, the maximum allowed, and an explanation
@@ -1061,7 +1061,7 @@ Source: UC-002-ext-k.md, BR-RULE-012
 
 #### Scenario: Flight Days Minimum of 1
 **Obligation ID** UC-002-EXT-K-02
-**Layer** behavioral
+**Layer** schema
 **Given** a media buy with `start_time` and `end_time` on the same day (0 days apart)
 **When** the system calculates flight days
 **Then** it uses a minimum of 1 day for the calculation
@@ -1124,7 +1124,7 @@ Source: UC-002-ext-m.md
 
 #### Scenario: Total Budget Below Proposal Minimum Guidance
 **Obligation ID** UC-002-EXT-M-02
-**Layer** behavioral
+**Layer** schema
 **Given** `total_budget.amount` is below the proposal's `total_budget_guidance.min`
 **When** the system validates the total budget
 **Then** it returns error with code `BUDGET_BELOW_MINIMUM`
@@ -1141,7 +1141,7 @@ Source: UC-002-ext-m.md
 
 #### Scenario: Derived Package Below Product min_spend
 **Obligation ID** UC-002-EXT-M-04
-**Layer** behavioral
+**Layer** schema
 **Given** a valid total budget that, after allocation derivation, produces a package below `min_spend_per_package`
 **When** the system validates derived packages
 **Then** it returns error identifying which packages are under-funded and the minimum required
@@ -1198,7 +1198,7 @@ Source: UC-002-ext-n.md, BR-RULE-006
 
 #### Scenario: PricingOption XOR Constraint -- Both Fixed and Floor
 **Obligation ID** UC-002-EXT-N-06
-**Layer** behavioral
+**Layer** schema
 **Given** a pricing option with both `fixed_price` and `floor_price` set
 **When** the system validates
 **Then** it rejects as invalid (XOR constraint)
@@ -1207,7 +1207,7 @@ Source: UC-002-ext-n.md, BR-RULE-006
 
 #### Scenario: PricingOption XOR Constraint -- Neither Fixed Nor Floor
 **Obligation ID** UC-002-EXT-N-07
-**Layer** behavioral
+**Layer** schema
 **Given** a pricing option with neither `fixed_price` nor `floor_price` set
 **When** the system validates
 **Then** it rejects as invalid (XOR constraint)
@@ -1352,7 +1352,7 @@ Source: BR-RULE-011
 
 #### Scenario: Package Budget Meets Product Minimum
 **Obligation ID** UC-002-CC-MINIMUM-SPEND-PER-01
-**Layer** behavioral
+**Layer** schema
 **Given** a package with budget >= product's `min_spend_per_package`
 **When** the system validates minimum spend
 **Then** validation passes
@@ -1361,7 +1361,7 @@ Source: BR-RULE-011
 
 #### Scenario: Package Budget Below Product Minimum
 **Obligation ID** UC-002-CC-MINIMUM-SPEND-PER-02
-**Layer** behavioral
+**Layer** schema
 **Given** a package with budget < product's `min_spend_per_package`
 **When** the system validates minimum spend
 **Then** it returns error with code `validation_error`
@@ -1370,7 +1370,7 @@ Source: BR-RULE-011
 
 #### Scenario: No Product min_spend -- Fallback to Currency Limit
 **Obligation ID** UC-002-CC-MINIMUM-SPEND-PER-03
-**Layer** behavioral
+**Layer** schema
 **Given** a product without `min_spend_per_package` but tenant has `min_package_budget` in CurrencyLimit
 **When** the system validates minimum spend
 **Then** it uses the currency limit's `min_package_budget` as the floor
@@ -1379,7 +1379,7 @@ Source: BR-RULE-011
 
 #### Scenario: No Minimum Configured at Any Level
 **Obligation ID** UC-002-CC-MINIMUM-SPEND-PER-04
-**Layer** behavioral
+**Layer** schema
 **Given** neither product nor currency limit has a minimum spend configured
 **When** the system validates minimum spend
 **Then** the check is skipped
@@ -1495,7 +1495,7 @@ Source: BR-RULE-026
 
 #### Scenario: MCP and A2A Use Same Implementation
 **Obligation ID** UC-002-SHARED-IMPLEMENTATION-PATTERN-01
-**Layer** behavioral
+**Layer** schema
 **Given** the `create_media_buy` tool
 **When** called via MCP (`@mcp.tool()`) or A2A (`create_media_buy_raw()`)
 **Then** both paths call the same `_create_media_buy_impl()` function

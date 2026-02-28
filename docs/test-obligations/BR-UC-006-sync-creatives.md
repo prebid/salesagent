@@ -162,7 +162,7 @@ Source: BR-UC-006-main-mcp.md
 
 #### Scenario: Default validation_mode is strict
 **Obligation ID** UC-006-MAIN-MCP-08
-**Layer** behavioral
+**Layer** schema
 
 **Given** the Buyer invokes `sync_creatives` without specifying validation_mode
 **When** the system checks the validation_mode
@@ -238,7 +238,7 @@ These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: Creative extends correct listing base class (P0)
 **Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
-**Layer** behavioral
+**Layer** schema
 
 **Given** the salesagent `Creative` class in `src/core/schemas.py`
 **When** inspected for its base class lineage
@@ -249,7 +249,7 @@ These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: list_creatives response includes name field (P0)
 **Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-02
-**Layer** behavioral
+**Layer** schema
 
 **Given** a creative exists in the database with name "Test Banner Ad"
 **When** `list_creatives` is called and the response is serialized
@@ -260,7 +260,7 @@ These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: list_creatives response includes status field (P0)
 **Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-03
-**Layer** behavioral
+**Layer** schema
 
 **Given** a creative exists with status "approved"
 **When** `list_creatives` is called and the response is serialized
@@ -271,7 +271,7 @@ These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: list_creatives response includes created_date field (P0)
 **Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-04
-**Layer** behavioral
+**Layer** schema
 
 **Given** a creative exists with created_date "2026-01-15T10:00:00Z"
 **When** `list_creatives` is called and the response is serialized
@@ -281,7 +281,7 @@ These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: list_creatives response includes updated_date field (P0)
 **Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-05
-**Layer** behavioral
+**Layer** schema
 
 **Given** a creative exists with updated_date "2026-02-20T14:30:00Z"
 **When** `list_creatives` is called and the response is serialized
@@ -304,7 +304,7 @@ These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: Creative model_dump produces listing-schema-compliant JSON
 **Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-07
-**Layer** behavioral
+**Layer** schema
 
 **Given** a fully populated Creative instance
 **When** `model_dump()` is called
@@ -325,7 +325,7 @@ These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: CreativeAction enum values match 3.6.0
 **Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-09
-**Layer** behavioral
+**Layer** schema
 
 **Given** the system reports creative actions
 **When** any action is serialized
@@ -386,7 +386,7 @@ These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: Missing format_id raises CREATIVE_FORMAT_REQUIRED (INV-1)
 **Obligation ID** UC-006-CREATIVE-FORMAT-VALIDATION-01
-**Layer** behavioral
+**Layer** schema
 
 **Given** a creative with format_id set to None
 **When** the system validates the creative
@@ -829,7 +829,7 @@ Source: BR-UC-006-ext-c.md
 
 #### Scenario: Invalid creative structure returns per-creative failure
 **Obligation ID** UC-006-EXT-C-01
-**Layer** behavioral
+**Layer** schema
 
 **Given** a creative with invalid structure (e.g., invalid field types, extra required fields missing)
 **When** the system validates against CreativeAsset schema
@@ -898,7 +898,7 @@ Source: BR-UC-006-ext-e.md
 
 #### Scenario: Missing format_id returns per-creative failure
 **Obligation ID** UC-006-EXT-E-01
-**Layer** behavioral
+**Layer** schema
 
 **Given** a creative with no format_id field
 **When** the system validates the creative
@@ -1067,7 +1067,7 @@ Source: BR-UC-006-ext-k.md
 
 #### Scenario: Successful assignment shows assigned_to array
 **Obligation ID** UC-006-ASSIGNMENTS-RESPONSE-COMPLETENESS-01
-**Layer** behavioral
+**Layer** schema
 
 **Given** a creative is synced with assignment to package "PKG-1"
 **And** the package exists and format is compatible
@@ -1190,7 +1190,7 @@ Source: BR-UC-006-ext-k.md
 
 #### Scenario: Request with zero creatives is rejected
 **Obligation ID** UC-006-REQUEST-CONSTRAINT-VALIDATION-01
-**Layer** behavioral
+**Layer** schema
 
 **Given** the Buyer sends `sync_creatives` with an empty creatives array
 **When** the system validates the request
@@ -1200,7 +1200,7 @@ Source: BR-UC-006-ext-k.md
 
 #### Scenario: Request with more than 100 creatives is rejected
 **Obligation ID** UC-006-REQUEST-CONSTRAINT-VALIDATION-02
-**Layer** behavioral
+**Layer** schema
 
 **Given** the Buyer sends `sync_creatives` with 101 creatives
 **When** the system validates the request

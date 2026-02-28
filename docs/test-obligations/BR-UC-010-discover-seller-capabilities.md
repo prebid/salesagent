@@ -39,7 +39,7 @@ High impact. The `get-adcp-capabilities-response.json` schema is central to the 
 
 #### Scenario: Channel alias mapping (video -> olv, audio -> streaming_audio)
 **Obligation ID** UC-010-MAIN-MCP-03
-**Layer** behavioral
+**Layer** schema
 **Given** an adapter reporting channels ["video", "audio", "display"]
 **When** capabilities are assembled
 **Then** channels are mapped to MediaChannel enum values: video -> olv, audio -> streaming_audio, display -> display
@@ -48,7 +48,7 @@ High impact. The `get-adcp-capabilities-response.json` schema is central to the 
 
 #### Scenario: Feature flags reflect implementation state
 **Obligation ID** UC-010-MAIN-MCP-04
-**Layer** behavioral
+**Layer** schema
 **Given** the current implementation
 **When** capabilities are assembled
 **Then** the features section contains at minimum:
@@ -236,7 +236,7 @@ High impact. The `get-adcp-capabilities-response.json` schema is central to the 
 
 #### Scenario: Context echo in capabilities response
 **Obligation ID** UC-010-EXT-E-01
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer invokes `get_adcp_capabilities` with `context: {"session_id": "s1"}`
 **Then** the response includes `context: {"session_id": "s1"}`
@@ -263,7 +263,7 @@ High impact. The `get-adcp-capabilities-response.json` schema is central to the 
 
 #### Scenario: Response conforms to get-adcp-capabilities-response.json
 **Obligation ID** UC-010-SCHEMA-01
-**Layer** behavioral
+**Layer** schema
 **Given** any capabilities response
 **When** serialized to JSON
 **Then** it validates against `get-adcp-capabilities-response.json` schema
@@ -272,7 +272,7 @@ High impact. The `get-adcp-capabilities-response.json` schema is central to the 
 
 #### Scenario: MediaChannel enum values are valid for 3.6
 **Obligation ID** UC-010-SCHEMA-02
-**Layer** behavioral
+**Layer** schema
 **Given** a capabilities response with primary_channels
 **When** the channels are serialized
 **Then** each value is a valid channels enum value as defined in adcp 3.6

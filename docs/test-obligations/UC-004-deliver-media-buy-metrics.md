@@ -85,7 +85,7 @@ Source: BR-UC-004-main-mcp.md
 
 #### Scenario: Default date range applied when not specified
 **Obligation ID** UC-004-MAIN-06
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer requesting delivery metrics
 **When** no `start_date` or `end_date` is provided
 **Then** the system defaults to last 30 days (implementation default; see gap G40 re: schema says lifetime)
@@ -94,7 +94,7 @@ Source: BR-UC-004-main-mcp.md
 
 #### Scenario: Response includes reporting_period
 **Obligation ID** UC-004-MAIN-07
-**Layer** behavioral
+**Layer** schema
 **Given** a successful delivery query
 **When** the response is returned
 **Then** `reporting_period` contains `start` and `end` dates matching the query window
@@ -103,7 +103,7 @@ Source: BR-UC-004-main-mcp.md
 
 #### Scenario: Response includes currency
 **Obligation ID** UC-004-MAIN-08
-**Layer** behavioral
+**Layer** schema
 **Given** a successful delivery query
 **When** the response is returned
 **Then** `currency` field is present with a valid currency code
@@ -225,7 +225,7 @@ Source: BR-UC-004-alt-filtered.md
 
 #### Scenario: Filter by status "active"
 **Obligation ID** UC-004-ALT-STATUS-FILTERED-DELIVERY-01
-**Layer** behavioral
+**Layer** schema
 **Given** a buyer owns 5 media buys: 3 active, 1 paused, 1 completed
 **When** the buyer sends `get_media_buy_delivery` with `status_filter: "active"`
 **Then** the response includes delivery data for the 3 active media buys only
@@ -302,7 +302,7 @@ Source: BR-UC-004-alt-date-range.md
 
 #### Scenario: Only start_date provided -- end defaults to now
 **Obligation ID** UC-004-ALT-CUSTOM-DATE-RANGE-02
-**Layer** behavioral
+**Layer** schema
 **Given** a buyer provides only `start_date: "2026-02-01"`
 **When** the delivery query runs
 **Then** `end_date` defaults to the current date/time
@@ -311,7 +311,7 @@ Source: BR-UC-004-alt-date-range.md
 
 #### Scenario: Only end_date provided -- start defaults to creation date
 **Obligation ID** UC-004-ALT-CUSTOM-DATE-RANGE-03
-**Layer** behavioral
+**Layer** schema
 **Given** a media buy created on 2026-01-15 and the buyer provides only `end_date: "2026-03-01"`
 **When** the delivery query runs
 **Then** `start_date` defaults to the media buy's creation date (2026-01-15)
@@ -746,7 +746,7 @@ Source: BR-UC-004-ext-g.md
 
 #### Scenario: GetMediaBuyDeliveryResponse nested serialization
 **Obligation ID** UC-004-RESPONSE-SERIALIZATION-SALESAGENT-01
-**Layer** behavioral
+**Layer** schema
 **Given** a delivery response with multiple media_buy_deliveries, each containing packages
 **When** `model_dump()` is called on the response
 **Then** all nested models (media_buy_deliveries, packages, delivery_metrics) are correctly serialized (NestedModelSerializerMixin applied)

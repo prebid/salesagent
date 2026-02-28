@@ -96,7 +96,7 @@ Then the product has all 3 pricing options
 
 ### BR-RULE-005: AI Ranking Minimum Threshold
 **Obligation ID** BR-RULE-005-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** When AI ranking is applied, products scoring below 0.1 are filtered out. Products >= 0.1 are sorted descending. Without ranking, no threshold.
 **Scenario:**
 ```gherkin
@@ -115,7 +115,7 @@ Then all products are included regardless of score
 
 ### BR-RULE-006: PricingOption XOR Constraint
 **Obligation ID** BR-RULE-006-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Each pricing option must have exactly one of `fixed_price` or `floor_price`. Both or neither is invalid. CPA always has `fixed_price`.
 **Scenario:**
 ```gherkin
@@ -135,7 +135,7 @@ Then fixed_price is required and floor_price must be null
 
 ### BR-RULE-007: Product Schema Validity
 **Obligation ID** BR-RULE-007-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Each product must have >= 1 format_id, >= 1 publisher_property, >= 1 pricing_option. Conversion failure is treated as data corruption and fails the entire request.
 **Scenario:**
 ```gherkin
@@ -211,7 +211,7 @@ Then validation passes
 
 ### BR-RULE-011: Minimum Spend Per Package
 **Obligation ID** BR-RULE-011-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Package budget must meet min_spend from product pricing or tenant currency limit fallback.
 **Scenario:**
 ```gherkin
@@ -234,7 +234,7 @@ Then minimum spend check is skipped
 
 ### BR-RULE-012: Maximum Daily Spend Cap
 **Obligation ID** BR-RULE-012-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Daily budget (package_budget / max(1, flight_days)) must not exceed tenant's max_daily_package_spend.
 **Scenario:**
 ```gherkin
@@ -333,7 +333,7 @@ Then the media buy enters pending manual approval state
 
 ### BR-RULE-018: Atomic Response Semantics
 **Obligation ID** BR-RULE-018-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Responses contain EITHER success data OR error data, never both. Enforced by oneOf schema.
 **Scenario:**
 ```gherkin
@@ -637,7 +637,7 @@ Then the existing assignment is updated (weight reset to 100)
 
 ### BR-RULE-039: Assignment Format Compatibility
 **Obligation ID** BR-RULE-039-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Format compatibility checks normalized agent_url and exact format_id against product's format_ids. Empty format_ids means all allowed.
 **Scenario:**
 ```gherkin
@@ -755,7 +755,7 @@ Then advertising_policies field is omitted
 
 ### BR-RULE-045: Publisher Domain Filter Validation
 **Obligation ID** BR-RULE-045-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Domain must match lowercase alphanumeric pattern. Filter array must have >= 1 item. Valid but non-matching domains yield empty results (not error).
 **Scenario:**
 ```gherkin
@@ -854,7 +854,7 @@ Then that signal is excluded
 
 ### BR-RULE-051: Performance Index Scale Semantics
 **Obligation ID** BR-RULE-051-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** 0.0 = no value, 1.0 = expected, > 1.0 = above expected. Must be >= 0. Scores < 0.8 trigger optimization recommendation.
 **Scenario:**
 ```gherkin
@@ -1058,7 +1058,7 @@ Then X1 is NOT affected (agent-scoped deactivation)
 
 ### BR-RULE-062: Dry Run Preview Mode
 **Obligation ID** BR-RULE-062-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** dry_run=true returns what would change without applying modifications. Response includes dry_run=true.
 **Scenario:**
 ```gherkin
@@ -1096,7 +1096,7 @@ Then the operation proceeds under the resolved tenant and principal
 
 ### BR-RULE-064: Content Standards Scope Requirements
 **Obligation ID** BR-RULE-064-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Scope requires languages (minItems: 1). countries_all uses AND logic. channels_any uses OR logic. countries and channels are optional.
 **Scenario:**
 ```gherkin
@@ -1179,7 +1179,7 @@ Then standards matching (display OR social) AND (en) are returned
 
 ### BR-RULE-069: Calibration Exemplar Polymorphism
 **Obligation ID** BR-RULE-069-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Exemplars accept URL references or artifact objects (oneOf). Both may coexist. URL references resolved to artifacts on ingest.
 **Scenario:**
 ```gherkin

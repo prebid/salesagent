@@ -90,7 +90,7 @@ High impact. Content standards is a governance protocol domain that was introduc
 
 #### Scenario: Successful creation with minimal required fields
 **Obligation ID** UC-012-EXT-A-01
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer
 **When** the buyer invokes `create_content_standards` with `scope: {languages_any: ["en"]}` and `policy: "No gambling content"`
 **Then** the response contains a new `standards_id`
@@ -146,7 +146,7 @@ High impact. Content standards is a governance protocol domain that was introduc
 
 #### Scenario: Country codes follow ISO 3166-1 alpha-2
 **Obligation ID** UC-012-EXT-A-07
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer
 **When** providing `countries_all: ["US", "GB"]`
 **Then** the values are accepted
@@ -249,7 +249,7 @@ High impact. Content standards is a governance protocol domain that was introduc
 
 #### Scenario: Update with languages_any validates minItems
 **Obligation ID** UC-012-EXT-C-05
-**Layer** behavioral
+**Layer** schema
 **Given** an existing standard
 **When** the buyer updates with `scope: {languages_any: []}`
 **Then** the request is rejected (minItems: 1)
@@ -388,7 +388,7 @@ High impact. Content standards is a governance protocol domain that was introduc
 
 #### Scenario: Content standard object structure
 **Obligation ID** UC-012-SCHEMA-03
-**Layer** behavioral
+**Layer** schema
 **Given** any content standard in a response
 **When** inspected
 **Then** it includes `standards_id`, scope fields (`countries_all`, `channels_any`, `languages_any`), and `policy`
@@ -397,7 +397,7 @@ High impact. Content standards is a governance protocol domain that was introduc
 
 #### Scenario: Channels enum values match adcp 3.6
 **Obligation ID** UC-012-SCHEMA-04
-**Layer** behavioral
+**Layer** schema
 **Given** a content standard with channels_any
 **When** serialized
 **Then** each channel value is one of the 18 standardized channel types

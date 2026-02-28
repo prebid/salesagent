@@ -35,7 +35,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Status filter validates enum values
 **Obligation ID** UC-011-MAIN-03
-**Layer** behavioral
+**Layer** schema
 **Given** a buyer requesting accounts
 **When** the buyer provides `status: "invalid_status"`
 **Then** the request is rejected (status must be one of: active, pending_approval, payment_required, suspended, closed)
@@ -54,7 +54,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Pagination max_results bounds (1-100)
 **Obligation ID** UC-011-MAIN-05
-**Layer** behavioral
+**Layer** schema
 **Given** a buyer requesting accounts
 **When** the buyer provides `pagination: {max_results: 0}`
 **Then** the request is rejected (must be 1-100)
@@ -80,7 +80,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Account fields include required data
 **Obligation ID** UC-011-MAIN-08
-**Layer** behavioral
+**Layer** schema
 **Given** a returned account
 **When** the response is inspected
 **Then** each account includes at minimum: account_id, status
@@ -121,7 +121,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Sync requires at least one account
 **Obligation ID** UC-011-MAIN-12
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer
 **When** the buyer sends `sync_accounts` with `accounts: []`
 **Then** the request is rejected (minItems: 1)
@@ -157,7 +157,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: operator format validation
 **Obligation ID** UC-011-MAIN-16
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer
 **When** the buyer provides `operator: "not a domain"`
 **Then** the request is rejected (must match domain pattern)
@@ -295,7 +295,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Setup URL is actionable
 **Obligation ID** UC-011-EXT-D-02
-**Layer** behavioral
+**Layer** schema
 **Given** a pending_approval account
 **When** the setup object is inspected
 **Then** `setup.url` is a valid URL for the human to visit
@@ -315,7 +315,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Dry run previews changes without applying
 **Obligation ID** UC-011-EXT-E-01
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer
 **When** the buyer sends `sync_accounts` with `dry_run: true` and 2 new accounts
 **Then** the response includes `dry_run: true`
@@ -375,7 +375,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Context echoed in list_accounts response
 **Obligation ID** UC-011-EXT-G-01
-**Layer** behavioral
+**Layer** schema
 **Given** a buyer requesting `list_accounts` with `context: {"req": "r1"}`
 **When** the response is returned
 **Then** the response includes `context: {"req": "r1"}`
@@ -384,7 +384,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Context echoed in sync_accounts success response
 **Obligation ID** UC-011-EXT-G-02
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer syncing with `context: {"batch": "b1"}`
 **When** the sync succeeds
 **Then** the success response includes `context: {"batch": "b1"}`
@@ -392,7 +392,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Context echoed in sync_accounts error response
 **Obligation ID** UC-011-EXT-G-03
-**Layer** behavioral
+**Layer** schema
 **Given** an unauthenticated buyer sending sync_accounts with `context: {"trace": "t1"}`
 **When** the AUTH_TOKEN_INVALID error is returned
 **Then** the error response includes `context: {"trace": "t1"}`
@@ -401,7 +401,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Context is opaque and unmodified
 **Obligation ID** UC-011-EXT-G-04
-**Layer** behavioral
+**Layer** schema
 **Given** a deeply nested context object
 **When** echoed in the response
 **Then** the structure is preserved exactly
@@ -420,7 +420,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: sync-accounts-response success variant
 **Obligation ID** UC-011-SCHEMA-02
-**Layer** behavioral
+**Layer** schema
 **Given** a successful sync response
 **When** serialized
 **Then** it validates against `sync-accounts-response.json` (success oneOf variant)
@@ -429,7 +429,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: sync-accounts-response error variant
 **Obligation ID** UC-011-SCHEMA-03
-**Layer** behavioral
+**Layer** schema
 **Given** an operation-level error response (e.g., AUTH_TOKEN_INVALID)
 **When** serialized
 **Then** it validates against `sync-accounts-response.json` (error oneOf variant)
@@ -438,7 +438,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Account status enum values are valid
 **Obligation ID** UC-011-SCHEMA-04
-**Layer** behavioral
+**Layer** schema
 **Given** any account in a response
 **When** the status is inspected
 **Then** it is one of: active, pending_approval, payment_required, suspended, closed
@@ -446,7 +446,7 @@ High impact. Account management is a new protocol domain in adcp 3.x. The schema
 
 #### Scenario: Billing model enum values are valid
 **Obligation ID** UC-011-SCHEMA-05
-**Layer** behavioral
+**Layer** schema
 **Given** any account with billing set
 **When** the billing is inspected
 **Then** it is one of: brand, operator, agent

@@ -175,7 +175,7 @@ Source: UC-003-alt-pause.md
 
 #### Scenario: Pause is a campaign-level action (all packages affected)
 **Obligation ID** UC-003-ALT-PAUSE-RESUME-CAMPAIGN-04
-**Layer** behavioral
+**Layer** schema
 **Given** a media buy with three packages
 **When** the buyer sends `update_media_buy` with `paused: true`
 **Then** the `affected_packages` in the response includes all three packages
@@ -402,7 +402,7 @@ Source: UC-003-alt-creatives-inline.md
 
 #### Scenario: Maximum 100 inline creatives enforced
 **Obligation ID** UC-003-ALT-UPLOAD-INLINE-CREATIVES-03
-**Layer** behavioral
+**Layer** schema
 **Given** a package update request
 **When** the buyer provides 101 inline creative assets
 **Then** schema validation rejects the request (maxItems: 100)
@@ -607,7 +607,7 @@ Source: UC-003-ext-b.md
 
 #### Scenario: Both media_buy_id and buyer_ref provided (XOR violation)
 **Obligation ID** UC-003-EXT-B-03
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer
 **When** the buyer sends `update_media_buy` with BOTH `media_buy_id` and `buyer_ref`
 **Then** schema validation rejects the request
@@ -616,7 +616,7 @@ Source: UC-003-ext-b.md
 
 #### Scenario: Neither media_buy_id nor buyer_ref provided (XOR violation)
 **Obligation ID** UC-003-EXT-B-04
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer
 **When** the buyer sends `update_media_buy` with NEITHER `media_buy_id` nor `buyer_ref`
 **Then** schema validation rejects the request
@@ -740,7 +740,7 @@ Source: UC-003-ext-g.md
 
 #### Scenario: Daily spend calculation uses minimum 1 day for flight
 **Obligation ID** UC-003-EXT-G-02
-**Layer** behavioral
+**Layer** schema
 **Given** a media buy with same-day start and end (0 flight days)
 **When** daily spend is calculated
 **Then** the system uses minimum 1 day for the divisor (not zero)

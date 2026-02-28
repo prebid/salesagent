@@ -33,7 +33,7 @@ Medium impact. The signals subsystem depends on adcp signal schemas (`get-signal
 
 #### Scenario: Request must provide signal_spec or signal_ids
 **Obligation ID** UC-008-MAIN-MCP-03
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer agent calls `get_signals` without either `signal_spec` or `signal_ids`
 **Then** the request is rejected (anyOf constraint violation)
@@ -42,7 +42,7 @@ Medium impact. The signals subsystem depends on adcp signal schemas (`get-signal
 
 #### Scenario: deliver_to is required with deployments and countries
 **Obligation ID** UC-008-MAIN-MCP-04
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer agent calls `get_signals` with `signal_spec` but without `deliver_to`
 **Then** the request is rejected (required field missing)
@@ -51,7 +51,7 @@ Medium impact. The signals subsystem depends on adcp signal schemas (`get-signal
 
 #### Scenario: deliver_to requires at least one deployment and one country
 **Obligation ID** UC-008-MAIN-MCP-05
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer agent calls `get_signals` with `deliver_to: {deployments: [], countries: ["US"]}`
 **Then** the request is rejected (minItems: 1 on deployments)
@@ -60,7 +60,7 @@ Medium impact. The signals subsystem depends on adcp signal schemas (`get-signal
 
 #### Scenario: Country code format validation
 **Obligation ID** UC-008-MAIN-MCP-06
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer agent calls `get_signals` with `deliver_to: {deployments: ["dv360"], countries: ["usa"]}`
 **Then** the request is rejected (country codes must match `^[A-Z]{2}$`)
@@ -225,7 +225,7 @@ Medium impact. The signals subsystem depends on adcp signal schemas (`get-signal
 
 #### Scenario: activate_signal requires at least one deployment
 **Obligation ID** UC-008-EXT-B-03
-**Layer** behavioral
+**Layer** schema
 **Given** an authenticated buyer
 **When** the buyer agent calls `activate_signal` with `deployments: []`
 **Then** the request is rejected (minItems: 1)
