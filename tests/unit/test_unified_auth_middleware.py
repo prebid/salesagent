@@ -47,8 +47,9 @@ class TestOldMiddlewaresDeleted:
 
     def test_no_auth_context_middleware_function(self):
         """auth_context_middleware function must not exist in app.py."""
-        with open("src/app.py") as f:
-            source = f.read()
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[2] / "src" / "app.py").read_text()
 
         tree = ast.parse(source)
         func_names = [node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
@@ -58,8 +59,9 @@ class TestOldMiddlewaresDeleted:
 
     def test_no_a2a_auth_middleware_function(self):
         """a2a_auth_middleware function must not exist in app.py."""
-        with open("src/app.py") as f:
-            source = f.read()
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[2] / "src" / "app.py").read_text()
 
         tree = ast.parse(source)
         func_names = [node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
@@ -73,8 +75,9 @@ class TestA2AHandlerUsesNewContextVar:
 
     def test_no_request_auth_token_contextvar(self):
         """_request_auth_token ContextVar must not exist in adcp_a2a_server."""
-        with open("src/a2a_server/adcp_a2a_server.py") as f:
-            source = f.read()
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[2] / "src" / "a2a_server" / "adcp_a2a_server.py").read_text()
 
         tree = ast.parse(source)
         # Look for: _request_auth_token: ContextVar = ...
@@ -95,8 +98,9 @@ class TestA2AHandlerUsesNewContextVar:
 
     def test_no_request_headers_contextvar(self):
         """_request_headers ContextVar must not exist in adcp_a2a_server."""
-        with open("src/a2a_server/adcp_a2a_server.py") as f:
-            source = f.read()
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[2] / "src" / "a2a_server" / "adcp_a2a_server.py").read_text()
 
         tree = ast.parse(source)
         for node in ast.walk(tree):

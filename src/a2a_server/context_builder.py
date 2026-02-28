@@ -12,7 +12,7 @@ from a2a.server.apps.jsonrpc.jsonrpc_app import CallContextBuilder
 from a2a.server.context import ServerCallContext
 from starlette.requests import Request
 
-from src.core.auth_context import AuthContext
+from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +34,11 @@ class AdCPCallContextBuilder(CallContextBuilder):
         Returns:
             ServerCallContext with auth_context in state.
         """
-        auth_ctx: AuthContext | None = getattr(getattr(request, "state", None), "auth_context", None)
+        auth_ctx: AuthContext | None = getattr(getattr(request, "state", None), AUTH_CONTEXT_STATE_KEY, None)
         if auth_ctx is None:
             auth_ctx = AuthContext.unauthenticated()
 
-        state: dict = {"auth_context": auth_ctx}
+        state: dict = {AUTH_CONTEXT_STATE_KEY: auth_ctx}
 
         # Also populate headers for SDK extensions that may inspect them
         headers = getattr(request, "headers", None)

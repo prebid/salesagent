@@ -86,8 +86,9 @@ class TestA2AAppUsesCustomContextBuilder:
 
     def test_app_py_uses_adcp_call_context_builder(self):
         """src/app.py must construct A2AStarletteApplication with context_builder."""
-        with open("src/app.py") as f:
-            source = f.read()
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[2] / "src" / "app.py").read_text()
 
         assert "context_builder" in source, (
             "A2AStarletteApplication in app.py must be constructed with context_builder parameter"

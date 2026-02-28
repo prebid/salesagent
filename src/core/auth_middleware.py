@@ -12,9 +12,10 @@ propagation bugs (Starlette issue #1729).
 from __future__ import annotations
 
 import logging
+from types import MappingProxyType
 from typing import Any
 
-from src.core.auth_context import AuthContext
+from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +55,9 @@ class UnifiedAuthMiddleware:
                 potential = auth_header[7:].strip()
                 token = potential or None
 
-        auth_ctx = AuthContext(auth_token=token, headers=headers)
+        auth_ctx = AuthContext(auth_token=token, headers=MappingProxyType(headers))
 
         scope.setdefault("state", {})
-        scope["state"]["auth_context"] = auth_ctx
+        scope["state"][AUTH_CONTEXT_STATE_KEY] = auth_ctx
 
         await self.app(scope, receive, send)

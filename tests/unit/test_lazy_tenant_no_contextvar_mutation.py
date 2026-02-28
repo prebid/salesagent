@@ -17,8 +17,9 @@ class TestLazyTenantNoContextVarMutation:
         ContextVar mutation must happen at explicit transport boundaries,
         not as a side effect of property access on lazy objects.
         """
-        with open("src/core/tenant_context.py") as f:
-            source = f.read()
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[2] / "src" / "core" / "tenant_context.py").read_text()
 
         tree = ast.parse(source)
 

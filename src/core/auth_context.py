@@ -11,9 +11,14 @@ resolve_identity() — this is intentional to avoid DB calls on every request.
 """
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
+
+# Shared state key for auth context in scope["state"] and ServerCallContext.state.
+# All producers/consumers must use this constant instead of a string literal.
+AUTH_CONTEXT_STATE_KEY = "auth_context"
 
 
 @dataclass(frozen=True)
@@ -26,7 +31,12 @@ class AuthContext:
     """
 
     auth_token: str | None = None
-    headers: dict[str, str] = field(default_factory=dict)
+    headers: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
+
+    def __post_init__(self) -> None:
+        # Wrap mutable dicts passed to __init__ so headers is always immutable.
+        if isinstance(self.headers, dict):
+            object.__setattr__(self, "headers", MappingProxyType(self.headers))
 
     @classmethod
     def unauthenticated(cls, *, headers: "dict[str, str] | None" = None) -> "AuthContext":
@@ -40,7 +50,7 @@ def _get_auth_context(request: Request) -> AuthContext:
     The middleware must have already populated request.state.auth_context.
     If middleware hasn't run (e.g., websocket or internal route), returns unauthenticated.
     """
-    return getattr(request.state, "auth_context", AuthContext.unauthenticated())
+    return getattr(request.state, AUTH_CONTEXT_STATE_KEY, AuthContext.unauthenticated())
 
 
 # Annotated type aliases for route signatures (modern FastAPI pattern):

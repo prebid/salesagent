@@ -44,6 +44,7 @@ from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
@@ -137,7 +138,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         if context is None:
             return None
-        auth_ctx = context.state.get("auth_context")
+        auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY)
         return auth_ctx.auth_token if auth_ctx else None
 
     def _resolve_a2a_identity(
@@ -166,7 +167,7 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.resolved_identity import resolve_identity
         from src.core.testing_hooks import AdCPTestContext
 
-        auth_ctx = context.state.get("auth_context") if context is not None else None
+        auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY) if context is not None else None
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:

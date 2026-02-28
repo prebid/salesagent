@@ -17,8 +17,9 @@ class TestNoDuplicateAuthFunctions:
         This function is dead code (0 callers). The canonical version lives in
         auth.py and is only used by tests. All production code uses resolve_identity().
         """
-        with open("src/core/auth_utils.py") as f:
-            source = f.read()
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[2] / "src" / "core" / "auth_utils.py").read_text()
 
         tree = ast.parse(source)
 

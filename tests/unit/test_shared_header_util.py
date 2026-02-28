@@ -5,6 +5,9 @@ Extract to src/core/http_utils.py and import everywhere.
 """
 
 import ast
+import pathlib
+
+_PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class TestSharedHeaderUtil:
@@ -12,8 +15,7 @@ class TestSharedHeaderUtil:
 
     def test_http_utils_module_exists(self):
         """src/core/http_utils.py should exist with the shared function."""
-        with open("src/core/http_utils.py") as f:
-            source = f.read()
+        source = (_PROJECT_ROOT / "src" / "core" / "http_utils.py").read_text()
 
         tree = ast.parse(source)
         func_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
@@ -23,8 +25,7 @@ class TestSharedHeaderUtil:
 
     def test_auth_py_imports_from_http_utils(self):
         """auth.py should import from http_utils, not define its own copy."""
-        with open("src/core/auth.py") as f:
-            source = f.read()
+        source = (_PROJECT_ROOT / "src" / "core" / "auth.py").read_text()
 
         tree = ast.parse(source)
 
@@ -36,8 +37,7 @@ class TestSharedHeaderUtil:
 
     def test_resolved_identity_imports_from_http_utils(self):
         """resolved_identity.py should import from http_utils, not define its own copy."""
-        with open("src/core/resolved_identity.py") as f:
-            source = f.read()
+        source = (_PROJECT_ROOT / "src" / "core" / "resolved_identity.py").read_text()
 
         tree = ast.parse(source)
 
@@ -48,8 +48,7 @@ class TestSharedHeaderUtil:
 
     def test_app_py_imports_from_http_utils(self):
         """app.py should import from http_utils, not define its own copy."""
-        with open("src/app.py") as f:
-            source = f.read()
+        source = (_PROJECT_ROOT / "src" / "app.py").read_text()
 
         tree = ast.parse(source)
 

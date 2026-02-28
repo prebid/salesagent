@@ -7,7 +7,7 @@ a Starlette request object.
 
 from a2a.server.context import ServerCallContext
 
-from src.core.auth_context import AuthContext
+from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
 
 def make_a2a_context(
@@ -27,4 +27,4 @@ def make_a2a_context(
         ServerCallContext ready to pass to handler.on_message_send(params, context=ctx).
     """
     auth_ctx = AuthContext(auth_token=auth_token, headers=headers or {})
-    return ServerCallContext(state={"auth_context": auth_ctx})
+    return ServerCallContext(state={AUTH_CONTEXT_STATE_KEY: auth_ctx})

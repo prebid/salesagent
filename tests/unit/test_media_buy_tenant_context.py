@@ -6,6 +6,9 @@ receive the typed model, not a lossy dict.
 """
 
 import ast
+import pathlib
+
+_PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class TestMediaBuyTenantContext:
@@ -17,8 +20,7 @@ class TestMediaBuyTenantContext:
         Manual dict construction (tenant_dict = {"tenant_id": ..., "name": ...}) misses
         fields and violates the architecture rule: logic layer works with ORM models.
         """
-        with open("src/core/tools/media_buy_create.py") as f:
-            source = f.read()
+        source = (_PROJECT_ROOT / "src" / "core" / "tools" / "media_buy_create.py").read_text()
 
         tree = ast.parse(source)
 
@@ -41,8 +43,7 @@ class TestMediaBuyTenantContext:
 
     def test_passes_tenant_obj_to_adapter_calls(self):
         """Downstream adapter calls should receive tenant_obj, not tenant_dict."""
-        with open("src/core/tools/media_buy_create.py") as f:
-            source = f.read()
+        source = (_PROJECT_ROOT / "src" / "core" / "tools" / "media_buy_create.py").read_text()
 
         tree = ast.parse(source)
 
@@ -63,8 +64,7 @@ class TestMediaBuyTenantContext:
 
     def test_get_adapter_handles_orm_model(self):
         """get_adapter should accept Tenant ORM model via attribute access."""
-        with open("src/core/helpers/adapter_helpers.py") as f:
-            source = f.read()
+        source = (_PROJECT_ROOT / "src" / "core" / "helpers" / "adapter_helpers.py").read_text()
 
         # get_adapter should have ORM model branch (not just dict access)
         assert "tenant.tenant_id" in source, "get_adapter does not support Tenant ORM model attribute access"
