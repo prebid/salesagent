@@ -1493,13 +1493,11 @@ class AdCPRequestHandler(RequestHandler):
 
             brief = parameters.get("brief", "")
             brand = parameters.get("brand")
-
-            # Require at least one search criterion (brief, brand, or filters)
             filters = parameters.get("filters")
+
+            # Require at least one search criterion for A2A callers
             if not brief and not brand and not filters:
-                raise ServerError(
-                    InvalidParamsError(message="At least one of 'brief', 'brand', or 'filters' parameter is required")
-                )
+                raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
 
             # Call core function with identity — _raw handles full schema validation
             response = await core_get_products_tool(
@@ -1528,6 +1526,9 @@ class AdCPRequestHandler(RequestHandler):
                 response_data.setdefault("success", True)
             return apply_version_compat("get_products", response_data, adcp_version)
 
+        except AdCPError:
+            # Let AdCPError propagate to outer handler for proper translation
+            raise
         except Exception as e:
             logger.error(f"Error in get_products skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve products: {str(e)}"))

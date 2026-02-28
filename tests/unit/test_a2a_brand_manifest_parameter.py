@@ -125,7 +125,7 @@ async def test_handle_get_products_skill_brand_manifest_not_converted():
 
 @pytest.mark.asyncio
 async def test_handle_get_products_skill_no_brief_no_brand_raises():
-    """Test that empty parameters (no brief, no brand) raises an error."""
+    """Test that empty parameters raises AdCPValidationError, propagated to outer handler."""
     handler = AdCPRequestHandler()
 
     with (
@@ -137,7 +137,9 @@ async def test_handle_get_products_skill_no_brief_no_brand_raises():
         mock_resolve.return_value = MagicMock()
         mock_core_tool.return_value = MagicMock()
 
-        from a2a.utils.errors import ServerError
+        # Handler raises AdCPValidationError for missing search criteria,
+        # which propagates via 'except AdCPError: raise' to outer handler
+        from src.core.exceptions import AdCPValidationError
 
-        with pytest.raises(ServerError):
+        with pytest.raises(AdCPValidationError):
             await handler._handle_get_products_skill({}, "test_token")
