@@ -37,18 +37,22 @@ class UnifiedAuthMiddleware:
 
         # Extract headers from ASGI scope
         headers: dict[str, str] = {}
-        token: str | None = None
         for raw_name, raw_value in scope.get("headers", []):
             name = raw_name.decode("latin-1").lower()
             value = raw_value.decode("latin-1")
             headers[name] = value
 
-            if name == "authorization":
-                auth_header = value.strip()
-                if auth_header.startswith("Bearer "):
-                    token = auth_header[7:]
-            elif name == "x-adcp-auth" and token is None:
-                token = value.strip()
+        # Token extraction: x-adcp-auth takes priority (AdCP convention),
+        # then Authorization: Bearer (case-insensitive per RFC 7235 §2.1).
+        token: str | None = None
+        x_adcp = headers.get("x-adcp-auth", "").strip()
+        if x_adcp:
+            token = x_adcp
+        else:
+            auth_header = headers.get("authorization", "").strip()
+            if auth_header.lower().startswith("bearer "):
+                potential = auth_header[7:].strip()
+                token = potential or None
 
         auth_ctx = AuthContext(auth_token=token, headers=headers)
 
