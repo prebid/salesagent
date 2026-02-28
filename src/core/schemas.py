@@ -2974,6 +2974,27 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
             raise ValueError("Either media_buy_id or buyer_ref is required (AdCP oneOf constraint)")
         return self
 
+    def has_updatable_fields(self) -> bool:
+        """Check whether this request includes at least one updatable field.
+
+        Returns True if any field beyond the identifier (media_buy_id/buyer_ref)
+        is set. Used by _build_update_request to enforce BR-RULE-022.
+        """
+        return any(
+            f is not None
+            for f in (
+                self.paused,
+                self.start_time,
+                self.end_time,
+                self.packages,
+                self.budget,
+                self.push_notification_config,
+                self.reporting_webhook,
+                self.context,
+                self.ext,
+            )
+        )
+
     # Backward compatibility properties (deprecated)
     @property
     def flight_start_date(self) -> date | None:

@@ -1331,9 +1331,19 @@ def _build_update_request(
         request_params["ext"] = ext
 
     try:
-        return UpdateMediaBuyRequest(**request_params)
+        req = UpdateMediaBuyRequest(**request_params)
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="update_media_buy request")) from e
+
+    # BR-RULE-022: reject empty updates (no updatable fields beyond identifier)
+    if not req.has_updatable_fields():
+        raise AdCPValidationError(
+            "Update request must include at least one updatable field "
+            "(paused, start_time, end_time, packages, budget, "
+            "push_notification_config, reporting_webhook, context, ext)"
+        )
+
+    return req
 
 
 def update_media_buy(

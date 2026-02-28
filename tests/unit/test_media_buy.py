@@ -1623,7 +1623,6 @@ class TestUpdateMediaBuyMainFlow:
         assert pkg2.budget is None
         assert pkg2.creative_ids is None
 
-    @pytest.mark.xfail(reason="empty update validation not yet implemented (BR-RULE-022)")
     def test_empty_update_rejected(self):
         """UC-003-MF04: update with no updatable fields returns error.
 
@@ -1632,12 +1631,11 @@ class TestUpdateMediaBuyMainFlow:
         Type: unit
         Source: UC-003, BR-RULE-022
         """
+        from src.core.tools.media_buy_update import _build_update_request
+
         # Update with only the identifier and nothing to change
-        with pytest.raises((ValueError, AdCPValidationError)):
-            UpdateMediaBuyRequest(
-                media_buy_id="mb_empty",
-                # no packages, no budget, no paused, no start_time, no end_time
-            )
+        with pytest.raises(AdCPValidationError, match="at least one updatable field"):
+            _build_update_request(media_buy_id="mb_empty")
 
 
 class TestUpdateMediaBuyPauseResume:
