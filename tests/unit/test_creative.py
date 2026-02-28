@@ -2143,9 +2143,6 @@ class TestDeleteMissing:
     Spec: CONFIRMED -- sync-creatives-request.json defines delete_missing (boolean, default: false).
     """
 
-    @pytest.mark.xfail(
-        reason="delete_missing=True not yet implemented in _sync_creatives_impl — parameter accepted but archive logic missing"
-    )
     def test_delete_missing_archives_unlisted_creatives(self):
         """When delete_missing=True, creatives not in payload are deleted/archived."""
         from src.core.tools.creatives._sync import _sync_creatives_impl
@@ -2178,7 +2175,20 @@ class TestDeleteMissing:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
+
+            # The upsert loop query for existing creative returns None (c1 is new)
+            # The delete_missing query returns an orphaned creative (c_orphan)
+            orphan_creative = MagicMock()
+            orphan_creative.creative_id = "c_orphan"
+            orphan_creative.status = "approved"
+
+            # First call: upsert lookup for c1 -> None (new creative)
+            # Second call: delete_missing query -> [c_orphan]
+            mock_scalars = MagicMock()
+            mock_scalars.first.side_effect = [None]  # upsert lookup
+            mock_scalars.all.return_value = [orphan_creative]  # delete_missing query
+
+            mock_session.scalars.return_value = mock_scalars
 
             # Sync only c1, with delete_missing=True
             result = _sync_creatives_impl(
@@ -2187,15 +2197,17 @@ class TestDeleteMissing:
                 identity=identity,
             )
 
-            # Expect a "deleted" action for creatives not in payload
-            actions = []
+            # Expect a "deleted" action for c_orphan (not in payload)
+            actions = {}
             for r in result.creatives:
                 action = r.action
                 if hasattr(action, "value"):
                     action = action.value
-                actions.append(action)
+                actions[r.creative_id] = action
 
-            assert "deleted" in actions, "delete_missing=True should produce 'deleted' actions for unlisted creatives"
+            assert "c_orphan" in actions, "delete_missing=True should produce result for unlisted creative"
+            assert actions["c_orphan"] == "deleted", "Unlisted creative should have 'deleted' action"
+            assert orphan_creative.status == "archived", "Unlisted creative should be set to 'archived' status"
 
 
 class TestDryRun:

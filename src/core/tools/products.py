@@ -214,6 +214,10 @@ async def _get_products_impl(
     """
     start_time = time.time()
 
+    # Require at least one search criterion (brief, brand, or filters)
+    if not req.brief and not req.brand and not req.filters:
+        raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
+
     # Extract identity fields
     if identity is None:
         raise AdCPValidationError("Identity is required")

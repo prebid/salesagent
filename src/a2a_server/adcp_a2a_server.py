@@ -1495,11 +1495,7 @@ class AdCPRequestHandler(RequestHandler):
             brand = parameters.get("brand")
             filters = parameters.get("filters")
 
-            # Require at least one search criterion for A2A callers
-            if not brief and not brand and not filters:
-                raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
-
-            # Call core function with identity — _raw handles full schema validation
+            # Call core function with identity — _impl validates search criteria
             response = await core_get_products_tool(
                 brief=brief,
                 brand=brand,

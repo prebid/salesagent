@@ -101,6 +101,7 @@ def _sync_creatives_impl(
     updated_count = 0
     unchanged_count = 0
     failed_count = 0
+    deleted_count = 0
 
     # Legacy tracking (still used internally)
     synced_creatives = []
@@ -316,6 +317,39 @@ def _sync_creatives_impl(
                     )
                 )
 
+        # Archive creatives not in the sync payload when delete_missing=True
+        if delete_missing:
+            from src.core.database.models import Creative as DBCreative
+
+            # Collect all creative IDs from the payload (regardless of success/failure)
+            payload_creative_ids = {_get_field(c, "creative_id") for c in creatives}
+            payload_creative_ids.discard(None)
+
+            # Query for existing creatives belonging to this tenant+principal
+            # that are NOT in the payload and NOT already archived
+            stmt = select(DBCreative).filter_by(
+                tenant_id=tenant["tenant_id"],
+                principal_id=principal_id,
+            )
+            existing_creatives = session.scalars(stmt).all()
+
+            for db_creative in existing_creatives:
+                if db_creative.creative_id not in payload_creative_ids and db_creative.status != "archived":
+                    if not dry_run:
+                        db_creative.status = "archived"
+                    deleted_count += 1
+                    results.append(
+                        SyncCreativeResult(
+                            creative_id=db_creative.creative_id,
+                            action=CreativeAction.deleted,
+                            status=None,
+                            platform_id=None,
+                            review_feedback=None,
+                            assigned_to=None,
+                            assignment_errors=None,
+                        )
+                    )
+
         # Commit all successful creative operations
         session.commit()
 
@@ -377,6 +411,8 @@ def _sync_creatives_impl(
         message += f" ({updated_count} updated)"
     if unchanged_count:
         message += f", {unchanged_count} unchanged"
+    if deleted_count:
+        message += f", {deleted_count} archived"
     if failed_count:
         message += f", {failed_count} failed"
     if assignment_list:
