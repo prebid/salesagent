@@ -41,7 +41,7 @@ class AuthContext:
     @classmethod
     def unauthenticated(cls, *, headers: "dict[str, str] | None" = None) -> "AuthContext":
         """Factory for unauthenticated request context."""
-        return cls(headers=headers or {})
+        return cls(headers=MappingProxyType(headers or {}))
 
 
 def _get_auth_context(request: Request) -> AuthContext:
@@ -78,7 +78,7 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     from src.core.resolved_identity import resolve_identity
 
     identity = resolve_identity(
-        headers=auth_ctx.headers,
+        headers=dict(auth_ctx.headers),
         auth_token=auth_ctx.auth_token,
         require_valid_token=False,
         protocol="rest",
@@ -86,6 +86,12 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
 
     if not identity.principal_id:
         return None
+
+    # Set tenant ContextVar at the REST transport boundary
+    if identity.tenant:
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(identity.tenant)
 
     return identity
 
@@ -104,7 +110,7 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     from src.core.resolved_identity import resolve_identity
 
     identity = resolve_identity(
-        headers=auth_ctx.headers,
+        headers=dict(auth_ctx.headers),
         auth_token=auth_ctx.auth_token,
         require_valid_token=True,
         protocol="rest",
@@ -112,6 +118,12 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
 
     if not identity.principal_id:
         raise AdCPAuthenticationError("Authentication required")
+
+    # Set tenant ContextVar at the REST transport boundary
+    if identity.tenant:
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(identity.tenant)
 
     return identity
 

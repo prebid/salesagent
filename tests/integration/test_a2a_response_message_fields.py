@@ -69,7 +69,7 @@ class TestA2AMessageFieldValidation:
             handler._identity = identity  # Store for test access
             return patch(
                 "src.core.auth_utils.get_principal_from_token",
-                return_value=sample_principal["principal_id"],
+                return_value=(sample_principal["principal_id"], None),
             )
 
         return _mock_context

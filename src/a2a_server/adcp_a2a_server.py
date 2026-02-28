@@ -203,6 +203,12 @@ class AdCPRequestHandler(RequestHandler):
                 f"[A2A AUTH] ✅ Authentication successful: tenant={tenant_id}, principal={identity.principal_id}"
             )
 
+        # Set tenant ContextVar at the A2A transport boundary
+        if identity.tenant:
+            from src.core.config_loader import set_current_tenant
+
+            set_current_tenant(identity.tenant)
+
         return identity
 
     def _make_tool_context(

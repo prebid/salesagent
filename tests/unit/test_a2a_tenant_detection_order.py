@@ -22,10 +22,9 @@ from src.core.resolved_identity import _detect_tenant
 class TestTenantDetectionStrategyOrder:
     """Verify _detect_tenant tries virtual host BEFORE subdomain."""
 
-    @patch("src.core.resolved_identity.set_current_tenant")
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host")
-    def test_virtual_host_takes_priority_over_subdomain(self, mock_vhost, mock_subdomain, mock_set_tenant):
+    def test_virtual_host_takes_priority_over_subdomain(self, mock_vhost, mock_subdomain):
         """When both virtual host and subdomain match, virtual host wins."""
         vhost_tenant = {"tenant_id": "vhost-tenant", "subdomain": "acme"}
         subdomain_tenant = {"tenant_id": "subdomain-tenant", "subdomain": "acme"}
@@ -43,10 +42,9 @@ class TestTenantDetectionStrategyOrder:
         # Subdomain should NOT have been called since virtual host matched
         mock_subdomain.assert_not_called()
 
-    @patch("src.core.resolved_identity.set_current_tenant")
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host")
-    def test_localhost_fallback_resolves_default_tenant(self, mock_vhost, mock_subdomain, mock_set_tenant):
+    def test_localhost_fallback_resolves_default_tenant(self, mock_vhost, mock_subdomain):
         """localhost with no other match should resolve to 'default' tenant."""
         mock_vhost.return_value = None
         default_tenant = {"tenant_id": "default", "subdomain": "default"}

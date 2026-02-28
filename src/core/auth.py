@@ -242,12 +242,12 @@ def get_principal_from_context(
         # SECURITY NOTE: This is safe because get_principal_from_token() will:
         # 1. Look up the token globally
         # 2. Find which tenant it belongs to
-        # 3. Set that tenant's context
+        # 3. Return (principal_id, tenant_dict) — caller sets context
         # 4. Return principal_id only if token is valid for that tenant
         logger.debug("Using global token lookup (finds tenant from token)")
         detection_method = "global token lookup"
 
-    principal_id = get_principal_from_token(auth_token, requested_tenant_id)
+    principal_id, token_tenant = get_principal_from_token(auth_token, requested_tenant_id)
 
     # If token was provided but invalid, raise an error (unless require_valid_token=False for discovery)
     # This distinguishes between "no auth" (OK) and "bad auth" (error or warning)
@@ -268,10 +268,9 @@ def get_principal_from_context(
             )
             return (None, tenant_context)
 
-    # If tenant_context wasn't set by header detection, get it from current tenant
-    # (get_principal_from_token set it as a side effect for global lookup case)
-    if not tenant_context:
-        tenant_context = get_current_tenant()
+    # If tenant_context wasn't set by header detection, use tenant discovered from token
+    if not tenant_context and token_tenant:
+        tenant_context = token_tenant
 
     # Return both principal_id and tenant_context explicitly
     # Caller MUST call set_current_tenant(tenant_context) in their async context
