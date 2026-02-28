@@ -874,9 +874,6 @@ class TestCreateMediaBuyCreativeValidation:
 
         assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
-    @pytest.mark.xfail(
-        reason="Format mismatch validation not yet implemented; _validate_creatives_before_adapter_call does not have access to product format_ids"
-    )
     def test_creative_format_mismatch_rejected(self):
         """UC-002-C04: creative format not matching product format rejected.
 
@@ -898,10 +895,14 @@ class TestCreateMediaBuyCreativeValidation:
         mock_format_spec = MagicMock()
         mock_format_spec.output_format_ids = None  # reference format
 
+        # Product only accepts display_300x250
+        mock_product = MagicMock()
+        mock_product.product_id = "prod_display"
+        mock_product.format_ids = [{"agent_url": "http://agent.test", "id": "display_300x250"}]
+
         package = MagicMock()
         package.creative_ids = ["c_mismatch"]
         package.package_id = "pkg_1"
-        # Package is for product that only accepts display_300x250 format
         package.product_id = "prod_display"
 
         with (
@@ -912,7 +913,12 @@ class TestCreateMediaBuyCreativeValidation:
             ),
         ):
             session = MagicMock()
-            session.scalars.return_value.all.return_value = [mock_creative]
+            # First scalars call: creative lookup; second: product lookup
+            creative_result = MagicMock()
+            creative_result.all.return_value = [mock_creative]
+            product_result = MagicMock()
+            product_result.all.return_value = [mock_product]
+            session.scalars.side_effect = [creative_result, product_result]
 
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)

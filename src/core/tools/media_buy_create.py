@@ -312,13 +312,65 @@ def _validate_creatives_before_adapter_call(
                 f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
             )
 
+    # --- Format compatibility check: creative format vs product accepted formats ---
+    # Build creative_id -> format mapping from fetched creatives
+    creative_format_map: dict[str, str] = {}
+    for creative in creatives_list:
+        if creative.format:
+            creative_format_map[creative.creative_id] = str(creative.format)
+
+    # Collect all product_ids from packages that have creatives
+    product_ids_needed: set[str] = set()
+    for package in packages:
+        pkg_creative_ids = _get_creative_ids(package)
+        if pkg_creative_ids and package.product_id:
+            product_ids_needed.add(package.product_id)
+
+    if product_ids_needed:
+        from src.core.database.models import Product as DBProduct
+
+        product_stmt = select(DBProduct).where(
+            DBProduct.tenant_id == tenant_id, DBProduct.product_id.in_(list(product_ids_needed))
+        )
+        products_list = list(session.scalars(product_stmt).all())
+
+        # Build product_id -> set of accepted format id strings
+        product_format_map: dict[str, set[str]] = {}
+        for product in products_list:
+            accepted_formats: set[str] = set()
+            if product.format_ids:
+                for fmt in product.format_ids:
+                    fmt_id = fmt.get("id") if isinstance(fmt, dict) else getattr(fmt, "id", None)
+                    if fmt_id:
+                        accepted_formats.add(str(fmt_id))
+            product_format_map[product.product_id] = accepted_formats
+
+        # Check each package's creatives against its product's accepted formats
+        for package in packages:
+            pkg_creative_ids = _get_creative_ids(package)
+            if not pkg_creative_ids or not package.product_id:
+                continue
+
+            accepted = product_format_map.get(package.product_id)
+            if accepted is None or not accepted:
+                continue  # Product not found or has no formats — skip format check
+
+            for cid in pkg_creative_ids:
+                creative_fmt = creative_format_map.get(cid)
+                if creative_fmt and creative_fmt not in accepted:
+                    validation_errors.append(
+                        f"Creative {cid} has format '{creative_fmt}' which is not accepted by "
+                        f"product {package.product_id} (accepted formats: {sorted(accepted)})"
+                    )
+
     if validation_errors:
         error_msg = (
-            "Cannot create media buy with invalid reference creatives. "
-            "The following reference creatives are missing required fields:\n"
+            "Cannot create media buy with invalid creatives. "
+            "The following creatives have validation errors:\n"
             + "\n".join(f"  • {err}" for err in validation_errors)
             + "\n\nReference creatives must have dimensions (width/height) and a content URL "
             "matching their format specification. "
+            + "Creative formats must match the product's accepted formats. "
             + "Generative creatives will be converted to reference formats during campaign creation. "
             + "Please ensure reference creatives are properly synced before creating media buys."
         )

@@ -27,10 +27,10 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # FIXME(salesagent-hr8n): All 29 violations need migration to repository pattern.
 KNOWN_VIOLATIONS = {
     # _create_media_buy_impl: 4 violations (DB storage + workflow)
-    ("media_buy_create.py", 1250),  # push_notification_config.model_dump()
-    ("media_buy_create.py", 1341),  # req.model_dump() → request_data_for_workflow
-    ("media_buy_create.py", 1961),  # req.model_dump() → raw_request_dict
-    ("media_buy_create.py", 2898),  # req.model_dump() → raw_request=
+    ("media_buy_create.py", 1302),  # push_notification_config.model_dump()
+    ("media_buy_create.py", 1393),  # req.model_dump() → request_data_for_workflow
+    ("media_buy_create.py", 2013),  # req.model_dump() → raw_request_dict
+    ("media_buy_create.py", 2950),  # req.model_dump() → raw_request=
     # _update_media_buy_impl: 23 violations (workflow step response_data)
     ("media_buy_update.py", 185),  # req.model_dump() → request_data_for_workflow
     ("media_buy_update.py", 211),  # response_data.model_dump()
