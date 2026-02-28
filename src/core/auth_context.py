@@ -1,23 +1,32 @@
-"""Shared AuthContext populated by middleware, consumed by handlers via FastAPI dependency.
+"""Shared AuthContext populated by UnifiedAuthMiddleware, consumed by handlers.
 
-Middleware extracts auth_token and headers BEFORE the handler runs.
+UnifiedAuthMiddleware extracts auth_token and headers BEFORE the handler runs.
+Available via:
+- request.state.auth_context (FastAPI routes, via scope["state"])
+- get_current_auth_context() (anywhere, via ContextVar)
+- get_auth_context FastAPI Depends (route signatures)
+
 Identity resolution (principal, tenant) happens at handler level via
 resolve_identity() — this is intentional to avoid DB calls on every request.
 """
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Depends, Request
+
+# ContextVar set by UnifiedAuthMiddleware, cleaned up via try/finally.
+_auth_context_var: ContextVar[AuthContext | None] = ContextVar("auth_context", default=None)
 
 
 @dataclass(frozen=True)
 class AuthContext:
     """Immutable per-request auth token + headers carrier.
 
-    Populated by auth_context_middleware (extracts token from headers).
+    Populated by UnifiedAuthMiddleware (extracts token from headers).
     Identity resolution (principal_id, tenant_id) happens downstream
     via resolve_identity() at the handler level.
     """
@@ -29,6 +38,14 @@ class AuthContext:
     def unauthenticated(cls, *, headers: dict[str, str] | None = None) -> AuthContext:
         """Factory for unauthenticated request context."""
         return cls(headers=headers or {})
+
+
+def get_current_auth_context() -> AuthContext | None:
+    """Read AuthContext from ContextVar. Callable from anywhere without a Request object.
+
+    Returns None when called outside a request scope.
+    """
+    return _auth_context_var.get()
 
 
 def _get_auth_context(request: Request) -> AuthContext:

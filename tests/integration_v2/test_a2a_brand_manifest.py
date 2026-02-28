@@ -36,9 +36,9 @@ async def test_get_products_with_brand_manifest_dict(sample_tenant, sample_princ
     # Mock identity resolution
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
         # Set request headers for tenant detection
-        from src.a2a_server import adcp_a2a_server
+        from src.core.auth_context import AuthContext, _auth_context_var
 
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
         # Create A2A message with brand_manifest as dict
         message = create_a2a_message_with_skill(
@@ -94,9 +94,9 @@ async def test_get_products_with_brand_manifest_url_only(
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-        from src.a2a_server import adcp_a2a_server
+        from src.core.auth_context import AuthContext, _auth_context_var
 
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -123,9 +123,9 @@ async def test_get_products_with_brand_manifest_name_only(
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-        from src.a2a_server import adcp_a2a_server
+        from src.core.auth_context import AuthContext, _auth_context_var
 
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -151,9 +151,9 @@ async def test_get_products_backward_compat_promoted_offering(
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-        from src.a2a_server import adcp_a2a_server
+        from src.core.auth_context import AuthContext, _auth_context_var
 
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -179,9 +179,9 @@ async def test_get_products_missing_brand_info_uses_brief_fallback(
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-        from src.a2a_server import adcp_a2a_server
+        from src.core.auth_context import AuthContext, _auth_context_var
 
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",

@@ -74,8 +74,6 @@ from starlette.routing import Route  # noqa: E402
 
 from src.a2a_server.adcp_a2a_server import (  # noqa: E402
     AdCPRequestHandler,
-    _request_auth_token,
-    _request_headers,
     create_agent_card,
 )
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain  # noqa: E402
@@ -177,53 +175,8 @@ def _replace_routes():
 _replace_routes()
 
 # ---------------------------------------------------------------------------
-# A2A Middleware — auth and messageId compatibility
-#
-# Middleware execution order (outermost first):
-#   1. CORSMiddleware  (via add_middleware — always outermost)
-#   2. auth_context_middleware  (registered last → runs first, populates request.state)
-#   3. a2a_messageid_compatibility_middleware
-#   4. a2a_auth_middleware  (registered first → runs last, closest to handler)
-#
-# @app.middleware("http") runs in reverse registration order in Starlette,
-# so we register in reverse of desired execution order.
+# A2A messageId compatibility middleware (body rewriting, unrelated to auth)
 # ---------------------------------------------------------------------------
-
-
-@app.middleware("http")
-async def a2a_auth_middleware(request: Request, call_next):
-    """Extract Bearer token and set authentication context for A2A requests.
-
-    Accepts authentication via either:
-    - Authorization: Bearer <token> (standard A2A/HTTP)
-    - x-adcp-auth: <token> (AdCP convention, for compatibility with MCP)
-    """
-    is_a2a_request = request.url.path in ["/a2a", "/a2a/"] and request.method == "POST"
-
-    if is_a2a_request:
-        # Read token from request.state.auth_context (already extracted by auth_context_middleware)
-        # instead of re-parsing headers — single extraction point per request
-        auth_ctx = getattr(request.state, "auth_context", None)
-        token = auth_ctx.auth_token if auth_ctx else None
-        headers = auth_ctx.headers if auth_ctx else dict(request.headers)
-
-        if token:
-            _request_auth_token.set(token)
-            _request_headers.set(headers)
-            logger.debug(f"Transferred auth token to A2A context: {token[:10]}...")
-        else:
-            logger.warning(f"A2A request to {request.url.path} missing authentication (no token in auth_context)")
-            _request_auth_token.set(None)
-            _request_headers.set(headers)
-
-    response = await call_next(request)
-
-    # Clean up context variables only for A2A routes where they were set
-    if is_a2a_request:
-        _request_auth_token.set(None)
-        _request_headers.set(None)
-
-    return response
 
 
 @app.middleware("http")
@@ -265,38 +218,6 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
     return response
 
 
-@app.middleware("http")
-async def auth_context_middleware(request: Request, call_next):
-    """Populate request.state.auth_context for all routes.
-
-    Registered last so it runs first (Starlette reverse order).
-    Extracts auth token from headers. Does NOT resolve tenant or principal
-    (that requires DB and is done by route-specific handlers).
-    """
-    from src.core.auth_context import AuthContext
-
-    headers = dict(request.headers)
-    token = None
-
-    # Extract token from Authorization or x-adcp-auth header
-    for key, value in request.headers.items():
-        if key.lower() == "authorization":
-            auth_header = value.strip()
-            if auth_header.startswith("Bearer "):
-                token = auth_header[7:]
-                break
-        elif key.lower() == "x-adcp-auth":
-            token = value.strip()
-
-    request.state.auth_context = AuthContext(
-        auth_token=token,
-        headers=headers,
-    )
-
-    response = await call_next(request)
-    return response
-
-
 # ---------------------------------------------------------------------------
 # Health and debug routes
 # ---------------------------------------------------------------------------
@@ -310,9 +231,14 @@ app.include_router(health_router)
 app.include_router(health_debug_router)
 
 # ---------------------------------------------------------------------------
-# CORS — use specific origins when credentials are needed.
-# CORS spec forbids allow_origins=["*"] with allow_credentials=True.
+# Middleware stack (via add_middleware — outermost = last registered):
+#   1. CORSMiddleware (outermost — adds CORS headers to all responses)
+#   2. UnifiedAuthMiddleware (extracts auth token, sets ContextVar + scope state)
 # ---------------------------------------------------------------------------
+
+from src.core.auth_middleware import UnifiedAuthMiddleware  # noqa: E402
+
+app.add_middleware(UnifiedAuthMiddleware)
 
 _cors_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")
 

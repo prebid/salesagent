@@ -13,7 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _request_headers
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.auth_context import AuthContext, _auth_context_var
 from src.core.resolved_identity import ResolvedIdentity
 
 _MOCK_IDENTITY = ResolvedIdentity(
@@ -46,7 +47,7 @@ async def test_nl_product_query_calls_resolve_identity_once():
     """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
-    _request_headers.set({"host": "test.example.com"})
+    _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "test.example.com"}))
 
     params = _make_nl_message("Show me available products in the catalog")
 
@@ -73,7 +74,7 @@ async def test_nl_pricing_query_calls_resolve_identity_once():
     """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
-    _request_headers.set({"host": "test.example.com"})
+    _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "test.example.com"}))
 
     params = _make_nl_message("What is the pricing for CPM ads?")
 
@@ -98,7 +99,7 @@ async def test_nl_targeting_query_calls_resolve_identity_once():
     """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
-    _request_headers.set({"host": "test.example.com"})
+    _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "test.example.com"}))
 
     params = _make_nl_message("Show me audience targeting options")
 
@@ -123,7 +124,7 @@ async def test_nl_media_buy_query_calls_resolve_identity_once():
     """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
-    _request_headers.set({"host": "test.example.com"})
+    _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "test.example.com"}))
 
     params = _make_nl_message("Create a campaign for Nike")
 

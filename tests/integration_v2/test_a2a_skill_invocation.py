@@ -192,9 +192,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create natural language message
             message = create_a2a_text_message("What video products do you have available?")
@@ -243,9 +243,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create explicit skill invocation message
             skill_params = {
@@ -299,9 +299,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create explicit skill invocation message using A2A spec 'input' field
             skill_params = {
@@ -359,9 +359,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create explicit skill invocation message using AdCP spec format
             from datetime import UTC, datetime, timedelta
@@ -428,9 +428,9 @@ class TestA2ASkillInvocation:
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
         ):
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create explicit skill invocation message
             from datetime import UTC, datetime, timedelta
@@ -478,9 +478,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create hybrid message (text + explicit skill)
             skill_params = {"brief": "Sports video advertising", "brand_manifest": {"name": "Sports brand"}}
@@ -524,9 +524,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create message with multiple skill invocations
             # Note: get_signals removed - should come from dedicated signals agents
@@ -726,9 +726,9 @@ class TestA2ASkillInvocation:
             patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         ):
             # Mock request headers to provide Host header for subdomain detection
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Mock adapter - must return UpdateMediaBuySuccessResponse, not dict
             from adcp.types.aliases import UpdateMediaBuySuccessResponse
@@ -773,9 +773,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create skill invocation
             skill_params = {"brief": "display formats"}
@@ -839,9 +839,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create skill invocation
             skill_params = {}
@@ -876,9 +876,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create skill invocation with creatives
             skill_params = {
@@ -919,9 +919,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create skill invocation
             skill_params = {}
@@ -955,9 +955,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create skill invocation
             skill_params = {
@@ -989,9 +989,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create skill invocation
             skill_params = {
@@ -1021,9 +1021,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create skill invocation
             skill_params = {
@@ -1052,9 +1052,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create skill invocation
             skill_params = {
@@ -1083,9 +1083,9 @@ class TestA2ASkillInvocation:
         ):
             # Mock request headers to provide Host header for subdomain detection
             # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+            from src.core.auth_context import AuthContext, _auth_context_var
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            _auth_context_var.set(AuthContext(headers={"host": f"{sample_tenant['subdomain']}.example.com"}))
 
             # Create skill invocation
             skill_params = {

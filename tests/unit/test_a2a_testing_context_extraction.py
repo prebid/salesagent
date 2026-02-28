@@ -11,7 +11,8 @@ Beads: salesagent-2yt6
 
 from unittest.mock import patch
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _request_headers
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.auth_context import AuthContext, _auth_context_var
 from src.core.resolved_identity import ResolvedIdentity
 
 
@@ -31,7 +32,9 @@ class TestA2ATestingContextExtraction:
             "x-adcp-tenant": "test-tenant",
             "x-dry-run": "true",
         }
-        _request_headers.set(headers)
+        _auth_context_var.set(
+            AuthContext(auth_token=headers.get("authorization", "").replace("Bearer ", "") or None, headers=headers)
+        )
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal",
@@ -60,7 +63,9 @@ class TestA2ATestingContextExtraction:
             "x-adcp-tenant": "test-tenant",
             "x-test-session-id": "session-abc-123",
         }
-        _request_headers.set(headers)
+        _auth_context_var.set(
+            AuthContext(auth_token=headers.get("authorization", "").replace("Bearer ", "") or None, headers=headers)
+        )
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal",
@@ -87,7 +92,9 @@ class TestA2ATestingContextExtraction:
             "authorization": "Bearer test-token",
             "x-adcp-tenant": "test-tenant",
         }
-        _request_headers.set(headers)
+        _auth_context_var.set(
+            AuthContext(auth_token=headers.get("authorization", "").replace("Bearer ", "") or None, headers=headers)
+        )
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal",

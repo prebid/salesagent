@@ -69,9 +69,8 @@ class TestA2ATenantDetectionMatchesCanonical:
     the strategy order may diverge (which is the bug).
     """
 
-    @patch("src.a2a_server.adcp_a2a_server._request_headers")
     @patch("src.core.resolved_identity.resolve_identity")
-    def test_a2a_delegates_to_resolve_identity(self, mock_resolve, mock_headers_var):
+    def test_a2a_delegates_to_resolve_identity(self, mock_resolve):
         """A2A should delegate to resolve_identity(), not hand-roll tenant detection.
 
         We verify behaviorally: call _resolve_a2a_identity and assert
@@ -79,9 +78,10 @@ class TestA2ATenantDetectionMatchesCanonical:
         inline tenant detection, resolve_identity() would NOT be called.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.auth_context import AuthContext, _auth_context_var
         from src.core.resolved_identity import ResolvedIdentity
 
-        mock_headers_var.get.return_value = {"host": "acme.example.com"}
+        _auth_context_var.set(AuthContext(auth_token="test-token", headers={"host": "acme.example.com"}))
         mock_resolve.return_value = ResolvedIdentity(
             principal_id="test-principal",
             tenant_id="acme",

@@ -4,7 +4,6 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
-import contextvars
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -121,10 +120,6 @@ DISCOVERY_SKILLS = frozenset(
     }
 )
 
-# Context variables for current request (works with async code, unlike threading.local())
-_request_auth_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_auth_token", default=None)
-_request_headers: contextvars.ContextVar[dict | None] = contextvars.ContextVar("request_headers", default=None)
-
 
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
@@ -135,8 +130,11 @@ class AdCPRequestHandler(RequestHandler):
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     def _get_auth_token(self) -> str | None:
-        """Extract Bearer token from current request context."""
-        return _request_auth_token.get()
+        """Extract Bearer token from current request context via unified middleware."""
+        from src.core.auth_context import get_current_auth_context
+
+        auth_ctx = get_current_auth_context()
+        return auth_ctx.auth_token if auth_ctx else None
 
     def _resolve_a2a_identity(self, auth_token: str | None, require_valid_token: bool = True) -> ResolvedIdentity:
         """Resolve identity at the A2A transport boundary — called ONCE per request.
@@ -155,10 +153,12 @@ class AdCPRequestHandler(RequestHandler):
         Raises:
             ServerError: If require_valid_token=True and authentication fails
         """
+        from src.core.auth_context import get_current_auth_context
         from src.core.resolved_identity import resolve_identity
         from src.core.testing_hooks import AdCPTestContext
 
-        headers = _request_headers.get() or {}
+        auth_ctx = get_current_auth_context()
+        headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
             raise ServerError(InvalidRequestError(message="Missing authentication token"))
