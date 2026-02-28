@@ -295,7 +295,7 @@ Source: BR-UC-005-ext-b.md
 
 #### Scenario: Malformed FormatId objects
 **Obligation ID** UC-005-EXT-B-02
-**Layer** behavioral
+**Layer** schema
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with malformed `format_ids` (e.g., missing `agent_url`)
@@ -305,7 +305,7 @@ Source: BR-UC-005-ext-b.md
 
 #### Scenario: Non-integer dimension values
 **Obligation ID** UC-005-EXT-B-03
-**Layer** behavioral
+**Layer** schema
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with `max_width="not_a_number"`
@@ -353,7 +353,7 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 
 #### Scenario: ListCreativeFormatsRequest accepts all valid filter combinations
 **Obligation ID** UC-005-EXT-B-07
-**Layer** behavioral
+**Layer** schema
 
 **Given** a request with every optional filter provided and valid
 **When** parsed by Pydantic model
@@ -372,7 +372,7 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 
 #### Scenario: FormatId is a structured object with agent_url and id
 **Obligation ID** UC-005-EXT-B-09
-**Layer** behavioral
+**Layer** schema
 
 **Given** any format in the response
 **When** the Buyer inspects its format_id

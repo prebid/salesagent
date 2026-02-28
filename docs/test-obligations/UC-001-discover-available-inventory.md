@@ -104,7 +104,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Brand manifest extraction -- name-based offering text (Step 3)
 **Obligation ID** UC-001-MAIN-03
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes a `brand` reference with a `name` field
 **When** the system extracts the brand manifest
 **Then** the offering text is derived from the brand `name`
@@ -112,7 +112,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Brand manifest extraction -- URL-based offering text (Step 3)
 **Obligation ID** UC-001-MAIN-04
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes a `brand` reference with a `url` field but no `name`
 **When** the system extracts the brand manifest
 **Then** the offering text is derived from the brand `url`
@@ -417,7 +417,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Protocol envelope wrapping (Step 20)
 **Obligation ID** UC-001-MAIN-37
-**Layer** behavioral
+**Layer** schema
 **Given** the response is assembled
 **When** the system wraps it in a protocol envelope
 **Then** the envelope has `status: completed`
@@ -426,7 +426,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: MCP transport wrapping
 **Obligation ID** UC-001-MAIN-38
-**Layer** behavioral
+**Layer** schema
 **Given** the response is delivered via MCP
 **When** the system wraps the protocol envelope
 **Then** the MCP `ToolResult` includes both `content` (human-readable text) and `structured_content` (typed response)
@@ -483,7 +483,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Policy check BLOCKED -- response schema compliance
 **Obligation ID** UC-001-EXT-A-05
-**Layer** behavioral
+**Layer** schema
 **Given** the brief was blocked by policy
 **When** the error response is returned
 **Then** the response conforms to `get-products-response.json` error variant schema
@@ -1158,7 +1158,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Default max_results when not specified
 **Obligation ID** UC-001-ALT-PAGINATED-DISCOVERY-06
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `pagination` but no `max_results`
 **When** the system processes the request
 **Then** the default page size of 50 is used
@@ -1214,7 +1214,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Proposal allocation percentages sum to 100
 **Obligation ID** UC-001-ALT-DISCOVERY-WITH-PROPOSALS-02
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal is generated with multiple allocations
 **When** the proposal is assembled
 **Then** the sum of `allocation_percentage` values across all allocations equals 100
@@ -1222,7 +1222,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Proposal allocation product_id references valid product
 **Obligation ID** UC-001-ALT-DISCOVERY-WITH-PROPOSALS-03
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal allocation has a `product_id`
 **When** the allocation is validated
 **Then** the `product_id` must reference a product in the response's `products[]` array
@@ -1230,7 +1230,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Proposal includes optional budget guidance
 **Obligation ID** UC-001-ALT-DISCOVERY-WITH-PROPOSALS-04
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal is generated
 **When** budget guidance is available
 **Then** `total_budget_guidance` includes `min`, `recommended`, `max`, and `currency`
@@ -1262,7 +1262,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Allocation includes pricing_option_id recommendation
 **Obligation ID** UC-001-ALT-DISCOVERY-WITH-PROPOSALS-08
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal allocation references a product with multiple pricing options
 **When** the allocation is generated
 **Then** `pricing_option_id` recommends a specific pricing option from the product's available options
@@ -1278,7 +1278,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Allocation includes sequence
 **Obligation ID** UC-001-ALT-DISCOVERY-WITH-PROPOSALS-10
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal has multiple allocations
 **When** allocations include `sequence` values
 **Then** sequence represents recommended execution order (integer >= 1)
@@ -1314,7 +1314,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Valid pricing option -- fixed_price only
 **Obligation ID** UC-001-BR-PRICINGOPTION-XOR-CONSTRAINT-01
-**Layer** behavioral
+**Layer** schema
 **Given** a pricing option has `fixed_price` set and `floor_price` is null
 **When** the system validates the pricing option
 **Then** the pricing option is valid
@@ -1323,7 +1323,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Valid pricing option -- floor_price only
 **Obligation ID** UC-001-BR-PRICINGOPTION-XOR-CONSTRAINT-02
-**Layer** behavioral
+**Layer** schema
 **Given** a pricing option has `floor_price` set and `fixed_price` is null
 **When** the system validates the pricing option
 **Then** the pricing option is valid
@@ -1332,7 +1332,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Invalid pricing option -- both fixed_price and floor_price set
 **Obligation ID** UC-001-BR-PRICINGOPTION-XOR-CONSTRAINT-03
-**Layer** behavioral
+**Layer** schema
 **Given** a pricing option has both `fixed_price` and `floor_price` set
 **When** the system validates the pricing option
 **Then** the pricing option is invalid
@@ -1341,7 +1341,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Invalid pricing option -- neither fixed_price nor floor_price set
 **Obligation ID** UC-001-BR-PRICINGOPTION-XOR-CONSTRAINT-04
-**Layer** behavioral
+**Layer** schema
 **Given** a pricing option has neither `fixed_price` nor `floor_price` set
 **When** the system validates the pricing option
 **Then** the pricing option is invalid
@@ -1350,7 +1350,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: CPA pricing model -- always fixed_price (model-specific)
 **Obligation ID** UC-001-BR-PRICINGOPTION-XOR-CONSTRAINT-05
-**Layer** behavioral
+**Layer** schema
 **Given** a pricing option uses the `cpa` model
 **When** the system validates the pricing option
 **Then** the pricing option is valid because CPA always has `fixed_price` (schema-enforced)
@@ -1462,7 +1462,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: POST-S5 -- Buyer knows request completed
 **Obligation ID** UC-001-POST-05
-**Layer** behavioral
+**Layer** schema
 **Given** a successful response
 **When** the buyer examines the protocol envelope
 **Then** `status` is `completed`
@@ -1470,7 +1470,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: POST-S6 -- Buyer can evaluate proposals
 **Obligation ID** UC-001-POST-06
-**Layer** behavioral
+**Layer** schema
 **Given** a successful response with proposals
 **When** the buyer examines the proposals
 **Then** each proposal has actionable information (proposal_id, name, allocations)
@@ -1478,7 +1478,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: POST-S7 -- Buyer knows pagination state
 **Obligation ID** UC-001-POST-07
-**Layer** behavioral
+**Layer** schema
 **Given** a paginated response
 **When** the buyer examines the pagination metadata
 **Then** `has_more` indicates if more pages exist
@@ -1495,7 +1495,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: POST-F2 -- Buyer knows failure reason
 **Obligation ID** UC-001-POST-09
-**Layer** behavioral
+**Layer** schema
 **Given** a failed get_products request
 **When** the buyer examines the error response
 **Then** the error code and message explain why the request failed

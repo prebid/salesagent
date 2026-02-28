@@ -78,7 +78,7 @@ Low direct impact. This use case is a read-only discovery endpoint. The primary 
 
 #### Scenario: Context echo in response
 **Obligation ID** UC-007-MAIN-MCP-08
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer agent invokes `list_authorized_properties` with `context: {"request_id": "abc-123", "campaign": "summer"}`
 **Then** the response `context` field contains the exact same object: `{"request_id": "abc-123", "campaign": "summer"}`
@@ -87,7 +87,7 @@ Low direct impact. This use case is a read-only discovery endpoint. The primary 
 
 #### Scenario: Context omitted when not provided
 **Obligation ID** UC-007-MAIN-MCP-09
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer agent invokes `list_authorized_properties` without `context`
 **Then** the response does not include a `context` field (or it is null)
@@ -204,7 +204,7 @@ Low direct impact. This use case is a read-only discovery endpoint. The primary 
 
 #### Scenario: Valid domain format passes validation
 **Obligation ID** UC-007-EXT-C-03
-**Layer** behavioral
+**Layer** schema
 **Given** a valid tenant
 **When** the buyer agent provides `publisher_domains: ["valid-domain.example.com"]`
 **Then** the domain passes format validation (matches `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)

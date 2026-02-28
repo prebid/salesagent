@@ -717,7 +717,7 @@ Then an empty publisher_domains array is returned with a portfolio_description
 
 ### BR-RULE-043: Context Echo Invariant
 **Obligation ID** BR-RULE-043-01
-**Layer** behavioral
+**Layer** schema
 **Invariant:** Request context is echoed unchanged in the response. Context is opaque. Applies to all response paths.
 **Scenario:**
 ```gherkin

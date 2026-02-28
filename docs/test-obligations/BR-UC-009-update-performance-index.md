@@ -227,7 +227,7 @@ Medium impact. The `provide-performance-feedback-request.json` and `provide-perf
 
 #### Scenario: performance_index normalization scale
 **Obligation ID** UC-009-SCHEMA-02
-**Layer** behavioral
+**Layer** schema
 **Given** various performance_index values
 **When** validated
 **Then** 0.0 = no value, 1.0 = expected, > 1.0 = above expected, and all values >= 0 are accepted

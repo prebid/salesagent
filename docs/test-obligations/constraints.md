@@ -1423,7 +1423,7 @@ Then supported_protocols contains valid protocol enum values
 
 ### context_echo: Context Echo Constraint
 **Obligation ID** CONSTR-CONTEXT-ECHO-01
-**Layer** behavioral
+**Layer** schema
 **Requirement:** Request context echoed unchanged in response. Opaque object. Applies to success, empty, and error paths. GAP: capabilities endpoint does not echo context.
 **Scenario:**
 ```gherkin

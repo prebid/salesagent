@@ -291,7 +291,7 @@ These scenarios directly test the salesagent-goy2 fix.
 
 #### Scenario: list_creatives response does NOT include delivery-only fields (P0)
 **Obligation ID** UC-006-CREATIVE-SCHEMA-COMPLIANCE-06
-**Layer** behavioral
+**Layer** schema
 
 **Given** creatives exist in the database
 **When** `list_creatives` is called and the response is serialized

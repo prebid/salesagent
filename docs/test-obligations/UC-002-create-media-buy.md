@@ -132,7 +132,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: Step 4 -- Ordering Mode Detection (Proposal-Based Branch)
 **Obligation ID** UC-002-MAIN-06
-**Layer** behavioral
+**Layer** schema
 **Given** a request WITH `proposal_id`
 **When** the system checks ordering mode
 **Then** it branches to the proposal-based flow (alt-proposal)
@@ -140,7 +140,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: Step 5 -- Total Budget Positive
 **Obligation ID** UC-002-MAIN-07
-**Layer** behavioral
+**Layer** schema
 **Given** packages with budgets summing to a positive total
 **When** the system validates total budget
 **Then** validation passes and proceeds to date/time validation
@@ -224,7 +224,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: Step 14 -- Inline Creative Processing (None Present)
 **Obligation ID** UC-002-MAIN-16
-**Layer** behavioral
+**Layer** schema
 **Given** no inline creatives in the request
 **When** the system checks for inline creatives
 **Then** it skips creative upload and proceeds to format validation
@@ -240,7 +240,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: Step 16 -- Creative Validation (Reference Creatives Valid)
 **Obligation ID** UC-002-MAIN-18
-**Layer** behavioral
+**Layer** schema
 **Given** reference creatives with valid URLs and dimensions
 **When** the system validates creatives
 **Then** validation passes
@@ -326,7 +326,7 @@ Source: UC-002-main-mcp.md
 
 #### Scenario: account_id Accepted at Request Boundary
 **Obligation ID** UC-002-UPG-06
-**Layer** behavioral
+**Layer** schema
 **Given** a `create_media_buy` request with `account_id: "acc_123"`
 **When** the request is parsed
 **Then** the `account_id` field is accepted (not rejected by validation)
@@ -401,7 +401,7 @@ Source: UC-002-alt-asap.md
 
 #### Scenario: ASAP with end_time Before Now
 **Obligation ID** UC-002-ALT-ASAP-START-TIMING-05
-**Layer** behavioral
+**Layer** schema
 **Given** a request with `start_time: "asap"` and `end_time` in the past
 **When** the system validates timing
 **Then** it fails because `end_time` <= resolved start time
@@ -434,7 +434,7 @@ Source: UC-002-alt-creatives.md
 
 #### Scenario: Generative Format Exempt from URL/Dimension Validation
 **Obligation ID** UC-002-ALT-WITH-INLINE-CREATIVES-03
-**Layer** behavioral
+**Layer** schema
 **Given** an inline creative with a generative format (has `output_format_ids`)
 **When** the system validates creative assets
 **Then** it skips URL and dimension validation for that creative
@@ -605,7 +605,7 @@ Source: UC-002-alt-proposal.md
 
 #### Scenario: Step 7 -- DateTime Validation on Proposal Path
 **Obligation ID** UC-002-ALT-PROPOSAL-BASED-MEDIA-05
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal-based request with valid `start_time` and `end_time`
 **When** the system validates timing
 **Then** it applies the same date/time rules as the package-based path
@@ -640,7 +640,7 @@ Source: UC-002-alt-proposal.md
 
 #### Scenario: Proposal-Based Skips Duplicate Product Check
 **Obligation ID** UC-002-ALT-PROPOSAL-BASED-MEDIA-09
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal-based request
 **When** the system validates packages
 **Then** it does NOT check for duplicate product_ids (proposal guarantees uniqueness)
@@ -648,7 +648,7 @@ Source: UC-002-alt-proposal.md
 
 #### Scenario: Proposal-Based Skips Per-Package Currency Validation
 **Obligation ID** UC-002-ALT-PROPOSAL-BASED-MEDIA-10
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal-based request with `total_budget.currency`
 **When** the system validates currency
 **Then** it uses `total_budget.currency` instead of per-package pricing option currency
@@ -656,7 +656,7 @@ Source: UC-002-alt-proposal.md
 
 #### Scenario: Daypart Targets from Proposal Converted to Targeting Overlays
 **Obligation ID** UC-002-ALT-PROPOSAL-BASED-MEDIA-11
-**Layer** behavioral
+**Layer** schema
 **Given** a proposal with `daypart_targets` per allocation
 **When** the system derives packages
 **Then** daypart targets are converted to targeting overlays on derived packages
@@ -669,7 +669,7 @@ Source: UC-002-ext-a.md, BR-RULE-008
 
 #### Scenario: Total Budget is Zero
 **Obligation ID** UC-002-EXT-A-01
-**Layer** behavioral
+**Layer** schema
 **Given** packages with budgets summing to exactly 0
 **When** the system validates total budget
 **Then** it returns error: "Invalid budget: 0. Budget must be positive."
@@ -680,7 +680,7 @@ Source: UC-002-ext-a.md, BR-RULE-008
 
 #### Scenario: Total Budget is Negative
 **Obligation ID** UC-002-EXT-A-02
-**Layer** behavioral
+**Layer** schema
 **Given** packages with budgets summing to a negative value
 **When** the system validates total budget
 **Then** it returns error with the negative amount and "Budget must be positive" message
@@ -714,7 +714,7 @@ Source: UC-002-ext-b.md
 
 #### Scenario: No Products Specified (Empty Packages)
 **Obligation ID** UC-002-EXT-B-02
-**Layer** behavioral
+**Layer** schema
 **Given** a request with no packages (or all packages lack `product_id`)
 **When** the system validates products
 **Then** it returns error: "At least one product is required."
@@ -722,7 +722,7 @@ Source: UC-002-ext-b.md
 
 #### Scenario: Package Missing product_id Field
 **Obligation ID** UC-002-EXT-B-03
-**Layer** behavioral
+**Layer** schema
 **Given** a package in the request that has no `product_id`
 **When** the system validates
 **Then** it returns error: "Package {buyer_ref} must specify product_id."
@@ -744,7 +744,7 @@ Source: UC-002-ext-c.md, BR-RULE-013
 
 #### Scenario: End Time Before Start Time
 **Obligation ID** UC-002-EXT-C-02
-**Layer** behavioral
+**Layer** schema
 **Given** `end_time` is before or equal to `start_time`
 **When** the system validates timing
 **Then** it returns error: "Invalid time range: end time ({end}) must be after start time ({start})."
@@ -753,7 +753,7 @@ Source: UC-002-ext-c.md, BR-RULE-013
 
 #### Scenario: End Time Equal to Start Time
 **Obligation ID** UC-002-EXT-C-03
-**Layer** behavioral
+**Layer** schema
 **Given** `end_time` equals `start_time` exactly
 **When** the system validates timing
 **Then** it rejects (end time must be strictly after start time)
@@ -762,7 +762,7 @@ Source: UC-002-ext-c.md, BR-RULE-013
 
 #### Scenario: Missing start_time
 **Obligation ID** UC-002-EXT-C-04
-**Layer** behavioral
+**Layer** schema
 **Given** a request with `start_time` null or missing
 **When** the system validates timing
 **Then** it returns error: "start_time is required"
@@ -770,7 +770,7 @@ Source: UC-002-ext-c.md, BR-RULE-013
 
 #### Scenario: Missing end_time
 **Obligation ID** UC-002-EXT-C-05
-**Layer** behavioral
+**Layer** schema
 **Given** a request with `end_time` null or missing
 **When** the system validates timing
 **Then** it returns error: "end_time is required"
@@ -778,7 +778,7 @@ Source: UC-002-ext-c.md, BR-RULE-013
 
 #### Scenario: Naive Datetime Treated as UTC
 **Obligation ID** UC-002-EXT-C-06
-**Layer** behavioral
+**Layer** schema
 **Given** a `start_time` without timezone information
 **When** the system parses the datetime
 **Then** it treats the naive datetime as UTC
@@ -810,7 +810,7 @@ Source: UC-002-ext-d.md, BR-RULE-009
 
 #### Scenario: Mixed Currencies Across Packages (Implicit)
 **Obligation ID** UC-002-EXT-D-03
-**Layer** behavioral
+**Layer** schema
 **Given** packages where pricing options reference different currencies
 **When** the system determines the request currency
 **Then** it uses the first package's pricing option currency as the canonical currency
@@ -820,7 +820,7 @@ Source: UC-002-ext-d.md, BR-RULE-009
 
 #### Scenario: Currency Fallback Chain
 **Obligation ID** UC-002-EXT-D-04
-**Layer** behavioral
+**Layer** schema
 **Given** a package without explicit currency in pricing option
 **When** the system determines currency
 **Then** it follows the fallback chain: pricing option currency -> legacy field -> "USD"
@@ -833,7 +833,7 @@ Source: UC-002-ext-e.md, BR-RULE-010
 
 #### Scenario: Same product_id in Multiple Packages
 **Obligation ID** UC-002-EXT-E-01
-**Layer** behavioral
+**Layer** schema
 **Given** two or more packages referencing the same `product_id`
 **When** the system validates products
 **Then** it returns error: "Duplicate product_id(s) found in packages: {ids}. Each product can only be used once per media buy."
@@ -843,7 +843,7 @@ Source: UC-002-ext-e.md, BR-RULE-010
 
 #### Scenario: Duplicate Check Not Protocol-Level
 **Obligation ID** UC-002-EXT-E-02
-**Layer** behavioral
+**Layer** schema
 **Given** the duplicate product_id constraint is code-enforced (G12)
 **When** validating against the schema
 **Then** the schema allows duplicates but the system rejects them
@@ -874,7 +874,7 @@ Source: UC-002-ext-f.md, BR-RULE-014
 
 #### Scenario: Geo Inclusion/Exclusion Overlap
 **Obligation ID** UC-002-EXT-F-03
-**Layer** behavioral
+**Layer** schema
 **Given** a targeting overlay with the same geographic value in both include and exclude lists
 **When** the system validates targeting
 **Then** it returns error: "{value} appears in both inclusion and exclusion for {dimension}"
@@ -883,7 +883,7 @@ Source: UC-002-ext-f.md, BR-RULE-014
 
 #### Scenario: Multiple Targeting Violations Collected
 **Obligation ID** UC-002-EXT-F-04
-**Layer** behavioral
+**Layer** schema
 **Given** a targeting overlay with violations across all three layers (unknown, managed-only, geo overlap)
 **When** the system validates targeting
 **Then** all violations are collected and returned together in a single error response
@@ -891,7 +891,7 @@ Source: UC-002-ext-f.md, BR-RULE-014
 
 #### Scenario: Empty/Absent Targeting Overlay is Valid
 **Obligation ID** UC-002-EXT-F-05
-**Layer** behavioral
+**Layer** schema
 **Given** a package with no targeting_overlay (null or absent)
 **When** the system validates targeting
 **Then** validation passes without error
@@ -905,7 +905,7 @@ Source: UC-002-ext-g.md, BR-RULE-015
 
 #### Scenario: Reference Creative Missing URL
 **Obligation ID** UC-002-EXT-G-01
-**Layer** behavioral
+**Layer** schema
 **Given** a reference creative without a URL in its assets
 **When** the system validates creatives
 **Then** the error "Reference creative missing required URL field in assets" is collected
@@ -914,7 +914,7 @@ Source: UC-002-ext-g.md, BR-RULE-015
 
 #### Scenario: Reference Creative Missing Dimensions
 **Obligation ID** UC-002-EXT-G-02
-**Layer** behavioral
+**Layer** schema
 **Given** a reference creative without width or height in its assets
 **When** the system validates creatives
 **Then** the error "Reference creative missing dimensions" is collected
@@ -923,7 +923,7 @@ Source: UC-002-ext-g.md, BR-RULE-015
 
 #### Scenario: Generative Format Exempt from URL Validation
 **Obligation ID** UC-002-EXT-G-03
-**Layer** behavioral
+**Layer** schema
 **Given** a creative with a generative format (has `output_format_ids`)
 **When** the system validates creatives
 **Then** it skips URL and dimension validation for that creative
@@ -946,7 +946,7 @@ Source: UC-002-ext-h.md
 
 #### Scenario: Plain String Format ID Rejected
 **Obligation ID** UC-002-EXT-H-01
-**Layer** behavioral
+**Layer** schema
 **Given** a format ID that is a plain string (e.g., `"banner_300x250"`) instead of a FormatId object
 **When** the system validates format IDs
 **Then** it returns error: "Plain string format IDs are not supported. Per AdCP spec, format_ids must be FormatId objects with {agent_url, id}."
@@ -1173,7 +1173,7 @@ Source: UC-002-ext-n.md, BR-RULE-006
 
 #### Scenario: Auction Pricing Without bid_price
 **Obligation ID** UC-002-EXT-N-03
-**Layer** behavioral
+**Layer** schema
 **Given** a package selecting an auction pricing model (floor_price set) but no `bid_price` provided
 **When** the system validates pricing
 **Then** it returns error with code `PRICING_ERROR` indicating bid_price is required for auction models
@@ -1182,7 +1182,7 @@ Source: UC-002-ext-n.md, BR-RULE-006
 
 #### Scenario: bid_price Below Floor Price
 **Obligation ID** UC-002-EXT-N-04
-**Layer** behavioral
+**Layer** schema
 **Given** a package with `bid_price` less than the pricing option's `floor_price`
 **When** the system validates pricing
 **Then** it returns error with code `PRICING_ERROR` indicating bid is below floor
@@ -1190,7 +1190,7 @@ Source: UC-002-ext-n.md, BR-RULE-006
 
 #### Scenario: Fixed Pricing Without Rate
 **Obligation ID** UC-002-EXT-N-05
-**Layer** behavioral
+**Layer** schema
 **Given** a fixed pricing model selected but the product has no rate defined
 **When** the system validates pricing
 **Then** it returns error with code `PRICING_ERROR`
@@ -1424,7 +1424,7 @@ Source: BR-RULE-026
 
 #### Scenario: CreateMediaBuyRequest Accepts All adcp 3.6 Fields
 **Obligation ID** UC-002-CC-SCHEMA-COMPLIANCE-01
-**Layer** behavioral
+**Layer** schema
 **Given** a request with all adcp 3.6 fields: `account_id`, `artifact_webhook`, `brand`, `buyer_campaign_ref`, `buyer_ref`, `context`, `end_time`, `ext`, `packages`, `po_number`, `proposal_id`, `reporting_webhook`, `start_time`, `total_budget`
 **When** the request is parsed by the salesagent `CreateMediaBuyRequest` model
 **Then** all fields are accepted without validation errors
@@ -1432,7 +1432,7 @@ Source: BR-RULE-026
 
 #### Scenario: CreateMediaBuySuccess Exposes All adcp 3.6 Response Fields
 **Obligation ID** UC-002-CC-SCHEMA-COMPLIANCE-02
-**Layer** behavioral
+**Layer** schema
 **Given** a successful media buy creation
 **When** the response is serialized at the MCP boundary
 **Then** the response schema includes: `account`, `buyer_campaign_ref`, `buyer_ref`, `context`, `creative_deadline`, `ext`, `media_buy_id`, `packages`, `sandbox`
@@ -1440,7 +1440,7 @@ Source: BR-RULE-026
 
 #### Scenario: PackageRequest Accepts All adcp 3.6 Fields
 **Obligation ID** UC-002-CC-SCHEMA-COMPLIANCE-03
-**Layer** behavioral
+**Layer** schema
 **Given** a package request with all adcp 3.6 fields: `bid_price`, `budget`, `buyer_ref`, `catalog`, `creative_assignments`, `creatives`, `ext`, `format_ids`, `impressions`, `optimization_goal`, `pacing`, `paused`, `pricing_option_id`, `product_id`, `targeting_overlay`
 **When** the package is parsed
 **Then** all fields are accepted without validation errors
@@ -1462,7 +1462,7 @@ Source: BR-RULE-026
 
 #### Scenario: POST-F2 -- Error Response Contains Specific Error Code
 **Obligation ID** UC-002-POST-02
-**Layer** behavioral
+**Layer** schema
 **Given** any failure
 **When** the error response is returned
 **Then** it contains a specific error code (not generic)
