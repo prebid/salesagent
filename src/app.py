@@ -181,43 +181,13 @@ _replace_routes()
 #
 # Middleware execution order (outermost first):
 #   1. CORSMiddleware  (via add_middleware — always outermost)
-#   2. a2a_messageid_compatibility_middleware  (registered second → runs first of the two)
-#   3. a2a_auth_middleware  (registered first → runs second, closest to handler)
+#   2. auth_context_middleware  (registered last → runs first, populates request.state)
+#   3. a2a_messageid_compatibility_middleware
+#   4. a2a_auth_middleware  (registered first → runs last, closest to handler)
 #
 # @app.middleware("http") runs in reverse registration order in Starlette,
-# so we register auth first and messageId second to get the correct order.
+# so we register in reverse of desired execution order.
 # ---------------------------------------------------------------------------
-
-
-@app.middleware("http")
-async def auth_context_middleware(request: Request, call_next):
-    """Populate request.state.auth_context for all routes.
-
-    Extracts auth token from headers. Does NOT resolve tenant or principal
-    (that requires DB and is done by route-specific handlers).
-    """
-    from src.core.auth_context import AuthContext
-
-    headers = dict(request.headers)
-    token = None
-
-    # Extract token from Authorization or x-adcp-auth header
-    for key, value in request.headers.items():
-        if key.lower() == "authorization":
-            auth_header = value.strip()
-            if auth_header.startswith("Bearer "):
-                token = auth_header[7:]
-                break
-        elif key.lower() == "x-adcp-auth":
-            token = value.strip()
-
-    request.state.auth_context = AuthContext(
-        auth_token=token,
-        headers=headers,
-    )
-
-    response = await call_next(request)
-    return response
 
 
 @app.middleware("http")
@@ -290,6 +260,38 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
             return {"type": "http.request", "body": body}
 
         request = StarletteRequest(request.scope, receive=_receive)
+
+    response = await call_next(request)
+    return response
+
+
+@app.middleware("http")
+async def auth_context_middleware(request: Request, call_next):
+    """Populate request.state.auth_context for all routes.
+
+    Registered last so it runs first (Starlette reverse order).
+    Extracts auth token from headers. Does NOT resolve tenant or principal
+    (that requires DB and is done by route-specific handlers).
+    """
+    from src.core.auth_context import AuthContext
+
+    headers = dict(request.headers)
+    token = None
+
+    # Extract token from Authorization or x-adcp-auth header
+    for key, value in request.headers.items():
+        if key.lower() == "authorization":
+            auth_header = value.strip()
+            if auth_header.startswith("Bearer "):
+                token = auth_header[7:]
+                break
+        elif key.lower() == "x-adcp-auth":
+            token = value.strip()
+
+    request.state.auth_context = AuthContext(
+        auth_token=token,
+        headers=headers,
+    )
 
     response = await call_next(request)
     return response
