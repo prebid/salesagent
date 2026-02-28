@@ -337,6 +337,14 @@ iterate:
         SAME behavior with real database. If the integration test fails,
         the production code is wrong — not the stub.
 
+        ## Transport Parity Invariant
+
+        Every behavioral test MUST verify identical behavior across all three
+        transports: MCP, A2A, and REST. Use parametrize or test explicitly
+        through all 3 entry points. If behavior differs, the bug is in the
+        wrapper — fix the wrapper, not the test.
+        See `docs/development/architecture.md` "Transport Parity Invariant".
+
         ## Prerequisites
 
         Read the architecture plan from notes. It contains:

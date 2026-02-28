@@ -123,22 +123,17 @@ not optional — failing any one means the task is NOT complete.
 make quality
 ```
 
-### Gate 2: Integration tests (MANDATORY — this is why you have a database)
+### Gate 2: Full test suite (MANDATORY)
 ```bash
-uv run pytest tests/integration/ -x -q
+./run_all_tests.sh
 ```
 
-This is the gate that catches real bugs. Unit tests mock away the database
-and cannot catch session lifecycle, ORM detachment, or query correctness
-issues. Integration tests use real Postgres and exercise the actual code path.
+This starts Docker, runs all 5 suites (unit, integration, integration_v2,
+e2e, ui) via tox, and tears down. Do NOT substitute with individual pytest
+commands — `./run_all_tests.sh` is the single source of truth.
 
-**If integration tests fail, your implementation has a bug. Fix it before
+**If any test fails, your implementation has a bug. Fix it before
 committing.** You started from a clean slate — every failure is yours.
-
-### Gate 3: Integration V2 tests
-```bash
-uv run pytest tests/integration_v2/ -x -q
-```
 
 ### What tests to write
 
@@ -162,6 +157,9 @@ integration test that runs against real Postgres.
 4. **Nested serialization**: Override `model_dump()` for nested children
 5. **SQLAlchemy 2.0**: Use `select()` + `scalars()`, not `query()`
 6. **Test fixtures**: Use factories from `tests/factories/`, not inline `session.add()`
+7. **Transport parity**: Every behavioral test MUST verify identical behavior
+   across MCP, A2A, and REST. Use `@pytest.mark.parametrize("transport", [...])`
+   or test explicitly through all 3 entry points. See `docs/development/architecture.md`.
 
 ### Structural guards
 Eight AST-scanning tests run on `make quality`. New violations fail the build.

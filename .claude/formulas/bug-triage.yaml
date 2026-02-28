@@ -121,6 +121,12 @@ iterate:
         6. **Write a failing test**:
            - Place it in the appropriate test file based on level chosen in step 4
            - The test should demonstrate the bug clearly and minimally
+           - **Transport Parity Invariant**: Every behavioral test MUST verify
+             identical behavior across all three transports (MCP, A2A, REST).
+             Use `@pytest.mark.parametrize("transport", ["mcp", "a2a", "rest"])`
+             or explicitly test the same scenario through all 3 entry points.
+             If behavior differs between transports, the bug is in the wrapper.
+             See `docs/development/architecture.md` "Transport Parity Invariant".
            - **Use factories for test data** (CLAUDE.md Pattern #8):
              - Import from `tests.helpers.adcp_factories` — never inline-construct
                ORM models or Pydantic schemas with manual field plucking
@@ -580,12 +586,13 @@ finalize:
          ```
          Find the "## Baseline (pre-change)" section. Note the exact counts.
 
-      2. **Run all three gates**:
+      2. **Run the full test suite** (MANDATORY — this is the only correct way):
          ```bash
-         make quality 2>&1 | tail -5
-         uv run pytest tests/integration/ -x -q 2>&1 | tail -5
-         uv run pytest tests/integration_v2/ -x -q 2>&1 | tail -5
+         ./run_all_tests.sh
          ```
+         This starts Docker, runs all 5 suites (unit, integration, integration_v2,
+         e2e, ui) via tox, and tears down. Do NOT substitute with individual pytest
+         commands — `./run_all_tests.sh` is the single source of truth.
 
       3. **Compare counts**:
          - Passes must be >= baseline (new tests are expected)

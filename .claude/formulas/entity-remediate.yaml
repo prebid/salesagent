@@ -238,6 +238,9 @@ iterate:
            - Follow the plan (setup, assertions)
            - Use existing fixtures from the entity test suite
            - Follow CLAUDE.md testing patterns
+           - **Transport Parity Invariant**: Every behavioral test MUST verify
+             identical behavior across MCP, A2A, and REST. Use parametrize or
+             test through all 3 entry points. See `docs/development/architecture.md`.
         3. **Run and confirm it fails for the RIGHT reason**:
            ```bash
            uv run pytest tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py::test_name -x -v
