@@ -106,13 +106,7 @@ logger.info("A2A routes added: /a2a, /.well-known/agent-card.json, /agent.json")
 # ---------------------------------------------------------------------------
 
 
-def _get_header_case_insensitive(headers, header_name: str) -> str | None:
-    """Get header value with case-insensitive lookup."""
-    for key, value in headers.items():
-        if key.lower() == header_name.lower():
-            return value
-    return None
-
+from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 _VALID_HOSTNAME_RE = re.compile(
     r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*(\:\d{1,5})?$"

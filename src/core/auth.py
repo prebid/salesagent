@@ -33,27 +33,7 @@ logger = logging.getLogger(__name__)
 _VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
 
 
-def _get_header_case_insensitive(headers: dict, header_name: str) -> str | None:
-    """Get a header value with case-insensitive lookup.
-
-    HTTP headers are case-insensitive, but Python dicts are case-sensitive.
-    This helper function performs case-insensitive header lookup.
-
-    Args:
-        headers: Dictionary of headers
-        header_name: Header name to look up (will be compared case-insensitively)
-
-    Returns:
-        Header value if found, None otherwise
-    """
-    if not headers:
-        return None
-
-    header_name_lower = header_name.lower()
-    for key, value in headers.items():
-        if key.lower() == header_name_lower:
-            return value
-    return None
+from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:

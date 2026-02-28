@@ -43,15 +43,7 @@ class ResolvedIdentity(BaseModel, frozen=True):
         return self.principal_id is not None and self.principal_id != ""
 
 
-def _get_header_case_insensitive(headers: dict, header_name: str) -> str | None:
-    """Case-insensitive header lookup (HTTP headers are case-insensitive)."""
-    if not headers:
-        return None
-    header_name_lower = header_name.lower()
-    for key, value in headers.items():
-        if key.lower() == header_name_lower:
-            return value
-    return None
+from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 
 def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
