@@ -190,7 +190,9 @@ class _PatchContext:
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = self.db_session
-        mock_uow.media_buys = MagicMock()
+        mock_media_buys = MagicMock()
+        mock_media_buys.get_by_principal.return_value = []  # no duplicate buyer_refs
+        mock_uow.media_buys = mock_media_buys
 
         self._p_uow = patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow)
         self._p_uow.start()

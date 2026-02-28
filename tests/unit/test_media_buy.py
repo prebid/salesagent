@@ -389,7 +389,9 @@ class TestCreateMediaBuyValidation:
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = session
-        mock_uow.media_buys = MagicMock()
+        mock_media_buys = MagicMock()
+        mock_media_buys.get_by_principal.return_value = []
+        mock_uow.media_buys = mock_media_buys
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -461,7 +463,9 @@ class TestCreateMediaBuyValidation:
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = session
-        mock_uow.media_buys = MagicMock()
+        mock_media_buys = MagicMock()
+        mock_media_buys.get_by_principal.return_value = []
+        mock_uow.media_buys = mock_media_buys
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -592,7 +596,6 @@ class TestCreateMediaBuyValidation:
         assert req.get_total_budget() == 0
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="buyer_ref uniqueness validation not yet implemented (BR-RULE-009)")
     async def test_duplicate_buyer_ref_rejected(self):
         """UC-002-V09: duplicate buyer_ref for same principal rejected.
 
@@ -606,28 +609,23 @@ class TestCreateMediaBuyValidation:
         identity = _make_identity()
         req = _make_request(buyer_ref="duplicate-ref")
 
-        # Build a mock UoW that provides session via context manager
-        mock_session = MagicMock()
-        # Simulate existing media buy with same buyer_ref
-        mock_session.scalars.return_value.first.return_value = MagicMock(buyer_ref="duplicate-ref")
+        # Build a mock UoW whose repo signals a duplicate buyer_ref exists
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [MagicMock(buyer_ref="duplicate-ref")]
 
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
-        mock_uow.session = mock_session
-        mock_uow.media_buys = MagicMock()
+        mock_uow.session = MagicMock()
+        mock_uow.media_buys = mock_repo
 
-        # First create should succeed
         with (
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=MagicMock()),
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
-            result = await _create_media_buy_impl(req, identity=identity)
-            # Should reject with duplicate buyer_ref error
-            response, status = result
-            assert status == "failed"
-            assert "duplicate" in str(response).lower() or "buyer_ref" in str(response).lower()
+            with pytest.raises(AdCPValidationError, match="buyer_ref.*duplicate-ref.*already exists"):
+                await _create_media_buy_impl(req, identity=identity)
 
     def test_missing_start_time_rejected(self):
         """UC-002-V10: missing start_time rejected.
@@ -1361,6 +1359,7 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = mock_session
+        mock_uow.media_buys.get_by_principal.return_value = []
 
         with (
             patch("src.core.tools.media_buy_create.validate_setup_complete"),

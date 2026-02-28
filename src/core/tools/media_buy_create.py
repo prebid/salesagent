@@ -1305,6 +1305,19 @@ async def _create_media_buy_impl(
             status=AdcpTaskStatus.failed.value,
         )
 
+    # Validate buyer_ref uniqueness within tenant+principal scope (BR-RULE-009)
+    if req.buyer_ref:
+        from src.core.database.repositories import MediaBuyUoW
+
+        with MediaBuyUoW(tenant["tenant_id"]) as dup_uow:
+            assert dup_uow.media_buys is not None
+            existing = dup_uow.media_buys.get_by_principal(principal_id, buyer_refs=[req.buyer_ref])
+            if existing:
+                raise AdCPValidationError(
+                    f"buyer_ref '{req.buyer_ref}' already exists for this principal. "
+                    f"Each buyer_ref must be unique within a principal."
+                )
+
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
     ctx_manager = get_context_manager()
