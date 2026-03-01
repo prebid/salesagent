@@ -57,9 +57,20 @@ SCHEMA_TO_MODEL_MAP = {
 # See test_schema_account_field_mismatch.py for detailed documentation.
 # FIXME(salesagent-amkf): Remove entries as adcp library adds these fields.
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
+    "/schemas/latest/media-buy/get-products-request.json": {
+        "fields",  # Schema defines field selection, library doesn't have it yet
+        "refine",  # Schema defines refinement array, library doesn't have it yet
+    },
+    "/schemas/latest/media-buy/update-media-buy-request.json": {
+        "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
+    },
     "/schemas/latest/media-buy/get-media-buy-delivery-request.json": {
         "account",  # Schema says 'account' (object), library uses 'account_id' (string)
         "reporting_dimensions",  # Schema defines it, library doesn't have it yet
+    },
+    "/schemas/latest/media-buy/sync-creatives-request.json": {
+        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+        "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
     },
 }
 

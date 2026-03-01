@@ -662,7 +662,9 @@ class TestCreateMediaBuyValidation:
                 packages=[{"product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm_usd_fixed"}],
             )
 
-    @pytest.mark.skip(reason="Covered by integration test: test_unsupported_currency_rejected in test_media_buy_v3.py")
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_unsupported_currency_rejected in test_media_buy_v3.py", run=False
+    )
     def test_unsupported_currency_rejected(self):
         """UC-002-V12: package currency not in tenant limits rejected.
 
@@ -1172,8 +1174,9 @@ class TestCreateMediaBuyImplAuth:
 class TestCreateMediaBuyManualApproval:
     """UC-002 alt-manual: manual approval / HITL flow."""
 
-    @pytest.mark.skip(
-        reason="Covered by integration test: test_manual_approval_creates_pending_workflow_step in test_media_buy_v3.py"
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_manual_approval_creates_pending_workflow_step in test_media_buy_v3.py",
+        run=False,
     )
     def test_manual_approval_creates_pending_workflow_step(self):
         """UC-002-MA01: when human_review_required, status is 'submitted'.
@@ -1185,8 +1188,9 @@ class TestCreateMediaBuyManualApproval:
         """
         pytest.fail("Manual approval flow requires integration test with real database")
 
-    @pytest.mark.skip(
-        reason="Covered by integration test: test_manual_approval_stores_raw_request in test_media_buy_v3.py"
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_manual_approval_stores_raw_request in test_media_buy_v3.py",
+        run=False,
     )
     def test_manual_approval_stores_raw_request(self):
         """UC-002-MA02: raw_request preserved in DB for deferred adapter call.
@@ -1198,8 +1202,9 @@ class TestCreateMediaBuyManualApproval:
         """
         pytest.fail("Manual approval raw_request storage requires integration test with real database")
 
-    @pytest.mark.skip(
-        reason="Covered by integration test: test_execute_approved_calls_adapter in test_media_buy_v3.py (currently xfail: status not updated)"
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_execute_approved_calls_adapter in test_media_buy_v3.py (currently xfail: status not updated)",
+        run=False,
     )
     def test_execute_approved_calls_adapter(self):
         """UC-002-MA03: approved buy triggers adapter creation.
@@ -2559,8 +2564,9 @@ class TestUpdateMediaBuyCreativeIds:
 class TestUpdateMediaBuyCreativeAssignments:
     """UC-003 alt-creative-assignments: weighted/placement-targeted assignments."""
 
-    @pytest.mark.skip(
-        reason="Covered by integration test: test_creative_assignments_with_weights in test_media_buy_v3.py (currently xfail)"
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_creative_assignments_with_weights in test_media_buy_v3.py (currently xfail)",
+        run=False,
     )
     def test_creative_assignments_with_weights(self):
         """UC-003-CA01: creative_assignments replaces all with specified weights.
@@ -2573,8 +2579,9 @@ class TestUpdateMediaBuyCreativeAssignments:
         """
         pytest.fail("creative_assignments with weights requires integration test with real database")
 
-    @pytest.mark.skip(
-        reason="Covered by integration test: test_invalid_placement_ids_rejected in test_media_buy_v3.py (currently xfail)"
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_invalid_placement_ids_rejected in test_media_buy_v3.py (currently xfail)",
+        run=False,
     )
     def test_invalid_placement_ids_rejected(self):
         """UC-003-CA02: placement_ids not in product rejected.
@@ -4108,8 +4115,9 @@ class TestGetMediaBuysResponseShape:
         assert pkgs[0]["package_id"] == "pkg_1"
         assert pkgs[1]["package_id"] == "pkg_2"
 
-    @pytest.mark.skip(
-        reason="Covered by integration test: test_snapshot_populated_when_requested in test_media_buy_v3.py (currently xfail: H-4)"
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_snapshot_populated_when_requested in test_media_buy_v3.py (currently xfail: H-4)",
+        run=False,
     )
     def test_snapshot_populated_when_requested(self):
         """GMB-RS03: include_snapshot=true populates snapshot per package.
@@ -4121,8 +4129,9 @@ class TestGetMediaBuysResponseShape:
         """
         pytest.fail("Snapshot population requires integration test with real database")
 
-    @pytest.mark.skip(
-        reason="Covered by integration test: test_creative_approvals_populated in test_media_buy_v3.py (currently xfail: H-4)"
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_creative_approvals_populated in test_media_buy_v3.py (currently xfail: H-4)",
+        run=False,
     )
     def test_creative_approvals_populated(self):
         """GMB-RS04: creative approval status per package.
@@ -4263,8 +4272,9 @@ class TestBRRule018AtomicResponse:
 class TestBRRule020AdapterAtomicity:
     """BR-RULE-020: adapter success = records persisted, adapter error = no records."""
 
-    @pytest.mark.skip(
-        reason="Covered by integration test: test_adapter_success_persists_records in test_media_buy_v3.py"
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_adapter_success_persists_records in test_media_buy_v3.py",
+        run=False,
     )
     def test_adapter_success_persists_records(self):
         """BR-020-01: successful adapter call creates DB records.
@@ -4277,7 +4287,9 @@ class TestBRRule020AdapterAtomicity:
         """
         pytest.fail("Adapter success persistence requires integration test with real database")
 
-    @pytest.mark.skip(reason="Covered by integration test: test_adapter_failure_no_db_changes in test_media_buy_v3.py")
+    @pytest.mark.xfail(
+        reason="Covered by integration test: test_adapter_failure_no_db_changes in test_media_buy_v3.py", run=False
+    )
     def test_adapter_failure_no_db_changes(self):
         """BR-020-02: failed adapter call creates no DB records.
 
