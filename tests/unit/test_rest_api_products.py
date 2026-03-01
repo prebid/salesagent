@@ -41,10 +41,8 @@ class TestRESTProductsEndpoint:
     """Verify POST /api/v1/products endpoint."""
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
-    @patch("src.routes.api_v1.get_principal_from_token", return_value="test-principal")
-    @patch("src.core.config_loader.set_current_tenant")
     @patch("src.core.tools.products._get_products_impl")
-    def test_endpoint_returns_200(self, mock_impl, mock_tenant, mock_auth, mock_resolve):
+    def test_endpoint_returns_200(self, mock_impl, mock_resolve):
         """POST /api/v1/products should return 200 with valid request."""
         from src.core.schemas import GetProductsResponse
 
@@ -58,10 +56,8 @@ class TestRESTProductsEndpoint:
         assert response.status_code == 200
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
-    @patch("src.routes.api_v1.get_principal_from_token", return_value="test-principal")
-    @patch("src.core.config_loader.set_current_tenant")
     @patch("src.core.tools.products._get_products_impl")
-    def test_response_has_products_field(self, mock_impl, mock_tenant, mock_auth, mock_resolve):
+    def test_response_has_products_field(self, mock_impl, mock_resolve):
         """Response must contain 'products' list."""
         from src.core.schemas import GetProductsResponse
 

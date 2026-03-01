@@ -359,18 +359,16 @@ class TestHighRiskA2A:
         """H8: A2A handler returns validation error dict when params are empty.
 
         Covers: #30 T-UC-009-ext-b-rest
-        The handler calls _create_tool_context_from_a2a before parameter validation,
-        so we must mock that to reach the Pydantic validation path.
+        Identity is resolved at transport boundary so the handler receives it directly.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
-        mock_tool_context = _make_tool_context()
-        handler._create_tool_context_from_a2a = MagicMock(return_value=mock_tool_context)
+        mock_identity = _make_identity()
 
         result = await handler._handle_update_performance_index_skill(
             parameters={},
-            auth_token="test-token",
+            identity=mock_identity,
         )
 
         assert isinstance(result, dict)
@@ -388,11 +386,7 @@ class TestHighRiskA2A:
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
-        mock_tool_context = _make_tool_context()
-
-        # Mock _create_tool_context_from_a2a and _tool_context_to_mcp_context
-        handler._create_tool_context_from_a2a = MagicMock(return_value=mock_tool_context)
-        handler._tool_context_to_mcp_context = MagicMock(return_value=mock_tool_context)
+        mock_identity = _make_identity()
 
         with patch(
             "src.a2a_server.adcp_a2a_server.core_update_performance_index_tool",
@@ -411,7 +405,7 @@ class TestHighRiskA2A:
                     "media_buy_id": "mb_test_123",
                     "performance_data": [{"product_id": "p1", "performance_index": 1.25}],
                 },
-                auth_token="test-token",
+                identity=mock_identity,
             )
 
         # Handler delegates to core tool and returns its result

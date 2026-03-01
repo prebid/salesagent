@@ -318,7 +318,8 @@ class TestA2ARequestHandler:
         """Test that authentication-related methods exist."""
         auth_methods = [
             "_get_auth_token",
-            "_create_tool_context_from_a2a",
+            "_resolve_a2a_identity",
+            "_make_tool_context",
         ]
 
         for method_name in auth_methods:

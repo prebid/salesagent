@@ -34,12 +34,19 @@ def get_adapter(
 
         tenant = get_current_tenant()
 
-    selected_adapter = tenant.get("ad_server", "mock")
+    # Extract tenant_id and ad_server from tenant (supports both ORM model and dict)
+    if isinstance(tenant, dict):
+        tenant_id = tenant["tenant_id"]
+        selected_adapter = tenant.get("ad_server", "mock")
+    else:
+        # ORM model (Tenant) — use attribute access
+        tenant_id = tenant.tenant_id
+        selected_adapter = tenant.ad_server or "mock"
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
     # Get adapter config from adapter_config table
     with get_db_session() as session:
-        stmt = select(AdapterConfig).filter_by(tenant_id=tenant["tenant_id"])
+        stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
         config_row = session.scalars(stmt).first()
 
         adapter_config: dict[str, Any] = {"enabled": True}
@@ -110,7 +117,6 @@ def get_adapter(
             adapter_config = {"enabled": True}
 
     # Create the appropriate adapter instance with tenant_id and testing context
-    tenant_id = tenant["tenant_id"]
     logger.info(f"[ADAPTER_SELECT] FINAL selected_adapter: {selected_adapter}")
     if selected_adapter == "mock":
         logger.info("[ADAPTER_SELECT] Instantiating MockAdServerAdapter")

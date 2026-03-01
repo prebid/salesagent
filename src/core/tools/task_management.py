@@ -24,7 +24,7 @@ from src.core.resolved_identity import ResolvedIdentity
 logger = logging.getLogger(__name__)
 
 
-def list_tasks(
+async def list_tasks(
     status: str | None = None,
     object_type: str | None = None,
     object_id: str | None = None,
@@ -47,10 +47,8 @@ def list_tasks(
     Returns:
         Dict containing tasks list and pagination info
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(context, require_valid_token=True)
+    if identity is None and context is not None:
+        identity = await context.get_state("identity")
 
     if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
@@ -122,7 +120,9 @@ def list_tasks(
         }
 
 
-def get_task(task_id: str, context: Context | None = None, identity: ResolvedIdentity | None = None) -> dict[str, Any]:
+async def get_task(
+    task_id: str, context: Context | None = None, identity: ResolvedIdentity | None = None
+) -> dict[str, Any]:
     """Get detailed information about a specific task.
 
     Args:
@@ -133,10 +133,8 @@ def get_task(task_id: str, context: Context | None = None, identity: ResolvedIde
     Returns:
         Dict containing complete task details
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(context, require_valid_token=True)
+    if identity is None and context is not None:
+        identity = await context.get_state("identity")
 
     if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
@@ -187,7 +185,7 @@ def get_task(task_id: str, context: Context | None = None, identity: ResolvedIde
         return task_detail
 
 
-def complete_task(
+async def complete_task(
     task_id: str,
     status: str = "completed",
     response_data: dict[str, Any] | None = None,
@@ -208,10 +206,8 @@ def complete_task(
     Returns:
         Dict containing task completion status
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(context, require_valid_token=True)
+    if identity is None and context is not None:
+        identity = await context.get_state("identity")
 
     if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")

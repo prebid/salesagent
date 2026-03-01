@@ -7,10 +7,8 @@ from rich.console import Console
 from sqlalchemy import select
 
 from src.adapters.mock_creative_engine import MockCreativeEngine
-from src.core.auth import (
-    get_principal_from_context,
-)
 from src.core.exceptions import AdCPAuthenticationError
+from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +131,13 @@ mcp = FastMCP(
     # Note: stateless_http is now configured at runtime via run() or global settings
     lifespan=lifespan_context,
 )
+
+# Centralized identity resolution — runs before every tool call.
+# Tools read identity via ctx.get_state('identity') instead of calling
+# resolve_identity_from_context() directly.
+from src.core.mcp_auth_middleware import MCPAuthMiddleware
+
+mcp.add_middleware(MCPAuthMiddleware())
 
 # Initialize creative engine with minimal config (will be tenant-specific later)
 creative_engine_config: dict[str, Any] = {}
@@ -260,16 +265,19 @@ from src.core.strategy import StrategyManager
 
 def get_strategy_manager(context: Context | None) -> StrategyManager:
     """Get strategy manager for current context."""
-    principal_id, tenant_config = get_principal_from_context(context)
-    if tenant_config:
-        set_current_tenant(tenant_config)
-    else:
-        tenant_config = get_current_tenant()
+    identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
 
-    if not tenant_config:
+    if not identity or not identity.tenant_id:
         raise AdCPAuthenticationError("No tenant configuration found")
 
-    return StrategyManager(tenant_id=tenant_config.get("tenant_id"), principal_id=principal_id)
+    if identity.tenant and isinstance(identity.tenant, dict):
+        set_current_tenant(identity.tenant)
+    else:
+        tenant_config = get_current_tenant()
+        if not tenant_config:
+            raise AdCPAuthenticationError("No tenant configuration found")
+
+    return StrategyManager(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
 
 
 # Health/debug routes moved to src/routes/health.py (FastAPI migration).

@@ -1346,7 +1346,7 @@ def _build_update_request(
     return req
 
 
-def update_media_buy(
+async def update_media_buy(
     media_buy_id: str | None = None,
     buyer_ref: str | None = None,
     paused: bool = None,
@@ -1416,19 +1416,9 @@ def update_media_buy(
         reporting_webhook=reporting_webhook,
         ext=ext,
     )
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    # Extract x-context-id at transport boundary
-    _ctx_id = None
-    try:
-        from fastmcp.server.dependencies import get_http_headers
-
-        http_headers = get_http_headers(include_all=True)
-        if http_headers:
-            _ctx_id = http_headers.get("x-context-id")
-    except Exception:
-        pass
+    # Read identity and context_id pre-resolved by MCPAuthMiddleware
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
     response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
     return ToolResult(content=str(response), structured_content=response)
 

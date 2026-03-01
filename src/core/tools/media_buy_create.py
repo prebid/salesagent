@@ -486,15 +486,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 logger.error(f"[APPROVAL] {error_msg}")
                 return False, error_msg
 
-            # Set tenant context (converts ORM object to dict)
-            tenant_dict = {
-                "tenant_id": tenant_obj.tenant_id,
-                "name": tenant_obj.name,
-                "subdomain": tenant_obj.subdomain,
-                "ad_server": tenant_obj.ad_server,
-                "virtual_host": tenant_obj.virtual_host,
-            }
-            set_current_tenant(tenant_dict)
+            # Set tenant ContextVar via standard config_loader boundary
+            from src.core.config_loader import get_tenant_by_id
+
+            tenant_config = get_tenant_by_id(tenant_id)
+            if tenant_config:
+                set_current_tenant(tenant_config)
             logger.info(f"[APPROVAL] Set tenant context: {tenant_id}")
 
             # Load media buy
@@ -800,7 +797,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             package_pricing_info,
             principal,
             testing_ctx,
-            tenant=tenant_dict,
+            tenant=tenant_obj,
         )
 
         # Check if adapter returned an error response
@@ -939,7 +936,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
 
                     # Get adapter and upload creatives
-                    adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_dict)
+                    adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
 
                     # Call adapter's add_creative_assets method
                     # For GAM, the media_buy_id is the GAM order ID
@@ -975,7 +972,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         # 2. Creatives may have been uploaded after the initial approval attempt
         logger.info(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM")
         try:
-            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_dict)
+            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
             if hasattr(adapter, "orders_manager") and adapter.orders_manager:
                 approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
                 if approval_success:
@@ -3759,19 +3756,9 @@ async def create_media_buy(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
 
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    # Extract x-context-id at transport boundary
-    _ctx_id = None
-    try:
-        from fastmcp.server.dependencies import get_http_headers
-
-        http_headers = get_http_headers(include_all=True)
-        if http_headers:
-            _ctx_id = http_headers.get("x-context-id")
-    except Exception:
-        pass
+    # Read identity and context_id pre-resolved by MCPAuthMiddleware
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
     # FIXME(salesagent-v0kb): boundary-completeness — push_notification_config not passed to _impl
     result = await _create_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
     return ToolResult(content=str(result), structured_content=result)

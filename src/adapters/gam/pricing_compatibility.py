@@ -2,14 +2,14 @@
 GAM Pricing Model and Line Item Type Compatibility
 
 This module defines the compatibility between AdCP pricing models and GAM line item types,
-based on the official Google Ad Manager API v202411 specifications.
+based on the official Google Ad Manager API specifications.
 
 Key concepts:
 - AdCP pricing models: cpm, vcpm, cpc, flat_rate (exposed to clients)
 - GAM cost types: CPM, VCPM, CPC, CPD (used by GAM API)
 - CPD is NOT an AdCP pricing model - it's used internally to translate FLAT_RATE
 
-Source: https://developers.google.com/ad-manager/api/reference/v202411/ForecastService.CostType
+Source: https://developers.google.com/ad-manager/api/reference/ForecastService.CostType
 """
 
 from typing import Literal
@@ -28,7 +28,7 @@ class PricingCompatibility:
     """
 
     # Official GAM compatibility matrix (what GAM API supports)
-    # Source: GAM API v202411 LineItem and CostType specifications
+    # Source: GAM API LineItem and CostType specifications
     COMPATIBILITY_MATRIX = {
         "STANDARD": {"CPM", "CPC", "VCPM", "CPM_IN_TARGET"},
         "SPONSORSHIP": {"CPM", "CPC", "CPD"},

@@ -37,11 +37,13 @@ class A2AAdCPComplianceClient:
         self,
         a2a_url: str,
         auth_token: str,
+        tenant: str | None = None,
         validate_schemas: bool = True,
         offline_mode: bool = True,
     ):
         self.a2a_url = a2a_url
         self.auth_token = auth_token
+        self.tenant = tenant
         self.validate_schemas = validate_schemas
         self.offline_mode = offline_mode
         self.http_client = httpx.AsyncClient(timeout=30.0)
@@ -79,6 +81,8 @@ class A2AAdCPComplianceClient:
         }
 
         headers = {"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"}
+        if self.tenant:
+            headers["x-adcp-tenant"] = self.tenant
 
         response = await self.http_client.post(self.a2a_url, json=message, headers=headers)
         response.raise_for_status()
@@ -101,6 +105,8 @@ class A2AAdCPComplianceClient:
         }
 
         headers = {"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"}
+        if self.tenant:
+            headers["x-adcp-tenant"] = self.tenant
 
         response = await self.http_client.post(self.a2a_url, json=message, headers=headers)
         response.raise_for_status()
@@ -277,7 +283,7 @@ async def compliance_client(a2a_url, auth_token):
         pytest.skip(f"A2A server not available at {a2a_url}: {e}")
 
     async with A2AAdCPComplianceClient(
-        a2a_url=a2a_url, auth_token=auth_token, validate_schemas=True, offline_mode=True
+        a2a_url=a2a_url, auth_token=auth_token, tenant="ci-test", validate_schemas=True, offline_mode=True
     ) as client:
         yield client
 

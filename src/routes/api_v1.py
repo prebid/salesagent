@@ -13,14 +13,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel
 
-from src.core.auth import get_principal_from_token
-from src.core.config_loader import set_current_tenant
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.auth_context import require_auth, resolve_auth
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
 from src.core.tools import media_buy_create as media_buy_create_module
@@ -41,56 +39,6 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _resolve_auth(request: Request) -> tuple[str | None, ResolvedIdentity | None]:
-    """Resolve authentication from request using shared 4-strategy tenant detection.
-
-    Returns (principal_id, ResolvedIdentity) or (None, None).
-    Uses the same resolve_identity() as MCP and A2A transports.
-    """
-    from src.core.auth_context import AuthContext
-    from src.core.resolved_identity import ResolvedIdentity, resolve_identity
-
-    auth_ctx: AuthContext = getattr(request.state, "auth_context", AuthContext.unauthenticated())
-
-    if not auth_ctx.auth_token:
-        return None, None
-
-    principal_id = get_principal_from_token(auth_ctx.auth_token)
-    if not principal_id:
-        return None, None
-
-    # Use shared resolve_identity with request headers for proper 4-strategy tenant detection
-    identity = resolve_identity(
-        headers=auth_ctx.headers,
-        require_valid_token=False,
-        protocol="rest",
-    )
-    # Override principal_id from token validation (resolve_identity may not have it if headers lack auth)
-    if identity.principal_id != principal_id:
-        identity = ResolvedIdentity(
-            principal_id=principal_id,
-            tenant_id=identity.tenant_id,
-            tenant=identity.tenant,
-            auth_token=auth_ctx.auth_token,
-            protocol="rest",
-        )
-
-    if identity.tenant:
-        set_current_tenant(identity.tenant)
-    elif identity.tenant_id:
-        set_current_tenant({"tenant_id": identity.tenant_id})
-
-    return principal_id, identity
-
-
-def _require_auth(request: Request) -> tuple[str, ResolvedIdentity]:
-    """Resolve auth or raise 401."""
-    principal_id, identity = _resolve_auth(request)
-    if not principal_id or identity is None:
-        raise AdCPAuthenticationError("Authentication required")
-    return principal_id, identity
 
 
 def _handle_tool_error(e: ToolError) -> JSONResponse:
@@ -184,10 +132,8 @@ class ListAuthorizedPropertiesBody(BaseModel):
 
 
 @router.post("/products")
-async def get_products(body: GetProductsBody, request: Request):
+async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
     """Get available products matching the brief (auth-optional discovery skill)."""
-    _, identity = _resolve_auth(request)
-
     req = products_module.create_get_products_request(
         brief=body.brief,
         brand=body.brand,
@@ -204,9 +150,8 @@ async def get_products(body: GetProductsBody, request: Request):
 
 
 @router.get("/capabilities")
-async def get_capabilities(request: Request):
+async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
-    _, identity = _resolve_auth(request)
 
     try:
         response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
@@ -217,9 +162,8 @@ async def get_capabilities(request: Request):
 
 
 @router.post("/creative-formats")
-async def list_creative_formats(body: ListCreativeFormatsBody, request: Request):
+async def list_creative_formats(body: ListCreativeFormatsBody, identity: ResolvedIdentity | None = resolve_auth):
     """List available creative formats (auth-optional discovery skill)."""
-    _, identity = _resolve_auth(request)
 
     try:
         response = creative_formats_module.list_creative_formats_raw(identity=identity)
@@ -230,9 +174,10 @@ async def list_creative_formats(body: ListCreativeFormatsBody, request: Request)
 
 
 @router.post("/authorized-properties")
-async def list_authorized_properties(body: ListAuthorizedPropertiesBody, request: Request):
+async def list_authorized_properties(
+    body: ListAuthorizedPropertiesBody, identity: ResolvedIdentity | None = resolve_auth
+):
     """List authorized properties (auth-optional discovery skill)."""
-    _, identity = _resolve_auth(request)
 
     try:
         response = properties_module.list_authorized_properties_raw(identity=identity)
@@ -248,10 +193,8 @@ async def list_authorized_properties(body: ListAuthorizedPropertiesBody, request
 
 
 @router.post("/media-buys")
-async def create_media_buy(body: CreateMediaBuyBody, request: Request):
+async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity = require_auth):
     """Create a new media buy (auth required)."""
-    _, identity = _require_auth(request)
-
     try:
         response = await media_buy_create_module.create_media_buy_raw(
             buyer_ref=body.buyer_ref,
@@ -272,10 +215,8 @@ async def create_media_buy(body: CreateMediaBuyBody, request: Request):
 
 
 @router.put("/media-buys/{media_buy_id}")
-async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, request: Request):
+async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
     """Update an existing media buy (auth required)."""
-    _, identity = _require_auth(request)
-
     try:
         response = media_buy_update_module.update_media_buy_raw(
             media_buy_id=media_buy_id,
@@ -295,10 +236,8 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, request:
 
 
 @router.post("/media-buys/delivery")
-async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, request: Request):
+async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: ResolvedIdentity = require_auth):
     """Get delivery metrics for media buys (auth required)."""
-    _, identity = _require_auth(request)
-
     try:
         response = media_buy_delivery_module.get_media_buy_delivery_raw(
             media_buy_ids=body.media_buy_ids,
@@ -314,10 +253,8 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, request: Request
 
 
 @router.post("/creatives/sync")
-async def sync_creatives(body: SyncCreativesBody, request: Request):
+async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = require_auth):
     """Sync creatives (auth required)."""
-    _, identity = _require_auth(request)
-
     try:
         response = creatives_sync_module.sync_creatives_raw(
             creatives=body.creatives,  # type: ignore[arg-type]  # REST accepts dicts, _impl handles both
@@ -335,10 +272,8 @@ async def sync_creatives(body: SyncCreativesBody, request: Request):
 
 
 @router.post("/creatives")
-async def list_creatives(body: ListCreativesBody, request: Request):
+async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = require_auth):
     """List creatives (auth required)."""
-    _, identity = _require_auth(request)
-
     try:
         response = creatives_listing_module.list_creatives_raw(
             media_buy_id=body.media_buy_id,
@@ -355,10 +290,8 @@ async def list_creatives(body: ListCreativesBody, request: Request):
 
 
 @router.post("/performance-index")
-async def update_performance_index(body: UpdatePerformanceIndexBody, request: Request):
+async def update_performance_index(body: UpdatePerformanceIndexBody, identity: ResolvedIdentity = require_auth):
     """Update performance index for a media buy (auth required)."""
-    _, identity = _require_auth(request)
-
     try:
         response = performance_module.update_performance_index_raw(
             media_buy_id=body.media_buy_id,

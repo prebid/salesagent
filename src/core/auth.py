@@ -33,27 +33,7 @@ logger = logging.getLogger(__name__)
 _VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
 
 
-def _get_header_case_insensitive(headers: dict, header_name: str) -> str | None:
-    """Get a header value with case-insensitive lookup.
-
-    HTTP headers are case-insensitive, but Python dicts are case-sensitive.
-    This helper function performs case-insensitive header lookup.
-
-    Args:
-        headers: Dictionary of headers
-        header_name: Header name to look up (will be compared case-insensitively)
-
-    Returns:
-        Header value if found, None otherwise
-    """
-    if not headers:
-        return None
-
-    header_name_lower = header_name.lower()
-    for key, value in headers.items():
-        if key.lower() == header_name_lower:
-            return value
-    return None
+from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:
@@ -262,12 +242,12 @@ def get_principal_from_context(
         # SECURITY NOTE: This is safe because get_principal_from_token() will:
         # 1. Look up the token globally
         # 2. Find which tenant it belongs to
-        # 3. Set that tenant's context
+        # 3. Return (principal_id, tenant_dict) — caller sets context
         # 4. Return principal_id only if token is valid for that tenant
         logger.debug("Using global token lookup (finds tenant from token)")
         detection_method = "global token lookup"
 
-    principal_id = get_principal_from_token(auth_token, requested_tenant_id)
+    principal_id, token_tenant = get_principal_from_token(auth_token, requested_tenant_id)
 
     # If token was provided but invalid, raise an error (unless require_valid_token=False for discovery)
     # This distinguishes between "no auth" (OK) and "bad auth" (error or warning)
@@ -288,10 +268,9 @@ def get_principal_from_context(
             )
             return (None, tenant_context)
 
-    # If tenant_context wasn't set by header detection, get it from current tenant
-    # (get_principal_from_token set it as a side effect for global lookup case)
-    if not tenant_context:
-        tenant_context = get_current_tenant()
+    # If tenant_context wasn't set by header detection, use tenant discovered from token
+    if not tenant_context and token_tenant:
+        tenant_context = token_tenant
 
     # Return both principal_id and tenant_context explicitly
     # Caller MUST call set_current_tenant(tenant_context) in their async context

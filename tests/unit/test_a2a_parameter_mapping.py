@@ -14,6 +14,15 @@ from unittest.mock import patch
 
 import pytest
 
+from src.core.resolved_identity import ResolvedIdentity
+
+_MOCK_IDENTITY = ResolvedIdentity(
+    principal_id="principal_123",
+    tenant_id="tenant_123",
+    tenant={"tenant_id": "tenant_123"},
+    protocol="a2a",
+)
+
 
 class TestA2AParameterMapping:
     """Test parameter extraction and mapping in A2A skill handlers."""
@@ -33,14 +42,10 @@ class TestA2AParameterMapping:
 
         handler = AdCPRequestHandler()
 
-        # Mock at the right level - mock the update_media_buy_raw import in a2a_server
         with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_tenant,
+            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
             patch("src.a2a_server.adcp_a2a_server.core_update_media_buy_tool") as mock_update,
         ):
-            mock_principal.return_value = "principal_123"
-            mock_tenant.return_value = {"tenant_id": "tenant_123"}
             mock_update.return_value = {"status": "success", "media_buy_id": "mb_123"}
 
             # Simulate A2A request with AdCP v2.0+ 'packages' field
@@ -53,7 +58,7 @@ class TestA2AParameterMapping:
             # Call the skill handler (synchronous wrapper for async method)
             import asyncio
 
-            result = asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, auth_token="test_token"))
+            result = asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, identity=_MOCK_IDENTITY))
 
             # Verify the core function was called with correct parameter name
             mock_update.assert_called_once()
@@ -88,12 +93,9 @@ class TestA2AParameterMapping:
         handler = AdCPRequestHandler()
 
         with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_tenant,
+            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
             patch("src.a2a_server.adcp_a2a_server.core_update_media_buy_tool") as mock_update,
         ):
-            mock_principal.return_value = "principal_123"
-            mock_tenant.return_value = {"tenant_id": "tenant_123"}
             mock_update.return_value = {"status": "success"}
 
             # Legacy request format with 'updates' wrapper
@@ -106,7 +108,7 @@ class TestA2AParameterMapping:
 
             import asyncio
 
-            result = asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, auth_token="test_token"))
+            result = asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, identity=_MOCK_IDENTITY))
 
             # Should extract packages from legacy 'updates' wrapper
             mock_update.assert_called_once()
@@ -127,13 +129,7 @@ class TestA2AParameterMapping:
 
         handler = AdCPRequestHandler()
 
-        with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_tenant,
-        ):
-            mock_principal.return_value = "principal_123"
-            mock_tenant.return_value = {"tenant_id": "tenant_123"}
-
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Request with neither media_buy_id nor buyer_ref
             invalid_parameters = {"active": True, "packages": []}
 
@@ -144,7 +140,7 @@ class TestA2AParameterMapping:
             # Should raise ServerError for missing required parameter
             with pytest.raises(ServerError) as exc_info:
                 asyncio.run(
-                    handler._handle_update_media_buy_skill(parameters=invalid_parameters, auth_token="test_token")
+                    handler._handle_update_media_buy_skill(parameters=invalid_parameters, identity=_MOCK_IDENTITY)
                 )
 
             # Error message should mention required parameter
@@ -164,12 +160,9 @@ class TestA2AParameterMapping:
         handler = AdCPRequestHandler()
 
         with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_tenant,
+            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
             patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery,
         ):
-            mock_principal.return_value = "principal_123"
-            mock_tenant.return_value = {"tenant_id": "tenant_123"}
             mock_delivery.return_value = {"media_buys": []}
 
             # AdCP request with plural 'media_buy_ids'
@@ -178,7 +171,7 @@ class TestA2AParameterMapping:
             import asyncio
 
             result = asyncio.run(
-                handler._handle_get_media_buy_delivery_skill(parameters=parameters, auth_token="test_token")
+                handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY)
             )
 
             # Verify core function was called with correct parameter
@@ -202,12 +195,9 @@ class TestA2AParameterMapping:
         handler = AdCPRequestHandler()
 
         with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_tenant,
+            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
             patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery,
         ):
-            mock_principal.return_value = "principal_123"
-            mock_tenant.return_value = {"tenant_id": "tenant_123"}
             mock_delivery.return_value = {"media_buys": []}
 
             # AdCP request with filters but no media_buy_ids
@@ -220,7 +210,7 @@ class TestA2AParameterMapping:
             import asyncio
 
             result = asyncio.run(
-                handler._handle_get_media_buy_delivery_skill(parameters=parameters, auth_token="test_token")
+                handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY)
             )
 
             # Verify core function was called with filters
@@ -243,13 +233,7 @@ class TestA2AParameterMapping:
 
         handler = AdCPRequestHandler()
 
-        with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_principal,
-            patch("src.a2a_server.adcp_a2a_server.get_current_tenant") as mock_tenant,
-        ):
-            mock_principal.return_value = "principal_123"
-            mock_tenant.return_value = {"tenant_id": "tenant_123"}
-
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Request missing required AdCP parameters
             incomplete_parameters = {
                 "buyer_ref": "campaign_123",
@@ -259,7 +243,7 @@ class TestA2AParameterMapping:
             import asyncio
 
             result = asyncio.run(
-                handler._handle_create_media_buy_skill(parameters=incomplete_parameters, auth_token="test_token")
+                handler._handle_create_media_buy_skill(parameters=incomplete_parameters, identity=_MOCK_IDENTITY)
             )
 
             # Should reject and list missing required parameters

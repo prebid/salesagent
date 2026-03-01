@@ -19,9 +19,10 @@ def is_super_admin(email):
     # 2. Fallback to database configuration (runtime config)
     try:
         with get_db_session() as db:
-            config = db.query(TenantManagementConfig).filter_by(
+            stmt = select(TenantManagementConfig).filter_by(
                 config_key="super_admin_emails"
-            ).first()
+            )
+            config = db.scalars(stmt).first()
             if config and config.config_value:
                 db_emails = [e.strip().lower() for e in config.config_value.split(",")]
                 return email.lower() in db_emails

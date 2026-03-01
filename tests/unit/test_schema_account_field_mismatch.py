@@ -28,44 +28,39 @@ class TestAccountFieldMismatch:
     """Demonstrate account vs account_id mismatch between local schemas and adcp 3.6.0."""
 
     def test_get_products_schema_has_account_id_matching_model(self):
-        """After fix: local schema uses 'account_id' matching adcp 3.6.0 model."""
+        """Library uses 'account_id' (string). Local extends with 'account' (object ref)."""
         schema_path = SCHEMA_DIR / "_schemas_latest_media-buy_get-products-request_json.json"
         schema = json.loads(schema_path.read_text())
         schema_fields = set(schema["properties"].keys())
         model_fields = set(GetProductsRequest.model_fields.keys())
 
-        # Both schema and model should use 'account_id' (string)
-        assert "account_id" in schema_fields, "Schema should define 'account_id' field"
+        # 'account_id' (string) comes from adcp 3.6.0 library
         assert "account_id" in model_fields, "Model should have 'account_id' from adcp 3.6.0"
-        # Old 'account' field should not exist in either
-        assert "account" not in schema_fields, "Schema should NOT have old 'account' field"
-        assert "account" not in model_fields, "Model should NOT have 'account' — it uses 'account_id'"
+        # 'account' (object ref) is a local extension for account-based product lookup
+        # These are different fields: account_id is a string ID, account is a full ref object
+        assert "account" in model_fields, "Model should have 'account' as local extension (account-ref.json)"
 
     def test_get_media_buy_delivery_schema_has_account_id_matching_model(self):
-        """After fix: local schema uses 'account_id' matching adcp 3.6.0 model."""
+        """Library uses 'account_id' (string). Local extends with 'account' (object ref)."""
         schema_path = SCHEMA_DIR / "_schemas_latest_media-buy_get-media-buy-delivery-request_json.json"
         schema = json.loads(schema_path.read_text())
         schema_fields = set(schema["properties"].keys())
         model_fields = set(GetMediaBuyDeliveryRequest.model_fields.keys())
 
-        # Both schema and model should use 'account_id' (string)
-        assert "account_id" in schema_fields, "Schema should define 'account_id' field"
+        # 'account_id' (string) comes from adcp 3.6.0 library
         assert "account_id" in model_fields, "Model should have 'account_id' from adcp 3.6.0"
-        # Old 'account' field should not exist in either
-        assert "account" not in schema_fields, "Schema should NOT have old 'account' field"
-        assert "account" not in model_fields, "Model should NOT have 'account' — it uses 'account_id'"
+        # 'account' (object ref) is a local extension from spec
+        assert "account" in model_fields, "Model should have 'account' as local extension (account-ref.json)"
 
-    def test_get_products_model_rejects_account_field(self):
-        """Sending 'account' (from schema) to the Pydantic model fails in strict mode."""
-        with pytest.raises((TypeError, ValueError)):
-            # The schema says 'account' is valid, but the model rejects it
-            GetProductsRequest(account={"account_id": "acc_123"})
+    def test_get_products_model_accepts_account_field(self):
+        """Model accepts 'account' as a local extension (dict for account-ref.json)."""
+        req = GetProductsRequest(account={"account_id": "acc_123"}, brief="test")
+        assert req.account == {"account_id": "acc_123"}
 
-    def test_get_media_buy_delivery_model_rejects_account_field(self):
-        """Sending 'account' (from schema) to the Pydantic model fails in strict mode."""
-        with pytest.raises((TypeError, ValueError)):
-            # The schema says 'account' is valid, but the model rejects it
-            GetMediaBuyDeliveryRequest(account={"account_id": "acc_123"})
+    def test_get_media_buy_delivery_model_accepts_account_field(self):
+        """Model accepts 'account' as a local extension (dict for account-ref.json)."""
+        req = GetMediaBuyDeliveryRequest(account={"account_id": "acc_123"})
+        assert req.account == {"account_id": "acc_123"}
 
     def test_status_filter_schema_type_vs_model_type(self):
         """Schema defines status_filter as oneOf[enum-string, array-of-enum],

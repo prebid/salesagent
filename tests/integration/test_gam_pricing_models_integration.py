@@ -9,6 +9,7 @@ tests will skip rather than fail, since external service availability is outside
 our control.
 """
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -36,6 +37,12 @@ from tests.utils.database_helpers import create_tenant_with_timestamps
 
 # Tests are now AdCP 2.4 compliant (removed status field, using errors field)
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+# Use relative dates to avoid "start time in the past" validation failures.
+_NOW = datetime.now(UTC)
+_FUTURE_START = (_NOW + timedelta(days=7)).strftime("%Y-%m-%dT00:00:00Z")
+_FUTURE_END_30D = (_NOW + timedelta(days=37)).strftime("%Y-%m-%dT23:59:59Z")
+_FUTURE_END_10D = (_NOW + timedelta(days=17)).strftime("%Y-%m-%dT23:59:59Z")
 
 
 @pytest.fixture
@@ -384,8 +391,8 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
                 budget=10000.0,
             )
         ],
-        start_time="2026-03-01T00:00:00Z",
-        end_time="2026-03-31T23:59:59Z",
+        start_time=_FUTURE_START,
+        end_time=_FUTURE_END_30D,
     )
 
     identity = ResolvedIdentity(
@@ -433,8 +440,8 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
                 budget=5000.0,
             )
         ],
-        start_time="2026-03-01T00:00:00Z",
-        end_time="2026-03-31T23:59:59Z",
+        start_time=_FUTURE_START,
+        end_time=_FUTURE_END_30D,
     )
 
     identity = ResolvedIdentity(
@@ -483,8 +490,8 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
                 budget=12000.0,
             )
         ],
-        start_time="2026-03-01T00:00:00Z",
-        end_time="2026-03-31T23:59:59Z",
+        start_time=_FUTURE_START,
+        end_time=_FUTURE_END_30D,
     )
 
     identity = ResolvedIdentity(
@@ -534,8 +541,8 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
                 budget=5000.0,
             )
         ],
-        start_time="2026-03-01T00:00:00Z",
-        end_time="2026-03-10T23:59:59Z",  # 10 days
+        start_time=_FUTURE_START,
+        end_time=_FUTURE_END_10D,  # 10 days
     )
 
     identity = ResolvedIdentity(
@@ -596,8 +603,8 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
                 budget=9000.0,
             ),
         ],
-        start_time="2026-03-01T00:00:00Z",
-        end_time="2026-03-31T23:59:59Z",
+        start_time=_FUTURE_START,
+        end_time=_FUTURE_END_30D,
     )
 
     identity = ResolvedIdentity(
@@ -662,8 +669,8 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
                 bid_price=2.25,  # Bid within floor/ceiling
             )
         ],
-        start_time="2026-03-01T00:00:00Z",
-        end_time="2026-03-31T23:59:59Z",
+        start_time=_FUTURE_START,
+        end_time=_FUTURE_END_30D,
     )
 
     identity = ResolvedIdentity(

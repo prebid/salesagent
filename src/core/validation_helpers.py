@@ -70,7 +70,7 @@ def run_async_in_sync_context(coroutine):
 
 def safe_parse_json_field(field_value, field_name="field", default=None):
     """
-    Safely parse a database field that might be JSON string (SQLite) or dict (PostgreSQL JSONB).
+    Safely parse a database field that might be a JSON string or already-deserialized dict (JSONB).
 
     Args:
         field_value: The field value from database (could be str, dict, None, etc.)

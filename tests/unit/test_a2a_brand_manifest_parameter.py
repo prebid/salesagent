@@ -4,6 +4,9 @@ Test A2A get_products brand parameter handling (adcp 3.6.0).
 
 Unit tests to verify that the A2A server correctly uses brand (not brand_manifest)
 when calling the core get_products tool.
+
+After the identity-at-transport-boundary refactor, handlers
+receive a pre-resolved identity parameter.
 """
 
 import logging
@@ -12,8 +15,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.resolved_identity import ResolvedIdentity
 
 logger = logging.getLogger(__name__)
+
+_MOCK_IDENTITY = ResolvedIdentity(
+    principal_id="test_principal", tenant_id="test_tenant", tenant={"tenant_id": "test_tenant"}, protocol="a2a"
+)
 
 
 @pytest.mark.asyncio
@@ -21,14 +29,7 @@ async def test_handle_get_products_skill_passes_brand():
     """Test that _handle_get_products_skill passes brand parameter to core tool."""
     handler = AdCPRequestHandler()
 
-    with (
-        patch.object(handler, "_create_tool_context_from_a2a") as mock_create_context,
-        patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool,
-        patch.object(handler, "_resolve_identity") as mock_resolve,
-    ):
-        mock_create_context.return_value = MagicMock(tenant_id="test_tenant", principal_id="test_principal")
-        mock_resolve.return_value = MagicMock()
-
+    with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"products": [], "message": "Test products"}
         mock_core_tool.return_value = mock_response
@@ -38,7 +39,7 @@ async def test_handle_get_products_skill_passes_brand():
             "brief": "Athletic footwear",
         }
 
-        await handler._handle_get_products_skill(parameters, "test_token")
+        await handler._handle_get_products_skill(parameters, _MOCK_IDENTITY)
 
         mock_core_tool.assert_called_once()
         call_kwargs = mock_core_tool.call_args.kwargs
@@ -54,14 +55,7 @@ async def test_handle_get_products_skill_extracts_all_parameters():
     """Test that _handle_get_products_skill extracts all optional parameters."""
     handler = AdCPRequestHandler()
 
-    with (
-        patch.object(handler, "_create_tool_context_from_a2a") as mock_create_context,
-        patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool,
-        patch.object(handler, "_resolve_identity") as mock_resolve,
-    ):
-        mock_create_context.return_value = MagicMock(tenant_id="test_tenant", principal_id="test_principal")
-        mock_resolve.return_value = MagicMock()
-
+    with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"products": [], "message": "Test products"}
         mock_core_tool.return_value = mock_response
@@ -75,7 +69,7 @@ async def test_handle_get_products_skill_extracts_all_parameters():
             "strategy_id": "test_strategy_123",
         }
 
-        await handler._handle_get_products_skill(parameters, "test_token")
+        await handler._handle_get_products_skill(parameters, _MOCK_IDENTITY)
 
         mock_core_tool.assert_called_once()
         call_kwargs = mock_core_tool.call_args.kwargs
@@ -94,14 +88,7 @@ async def test_handle_get_products_skill_brand_manifest_not_converted():
     """Test that brand_manifest is NOT silently converted — brand_manifest is ignored."""
     handler = AdCPRequestHandler()
 
-    with (
-        patch.object(handler, "_create_tool_context_from_a2a") as mock_create_context,
-        patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool,
-        patch.object(handler, "_resolve_identity") as mock_resolve,
-    ):
-        mock_create_context.return_value = MagicMock(tenant_id="test_tenant", principal_id="test_principal")
-        mock_resolve.return_value = MagicMock()
-
+    with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"products": [], "message": "Test products"}
         mock_core_tool.return_value = mock_response
@@ -112,7 +99,7 @@ async def test_handle_get_products_skill_brand_manifest_not_converted():
             "brief": "Display ads",
         }
 
-        await handler._handle_get_products_skill(parameters, "test_token")
+        await handler._handle_get_products_skill(parameters, _MOCK_IDENTITY)
 
         mock_core_tool.assert_called_once()
         call_kwargs = mock_core_tool.call_args.kwargs
@@ -128,19 +115,11 @@ async def test_handle_get_products_skill_no_brief_no_brand_raises():
     """Test that AdCPValidationError from _impl propagates through the handler."""
     handler = AdCPRequestHandler()
 
-    with (
-        patch.object(handler, "_create_tool_context_from_a2a") as mock_create_context,
-        patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool,
-        patch.object(handler, "_resolve_identity") as mock_resolve,
-    ):
-        mock_create_context.return_value = MagicMock(tenant_id="test_tenant", principal_id="test_principal")
-        mock_resolve.return_value = MagicMock()
-
-        # _impl raises AdCPValidationError for missing search criteria
+    with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
         from src.core.exceptions import AdCPValidationError
 
         mock_core_tool.side_effect = AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
 
         # AdCPError propagates via 'except AdCPError: raise' to outer handler
         with pytest.raises(AdCPValidationError):
-            await handler._handle_get_products_skill({}, "test_token")
+            await handler._handle_get_products_skill({}, _MOCK_IDENTITY)

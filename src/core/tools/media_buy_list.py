@@ -4,6 +4,8 @@ Returns media buy status, creative approval state, and optional delivery snapsho
 for monitoring and reporting workflows.
 """
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,6 +20,7 @@ from pydantic import RootModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -59,7 +62,6 @@ from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
@@ -211,7 +213,7 @@ def _get_media_buys_impl(
     )
 
 
-def get_media_buys(
+async def get_media_buys(
     media_buy_ids: list[str] | None = None,
     buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -236,9 +238,6 @@ def get_media_buys(
     Returns:
         ToolResult with GetMediaBuysResponse data
     """
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx, require_valid_token=True)
     try:
         req = GetMediaBuysRequest(
             media_buy_ids=media_buy_ids,
@@ -248,6 +247,8 @@ def get_media_buys(
             account_id=account_id,
             context=cast(ContextObject | None, context),
         )
+        # Read identity pre-resolved by MCPAuthMiddleware
+        identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
         response = _get_media_buys_impl(req, identity=identity)
         return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:

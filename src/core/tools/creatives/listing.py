@@ -492,9 +492,7 @@ async def list_creatives(
     Returns:
         ToolResult with ListCreativesResponse data
     """
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Pass typed Pydantic models directly (no model_dump conversion needed)
     fields_list = [f.value if isinstance(f, FieldModel) else f for f in fields] if fields else None

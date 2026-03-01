@@ -127,7 +127,7 @@ def _update_performance_index_impl(
     )
 
 
-def update_performance_index(
+async def update_performance_index(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
     webhook_url: str | None = None,
@@ -148,9 +148,7 @@ def update_performance_index(
     Returns:
         ToolResult with UpdatePerformanceIndexResponse data
     """
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _update_performance_index_impl(media_buy_id, performance_data, context, identity)
     return ToolResult(content=str(response), structured_content=response)
 

@@ -4,7 +4,6 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
-import contextvars
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -45,8 +44,7 @@ from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth_utils import get_principal_from_token
-from src.core.config_loader import get_current_tenant
+from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
@@ -57,13 +55,15 @@ from src.core.exceptions import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.tools import (
     create_media_buy_raw as core_create_media_buy_tool,
 )
 from src.core.tools import (
     get_media_buy_delivery_raw as core_get_media_buy_delivery_tool,
+)
+from src.core.tools import (
+    get_media_buys_raw as core_get_media_buys_tool,
 )
 from src.core.tools import (
     get_products_raw as core_get_products_tool,
@@ -88,7 +88,6 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
-from src.core.transport_helpers import resolve_identity_from_context
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -122,10 +121,6 @@ DISCOVERY_SKILLS = frozenset(
     }
 )
 
-# Context variables for current request (works with async code, unlike threading.local())
-_request_auth_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_auth_token", default=None)
-_request_headers: contextvars.ContextVar[dict | None] = contextvars.ContextVar("request_headers", default=None)
-
 
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
@@ -135,188 +130,115 @@ class AdCPRequestHandler(RequestHandler):
         self.tasks = {}  # In-memory task storage
         logger.info("AdCP Request Handler initialized for direct function calls")
 
-    def _get_auth_token(self) -> str | None:
-        """Extract Bearer token from current request context."""
-        return _request_auth_token.get()
-
-    def _create_tool_context_from_a2a(
-        self, auth_token: str | None, tool_name: str, context_id: str | None = None
-    ) -> ToolContext:
-        """Create a ToolContext from A2A authentication information.
+    def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
+        """Extract Bearer token from ServerCallContext.
 
         Args:
-            auth_token: Bearer token from Authorization header (optional)
+            context: ServerCallContext from SDK (None when called directly in tests).
+        """
+        if context is None:
+            return None
+        auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY)
+        return auth_ctx.auth_token if auth_ctx else None
+
+    def _resolve_a2a_identity(
+        self,
+        auth_token: str | None,
+        require_valid_token: bool = True,
+        context: ServerCallContext | None = None,
+    ) -> ResolvedIdentity:
+        """Resolve identity at the A2A transport boundary — called ONCE per request.
+
+        This is the A2A equivalent of REST's _resolve_auth(). It calls
+        resolve_identity() once and returns the result. All downstream handlers
+        receive the pre-resolved identity instead of re-resolving from auth_token.
+
+        Args:
+            auth_token: Bearer token from Authorization header (None for unauthenticated)
+            require_valid_token: If True, auth failures raise ServerError
+            context: ServerCallContext from SDK (None when called directly in tests).
+
+        Returns:
+            ResolvedIdentity with tenant and (optionally) principal info
+
+        Raises:
+            ServerError: If require_valid_token=True and authentication fails
+        """
+        from src.core.resolved_identity import resolve_identity
+        from src.core.testing_hooks import AdCPTestContext
+
+        auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY) if context is not None else None
+        headers = auth_ctx.headers if auth_ctx else {}
+
+        if require_valid_token and not auth_token:
+            raise ServerError(InvalidRequestError(message="Missing authentication token"))
+
+        # Extract testing context from A2A request headers (same as MCP does)
+        testing_context = AdCPTestContext.from_headers(headers)
+
+        try:
+            identity = resolve_identity(
+                headers=headers,
+                auth_token=auth_token,
+                require_valid_token=require_valid_token,
+                protocol="a2a",
+                testing_context=testing_context,
+            )
+        except AdCPAuthenticationError as e:
+            raise ServerError(InvalidRequestError(message=str(e))) from e
+
+        if require_valid_token:
+            if not identity.principal_id:
+                raise ServerError(InvalidRequestError(message="Authentication token is invalid or expired."))
+
+            if not identity.tenant:
+                raise ServerError(
+                    InvalidRequestError(
+                        message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
+                    )
+                )
+
+            tenant_id = identity.tenant_id or identity.tenant.get("tenant_id", "unknown")
+            logger.info(
+                f"[A2A AUTH] ✅ Authentication successful: tenant={tenant_id}, principal={identity.principal_id}"
+            )
+
+        # Set tenant ContextVar at the A2A transport boundary
+        if identity.tenant:
+            from src.core.config_loader import set_current_tenant
+
+            set_current_tenant(identity.tenant)
+
+        return identity
+
+    def _make_tool_context(
+        self, identity: ResolvedIdentity, tool_name: str, context_id: str | None = None
+    ) -> ToolContext:
+        """Build ToolContext from a pre-resolved identity — NO database calls.
+
+        Args:
+            identity: Pre-resolved identity from _resolve_a2a_identity
             tool_name: Name of the tool being called
             context_id: Optional context ID for conversation tracking
 
         Returns:
             ToolContext for calling core functions
-
-        Raises:
-            ValueError: If authentication fails
         """
-        # Import tenant resolution functions
-        from src.core.config_loader import (
-            get_tenant_by_id,
-            get_tenant_by_subdomain,
-            get_tenant_by_virtual_host,
-            set_current_tenant,
-        )
-
-        # Get request headers for debugging (case-insensitive lookup)
-        headers = _request_headers.get() or {}
-
-        # Helper to get header case-insensitively
-        def get_header(header_name: str) -> str | None:
-            for key, value in headers.items():
-                if key.lower() == header_name.lower():
-                    return value
-            return None
-
-        apx_host = get_header("apx-incoming-host") or "NOT_PRESENT"
-        host = get_header("host")
-        tenant_header = get_header("x-adcp-tenant")
-
-        logger.info("[A2A AUTH] Resolving tenant from headers:")
-        logger.info(f"  Host: {host}")
-        logger.info(f"  Apx-Incoming-Host: {apx_host}")
-        logger.info(f"  x-adcp-tenant: {tenant_header}")
-
-        # CRITICAL: Resolve tenant from headers FIRST (before authentication)
-        # This matches the MCP pattern in main.py::get_principal_from_context()
-        requested_tenant_id = None
-        tenant_context = None
-        detection_method = None
-
-        # 1. Check Host header for subdomain
-        if not requested_tenant_id and host:
-            subdomain = host.split(".")[0] if "." in host else None
-            if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
-                logger.info(f"[A2A AUTH] Looking up tenant by subdomain: {subdomain}")
-                tenant_context = get_tenant_by_subdomain(subdomain)
-                if tenant_context:
-                    requested_tenant_id = tenant_context["tenant_id"]
-                    detection_method = "subdomain"
-                    set_current_tenant(tenant_context)
-                    logger.info(f"[A2A AUTH] ✅ Tenant detected from subdomain: {subdomain} → {requested_tenant_id}")
-                else:
-                    # Try virtual host lookup
-                    logger.info(f"[A2A AUTH] Trying virtual host lookup for: {host}")
-                    tenant_context = get_tenant_by_virtual_host(host)
-                    if tenant_context:
-                        requested_tenant_id = tenant_context["tenant_id"]
-                        detection_method = "host header (virtual host)"
-                        set_current_tenant(tenant_context)
-                        logger.info(f"[A2A AUTH] ✅ Tenant detected from Host header: {host} → {requested_tenant_id}")
-
-        # 2. Check x-adcp-tenant header
-        if not requested_tenant_id and tenant_header:
-            logger.info(f"[A2A AUTH] Looking up tenant from x-adcp-tenant: {tenant_header}")
-            tenant_context = get_tenant_by_subdomain(tenant_header)
-            if tenant_context:
-                requested_tenant_id = tenant_context["tenant_id"]
-                detection_method = "x-adcp-tenant (subdomain)"
-                set_current_tenant(tenant_context)
-                logger.info(
-                    f"[A2A AUTH] ✅ Tenant detected from x-adcp-tenant: {tenant_header} → {requested_tenant_id}"
-                )
-            else:
-                # Fallback: assume it's a tenant_id
-                tenant_context = get_tenant_by_id(tenant_header)
-                if tenant_context:
-                    requested_tenant_id = tenant_context["tenant_id"]
-                    detection_method = "x-adcp-tenant (direct)"
-                    set_current_tenant(tenant_context)
-                    logger.info(f"[A2A AUTH] ✅ Tenant detected from x-adcp-tenant: {requested_tenant_id}")
-
-        # 3. Check Apx-Incoming-Host header (for Approximated.app routing)
-        if not requested_tenant_id and apx_host and apx_host != "NOT_PRESENT":
-            logger.info(f"[A2A AUTH] Looking up tenant by Apx-Incoming-Host: {apx_host}")
-            tenant_context = get_tenant_by_virtual_host(apx_host)
-            if tenant_context:
-                requested_tenant_id = tenant_context["tenant_id"]
-                detection_method = "apx-incoming-host"
-                set_current_tenant(tenant_context)
-                logger.info(f"[A2A AUTH] ✅ Tenant detected from Apx-Incoming-Host: {apx_host} → {requested_tenant_id}")
-
-        if requested_tenant_id:
-            logger.info(f"[A2A AUTH] Final tenant_id: {requested_tenant_id} (via {detection_method})")
-        else:
-            logger.warning("[A2A AUTH] ⚠️  No tenant detected from headers - will use global token lookup")
-
-        # NOW authenticate with tenant context (if we have one)
-        if not auth_token:
-            raise ServerError(InvalidRequestError(message="Missing authentication token"))
-        principal_id = get_principal_from_token(auth_token, requested_tenant_id)
-        if not principal_id:
-            raise ServerError(
-                InvalidRequestError(
-                    message=f"Invalid authentication token (not found in database). "
-                    f"Token: {auth_token[:20]}..., "
-                    f"Tenant: {requested_tenant_id or 'any'}, "
-                    f"Apx-Incoming-Host: {apx_host}"
-                )
-            )
-
-        # Get tenant info (either from header detection or from token lookup)
-        if not tenant_context:
-            tenant_context = get_current_tenant()
-        if not tenant_context:
-            raise ServerError(
-                InvalidRequestError(
-                    message=f"Unable to determine tenant from authentication. "
-                    f"Principal: {principal_id}, "
-                    f"Apx-Incoming-Host: {apx_host}"
-                )
-            )
-
-        # Generate context ID if not provided
         if not context_id:
             context_id = f"a2a_{datetime.now(UTC).timestamp()}"
 
-        logger.info(
-            f"[A2A AUTH] ✅ Authentication successful: tenant={tenant_context['tenant_id']}, principal={principal_id}"
+        tenant_id = identity.tenant_id or (
+            identity.tenant.get("tenant_id", "unknown") if identity.tenant else "unknown"
         )
 
-        # Create ToolContext
         return ToolContext(
             context_id=context_id,
-            tenant_id=tenant_context["tenant_id"],
-            principal_id=principal_id,
+            tenant_id=tenant_id,
+            principal_id=identity.principal_id,
             tool_name=tool_name,
             request_timestamp=datetime.now(UTC),
             metadata={"source": "a2a_server", "protocol": "a2a_jsonrpc"},
-            testing_context=AdCPTestContext(),  # Default testing context for A2A requests
-        )
-
-    def _resolve_identity(self, tool_context: ToolContext) -> ResolvedIdentity:
-        """Resolve a ResolvedIdentity from an authenticated ToolContext.
-
-        Args:
-            tool_context: ToolContext created from A2A authentication
-
-        Returns:
-            ResolvedIdentity with tenant and principal info
-        """
-        identity = resolve_identity_from_context(tool_context, protocol="a2a")
-        assert identity is not None, "resolve_identity_from_context returned None for authenticated context"
-        return identity
-
-    def _resolve_identity_unauthenticated(self) -> ResolvedIdentity:
-        """Resolve identity for unauthenticated discovery requests.
-
-        Uses request headers for tenant detection without requiring auth token.
-
-        Returns:
-            ResolvedIdentity with tenant info (no principal)
-        """
-        headers = _request_headers.get() or {}
-        from src.core.resolved_identity import resolve_identity
-
-        return resolve_identity(
-            headers=headers,
-            require_valid_token=False,
-            protocol="a2a",
+            testing_context=identity.testing_context,
         )
 
     def _log_a2a_operation(
@@ -325,8 +247,8 @@ class AdCPRequestHandler(RequestHandler):
         tenant_id: str,
         principal_id: str,
         success: bool = True,
-        details: dict = None,
-        error: str = None,
+        details: dict[str, Any] | None = None,
+        error: str | None = None,
     ):
         """Log A2A operations to audit system for visibility in activity feed."""
         try:
@@ -445,6 +367,7 @@ class AdCPRequestHandler(RequestHandler):
                 CreateMediaBuyError,
                 CreateMediaBuySuccess,
                 GetMediaBuyDeliveryResponse,
+                GetMediaBuysResponse,
                 GetProductsResponse,
                 ListAuthorizedPropertiesResponse,
                 ListCreativeFormatsResponse,
@@ -472,6 +395,7 @@ class AdCPRequestHandler(RequestHandler):
             # Non-union response types - use the concrete class directly
             response_map: dict[str, type] = {
                 "get_media_buy_delivery": GetMediaBuyDeliveryResponse,
+                "get_media_buys": GetMediaBuysResponse,
                 "get_products": GetProductsResponse,
                 "list_authorized_properties": ListAuthorizedPropertiesResponse,
                 "list_creative_formats": ListCreativeFormatsResponse,
@@ -544,7 +468,7 @@ class AdCPRequestHandler(RequestHandler):
         combined_text = " ".join(text_parts).strip().lower()
 
         # Create task for tracking
-        task_id = f"task_{len(self.tasks) + 1}"
+        task_id = f"task_{uuid.uuid4().hex[:12]}"
         # Handle message_id being a number or string
         msg_id = str(params.message.message_id) if hasattr(params.message, "message_id") else None
         context_id = params.message.context_id or msg_id or f"ctx_{task_id}"
@@ -582,7 +506,7 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             # Get authentication token
-            auth_token = self._get_auth_token()
+            auth_token = self._get_auth_token(context)
 
             # Check if any requested skills require authentication
             # Default to not requiring auth - only require if we have non-discovery skills
@@ -602,6 +526,16 @@ class AdCPRequestHandler(RequestHandler):
                     )
                 )
 
+            # ── Transport boundary: resolve identity ONCE ──
+            # Like REST's _resolve_auth(), identity is resolved here and passed
+            # to all downstream handlers. No handler should call resolve_identity().
+            identity: ResolvedIdentity | None = None
+            if auth_token:
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
+            elif not requires_auth:
+                # Unauthenticated discovery request — resolve tenant from headers only
+                identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
+
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
                 # Process explicit skill invocations
@@ -615,7 +549,7 @@ class AdCPRequestHandler(RequestHandler):
                         result = await self._handle_explicit_skill(
                             skill_name,
                             parameters,
-                            auth_token,
+                            identity,
                             push_notification_config=task_metadata.get("push_notification_config"),
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
@@ -688,7 +622,8 @@ class AdCPRequestHandler(RequestHandler):
                 elif successful_skills:
                     # Log successful skill invocations with rich context
                     try:
-                        tool_context = self._create_tool_context_from_a2a(auth_token, successful_skills[0])
+                        tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
+                        principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
                         # Extract meaningful details from results
                         log_details = {"skills": successful_skills, "count": len(successful_skills)}
@@ -720,8 +655,8 @@ class AdCPRequestHandler(RequestHandler):
 
                         self._log_a2a_operation(
                             "explicit_skill_invocation",
-                            tool_context.tenant_id,
-                            tool_context.principal_id,
+                            tenant_id,
+                            principal_id,
                             True,
                             log_details,
                         )
@@ -730,16 +665,9 @@ class AdCPRequestHandler(RequestHandler):
 
             # Natural language fallback (existing keyword-based routing)
             elif any(word in combined_text for word in ["product", "inventory", "available", "catalog"]):
-                result = await self._get_products(combined_text, auth_token)
-                # Extract tenant and principal for logging
-                try:
-                    tool_context = self._create_tool_context_from_a2a(auth_token, "get_products")
-                    tenant_id = tool_context.tenant_id
-                    principal_id = tool_context.principal_id
-                except Exception as e:
-                    logger.warning(f"Could not extract context for logging: {e}")
-                    tenant_id = "unknown"
-                    principal_id = "unknown"
+                result = await self._get_products(combined_text, identity)
+                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
+                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
                 self._log_a2a_operation(
                     "get_products",
@@ -762,17 +690,10 @@ class AdCPRequestHandler(RequestHandler):
                 # Redirect pricing queries to get_products which has real price_guidance
                 result = await self._handle_get_products_skill(
                     {"brief": combined_text},
-                    auth_token,
+                    identity,
                 )
-                # Extract tenant and principal for logging
-                try:
-                    tool_context = self._create_tool_context_from_a2a(auth_token, "get_products")
-                    tenant_id = tool_context.tenant_id
-                    principal_id = tool_context.principal_id
-                except Exception as e:
-                    logger.warning(f"Could not extract context for logging: {e}")
-                    tenant_id = "unknown"
-                    principal_id = "unknown"
+                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
+                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
                 self._log_a2a_operation(
                     "get_products",
@@ -794,16 +715,9 @@ class AdCPRequestHandler(RequestHandler):
                 ]
             elif any(word in combined_text for word in ["target", "audience"]):
                 # Redirect targeting queries to get_adcp_capabilities which has real targeting info
-                result = await self._handle_get_adcp_capabilities_skill({}, auth_token)
-                # Extract tenant and principal for logging
-                try:
-                    tool_context = self._create_tool_context_from_a2a(auth_token, "get_adcp_capabilities")
-                    tenant_id = tool_context.tenant_id
-                    principal_id = tool_context.principal_id
-                except Exception as e:
-                    logger.warning(f"Could not extract context for logging: {e}")
-                    tenant_id = "unknown"
-                    principal_id = "unknown"
+                result = await self._handle_get_adcp_capabilities_skill({}, identity)
+                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
+                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
                 self._log_a2a_operation(
                     "get_adcp_capabilities",
@@ -823,16 +737,9 @@ class AdCPRequestHandler(RequestHandler):
                     )
                 ]
             elif any(word in combined_text for word in ["create", "buy", "campaign", "media"]):
-                result = await self._create_media_buy(combined_text, auth_token)
-                # Extract tenant and principal for logging
-                try:
-                    tool_context = self._create_tool_context_from_a2a(auth_token, "create_media_buy")
-                    tenant_id = tool_context.tenant_id
-                    principal_id = tool_context.principal_id
-                except Exception as e:
-                    logger.warning(f"Could not extract context for logging: {e}")
-                    tenant_id = "unknown"
-                    principal_id = "unknown"
+                result = await self._create_media_buy(combined_text, identity)
+                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
+                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
                 self._log_a2a_operation(
                     "create_media_buy",
@@ -874,15 +781,8 @@ class AdCPRequestHandler(RequestHandler):
                         "How do I create a media buy?",
                     ],
                 }
-                # Extract tenant and principal for logging
-                try:
-                    tool_context = self._create_tool_context_from_a2a(auth_token, "get_capabilities")
-                    tenant_id = tool_context.tenant_id
-                    principal_id = tool_context.principal_id
-                except Exception as e:
-                    logger.warning(f"Could not extract context for logging: {e}")
-                    tenant_id = "unknown"
-                    principal_id = "unknown"
+                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
+                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
                 self._log_a2a_operation(
                     "get_capabilities",
@@ -941,24 +841,14 @@ class AdCPRequestHandler(RequestHandler):
             raise
         except Exception as e:
             logger.error(f"Error processing message: {e}")
-            # Try to get context for error logging
-            try:
-                auth_token = self._get_auth_token()
-                if auth_token:
-                    tool_context = self._create_tool_context_from_a2a(auth_token, "error_handler")
-                    tenant_id = tool_context.tenant_id
-                    principal_id = tool_context.principal_id
-                else:
-                    tenant_id = "unknown"
-                    principal_id = "unknown"
-            except Exception:
-                tenant_id = "unknown"
-                principal_id = "unknown"
+            # Use identity resolved at transport boundary (if available)
+            err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
+            err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
             self._log_a2a_operation(
                 "message_processing",
-                tenant_id,
-                principal_id,
+                err_tenant_id,
+                err_principal_id,
                 False,
                 {"error_type": type(e).__name__},
                 str(e),
@@ -1071,13 +961,12 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.database.database_session import get_db_session
 
         try:
-            # Get authentication token
-            auth_token = self._get_auth_token()
+            # Get authentication token and resolve identity at transport boundary
+            auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise ServerError(InvalidRequestError(message="Missing authentication token"))
-
-            # Resolve tenant and principal from auth token
-            tool_context = self._create_tool_context_from_a2a(auth_token, "get_push_notification_config")
+            identity = self._resolve_a2a_identity(auth_token, context=context)
+            tool_context = self._make_tool_context(identity, "get_push_notification_config")
 
             # Extract config_id from params
             config_id = params.get("id") if isinstance(params, dict) else getattr(params, "id", None)
@@ -1134,23 +1023,18 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 
         try:
-            # Get authentication token
-            auth_token = self._get_auth_token()
+            # Get authentication token and resolve identity at transport boundary
+            auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise ServerError(InvalidRequestError(message="Missing authentication token"))
-
-            # Resolve tenant and principal from auth token
-            tool_context = self._create_tool_context_from_a2a(auth_token, "set_push_notification_config")
+            identity = self._resolve_a2a_identity(auth_token, context=context)
+            tool_context = self._make_tool_context(identity, "set_push_notification_config")
 
             # Extract parameters (A2A spec format)
             # Params structure: {task_id, push_notification_config: {url, authentication}}
             # Note: params comes as Pydantic object with snake_case attributes
-            logger.info(f"[DEBUG] Received params type: {type(params)}, value: {params}")
-
             task_id = getattr(params, "task_id", None)
             push_config = getattr(params, "push_notification_config", None)
-
-            logger.info(f"[DEBUG] task_id: {task_id}, push_config: {push_config}, type: {type(push_config)}")
 
             # Extract URL and authentication from push_config object
             url = getattr(push_config, "url", None) if push_config else None
@@ -1252,13 +1136,12 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 
         try:
-            # Get authentication token
-            auth_token = self._get_auth_token()
+            # Get authentication token and resolve identity at transport boundary
+            auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise ServerError(InvalidRequestError(message="Missing authentication token"))
-
-            # Resolve tenant and principal from auth token
-            tool_context = self._create_tool_context_from_a2a(auth_token, "list_push_notification_configs")
+            identity = self._resolve_a2a_identity(auth_token, context=context)
+            tool_context = self._make_tool_context(identity, "list_push_notification_configs")
 
             # Query database for all active configs
             with get_db_session() as db:
@@ -1311,13 +1194,12 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 
         try:
-            # Get authentication token
-            auth_token = self._get_auth_token()
+            # Get authentication token and resolve identity at transport boundary
+            auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise ServerError(InvalidRequestError(message="Missing authentication token"))
-
-            # Resolve tenant and principal from auth token
-            tool_context = self._create_tool_context_from_a2a(auth_token, "delete_push_notification_config")
+            identity = self._resolve_a2a_identity(auth_token, context=context)
+            tool_context = self._make_tool_context(identity, "delete_push_notification_config")
 
             # Extract config_id from params
             config_id = params.get("id") if isinstance(params, dict) else getattr(params, "id", None)
@@ -1392,7 +1274,7 @@ class AdCPRequestHandler(RequestHandler):
         self,
         skill_name: str,
         parameters: dict,
-        auth_token: str | None,
+        identity: ResolvedIdentity | None,
         push_notification_config: PushNotificationConfig | None = None,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
@@ -1403,7 +1285,7 @@ class AdCPRequestHandler(RequestHandler):
         Args:
             skill_name: The AdCP skill name (e.g., "get_products")
             parameters: Dictionary of skill-specific parameters
-            auth_token: Bearer token for authentication (optional for discovery endpoints)
+            identity: Pre-resolved identity from transport boundary
             push_notification_config: Push notification config from A2A protocol layer
 
         Returns:
@@ -1417,10 +1299,9 @@ class AdCPRequestHandler(RequestHandler):
             parameters = {**parameters, "push_notification_config": push_notification_config}
         logger.info(f"Handling explicit skill: {skill_name} with parameters: {list(parameters.keys())}")
 
-        # Validate auth_token for non-discovery skills
-        # Discovery skills are defined in DISCOVERY_SKILLS constant at module level
-        if skill_name not in DISCOVERY_SKILLS and auth_token is None:
-            raise ServerError(InvalidRequestError(message="Authentication token required for skill invocation"))
+        # Validate identity for non-discovery skills
+        if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
+            raise ServerError(InvalidRequestError(message="Authentication required for skill invocation"))
 
         # Map skill names to handlers
         skill_handlers = {
@@ -1434,6 +1315,7 @@ class AdCPRequestHandler(RequestHandler):
             "list_authorized_properties": self._handle_list_authorized_properties_skill,
             # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
             "update_media_buy": self._handle_update_media_buy_skill,
+            "get_media_buys": self._handle_get_media_buys_skill,
             "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
             "update_performance_index": self._handle_update_performance_index_skill,
             # AdCP Spec Creative Management (centralized library approach)
@@ -1456,7 +1338,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or dicts for early-return errors)
-            result = await handler(parameters, auth_token)  # type: ignore[arg-type]
+            result = await handler(parameters, identity)  # type: ignore[arg-type]
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
         except ServerError:
@@ -1470,7 +1352,7 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in skill handler {skill_name}: {e}")
             raise ServerError(InternalError(message=f"Skill {skill_name} failed: {str(e)}"))
 
-    async def _handle_get_products_skill(self, parameters: dict, auth_token: str | None) -> Any:
+    async def _handle_get_products_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_products skill invocation.
 
         Aligned with adcp spec - brand must be a BrandReference dict.
@@ -1479,17 +1361,16 @@ class AdCPRequestHandler(RequestHandler):
         brand_manifest_policy setting (public/require_brand/require_auth).
         """
         try:
-            # Resolve identity from A2A auth info (if provided)
-            if auth_token:
-                # Token provided - authentication MUST succeed (don't silently fall back)
-                tool_context = self._create_tool_context_from_a2a(
-                    auth_token=auth_token,
-                    tool_name="get_products",
+            # Normalize brand_manifest: URL string → dict (adcp v1.2.1 compat)
+            brand_manifest = parameters.get("brand_manifest")
+            if isinstance(brand_manifest, str):
+                brand_manifest = {"url": brand_manifest}
+            elif brand_manifest is not None and not isinstance(brand_manifest, dict):
+                raise ServerError(
+                    InvalidParamsError(
+                        message=f"brand_manifest must be a dict or URL string, got {type(brand_manifest)}"
+                    )
                 )
-                identity = self._resolve_identity(tool_context)
-            else:
-                # No auth token - resolve identity from headers for tenant detection
-                identity = self._resolve_identity_unauthenticated()
 
             brief = parameters.get("brief", "")
             brand = parameters.get("brand")
@@ -1529,7 +1410,7 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in get_products skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve products: {str(e)}"))
 
-    async def _handle_create_media_buy_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_create_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
         IMPORTANT: This handler ONLY accepts AdCP spec-compliant format:
@@ -1542,12 +1423,7 @@ class AdCPRequestHandler(RequestHandler):
         Legacy format (product_ids, total_budget, start_date, end_date) is NOT supported.
         """
         try:
-            # Create ToolContext from A2A auth info and resolve identity
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="create_media_buy",
-            )
-            identity = self._resolve_identity(tool_context)
+            tool_context = self._make_tool_context(identity, "create_media_buy")
 
             # Parse parameters into typed request model (validation at A2A boundary)
             from pydantic import ValidationError
@@ -1560,7 +1436,7 @@ class AdCPRequestHandler(RequestHandler):
                 params.setdefault("targeting_overlay", params.pop("custom_targeting"))
             # Set A2A defaults for optional fields
             params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
-            params.setdefault("buyer_ref", f"A2A-{tool_context.principal_id}")
+            params.setdefault("buyer_ref", f"A2A-{identity.principal_id}")
 
             # Validate required AdCP parameters (packages is optional in model but required by spec)
             required_params = ["brand", "packages", "start_time", "end_time"]
@@ -1617,7 +1493,7 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in create_media_buy skill: {e}")
             raise ServerError(InternalError(message=f"Failed to create media buy: {str(e)}"))
 
-    async def _handle_sync_creatives_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_sync_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit sync_creatives skill invocation (AdCP spec endpoint)."""
         try:
             # DEBUG: Log incoming parameters
@@ -1626,11 +1502,7 @@ class AdCPRequestHandler(RequestHandler):
             logger.info(f"[A2A sync_creatives] creatives count: {len(parameters.get('creatives', []))}")
 
             # Create ToolContext from A2A auth info and resolve identity
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="sync_creatives",
-            )
-            identity = self._resolve_identity(tool_context)
+            tool_context = self._make_tool_context(identity, "sync_creatives")
 
             # Map A2A parameters - creatives is required
             if "creatives" not in parameters:
@@ -1674,15 +1546,11 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in sync_creatives skill: {e}")
             raise ServerError(InternalError(message=f"Failed to sync creatives: {str(e)}"))
 
-    async def _handle_list_creatives_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_list_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit list_creatives skill invocation (AdCP spec endpoint)."""
         try:
             # Create ToolContext from A2A auth info and resolve identity
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="list_creatives",
-            )
-            identity = self._resolve_identity(tool_context)
+            tool_context = self._make_tool_context(identity, "list_creatives")
 
             # Call core function with optional parameters (fixing original validation bug)
             response = core_list_creatives_tool(
@@ -1708,14 +1576,10 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in list_creatives skill: {e}")
             raise ServerError(InternalError(message=f"Failed to list creatives: {str(e)}"))
 
-    async def _handle_create_creative_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_create_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit create_creative skill invocation."""
         try:
-            # Create ToolContext from A2A auth info
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="create_creative",
-            )
+            tool_context = self._make_tool_context(identity, "create_creative")
 
             # Map A2A parameters - format_id, content_uri, and name are required
             required_params = ["format_id", "content_uri", "name"]
@@ -1738,17 +1602,13 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in create_creative skill: {e}")
             raise ServerError(InternalError(message=f"Failed to create creative: {str(e)}"))
 
-    async def _handle_get_creatives_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_get_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_creatives skill invocation."""
         try:
-            # Create ToolContext from A2A auth info
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="get_creatives",
-            )
+            tool_context = self._make_tool_context(identity, "get_creatives")
 
             # TODO: Implement get_creatives tool
-            # identity = self._resolve_identity(tool_context)
+            # identity already resolved at transport boundary
             # response = core_get_creatives_tool(
             #     group_id=parameters.get("group_id"),
             #     media_buy_id=parameters.get("media_buy_id"),
@@ -1763,14 +1623,10 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in get_creatives skill: {e}")
             raise ServerError(InternalError(message=f"Failed to get creatives: {str(e)}"))
 
-    async def _handle_assign_creative_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_assign_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit assign_creative skill invocation."""
         try:
-            # Create ToolContext from A2A auth info
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="assign_creative",
-            )
+            tool_context = self._make_tool_context(identity, "assign_creative")
 
             # Map A2A parameters - media_buy_id, package_id, and creative_id are required
             required_params = ["media_buy_id", "package_id", "creative_id"]
@@ -1785,7 +1641,7 @@ class AdCPRequestHandler(RequestHandler):
                 }
 
             # TODO: Implement assign_creative tool
-            # identity = self._resolve_identity(tool_context)
+            # identity already resolved at transport boundary
             # response = core_assign_creative_tool(
             #     media_buy_id=parameters["media_buy_id"],
             #     package_id=parameters["package_id"],
@@ -1802,53 +1658,34 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in assign_creative skill: {e}")
             raise ServerError(InternalError(message=f"Failed to assign creative: {str(e)}"))
 
-    async def _handle_approve_creative_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_approve_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit approve_creative skill invocation."""
-        # TODO: Implement full approve_creative skill handler
-        return {
-            "success": False,
-            "message": "approve_creative skill not yet implemented in explicit invocation",
-            "parameters_received": parameters,
-        }
+        from a2a.types import UnsupportedOperationError
+
+        raise ServerError(UnsupportedOperationError(message="approve_creative skill not yet implemented"))
 
     # Signals skill handlers removed - should come from dedicated signals agents
 
-    async def _handle_get_media_buy_status_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_get_media_buy_status_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_status skill invocation."""
-        # TODO: Implement full get_media_buy_status skill handler
-        return {
-            "success": False,
-            "message": "get_media_buy_status skill not yet implemented in explicit invocation",
-            "parameters_received": parameters,
-        }
+        from a2a.types import UnsupportedOperationError
 
-    async def _handle_optimize_media_buy_skill(self, parameters: dict, auth_token: str) -> dict:
+        raise ServerError(UnsupportedOperationError(message="get_media_buy_status skill not yet implemented"))
+
+    async def _handle_optimize_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit optimize_media_buy skill invocation."""
-        # TODO: Implement full optimize_media_buy skill handler
-        return {
-            "success": False,
-            "message": "optimize_media_buy skill not yet implemented in explicit invocation",
-            "parameters_received": parameters,
-        }
+        from a2a.types import UnsupportedOperationError
 
-    async def _handle_get_adcp_capabilities_skill(self, parameters: dict, auth_token: str | None) -> Any:
+        raise ServerError(UnsupportedOperationError(message="optimize_media_buy skill not yet implemented"))
+
+    async def _handle_get_adcp_capabilities_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_adcp_capabilities skill invocation (CRITICAL AdCP discovery endpoint).
 
         NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.
         Returns agent capabilities including supported protocols, targeting, and portfolio info.
         """
         try:
-            # Resolve identity from A2A auth info (if provided)
-            if auth_token:
-                # Token provided - authentication MUST succeed (don't silently fall back)
-                tool_context = self._create_tool_context_from_a2a(
-                    auth_token=auth_token,
-                    tool_name="get_adcp_capabilities",
-                )
-                identity = self._resolve_identity(tool_context)
-            else:
-                # No auth token - resolve identity from headers for tenant detection
-                identity = self._resolve_identity_unauthenticated()
+            # Identity already resolved at transport boundary (on_message_send)
 
             # Import and call the core implementation
             from src.core.tools.capabilities import get_adcp_capabilities_raw
@@ -1865,23 +1702,13 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in get_adcp_capabilities skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve AdCP capabilities: {str(e)}"))
 
-    async def _handle_list_creative_formats_skill(self, parameters: dict, auth_token: str | None) -> Any:
+    async def _handle_list_creative_formats_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_creative_formats skill invocation (CRITICAL AdCP endpoint).
 
         NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.
         """
         try:
-            # Resolve identity from A2A auth info (if provided)
-            if auth_token:
-                # Token provided - authentication MUST succeed (don't silently fall back)
-                tool_context = self._create_tool_context_from_a2a(
-                    auth_token=auth_token,
-                    tool_name="list_creative_formats",
-                )
-                identity = self._resolve_identity(tool_context)
-            else:
-                # No auth token - resolve identity from headers for tenant detection
-                identity = self._resolve_identity_unauthenticated()
+            # Identity already resolved at transport boundary (on_message_send)
 
             # Build request from parameters (all optional)
             # Use local schema (extends library type) for proper type compatibility
@@ -1909,7 +1736,9 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in list_creative_formats skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve creative formats: {str(e)}"))
 
-    async def _handle_list_authorized_properties_skill(self, parameters: dict, auth_token: str | None) -> Any:
+    async def _handle_list_authorized_properties_skill(
+        self, parameters: dict, identity: ResolvedIdentity | None
+    ) -> Any:
         """Handle explicit list_authorized_properties skill invocation (CRITICAL AdCP endpoint).
 
         NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.
@@ -1918,18 +1747,7 @@ class AdCPRequestHandler(RequestHandler):
         Per AdCP v2.4 spec, returns publisher_domains (not properties/tags).
         """
         try:
-            # Resolve identity from A2A auth info (if provided)
-            if auth_token:
-                # Token provided - authentication MUST succeed (don't silently fall back)
-                tool_context = self._create_tool_context_from_a2a(
-                    auth_token=auth_token,
-                    tool_name="list_authorized_properties",
-                )
-                identity = self._resolve_identity(tool_context)
-            else:
-                # No auth token - resolve identity from headers for tenant detection
-                # This allows tenant detection via Apx-Incoming-Host, Host, or x-adcp-tenant headers
-                identity = self._resolve_identity_unauthenticated()
+            # Identity already resolved at transport boundary (on_message_send)
 
             # Map A2A parameters to ListAuthorizedPropertiesRequest
             # Note: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0, use local schema
@@ -1953,15 +1771,10 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in list_authorized_properties skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve authorized properties: {str(e)}"))
 
-    async def _handle_update_media_buy_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_update_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit update_media_buy skill invocation (CRITICAL for campaign management)."""
         try:
-            # Create ToolContext from A2A auth info and resolve identity
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="update_media_buy",
-            )
-            identity = self._resolve_identity(tool_context)
+            # Identity already resolved at transport boundary (on_message_send)
 
             # Parse parameters into typed request model (validation at A2A boundary)
             from pydantic import ValidationError
@@ -2017,7 +1830,28 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in update_media_buy skill: {e}")
             raise ServerError(InternalError(message=f"Unable to update media buy: {str(e)}"))
 
-    async def _handle_get_media_buy_delivery_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+        """Handle get_media_buys skill invocation."""
+        try:
+            tool_context = self._make_tool_context(identity, "get_media_buys")
+
+            response = core_get_media_buys_tool(
+                media_buy_ids=parameters.get("media_buy_ids"),
+                buyer_refs=parameters.get("buyer_refs"),
+                status_filter=parameters.get("status_filter"),
+                include_snapshot=parameters.get("include_snapshot", False),
+                account_id=parameters.get("account_id"),
+                context=parameters.get("context"),
+                ctx=tool_context,
+            )
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Error in get_media_buys skill: {e}")
+            raise ServerError(InternalError(message=f"Unable to get media buys: {str(e)}"))
+
+    async def _handle_get_media_buy_delivery_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_delivery skill invocation (CRITICAL for monitoring).
 
         Per AdCP spec, all parameters are optional:
@@ -2031,12 +1865,7 @@ class AdCPRequestHandler(RequestHandler):
         the requester has access to, filtered by the provided criteria.
         """
         try:
-            # Create ToolContext from A2A auth info and resolve identity
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="get_media_buy_delivery",
-            )
-            identity = self._resolve_identity(tool_context)
+            # Identity already resolved at transport boundary (on_message_send)
 
             # Parse parameters into typed request model (validation at A2A boundary)
             # Pre-process: support singular media_buy_id (legacy) → media_buy_ids (spec)
@@ -2067,15 +1896,10 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in get_media_buy_delivery skill: {e}")
             raise ServerError(InternalError(message=f"Unable to get media buy delivery: {str(e)}"))
 
-    async def _handle_update_performance_index_skill(self, parameters: dict, auth_token: str) -> dict:
+    async def _handle_update_performance_index_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit update_performance_index skill invocation (CRITICAL for optimization)."""
         try:
-            # Create ToolContext from A2A auth info and resolve identity
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="update_performance_index",
-            )
-            identity = self._resolve_identity(tool_context)
+            # Identity already resolved at transport boundary (on_message_send)
 
             # Parse parameters into typed request model (validation at A2A boundary)
             from pydantic import ValidationError
@@ -2106,23 +1930,18 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in update_performance_index skill: {e}")
             raise ServerError(InternalError(message=f"Unable to update performance index: {str(e)}"))
 
-    async def _get_products(self, query: str, auth_token: str | None) -> dict:
+    async def _get_products(self, query: str, identity: ResolvedIdentity | None) -> dict:
         """Get available advertising products by calling core functions directly.
 
         Args:
             query: User's product query
-            auth_token: Bearer token for authentication
+            identity: Pre-resolved identity from transport boundary
 
         Returns:
             Dictionary containing product information
         """
         try:
-            # Create ToolContext from A2A auth info and resolve identity
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="get_products",
-            )
-            identity = self._resolve_identity(tool_context)
+            # Identity already resolved at transport boundary (on_message_send)
 
             # Call core function directly using the underlying function
             response = await core_get_products_tool(
@@ -2178,12 +1997,12 @@ class AdCPRequestHandler(RequestHandler):
             # Generic fallback that should pass AdCP validation
             return "Business advertising products and services"
 
-    async def _create_media_buy(self, request: str, auth_token: str | None) -> dict:
+    async def _create_media_buy(self, request: str, identity: ResolvedIdentity | None) -> dict:
         """Create a media buy based on the request.
 
         Args:
             request: User's media buy request
-            auth_token: Bearer token for authentication
+            identity: Pre-resolved identity from transport boundary
 
         Returns:
             Dictionary containing media buy creation result
@@ -2191,19 +2010,17 @@ class AdCPRequestHandler(RequestHandler):
         # For now, return a mock response indicating authentication is working
         # but media buy creation needs more implementation
         try:
-            # Verify authentication works
-            tool_context = self._create_tool_context_from_a2a(
-                auth_token=auth_token,
-                tool_name="create_media_buy",
-            )
+            # Identity already resolved at transport boundary (on_message_send)
+            tenant_id = identity.tenant_id if identity else "unknown"
+            principal_id = identity.principal_id if identity else "unknown"
 
             return {
                 "success": False,
-                "message": f"Authentication successful for {tool_context.principal_id}. To create a media buy, use explicit skill invocation with AdCP v2.2.0 spec-compliant format.",
+                "message": f"Authentication successful for {principal_id}. To create a media buy, use explicit skill invocation with AdCP v2.2.0 spec-compliant format.",
                 "required_fields": ["brand", "packages", "start_time", "end_time"],
                 "note": "Per AdCP v2.2.0 spec, budget is specified at the PACKAGE level, not top level",
-                "authenticated_tenant": tool_context.tenant_id,
-                "authenticated_principal": tool_context.principal_id,
+                "authenticated_tenant": tenant_id,
+                "authenticated_principal": principal_id,
                 "example": {
                     "brand": {"domain": "example.com"},
                     "packages": [
@@ -2307,6 +2124,12 @@ def create_agent_card() -> AgentCard:
                 name="update_media_buy",
                 description="Update existing media buy configuration and settings",
                 tags=["campaign", "update", "management", "adcp"],
+            ),
+            AgentSkill(
+                id="get_media_buys",
+                name="get_media_buys",
+                description="Get media buy status, creative approval state, and optional near-real-time delivery snapshots",
+                tags=["media_buy", "status", "creative", "snapshot", "monitoring", "adcp"],
             ),
             AgentSkill(
                 id="get_media_buy_delivery",

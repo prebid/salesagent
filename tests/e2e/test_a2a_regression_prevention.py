@@ -210,29 +210,38 @@ class TestAuthenticationFlow:
         assert callable(handler._get_auth_token), "_get_auth_token should be callable"
 
     def test_tool_context_creation_method_exists(self):
-        """Test that ToolContext creation method exists and works."""
+        """Test that identity resolution and ToolContext creation methods exist."""
         handler = AdCPRequestHandler()
 
-        # Method should exist
-        assert hasattr(handler, "_create_tool_context_from_a2a"), (
-            "Handler should have _create_tool_context_from_a2a method"
-        )
-        assert callable(handler._create_tool_context_from_a2a), "_create_tool_context_from_a2a should be callable"
+        # Transport boundary identity resolution
+        assert hasattr(handler, "_resolve_a2a_identity"), "Handler should have _resolve_a2a_identity method"
+        assert callable(handler._resolve_a2a_identity), "_resolve_a2a_identity should be callable"
+
+        # ToolContext factory (cheap, no DB calls)
+        assert hasattr(handler, "_make_tool_context"), "Handler should have _make_tool_context method"
+        assert callable(handler._make_tool_context), "_make_tool_context should be callable"
 
 
 class TestHTTPBehaviorRegression:
     """Tests to prevent HTTP-level bugs like redirect issues."""
 
-    def test_middleware_handles_both_a2a_paths(self):
-        """Test that middleware handles both /a2a and /a2a/ paths."""
-        # Read the app file to verify middleware logic (migrated to FastAPI)
-        file_path = os.path.join(os.path.dirname(__file__), "..", "..", "src", "app.py")
+    def test_unified_auth_middleware_applies_to_all_requests(self):
+        """Test that auth middleware applies to all HTTP requests (not path-gated).
 
+        Previously, a2a_auth_middleware only ran for /a2a paths. The unified
+        middleware now handles auth for ALL requests, eliminating the need for
+        path-specific auth gating.
+        """
+        from src.core.auth_middleware import UnifiedAuthMiddleware
+
+        # UnifiedAuthMiddleware is a pure ASGI class, not path-specific
+        assert callable(UnifiedAuthMiddleware), "UnifiedAuthMiddleware must be a callable ASGI class"
+
+        # Verify it's registered in app.py
+        file_path = os.path.join(os.path.dirname(__file__), "..", "..", "src", "app.py")
         with open(file_path) as f:
             content = f.read()
-
-        # Should handle both paths in middleware
-        assert 'request.url.path in ["/a2a", "/a2a/"]' in content, "Middleware should handle both /a2a and /a2a/ paths"
+        assert "UnifiedAuthMiddleware" in content, "UnifiedAuthMiddleware should be registered in app.py"
 
     @pytest.mark.integration
     def test_no_redirect_on_agent_card_endpoints(self):

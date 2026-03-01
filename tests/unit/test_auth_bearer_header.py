@@ -82,8 +82,8 @@ class TestAuthorizationBearerSupport:
         # Mock tenant detection (avoid DB access)
         mock_get_virtual_host.return_value = {"tenant_id": "test_tenant"}
 
-        # Mock successful token validation
-        mock_get_principal.return_value = "test_principal_id"
+        # Mock successful token validation (returns tuple)
+        mock_get_principal.return_value = ("test_principal_id", None)
         mock_get_tenant.return_value = {"tenant_id": "test_tenant"}
 
         # Call get_principal_from_context
@@ -119,7 +119,7 @@ class TestAuthorizationBearerSupport:
         # Mock tenant detection (avoid DB access)
         mock_get_virtual_host.return_value = {"tenant_id": "test_tenant"}
 
-        mock_get_principal.return_value = "test_principal_id"
+        mock_get_principal.return_value = ("test_principal_id", None)
         mock_get_tenant.return_value = {"tenant_id": "test_tenant"}
 
         principal_id, tenant_context = get_principal_from_context(None)

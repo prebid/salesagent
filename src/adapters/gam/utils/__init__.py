@@ -13,7 +13,6 @@ This module provides utilities for Google Ad Manager operations including:
 # Import all utility classes and functions for easy access
 from .constants import (
     GAM_ALLOWED_EXTENSIONS,
-    GAM_API_VERSION,
     GAM_CREATIVE_SIZE_LIMITS,
     GAM_MAX_DIMENSIONS,
     GAM_SCOPES,
@@ -119,7 +118,6 @@ __all__ = [
     "GAMOrderStatus",
     "GAMLineItemStatus",
     "GAMTargetingType",
-    "GAM_API_VERSION",
     "GAM_SCOPES",
     "GAM_CREATIVE_SIZE_LIMITS",
     "GAM_MAX_DIMENSIONS",

@@ -81,14 +81,11 @@ class TestResolveIdentity:
     """Test the resolve_identity() boundary helper."""
 
     @patch("src.core.auth_utils.get_principal_from_token")
-    @patch("src.core.resolved_identity.set_current_tenant")
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
-    def test_resolve_with_tenant_header_and_token(
-        self, mock_get_subdomain, mock_get_vhost, mock_set_tenant, mock_get_principal
-    ):
+    def test_resolve_with_tenant_header_and_token(self, mock_get_subdomain, mock_get_vhost, mock_get_principal):
         """resolve_identity() extracts tenant from x-adcp-tenant header and validates token."""
-        mock_get_principal.return_value = "principal_123"
+        mock_get_principal.return_value = ("principal_123", None)
         mock_get_subdomain.return_value = {
             "tenant_id": "test_tenant",
             "name": "Test Tenant",
@@ -105,19 +102,17 @@ class TestResolveIdentity:
         assert identity.auth_token == "tok_abc"
         assert identity.protocol == "mcp"
         mock_get_principal.assert_called_once_with("tok_abc", "test_tenant")
-        mock_set_tenant.assert_called()
 
     @patch("src.core.auth_utils.get_principal_from_token")
-    @patch("src.core.resolved_identity.set_current_tenant")
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
-    def test_resolve_with_subdomain_host(self, mock_get_subdomain, mock_get_vhost, mock_set_tenant, mock_get_principal):
+    def test_resolve_with_subdomain_host(self, mock_get_subdomain, mock_get_vhost, mock_get_principal):
         """resolve_identity() detects tenant from Host subdomain."""
         mock_get_subdomain.return_value = {
             "tenant_id": "acme",
             "name": "Acme Corp",
         }
-        mock_get_principal.return_value = "principal_456"
+        mock_get_principal.return_value = ("principal_456", None)
 
         identity = resolve_identity(
             headers={"host": "acme.example.com", "x-adcp-auth": "tok_xyz"},
@@ -129,10 +124,9 @@ class TestResolveIdentity:
         assert identity.principal_id == "principal_456"
         assert identity.protocol == "a2a"
 
-    @patch("src.core.resolved_identity.set_current_tenant")
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
-    def test_resolve_anonymous_discovery(self, mock_get_subdomain, mock_get_vhost, mock_set_tenant):
+    def test_resolve_anonymous_discovery(self, mock_get_subdomain, mock_get_vhost):
         """resolve_identity() supports anonymous (no token) for discovery endpoints."""
         mock_get_subdomain.return_value = {"tenant_id": "default"}
 
@@ -146,10 +140,9 @@ class TestResolveIdentity:
         assert identity.tenant_id == "default"
         assert identity.is_authenticated is False
 
-    @patch("src.core.resolved_identity.set_current_tenant")
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
-    def test_resolve_localhost_defaults_to_default_tenant(self, mock_get_subdomain, mock_get_vhost, mock_set_tenant):
+    def test_resolve_localhost_defaults_to_default_tenant(self, mock_get_subdomain, mock_get_vhost):
         """resolve_identity() uses 'default' tenant for localhost requests."""
         mock_get_subdomain.return_value = {"tenant_id": "default"}
 

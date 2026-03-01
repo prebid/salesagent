@@ -150,8 +150,8 @@ class TestA2AHandlerMethodCalls:
         """Test that skill handler methods have expected parameter signatures."""
         # Note: Signals skills removed - should come from dedicated signals agents
         method_signatures = {
-            "_handle_get_products_skill": ["parameters", "auth_token"],
-            "_handle_create_media_buy_skill": ["parameters", "auth_token"],
+            "_handle_get_products_skill": ["parameters", "identity"],
+            "_handle_create_media_buy_skill": ["parameters", "identity"],
         }
 
         for method_name, expected_params in method_signatures.items():
@@ -178,38 +178,24 @@ class TestFunctionCallIntegration:
         self.handler = AdCPRequestHandler()
 
     def test_tool_context_creation_does_not_fail(self):
-        """Test that ToolContext creation works without errors."""
-        # This tests the integration without mocking everything
-        try:
-            # Mock only the external dependencies, not the function calls themselves
-            with (
-                pytest.MonkeyPatch().context() as m,
-            ):
-                # Mock external auth functions (updated signature: token, tenant_id)
-                m.setattr(
-                    "src.a2a_server.adcp_a2a_server.get_principal_from_token",
-                    lambda token, tenant_id=None: "test_principal",
-                )
-                m.setattr("src.a2a_server.adcp_a2a_server.get_current_tenant", lambda: {"tenant_id": "test_tenant"})
-                # Mock tenant resolution functions (return None to use fallback path)
-                m.setattr("src.core.config_loader.get_tenant_by_subdomain", lambda x: None)
-                m.setattr("src.core.config_loader.get_tenant_by_virtual_host", lambda x: None)
-                m.setattr("src.core.config_loader.get_tenant_by_id", lambda x: None)
-                m.setattr("src.core.config_loader.set_current_tenant", lambda x: None)
+        """Test that _make_tool_context creates ToolContext from identity without errors."""
+        from src.core.resolved_identity import ResolvedIdentity
 
-                # Test that the method can be called without errors
-                tool_context = self.handler._create_tool_context_from_a2a(
-                    auth_token="test_token", tool_name="test_tool", context_id="test_context"
-                )
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
+            protocol="a2a",
+        )
 
-                # Should return a ToolContext-like object
-                assert hasattr(tool_context, "tenant_id")
-                assert hasattr(tool_context, "principal_id")
-                assert tool_context.tenant_id == "test_tenant"
-                assert tool_context.principal_id == "test_principal"
+        tool_context = self.handler._make_tool_context(
+            identity=mock_identity, tool_name="test_tool", context_id="test_context"
+        )
 
-        except Exception as e:
-            pytest.fail(f"ToolContext creation failed: {e}")
+        assert hasattr(tool_context, "tenant_id")
+        assert hasattr(tool_context, "principal_id")
+        assert tool_context.tenant_id == "test_tenant"
+        assert tool_context.principal_id == "test_principal"
 
     def test_core_function_can_be_called_with_mock_context(self):
         """Test that core functions can actually be called (verifies imports work)."""

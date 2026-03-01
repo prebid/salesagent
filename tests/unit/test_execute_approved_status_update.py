@@ -172,6 +172,10 @@ class TestExecuteApprovedStatusUpdate:
         with (
             patch("src.core.database.repositories.MediaBuyUoW", side_effect=lambda _: next(uow_iter)),
             patch("src.core.config_loader.set_current_tenant"),
+            patch(
+                "src.core.config_loader.get_tenant_by_id",
+                return_value={"tenant_id": "tenant_1", "adapter_type": "mock"},
+            ),
             patch("src.core.auth.get_principal_object", return_value=principal),
             patch(
                 "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",

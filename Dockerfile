@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
 # Multi-stage build for smaller image
-# Cache bust: 2025-10-22-2135
+# Cache bust: 2026-02-27
 FROM python:3.12-slim AS builder
 
 # Disable man pages and docs to speed up apt operations
@@ -82,7 +82,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 WORKDIR /app
 
 # Cache bust for COPY layer - change this value to force rebuild
-ARG CACHE_BUST=2025-10-23-FIX-PROMOTED-OFFERING-V4
+ARG CACHE_BUST=2026-02-27-GAM-API-BUMP
 RUN echo "Cache bust: $CACHE_BUST"
 
 # Copy application code

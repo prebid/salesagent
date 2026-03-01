@@ -71,8 +71,8 @@ def test_get_principal_from_context_uses_global_lookup_when_no_tenant_detected()
         patch("src.core.auth.get_principal_from_token") as mock_get_principal,
         patch("src.core.auth.get_current_tenant", return_value=mock_tenant),
     ):
-        # Global lookup should succeed and return principal_id
-        mock_get_principal.return_value = "principal_abc123"
+        # Global lookup should succeed and return (principal_id, tenant_dict)
+        mock_get_principal.return_value = ("principal_abc123", mock_tenant)
 
         # Should succeed via global token lookup and return tuple
         principal_id, tenant = get_principal_from_context(context)

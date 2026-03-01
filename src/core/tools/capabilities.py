@@ -257,9 +257,7 @@ async def get_adcp_capabilities(
     Returns:
         ToolResult with human-readable text and structured data
     """
-    from src.core.transport_helpers import resolve_identity_from_context
-
-    identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Build request object (currently minimal)
     req = GetAdcpCapabilitiesRequest()

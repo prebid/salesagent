@@ -124,16 +124,23 @@ class TestSchemaMatchesLibrary:
         # TODO(adcp-lib): Remove allowlist when adcp library adds these fields
         # product_selectors — internal-only field
         # buying_mode — local extension for buying mode selection
+        # account — local extension for account-based product lookup (library has account_id)
         # adcp 3.6.0: brand, catalog, buyer_campaign_ref, pagination are now in the library
-        local_extensions = {"product_selectors", "buying_mode"}
+        local_extensions = {"product_selectors", "buying_mode", "account"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
         )
 
-        # GetMediaBuyDeliveryRequest - adcp 3.6.0: all fields now match library
+        # GetMediaBuyDeliveryRequest - local extends library with spec fields
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
-        assert lib_fields == local_fields, f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
+        # TODO(adcp-lib): Remove allowlist when adcp library adds these fields
+        # account, reporting_dimensions, include_package_daily_breakdown, attribution_window —
+        # spec fields added from online schema, not yet in adcp library 3.6.0
+        local_extensions = {"account", "reporting_dimensions", "include_package_daily_breakdown", "attribution_window"}
+        assert lib_fields == local_fields - local_extensions, (
+            f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
         # Document known drift for other schemas (to be fixed)
         # These assertions document the current state and will fail when fixed

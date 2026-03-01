@@ -14,8 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.auth import get_principal_from_context
 from src.core.config_loader import get_current_tenant, set_current_tenant
-from src.core.main import get_principal_from_context
 
 
 @pytest.mark.requires_db
@@ -141,11 +141,16 @@ def test_global_token_lookup_sets_tenant_from_principal(integration_db):
         # Verify principal was found
         assert principal_id == "principal_global"
 
-        # Verify tenant context was set from principal's tenant
+        # Verify tenant context was returned (caller sets it at transport boundary)
+        assert tenant_ctx is not None
+        assert tenant_ctx["tenant_id"] == "tenant_global"
+        assert tenant_ctx["subdomain"] == "global"
+
+        # Simulate transport boundary: caller sets ContextVar
+        set_current_tenant(tenant_ctx)
         current_tenant = get_current_tenant()
         assert current_tenant is not None
         assert current_tenant["tenant_id"] == "tenant_global"
-        assert current_tenant["subdomain"] == "global"
 
 
 @pytest.mark.requires_db

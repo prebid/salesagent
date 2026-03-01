@@ -150,8 +150,8 @@ class LazyTenantContext:
         "field" in tenant       # no DB (checks known field names)
         bool(tenant)            # always True (no DB)
 
-    Also calls set_current_tenant() when the full tenant is resolved,
-    so legacy code using the ContextVar still works.
+    Call ensure_resolved() at transport boundaries to populate the
+    tenant ContextVar for legacy code that reads get_current_tenant().
     """
 
     __slots__ = ("_tenant_id", "_resolved")
@@ -161,19 +161,22 @@ class LazyTenantContext:
         object.__setattr__(self, "_resolved", None)
 
     def _resolve(self) -> TenantContext:
-        """Load full tenant from DB on first access. Cache the result."""
+        """Load full tenant from DB on first access. Cache the result.
+
+        Does NOT mutate the tenant ContextVar. That must happen at
+        explicit transport boundaries via ensure_resolved().
+        """
         resolved = self._resolved
         if resolved is not None:
             return resolved
 
         from sqlalchemy.exc import SQLAlchemyError
 
-        from src.core.config_loader import get_tenant_by_id, set_current_tenant
+        from src.core.config_loader import get_tenant_by_id
 
         try:
             tenant_dict = get_tenant_by_id(self._tenant_id)
             if tenant_dict:
-                set_current_tenant(tenant_dict)
                 resolved = TenantContext.from_dict(tenant_dict)
                 object.__setattr__(self, "_resolved", resolved)
                 return resolved
@@ -182,7 +185,6 @@ class LazyTenantContext:
 
         # Fallback: minimal TenantContext (unit tests, DB unavailable)
         resolved = TenantContext(tenant_id=self._tenant_id)
-        set_current_tenant(resolved)  # type: ignore[arg-type]
         object.__setattr__(self, "_resolved", resolved)
         return resolved
 
@@ -196,8 +198,18 @@ class LazyTenantContext:
 
         Call at the transport boundary to guarantee that downstream code
         reading from get_current_tenant() sees a valid tenant dict.
+        This is the ONLY place where LazyTenantContext sets the ContextVar.
         """
-        return self._resolve()
+        resolved = self._resolve()
+
+        from src.core.config_loader import get_tenant_by_id, set_current_tenant
+
+        # Set the ContextVar at this explicit boundary call
+        tenant_dict = get_tenant_by_id(self._tenant_id)
+        if tenant_dict:
+            set_current_tenant(tenant_dict)
+
+        return resolved
 
     # --- tenant_id is always available without DB ---
 

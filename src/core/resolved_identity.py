@@ -12,11 +12,9 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from src.core.config_loader import (
-    get_current_tenant,
     get_tenant_by_id,
     get_tenant_by_subdomain,
     get_tenant_by_virtual_host,
-    set_current_tenant,
 )
 from src.core.testing_hooks import AdCPTestContext
 
@@ -43,15 +41,7 @@ class ResolvedIdentity(BaseModel, frozen=True):
         return self.principal_id is not None and self.principal_id != ""
 
 
-def _get_header_case_insensitive(headers: dict, header_name: str) -> str | None:
-    """Case-insensitive header lookup (HTTP headers are case-insensitive)."""
-    if not headers:
-        return None
-    header_name_lower = header_name.lower()
-    for key, value in headers.items():
-        if key.lower() == header_name_lower:
-            return value
-    return None
+from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 
 def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
@@ -96,14 +86,12 @@ def _detect_tenant(headers: dict) -> tuple[str | None, dict | None]:
     tenant_context = get_tenant_by_virtual_host(host)
     if tenant_context:
         tenant_id = tenant_context["tenant_id"]
-        set_current_tenant(tenant_context)
     else:
         subdomain = host.split(".")[0] if "." in host else None
         if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
             tenant_context = get_tenant_by_subdomain(subdomain)
             if tenant_context:
                 tenant_id = tenant_context["tenant_id"]
-                set_current_tenant(tenant_context)
 
     # 2. x-adcp-tenant header (nginx path-based routing)
     if not tenant_id:
@@ -112,12 +100,9 @@ def _detect_tenant(headers: dict) -> tuple[str | None, dict | None]:
             tenant_context = get_tenant_by_subdomain(tenant_hint)
             if tenant_context:
                 tenant_id = tenant_context["tenant_id"]
-                set_current_tenant(tenant_context)
             else:
                 tenant_id = tenant_hint
                 tenant_context = get_tenant_by_id(tenant_hint)
-                if tenant_context:
-                    set_current_tenant(tenant_context)
 
     # 3. Apx-Incoming-Host header (Approximated.app virtual hosts)
     if not tenant_id:
@@ -126,7 +111,6 @@ def _detect_tenant(headers: dict) -> tuple[str | None, dict | None]:
             tenant_context = get_tenant_by_virtual_host(apx_host)
             if tenant_context:
                 tenant_id = tenant_context["tenant_id"]
-                set_current_tenant(tenant_context)
 
     # 4. Localhost fallback → "default" tenant
     if not tenant_id:
@@ -135,7 +119,6 @@ def _detect_tenant(headers: dict) -> tuple[str | None, dict | None]:
             tenant_context = get_tenant_by_subdomain("default")
             if tenant_context:
                 tenant_id = tenant_context["tenant_id"]
-                set_current_tenant(tenant_context)
 
     return tenant_id, tenant_context
 
@@ -178,10 +161,10 @@ def resolve_identity(
     if auth_token is None:
         auth_token, _ = _extract_auth_token(headers)
 
-    # Step 3: Validate token → principal_id
+    # Step 3: Validate token → principal_id (and discover tenant from token if needed)
     principal_id = None
     if auth_token:
-        principal_id = get_principal_from_token(auth_token, tenant_id)
+        principal_id, token_tenant = get_principal_from_token(auth_token, tenant_id)
 
         if principal_id is None:
             if require_valid_token:
@@ -193,13 +176,10 @@ def resolve_identity(
                     details={"error_code": "INVALID_AUTH_TOKEN"},
                 )
             # For discovery endpoints, continue without auth
-
-    # Step 4: If tenant wasn't set by header detection, get from ContextVar
-    # (get_principal_from_token may have set it as side effect for global lookup)
-    if not tenant_context:
-        tenant_context = get_current_tenant()
-        if tenant_context:
-            tenant_id = tenant_context.get("tenant_id", tenant_id)
+        elif not tenant_context and token_tenant:
+            # Tenant discovered from token lookup (no headers matched)
+            tenant_context = token_tenant
+            tenant_id = token_tenant.get("tenant_id", tenant_id)
 
     # Wrap raw dict in TenantContext if possible (both paths produce typed model)
     tenant_model = tenant_context

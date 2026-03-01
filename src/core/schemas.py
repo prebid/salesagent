@@ -1460,13 +1460,14 @@ class ProductFilters(LibraryFilters):
 
 
 class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsRequest with internal-only fields.
+    """Extends library GetProductsRequest with spec and internal fields.
 
-    Library provides: account_id, brand, brief, context, ext, filters,
-    property_list, proposal_id — all inherited from AdCP spec.
+    Library provides: account_id, brand, brief, buyer_campaign_ref, catalog,
+    context, ext, filters, pagination, property_list — all inherited from AdCP 3.6.
 
-    Local adds: product_selectors, pagination — internal fields for
-    implementation (excluded from external serialization).
+    Local extensions: buying_mode, account.
+
+    Internal-only: product_selectors (excluded from external serialization).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -1474,26 +1475,14 @@ class GetProductsRequest(LibraryGetProductsRequest):
     # brand is inherited from library as BrandReference | None.
     # BrandReference has .domain (required str) and .brand_id (optional BrandId).
 
-    # Spec fields not yet in adcp library v3.2.0
+    # Local extensions not yet in adcp library
     buying_mode: str | None = Field(
         None,
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
     )
-    brand: dict[str, Any] | None = Field(  # type: ignore[assignment]
+    account: dict[str, Any] | None = Field(
         None,
-        description="Brand reference for product discovery context (spec: brand-ref.json)",
-    )
-    catalog: dict[str, Any] | None = Field(  # type: ignore[assignment]
-        None,
-        description="Catalog of items the buyer wants to promote (spec: catalog.json)",
-    )
-    buyer_campaign_ref: str | None = Field(
-        None,
-        description="Buyer's campaign reference label for CRM and ad server correlation",
-    )
-    pagination: dict[str, Any] | None = Field(  # type: ignore[assignment]
-        None,
-        description="Cursor-based pagination parameters (max_results, cursor)",
+        description="Account for product lookup. Returns products with pricing specific to this account's rate card (spec: account-ref.json)",
     )
 
     # Internal-only fields (not in AdCP spec)
@@ -2642,10 +2631,26 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Field in AdCP spec but not yet in library (spec leads library)
+    # Fields in AdCP spec but not yet in adcp library v3.2.0
     account_id: str | None = Field(
         None,
         description="Filter delivery data to a specific account",
+    )
+    account: dict[str, Any] | None = Field(
+        None,
+        description="Filter delivery data to a specific account (spec: account-ref.json)",
+    )
+    reporting_dimensions: dict[str, Any] | None = Field(
+        None,
+        description="Request dimensional breakdowns in delivery reporting (geo, device_type, device_platform, audience, placement)",
+    )
+    include_package_daily_breakdown: bool | None = Field(
+        None,
+        description="When true, include daily_breakdown arrays within each package in by_package",
+    )
+    attribution_window: dict[str, Any] | None = Field(
+        None,
+        description="Attribution window to apply for conversion metrics (post_click, post_view, model)",
     )
 
 
