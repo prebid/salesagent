@@ -50,6 +50,8 @@ from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPBudgetExhaustedError,
+    AdCPConflictError,
     AdCPError,
     AdCPValidationError,
 )
@@ -96,7 +98,7 @@ logger = logging.getLogger(__name__)
 
 def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
     """Translate AdCPError to an A2A SDK error type preserving semantics."""
-    if isinstance(exc, AdCPValidationError):
+    if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
         return InvalidParamsError(message=exc.message)
     elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):
         return InvalidRequestError(message=exc.message)

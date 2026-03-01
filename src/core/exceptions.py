@@ -86,11 +86,33 @@ class AdCPNotFoundError(AdCPError):
     error_code = "NOT_FOUND"
 
 
+class AdCPConflictError(AdCPError):
+    """Resource conflict, e.g. duplicate idempotency key (409)."""
+
+    status_code = 409
+    error_code = "CONFLICT"
+    recovery: RecoveryHint = "correctable"
+
+
+class AdCPGoneError(AdCPError):
+    """Resource previously existed but is no longer available (410)."""
+
+    status_code = 410
+    error_code = "GONE"
+
+
+class AdCPBudgetExhaustedError(AdCPError):
+    """Budget or spend limit has been reached (422)."""
+
+    status_code = 422
+    error_code = "BUDGET_EXHAUSTED"
+
+
 class AdCPRateLimitError(AdCPError):
     """Too many requests (429)."""
 
     status_code = 429
-    error_code = "RATE_LIMIT_EXCEEDED"
+    error_code = "RATE_LIMITED"
     recovery: RecoveryHint = "transient"
 
 
@@ -99,6 +121,14 @@ class AdCPAdapterError(AdCPError):
 
     status_code = 502
     error_code = "ADAPTER_ERROR"
+    recovery: RecoveryHint = "transient"
+
+
+class AdCPServiceUnavailableError(AdCPError):
+    """Service or product temporarily unavailable (503)."""
+
+    status_code = 503
+    error_code = "SERVICE_UNAVAILABLE"
     recovery: RecoveryHint = "transient"
 
 
@@ -112,8 +142,12 @@ _A2A_ERROR_CODE_MAP: dict[type[AdCPError], int] = {
     AdCPAuthenticationError: -32600,  # InvalidRequestError
     AdCPAuthorizationError: -32600,  # InvalidRequestError
     AdCPNotFoundError: -32001,  # TaskNotFoundError
+    AdCPConflictError: -32602,  # InvalidParamsError (correctable client error)
+    AdCPGoneError: -32001,  # TaskNotFoundError (resource no longer exists)
+    AdCPBudgetExhaustedError: -32602,  # InvalidParamsError (client-correctable)
     AdCPRateLimitError: -32603,  # InternalError
     AdCPAdapterError: -32603,  # InternalError
+    AdCPServiceUnavailableError: -32603,  # InternalError
 }
 
 
