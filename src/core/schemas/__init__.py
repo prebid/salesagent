@@ -27,16 +27,11 @@ from adcp.types import (
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
-from adcp.types import GetProductsRequest as LibraryGetProductsRequest
-from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest
 from adcp.types import ListCreativeFormatsResponse as LibraryListCreativeFormatsResponse
 from adcp.types import ListCreativesRequest as LibraryListCreativesRequest
 from adcp.types import ListCreativesResponse as LibraryListCreativesResponse
 from adcp.types import PackageRequest as LibraryPackageRequest
-from adcp.types import (
-    ProductFilters as LibraryFilters,  # For GetProductsRequest (was Filters pre-2.11.0)
-)
 from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
 )
@@ -97,13 +92,8 @@ from adcp.types import FrequencyCap as LibraryFrequencyCap
 from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
-from adcp.types import Placement as LibraryPlacement
 from adcp.types import PlatformDeployment as LibraryPlatformDeployment
 from adcp.types import Pricing as LibraryPricing
-from adcp.types import Product as LibraryProduct
-from adcp.types import ProductCard as LibraryProductCard
-from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
-from adcp.types import PromotedProducts as LibraryPromotedProducts
 from adcp.types import Property as LibraryProperty
 from adcp.types import QuerySummary as LibraryQuerySummary
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
@@ -125,7 +115,6 @@ from pydantic import (
     ConfigDict,
     Field,
     RootModel,
-    field_serializer,
     model_serializer,
     model_validator,
 )
@@ -1122,220 +1111,6 @@ class DeliveryMeasurement(LibraryDeliveryMeasurement):
     pass  # All fields inherited from library
 
 
-class ProductCard(LibraryProductCard):
-    """Visual card for displaying products in user interfaces per AdCP spec.
-
-    Extends library type - all fields inherited.
-    Can be rendered via preview_creative or pre-generated.
-    Standard card is 300x400px for marketplace display.
-    """
-
-    pass  # All fields inherited from library
-
-
-class ProductCardDetailed(LibraryProductCardDetailed):
-    """Detailed card with carousel and full specifications per AdCP spec.
-
-    Extends library type - all fields inherited.
-    Provides rich product presentation similar to media kit pages.
-    """
-
-    pass  # All fields inherited from library
-
-
-class Placement(LibraryPlacement):
-    """Extends library Placement with stricter field requirements.
-
-    Library makes description and format_ids optional, but our implementation
-    requires them for all placements.
-    """
-
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    description: str = Field(..., description="Detailed description of the placement")
-    format_ids: list["FormatId"] = Field(  # type: ignore[assignment]
-        ...,
-        description="Supported creative formats for this placement",
-        min_length=1,
-    )
-
-
-class Product(LibraryProduct):
-    """Product schema extending library Product with internal fields.
-
-    Inherits all AdCP-compliant fields from adcp library's Product,
-    ensuring we stay in sync with spec updates. Adds only internal-only
-    fields that we need for our implementation.
-
-    This pattern ensures:
-    - External serialization uses library Product (spec-compliant)
-    - Internal code has extra fields it needs (implementation_config)
-    - No conversion functions needed - inheritance handles it
-    - Automatic updates when library Product changes
-    """
-
-    # Internal-only fields (not in AdCP spec)
-    implementation_config: dict[str, Any] | None = Field(
-        default=None,
-        description="Internal: Ad server-specific configuration for implementing this product",
-        exclude=True,  # Exclude from serialization by default
-    )
-
-    # Filter-related fields (not in AdCP Product spec, but needed for filtering)
-    countries: list[str] | None = Field(
-        default=None,
-        description="Internal: Country codes (ISO 3166-1 alpha-2) where this product is available",
-        exclude=True,  # Exclude from serialization by default
-    )
-    # channels: inherited from library Product as list[MediaChannel] | None (public per AdCP spec)
-
-    # Principal access control
-    allowed_principal_ids: list[str] | None = Field(
-        default=None,
-        description="Internal: Principal IDs that can see this product. NULL/empty means visible to all.",
-        exclude=True,  # Exclude from serialization by default
-    )
-
-    @model_validator(mode="after")
-    def validate_pricing_fields(self) -> "Product":
-        """Validate pricing_options per AdCP spec.
-
-        Per AdCP PR #88: All products must use pricing_options in the database.
-        However, pricing_options may be empty in API responses for anonymous/unauthenticated
-        users to hide pricing information.
-        """
-        # pricing_options defaults to empty list if not provided
-        # This allows filtering pricing info for anonymous users
-        return self
-
-    @model_validator(mode="after")
-    def validate_publisher_properties(self) -> "Product":
-        """Validate publisher_properties per AdCP spec.
-
-        Per AdCP spec, products must have at least one publisher property.
-        """
-        if not self.publisher_properties or len(self.publisher_properties) == 0:
-            raise ValueError(
-                "Product must have at least one publisher_property per AdCP spec. "
-                "Properties identify the inventory covered by this product."
-            )
-
-        return self
-
-    @field_serializer("format_ids", when_used="json")
-    def serialize_format_ids_for_json(self, format_ids: list) -> list:
-        """Serialize format_ids as FormatId objects per AdCP spec.
-
-        Returns list of FormatId objects with agent_url and id fields.
-        Pydantic will automatically serialize these as dicts with both fields.
-
-        For unknown format IDs, uses a default agent_url to ensure graceful handling
-        of legacy data.
-        """
-        if not format_ids:
-            return []
-
-        # Default agent_url for unknown formats
-        DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
-
-        result = []
-        for fmt in format_ids:
-            if isinstance(fmt, str):
-                # Legacy string format - convert to FormatId object
-                from src.core.format_cache import upgrade_legacy_format_id
-
-                try:
-                    result.append(upgrade_legacy_format_id(fmt))
-                except ValueError:
-                    # Unknown format - use default agent_url
-                    result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt))
-            elif isinstance(fmt, FormatId):
-                # Already a FormatId object
-                result.append(fmt)
-            elif isinstance(fmt, dict):
-                # Dict representation - convert to FormatId
-                if "id" in fmt and "agent_url" in fmt:
-                    result.append(FormatId(agent_url=url(fmt["agent_url"]), id=fmt["id"]))
-                elif "id" in fmt:
-                    # Missing agent_url - try upgrade, fallback to default
-                    from src.core.format_cache import upgrade_legacy_format_id
-
-                    try:
-                        result.append(upgrade_legacy_format_id(fmt["id"]))
-                    except ValueError:
-                        result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt["id"]))
-                else:
-                    raise ValueError(f"Invalid format dict: {fmt}")
-            # Other object types (like FormatReference)
-            elif hasattr(fmt, "agent_url") and hasattr(fmt, "id"):
-                result.append(FormatId(agent_url=url(str(fmt.agent_url)), id=fmt.id))
-            elif hasattr(fmt, "format_id"):
-                from src.core.format_cache import upgrade_legacy_format_id
-
-                try:
-                    result.append(upgrade_legacy_format_id(fmt.format_id))
-                except ValueError:
-                    result.append(FormatId(agent_url=url(DEFAULT_AGENT_URL), id=fmt.format_id))
-            else:
-                raise ValueError(f"Cannot serialize format: {fmt}")
-
-        return result
-
-    # Note: In AdCP V3, pricing is determined by field presence:
-    # - fixed_price present = fixed pricing
-    # - floor_price present = auction pricing with floor
-    # The consolidated CpmPricingOption/VcpmPricingOption types handle this automatically.
-
-    def model_dump(self, **kwargs):
-        """Return AdCP-compliant model dump with proper field names, excluding internal fields and null values."""
-        # Exclude internal/non-spec fields
-        kwargs["exclude"] = kwargs.get("exclude", set())
-        if isinstance(kwargs["exclude"], set):
-            kwargs["exclude"].update({"implementation_config", "expires_at"})
-
-        data = super().model_dump(**kwargs)
-
-        # Convert formats to format_ids per AdCP spec
-        if "formats" in data:
-            data["format_ids"] = data.pop("formats")
-
-        # Remove null fields per AdCP spec
-        # Only truly required fields should always be present
-        core_fields = {
-            "product_id",
-            "name",
-            "description",
-            "format_ids",
-            "delivery_type",
-            "is_custom",
-        }
-
-        adcp_data = {}
-        for key, value in data.items():
-            # Include core fields always, and non-null optional fields
-            # Note: pricing_options=[] is valid for anonymous users (no pricing shown)
-            # Per AdCP spec, pricing_options is required but can be empty array
-            if key in core_fields or value is not None:
-                adcp_data[key] = value
-            # Include empty pricing_options explicitly (required per AdCP schema)
-            elif key == "pricing_options" and value == []:
-                adcp_data[key] = []
-
-        return adcp_data
-
-    def model_dump_internal(self, **kwargs):
-        """Return internal model dump including all fields for database operations."""
-        return super().model_dump(**kwargs)
-
-    def model_dump_adcp_compliant(self, **kwargs):
-        """Return model dump for AdCP schema compliance."""
-        return self.model_dump(**kwargs)
-
-    def dict(self, **kwargs):
-        """Override dict to maintain backward compatibility."""
-        return self.model_dump(**kwargs)
-
-
 # --- Core Schemas ---
 
 
@@ -1383,15 +1158,12 @@ class Principal(SalesAgentBaseModel):
 
 
 # --- Performance Index ---
-class ProductPerformance(SalesAgentBaseModel):
-    product_id: str
-    performance_index: float  # 1.0 = baseline, 1.2 = 20% better, 0.8 = 20% worse
-    confidence_score: float | None = None  # 0.0 to 1.0
+# ProductPerformance moved to src.core.schemas.product
 
 
 class UpdatePerformanceIndexRequest(SalesAgentBaseModel):
     media_buy_id: str
-    performance_data: list[ProductPerformance]
+    performance_data: list["ProductPerformance"]
     context: ContextObject | None = Field(
         None, description="Application-level context provided by the client (echoed in responses)"
     )
@@ -1418,115 +1190,7 @@ class DeliveryType(str, Enum):
     NON_GUARANTEED = "non_guaranteed"
 
 
-class ProductFilters(LibraryFilters):
-    """Product filters extending library Filters from AdCP spec.
-
-    Inherits all AdCP-compliant filter fields from adcp library's Filters class,
-    ensuring we stay in sync with spec updates. All fields come from the library:
-    - delivery_type: Filter by delivery type (guaranteed, auction)
-    - format_ids: Filter by specific format IDs
-    - format_types: Filter by format types (video, display, audio)
-    - is_fixed_price: Filter for fixed price vs auction products
-    - min_exposures: Minimum exposures for measurement validity
-    - standard_formats_only: Only return IAB standard formats
-
-    This pattern ensures:
-    - External requests use library Filters (spec-compliant)
-    - We automatically get spec updates when library updates
-    - No manual field duplication = no drift from spec
-    """
-
-    @model_validator(mode="before")
-    @classmethod
-    def upgrade_legacy_format_ids(cls, values: dict) -> dict:
-        """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance)."""
-        if not isinstance(values, dict):
-            return values
-
-        format_ids = values.get("format_ids")
-        if format_ids and isinstance(format_ids, list):
-            # Convert any dict format_ids to FormatId objects
-            upgraded = []
-            for fmt_id in format_ids:
-                if isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id:
-                    # Dict with FormatId structure - convert to FormatId object
-                    upgraded.append(FormatId(**fmt_id))
-                else:
-                    # Already a FormatId object - pass through
-                    upgraded.append(fmt_id)
-            values["format_ids"] = upgraded
-
-        return values
-
-
-class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsRequest with spec and internal fields.
-
-    Library provides: account_id, brand, brief, buyer_campaign_ref, catalog,
-    context, ext, filters, pagination, property_list — all inherited from AdCP 3.6.
-
-    Local extensions: buying_mode, account.
-
-    Internal-only: product_selectors (excluded from external serialization).
-    """
-
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    # brand is inherited from library as BrandReference | None.
-    # BrandReference has .domain (required str) and .brand_id (optional BrandId).
-
-    # Local extensions not yet in adcp library
-    buying_mode: str | None = Field(
-        None,
-        description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
-    )
-    account: dict[str, Any] | None = Field(
-        None,
-        description="Account for product lookup. Returns products with pricing specific to this account's rate card (spec: account-ref.json)",
-    )
-
-    # Internal-only fields (not in AdCP spec)
-    product_selectors: LibraryPromotedProducts | None = Field(
-        None,
-        description="Selectors to filter the brand manifest product catalog for product discovery",
-        exclude=True,
-    )
-
-
-class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):
-    """Extends library GetProductsResponse - all fields inherited from AdCP spec.
-
-    Per AdCP PR #113, this response contains ONLY domain data.
-    Protocol fields (status, task_id, message, context_id) are added by the
-    protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
-    """
-
-    def __str__(self) -> str:
-        """Return human-readable message for protocol layer.
-
-        Used by both MCP (for display) and A2A (for task messages).
-        Provides conversational text without adding non-spec fields to the schema.
-        """
-        count = len(self.products)
-
-        # Base message
-        if count == 0:
-            base_msg = "No products matched your requirements."
-        elif count == 1:
-            base_msg = "Found 1 product that matches your requirements."
-        else:
-            base_msg = f"Found {count} products that match your requirements."
-
-        # Check if this looks like an anonymous response (all pricing options have no rates)
-        # Import here to avoid circular import (schemas -> helpers -> auth -> schemas)
-        from src.core.helpers.pricing_helpers import pricing_option_has_rate
-
-        if count > 0 and all(
-            all(not pricing_option_has_rate(po) for po in p.pricing_options) for p in self.products if p.pricing_options
-        ):
-            return f"{base_msg} Please connect through an authorized buying agent for pricing data."
-
-        return base_msg
+# ProductFilters, GetProductsRequest, GetProductsResponse moved to src.core.schemas.product
 
 
 class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
@@ -2312,11 +1976,7 @@ class BrandAsset(SalesAgentBaseModel):
     duration: float | None = Field(None, ge=0, description="Duration in seconds (for video/audio)")
 
 
-class ProductCatalog(SalesAgentBaseModel):
-    """E-commerce product feed information."""
-
-    url: str = Field(..., description="URL to product catalog feed")
-    format: str | None = Field(None, description="Feed format (e.g., 'google_merchant', 'json', 'xml')")
+# ProductCatalog moved to src.core.schemas.product
 
 
 # Use library BrandManifest directly - all fields inherited from AdCP spec
@@ -3695,3 +3355,35 @@ class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
         if "media_buys" in result and self.media_buys:
             result["media_buys"] = [mb.model_dump(**kwargs) for mb in self.media_buys]
         return result
+
+
+# Re-export product schemas for backward compatibility.
+# These were extracted to src.core.schemas.product but must remain
+# importable from src.core.schemas.
+from src.core.schemas.product import (  # noqa: E402
+    GetProductsRequest as GetProductsRequest,
+)
+from src.core.schemas.product import (
+    GetProductsResponse as GetProductsResponse,
+)
+from src.core.schemas.product import (
+    Placement as Placement,
+)
+from src.core.schemas.product import (
+    Product as Product,
+)
+from src.core.schemas.product import (
+    ProductCard as ProductCard,
+)
+from src.core.schemas.product import (
+    ProductCardDetailed as ProductCardDetailed,
+)
+from src.core.schemas.product import (
+    ProductCatalog as ProductCatalog,
+)
+from src.core.schemas.product import (
+    ProductFilters as ProductFilters,
+)
+from src.core.schemas.product import (
+    ProductPerformance as ProductPerformance,
+)
