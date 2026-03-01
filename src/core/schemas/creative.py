@@ -66,6 +66,56 @@ from src.core.schemas._base import (
 )
 
 
+class DigitalSourceType(str, Enum):
+    """IPTC Digital Source Type enumeration for AI provenance tracking.
+
+    Values from IPTC NewsCodes vocabulary for Digital Source Type,
+    relevant to EU AI Act Article 50 disclosure requirements.
+    """
+
+    digital_capture = "digital_capture"
+    digital_creation = "digital_creation"
+    composite_capture = "composite_capture"
+    composite_synthetic = "composite_synthetic"
+    composite_with_trained_model = "composite_with_trained_model"
+    trained_algorithmic_model = "trained_algorithmic_model"
+    algorithmic_media = "algorithmic_media"
+    human_edits = "human_edits"
+    minor_human_edits = "minor_human_edits"
+
+
+class Provenance(SalesAgentBaseModel):
+    """AI provenance metadata for creative assets.
+
+    Tracks the origin, AI involvement, and disclosure status of creative content
+    per EU AI Act Article 50 requirements (enforcement Aug 2026).
+
+    The sales agent is pass-through: it stores and forwards provenance metadata
+    from buyers/creative agents, it does not generate it.
+    """
+
+    digital_source_type: DigitalSourceType = Field(
+        ..., description="IPTC Digital Source Type indicating how the content was created"
+    )
+    ai_tool: str | None = Field(
+        default=None, description="Name/identifier of the AI tool used to create or modify the content"
+    )
+    human_oversight: bool | None = Field(
+        default=None, description="Whether a human reviewed/approved the AI-generated content"
+    )
+    declared_by: str | None = Field(
+        default=None, description="Entity that declared the provenance metadata (e.g., advertiser, agency)"
+    )
+    created_time: datetime | None = Field(default=None, description="When the provenance declaration was created")
+    c2pa: str | None = Field(
+        default=None, description="URL to C2PA (Coalition for Content Provenance and Authenticity) manifest store"
+    )
+    disclosure: str | None = Field(default=None, description="Human-readable disclosure statement about AI involvement")
+    verification: dict[str, Any] | None = Field(
+        default=None, description="Verification metadata (e.g., C2PA validation results, signature info)"
+    )
+
+
 class CreativeStatusEnum(Enum):
     """Creative status enum (not in adcp library, local definition)."""
 
@@ -111,6 +161,9 @@ class Creative(LibraryCreative):
     updated_date: datetime | None = Field(default=None, description="Update timestamp")  # type: ignore[assignment]
     # Override assets to untyped dict (our DB stores arbitrary asset dicts, not typed models)
     assets: dict[str, Any] | None = Field(default=None, description="Creative assets")
+
+    # === AI Provenance (EU AI Act Article 50) ===
+    provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
 
     # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(

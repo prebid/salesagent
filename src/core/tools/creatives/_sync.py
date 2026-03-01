@@ -21,7 +21,7 @@ from src.core.validation_helpers import format_validation_error, run_async_in_sy
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _update_existing_creative
-from ._validation import _get_field, _validate_creative_input
+from ._validation import _get_field, _validate_creative_input, check_provenance_required
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
 logger = logging.getLogger(__name__)
@@ -135,6 +135,23 @@ def _sync_creatives_impl(
     all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
 
     with get_db_session() as session:
+        # Check if any product in this tenant requires AI provenance metadata
+        from src.core.database.models import Product as DBProduct
+
+        tenant_products = session.scalars(select(DBProduct).filter_by(tenant_id=tenant["tenant_id"])).all()
+        # Collect creative_policy from products that require provenance
+        provenance_policies = [
+            p.creative_policy
+            for p in tenant_products
+            if p.creative_policy and p.creative_policy.get("provenance_required")
+        ]
+        tenant_requires_provenance = len(provenance_policies) > 0
+        if tenant_requires_provenance:
+            logger.info(
+                f"[sync_creatives] Tenant {tenant['tenant_id']} has "
+                f"{len(provenance_policies)} product(s) requiring AI provenance"
+            )
+
         # Process each creative with proper transaction isolation
         for raw_creative in creatives:
             try:
@@ -177,6 +194,12 @@ def _sync_creatives_impl(
                         )
                     )
                     continue  # Skip to next creative
+
+                # Check provenance requirement (EU AI Act Article 50)
+                provenance_warning = None
+                if tenant_requires_provenance:
+                    # Use the first matching policy (tenant-wide enforcement)
+                    provenance_warning = check_provenance_required(validated_creative, provenance_policies[0])
 
                 # dry_run: build simulated results without DB writes
                 if dry_run:
@@ -289,6 +312,13 @@ def _sync_creatives_impl(
                                 creative_info["ai_review_reason"] = existing_creative.data["ai_review"].get("reason")
                             creatives_needing_approval.append(creative_info)
 
+                        # Add provenance warning if applicable
+                        if provenance_warning and update_result.action != CreativeAction.failed:
+                            update_result.warnings.append(provenance_warning)
+                            # Flag for review when provenance is missing
+                            existing_creative.status = "pending_review"
+                            needs_approval = True
+
                         results.append(update_result)
 
                     else:
@@ -334,6 +364,11 @@ def _sync_creatives_impl(
                             # AI review reason will be added asynchronously when review completes
                             # No ai_result available yet in async mode
                             creatives_needing_approval.append(creative_info)
+
+                        # Add provenance warning if applicable
+                        if provenance_warning and create_result.action != CreativeAction.failed:
+                            create_result.warnings.append(provenance_warning)
+                            needs_approval = True
 
                         results.append(create_result)
 

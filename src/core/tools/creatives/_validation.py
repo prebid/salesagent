@@ -7,7 +7,7 @@ from typing import Any
 
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 
-from src.core.schemas import Creative, CreativeStatusEnum
+from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
 from src.core.validation_helpers import run_async_in_sync_context
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,11 @@ def _validate_creative_input(
     if approved is not None:
         schema_data["approved"] = approved
 
+    # Pass through AI provenance metadata (EU AI Act Article 50)
+    provenance = getattr(creative, "provenance", None)
+    if provenance is not None:
+        schema_data["provenance"] = provenance
+
     # Validate by creating a Creative schema object
     # This will fail if required fields are missing or invalid (like empty name)
     # Also auto-upgrades string format_ids to FormatId objects via validator
@@ -137,3 +142,37 @@ def _validate_creative_input(
         logger.debug(f"Skipping external validation for adapter-provided format '{format_id}' (agent_url: {agent_url})")
 
     return validated_creative
+
+
+def check_provenance_required(
+    creative: Creative,
+    creative_policy: CreativePolicy | dict | None,
+) -> str | None:
+    """Check if provenance metadata is required but missing.
+
+    Args:
+        creative: Validated Creative schema object.
+        creative_policy: Product's creative policy (may be dict from DB).
+
+    Returns:
+        Warning message if provenance is required but missing, None otherwise.
+    """
+    if creative_policy is None:
+        return None
+
+    # Handle both CreativePolicy model and dict from DB
+    if isinstance(creative_policy, dict):
+        provenance_required = creative_policy.get("provenance_required")
+    else:
+        provenance_required = creative_policy.provenance_required
+
+    if not provenance_required:
+        return None
+
+    if creative.provenance is None:
+        return (
+            "AI provenance metadata is required by product creative policy "
+            "but not provided. Creative flagged for review."
+        )
+
+    return None

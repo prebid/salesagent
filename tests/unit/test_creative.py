@@ -4651,3 +4651,231 @@ class TestCreativeIdsScopeFilterGap:
             assert "C3" in processed_ids
             assert "C2" not in processed_ids
             assert len(result.creatives) == 2
+
+
+# ============================================================================
+# 8. AI PROVENANCE (EU AI Act Article 50)
+# ============================================================================
+
+
+class TestProvenanceModel:
+    """Provenance model serialization and validation."""
+
+    def test_provenance_serialization_all_fields(self):
+        """Provenance model serializes all fields correctly."""
+        from src.core.schemas import DigitalSourceType, Provenance
+
+        prov = Provenance(
+            digital_source_type=DigitalSourceType.composite_with_trained_model,
+            ai_tool="DALL-E 3",
+            human_oversight=True,
+            declared_by="Agency XYZ",
+            created_time=datetime(2026, 2, 1, 12, 0, tzinfo=UTC),
+            c2pa="https://c2pa.example.com/manifest/123",
+            disclosure="This creative was generated using AI tools with human oversight.",
+            verification={"method": "c2pa", "verified": True},
+        )
+        data = prov.model_dump(mode="json")
+        assert data["digital_source_type"] == "composite_with_trained_model"
+        assert data["ai_tool"] == "DALL-E 3"
+        assert data["human_oversight"] is True
+        assert data["declared_by"] == "Agency XYZ"
+        assert data["c2pa"] == "https://c2pa.example.com/manifest/123"
+        assert data["disclosure"].startswith("This creative was generated")
+        assert data["verification"]["method"] == "c2pa"
+
+    def test_provenance_serialization_minimal(self):
+        """Provenance model with only required field."""
+        from src.core.schemas import DigitalSourceType, Provenance
+
+        prov = Provenance(digital_source_type=DigitalSourceType.digital_creation)
+        data = prov.model_dump(exclude_none=True)
+        assert data == {"digital_source_type": DigitalSourceType.digital_creation}
+
+    def test_provenance_digital_source_type_enum_values(self):
+        """All IPTC Digital Source Type values are available."""
+        from src.core.schemas import DigitalSourceType
+
+        expected = {
+            "digital_capture",
+            "digital_creation",
+            "composite_capture",
+            "composite_synthetic",
+            "composite_with_trained_model",
+            "trained_algorithmic_model",
+            "algorithmic_media",
+            "human_edits",
+            "minor_human_edits",
+        }
+        actual = {e.value for e in DigitalSourceType}
+        assert actual == expected
+
+    def test_provenance_invalid_digital_source_type_rejected(self):
+        """Invalid digital_source_type is rejected."""
+        from pydantic import ValidationError
+
+        from src.core.schemas import Provenance
+
+        with pytest.raises(ValidationError, match="digital_source_type"):
+            Provenance(digital_source_type="not_a_valid_type")
+
+    def test_creative_with_provenance(self):
+        """Creative can carry provenance metadata."""
+        from src.core.schemas import DigitalSourceType
+
+        creative = _make_creative(
+            provenance={
+                "digital_source_type": DigitalSourceType.digital_creation,
+                "ai_tool": "Stable Diffusion",
+            }
+        )
+        assert creative.provenance is not None
+        assert creative.provenance.digital_source_type == DigitalSourceType.digital_creation
+        assert creative.provenance.ai_tool == "Stable Diffusion"
+
+        # Provenance included in model_dump
+        data = creative.model_dump()
+        assert "provenance" in data
+        assert data["provenance"]["ai_tool"] == "Stable Diffusion"
+
+    def test_creative_without_provenance(self):
+        """Creative without provenance serializes correctly (backward compat)."""
+        creative = _make_creative()
+        assert creative.provenance is None
+        data = creative.model_dump(exclude_none=True)
+        assert "provenance" not in data
+
+
+class TestCreativePolicyExtension:
+    """CreativePolicy extension with provenance_required."""
+
+    def test_creative_policy_with_provenance_required(self):
+        """CreativePolicy extends library with provenance_required field."""
+        from adcp.types import CreativePolicy as LibraryCreativePolicy
+
+        from src.core.schemas import CreativePolicy
+
+        # Local type extends library
+        assert issubclass(CreativePolicy, LibraryCreativePolicy)
+
+        policy = CreativePolicy(
+            co_branding="required",
+            landing_page="any",
+            templates_available=True,
+            provenance_required=True,
+        )
+        assert policy.provenance_required is True
+        data = policy.model_dump(mode="json")
+        assert data["provenance_required"] is True
+        # Library fields still present
+        assert data["co_branding"] == "required"
+        assert data["landing_page"] == "any"
+        assert data["templates_available"] is True
+
+    def test_creative_policy_without_provenance_required_backward_compat(self):
+        """CreativePolicy without provenance_required is backward compatible."""
+        from src.core.schemas import CreativePolicy
+
+        policy = CreativePolicy(
+            co_branding="optional",
+            landing_page="retailer_site_only",
+            templates_available=False,
+        )
+        assert policy.provenance_required is None
+        # When exclude_none, provenance_required is omitted (AdCP convention)
+        data = policy.model_dump(mode="json", exclude_none=True)
+        assert "provenance_required" not in data
+        assert len(data) == 3  # Only library fields
+
+    def test_creative_policy_from_dict_with_provenance(self):
+        """CreativePolicy constructed from dict (DB storage format)."""
+        from src.core.schemas import CreativePolicy
+
+        # Simulating what comes from DB JSON column
+        policy_dict = {
+            "co_branding": "optional",
+            "landing_page": "any",
+            "templates_available": False,
+            "provenance_required": True,
+        }
+        policy = CreativePolicy(**policy_dict)
+        assert policy.provenance_required is True
+
+
+class TestProvenanceValidation:
+    """Provenance validation in sync_creatives flow."""
+
+    def test_check_provenance_required_missing_provenance(self):
+        """check_provenance_required returns warning when provenance is missing."""
+        from src.core.tools.creatives._validation import check_provenance_required
+
+        creative = _make_creative(provenance=None)
+        policy = {
+            "co_branding": "optional",
+            "landing_page": "any",
+            "templates_available": False,
+            "provenance_required": True,
+        }
+
+        warning = check_provenance_required(creative, policy)
+        assert warning is not None
+        assert "provenance metadata is required" in warning
+
+    def test_check_provenance_required_with_provenance(self):
+        """check_provenance_required returns None when provenance is present."""
+        from src.core.schemas import DigitalSourceType
+        from src.core.tools.creatives._validation import check_provenance_required
+
+        creative = _make_creative(
+            provenance={
+                "digital_source_type": DigitalSourceType.digital_creation,
+                "ai_tool": "DALL-E",
+            }
+        )
+        policy = {
+            "co_branding": "optional",
+            "landing_page": "any",
+            "templates_available": False,
+            "provenance_required": True,
+        }
+
+        warning = check_provenance_required(creative, policy)
+        assert warning is None
+
+    def test_check_provenance_not_required(self):
+        """check_provenance_required returns None when provenance is not required."""
+        from src.core.tools.creatives._validation import check_provenance_required
+
+        creative = _make_creative(provenance=None)
+
+        # Policy without provenance_required
+        policy_none = {"co_branding": "optional", "landing_page": "any", "templates_available": False}
+        assert check_provenance_required(creative, policy_none) is None
+
+        # Policy with provenance_required=False
+        policy_false = {
+            "co_branding": "optional",
+            "landing_page": "any",
+            "templates_available": False,
+            "provenance_required": False,
+        }
+        assert check_provenance_required(creative, policy_false) is None
+
+        # No policy at all
+        assert check_provenance_required(creative, None) is None
+
+    def test_check_provenance_with_creative_policy_model(self):
+        """check_provenance_required works with CreativePolicy model (not just dict)."""
+        from src.core.schemas import CreativePolicy
+        from src.core.tools.creatives._validation import check_provenance_required
+
+        creative = _make_creative(provenance=None)
+        policy = CreativePolicy(
+            co_branding="optional",
+            landing_page="any",
+            templates_available=False,
+            provenance_required=True,
+        )
+        warning = check_provenance_required(creative, policy)
+        assert warning is not None
+        assert "provenance metadata is required" in warning

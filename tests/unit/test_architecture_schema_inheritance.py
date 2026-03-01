@@ -188,6 +188,7 @@ class TestSchemaInheritance:
             ("Placement", "format_ids"),
             ("Placement", "description"),
             ("Product", "channels"),
+            ("Product", "creative_policy"),
             ("QuerySummary", "filters_applied"),
             ("Signal", "signal_type"),
             ("Signal", "pricing"),

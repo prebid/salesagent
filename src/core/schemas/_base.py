@@ -81,6 +81,7 @@ from adcp.types import (
 )
 
 # AdCP creative types for schema definitions
+from adcp.types import CreativePolicy as LibraryCreativePolicy
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
 from adcp.types import FrequencyCap as LibraryFrequencyCap
 from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
@@ -1129,6 +1130,19 @@ class Placement(LibraryPlacement):
     )
 
 
+class CreativePolicy(LibraryCreativePolicy):
+    """Extends library CreativePolicy with AI provenance requirements.
+
+    Library provides: co_branding, landing_page, templates_available.
+    Local extension adds provenance_required for EU AI Act Article 50 compliance.
+    """
+
+    provenance_required: bool | None = Field(
+        default=None,
+        description="When True, creatives must include AI provenance metadata (EU AI Act Article 50)",
+    )
+
+
 class Product(LibraryProduct):
     """Product schema extending library Product with internal fields.
 
@@ -1142,6 +1156,12 @@ class Product(LibraryProduct):
     - No conversion functions needed - inheritance handles it
     - Automatic updates when library Product changes
     """
+
+    # Override creative_policy to use local CreativePolicy (extends library with provenance_required)
+    creative_policy: CreativePolicy | None = Field(
+        default=None,
+        description="Creative policy for this product, including AI provenance requirements",
+    )
 
     # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(
