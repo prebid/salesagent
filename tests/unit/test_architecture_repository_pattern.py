@@ -43,9 +43,9 @@ IMPL_FILES = [
 IMPL_SESSION_ALLOWLIST = {
     # media_buy_delivery.py — 1 function with get_db_session()
     ("src/core/tools/media_buy_delivery.py", "_get_pricing_options"),
-    # products.py — 2 functions with get_db_session()
+    # products.py — 1 function with get_db_session() (product queries moved to ProductRepository)
+    # FIXME(salesagent-qo8a): _get_products_impl still uses get_db_session() for policy review + dynamic pricing
     ("src/core/tools/products.py", "_get_products_impl"),
-    ("src/core/tools/products.py", "get_product_catalog"),
     # creatives — 5 functions with get_db_session()
     ("src/core/tools/creatives/listing.py", "_list_creatives_impl"),
     ("src/core/tools/creatives/_sync.py", "_sync_creatives_impl"),

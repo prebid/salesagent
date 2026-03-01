@@ -156,6 +156,7 @@ def _setup_standard_mocks(
     # DB returns placeholder models; convert_product transforms them to real Products
     db_models = [MagicMock() for _ in schema_products]
     _mock_db_returning_products(db_models, patches["db_session"])
+    _mock_db_returning_products(db_models, patches["uow_db_session"])
     patches["convert_product"].side_effect = list(schema_products)
 
     patches["audit_logger"].return_value = MagicMock()
@@ -172,6 +173,7 @@ class _PipelinePatches:
         "generate_variants": "src.services.dynamic_products.generate_variants_for_brief",
         "pricing_service": "src.services.dynamic_pricing_service.DynamicPricingService",
         "db_session": "src.core.tools.products.get_db_session",
+        "uow_db_session": "src.core.database.repositories.uow.get_db_session",
         "convert_product": "src.core.tools.products.convert_product_model_to_schema",
         "audit_logger": "src.core.tools.products.get_audit_logger",
     }
