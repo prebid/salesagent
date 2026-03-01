@@ -396,6 +396,7 @@ async def _get_products_impl(
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant["tenant_id"]) as uow:
+        assert uow.products is not None
         db_products = uow.products.list_all()
 
         # Convert database Product models to AdCP Product schema
@@ -957,6 +958,7 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
         tenant_id = get_current_tenant()["tenant_id"]
 
     with ProductUoW(tenant_id) as uow:
+        assert uow.products is not None
         products = uow.products.list_all_with_inventory()
 
         # Use convert_product_model_to_schema for consistency
