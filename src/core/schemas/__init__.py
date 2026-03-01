@@ -850,6 +850,25 @@ _LEGACY_GEO_FIELDS: list[tuple[str, str, Any]] = [
 ]
 
 
+# Mapping from device_platform (OS-level, AdCP TargetingOverlay) to
+# device_type_any_of (form factor, internal targeting).
+# Each platform maps to a list of form factors the device typically has.
+_PLATFORM_TO_FORM_FACTORS: dict[str, list[str]] = {
+    "ios": ["mobile", "tablet"],
+    "android": ["mobile", "tablet"],
+    "windows": ["desktop"],
+    "macos": ["desktop"],
+    "linux": ["desktop"],
+    "chromeos": ["desktop"],
+    "tvos": ["ctv"],
+    "tizen": ["ctv"],
+    "webos": ["ctv"],
+    "fire_os": ["ctv"],
+    "roku_os": ["ctv"],
+    # "unknown" intentionally omitted — maps to no form factors
+}
+
+
 class Targeting(TargetingOverlay):
     """Targeting extending AdCP TargetingOverlay with internal dimensions.
 
@@ -962,6 +981,19 @@ class Targeting(TargetingOverlay):
         city_none = values.pop("geo_city_none_of", None)
         if city_any or city_none:
             values["had_city_targeting"] = True
+
+        # device_platform (OS-level, from AdCP TargetingOverlay) → device_type_any_of
+        # (form factor, consumed by adapters). Only populate if device_type_any_of
+        # is not already explicitly set — explicit values take precedence.
+        dp = values.get("device_platform")
+        if dp and not values.get("device_type_any_of"):
+            form_factors: set[str] = set()
+            for platform in dp:
+                # Handle both enum values and raw strings
+                p = platform.value if hasattr(platform, "value") else str(platform)
+                form_factors.update(_PLATFORM_TO_FORM_FACTORS.get(p, []))
+            if form_factors:
+                values["device_type_any_of"] = sorted(form_factors)
 
         return values
 
