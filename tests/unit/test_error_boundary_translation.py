@@ -66,6 +66,46 @@ class TestExtractErrorInfoAdCPError:
         assert code == "ADAPTER_ERROR"
         assert message == "GAM down"
 
+    def test_adcp_conflict_error_extracts_code_and_message(self):
+        """AdCPConflictError → ('CONFLICT', 'duplicate key')."""
+        from src.core.exceptions import AdCPConflictError
+        from src.core.tool_error_logging import extract_error_info
+
+        exc = AdCPConflictError("duplicate key")
+        code, message = extract_error_info(exc)
+        assert code == "CONFLICT"
+        assert message == "duplicate key"
+
+    def test_adcp_gone_error_extracts_code_and_message(self):
+        """AdCPGoneError → ('GONE', 'proposal expired')."""
+        from src.core.exceptions import AdCPGoneError
+        from src.core.tool_error_logging import extract_error_info
+
+        exc = AdCPGoneError("proposal expired")
+        code, message = extract_error_info(exc)
+        assert code == "GONE"
+        assert message == "proposal expired"
+
+    def test_adcp_budget_exhausted_error_extracts_code_and_message(self):
+        """AdCPBudgetExhaustedError → ('BUDGET_EXHAUSTED', 'budget limit reached')."""
+        from src.core.exceptions import AdCPBudgetExhaustedError
+        from src.core.tool_error_logging import extract_error_info
+
+        exc = AdCPBudgetExhaustedError("budget limit reached")
+        code, message = extract_error_info(exc)
+        assert code == "BUDGET_EXHAUSTED"
+        assert message == "budget limit reached"
+
+    def test_adcp_service_unavailable_error_extracts_code_and_message(self):
+        """AdCPServiceUnavailableError → ('SERVICE_UNAVAILABLE', 'product unavailable')."""
+        from src.core.exceptions import AdCPServiceUnavailableError
+        from src.core.tool_error_logging import extract_error_info
+
+        exc = AdCPServiceUnavailableError("product unavailable")
+        code, message = extract_error_info(exc)
+        assert code == "SERVICE_UNAVAILABLE"
+        assert message == "product unavailable"
+
     def test_adcp_base_error_extracts_code_and_message(self):
         """AdCPError base → ('INTERNAL_ERROR', 'something broke')."""
         from src.core.tool_error_logging import extract_error_info
@@ -357,3 +397,37 @@ class TestRESTBoundaryAdCPErrorTranslation:
             assert response.status_code == 502
             body = response.json()
             assert body["error_code"] == "ADAPTER_ERROR"
+
+    def test_adcp_conflict_from_impl_returns_409(self):
+        """AdCPConflictError raised in _impl → REST returns 409."""
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.exceptions import AdCPConflictError
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=AdCPConflictError("duplicate key"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+            assert response.status_code == 409
+            body = response.json()
+            assert body["error_code"] == "CONFLICT"
+
+    def test_adcp_service_unavailable_from_impl_returns_503(self):
+        """AdCPServiceUnavailableError raised in _impl → REST returns 503."""
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.exceptions import AdCPServiceUnavailableError
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=AdCPServiceUnavailableError("product unavailable"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+            assert response.status_code == 503
+            body = response.json()
+            assert body["error_code"] == "SERVICE_UNAVAILABLE"
