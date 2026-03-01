@@ -101,6 +101,88 @@ class TestExceptionHierarchy:
 
 
 # ---------------------------------------------------------------------------
+# Recovery Classification Tests
+# ---------------------------------------------------------------------------
+
+
+class TestRecoveryClassification:
+    """Verify recovery field on AdCPError and all subclasses."""
+
+    def test_base_error_defaults_to_terminal(self):
+        """AdCPError base class defaults to recovery='terminal'."""
+        from src.core.exceptions import AdCPError
+
+        exc = AdCPError("something broke")
+        assert exc.recovery == "terminal"
+
+    def test_validation_error_defaults_to_correctable(self):
+        """AdCPValidationError defaults to recovery='correctable'."""
+        from src.core.exceptions import AdCPValidationError
+
+        exc = AdCPValidationError("invalid field")
+        assert exc.recovery == "correctable"
+
+    def test_authentication_error_defaults_to_terminal(self):
+        """AdCPAuthenticationError defaults to recovery='terminal'."""
+        from src.core.exceptions import AdCPAuthenticationError
+
+        exc = AdCPAuthenticationError("bad token")
+        assert exc.recovery == "terminal"
+
+    def test_authorization_error_defaults_to_terminal(self):
+        """AdCPAuthorizationError defaults to recovery='terminal'."""
+        from src.core.exceptions import AdCPAuthorizationError
+
+        exc = AdCPAuthorizationError("forbidden")
+        assert exc.recovery == "terminal"
+
+    def test_not_found_error_defaults_to_terminal(self):
+        """AdCPNotFoundError defaults to recovery='terminal'."""
+        from src.core.exceptions import AdCPNotFoundError
+
+        exc = AdCPNotFoundError("resource missing")
+        assert exc.recovery == "terminal"
+
+    def test_rate_limit_error_defaults_to_transient(self):
+        """AdCPRateLimitError defaults to recovery='transient'."""
+        from src.core.exceptions import AdCPRateLimitError
+
+        exc = AdCPRateLimitError("too many requests")
+        assert exc.recovery == "transient"
+
+    def test_adapter_error_defaults_to_transient(self):
+        """AdCPAdapterError defaults to recovery='transient'."""
+        from src.core.exceptions import AdCPAdapterError
+
+        exc = AdCPAdapterError("GAM unavailable")
+        assert exc.recovery == "transient"
+
+    def test_recovery_can_be_overridden_per_instance(self):
+        """Callers can override recovery for specific raise sites."""
+        from src.core.exceptions import AdCPValidationError
+
+        exc = AdCPValidationError("permanent schema mismatch", recovery="terminal")
+        assert exc.recovery == "terminal"
+
+    def test_to_dict_includes_recovery(self):
+        """to_dict() must include recovery field in serialized output."""
+        from src.core.exceptions import AdCPValidationError
+
+        exc = AdCPValidationError("bad field", details={"field": "name"})
+        d = exc.to_dict()
+        assert "recovery" in d
+        assert d["recovery"] == "correctable"
+
+    def test_to_dict_includes_overridden_recovery(self):
+        """to_dict() must serialize overridden recovery value."""
+        from src.core.exceptions import AdCPAdapterError
+
+        exc = AdCPAdapterError("permanent config error", recovery="terminal")
+        d = exc.to_dict()
+        assert d["recovery"] == "terminal"
+
+
+# ---------------------------------------------------------------------------
 # FastAPI Exception Handler Tests
 # ---------------------------------------------------------------------------
 
