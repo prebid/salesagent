@@ -175,6 +175,7 @@ class TestCreateMediaBuySchemaCompliance:
         Spec: CONFIRMED -- create-media-buy-request.json requires brand_manifest (mapped to brand in library)
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-request.json
         https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/media_buy/create_media_buy_request.py
+        Covers: UC-002-MAIN-02
         """
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
@@ -190,6 +191,7 @@ class TestCreateMediaBuySchemaCompliance:
 
         Spec: CONFIRMED -- create-media-buy-request.json required: ["buyer_ref", ...]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-request.json
+        Covers: UC-002-MAIN-02
         """
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
@@ -205,6 +207,7 @@ class TestCreateMediaBuySchemaCompliance:
 
         Spec: CONFIRMED -- validates required fields from create-media-buy-request.json
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-request.json
+        Covers: UC-002-MAIN-02
         """
         req = _make_request()
         assert req.buyer_ref == "test-buyer"
@@ -216,6 +219,7 @@ class TestCreateMediaBuySchemaCompliance:
 
         Spec: CONFIRMED -- start-timing.json requires "format": "date-time" (tz-aware)
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/start-timing.json
+        Covers: UC-002-EXT-C-06
         """
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
@@ -231,6 +235,7 @@ class TestCreateMediaBuySchemaCompliance:
 
         Spec: CONFIRMED -- start-timing.json oneOf includes const "asap"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/start-timing.json
+        Covers: UC-002-ALT-ASAP-START-TIMING-01
         """
         req = _make_request(start_time="asap")
         assert req.start_time is not None
@@ -239,6 +244,7 @@ class TestCreateMediaBuySchemaCompliance:
         """UC-002-S06: get_total_budget sums all package budgets.
 
         Spec: UNSPECIFIED (implementation-defined helper; spec defines budget at package level)
+        Covers: UC-002-MAIN-07
         """
         req = _make_request(
             packages=[
@@ -252,6 +258,7 @@ class TestCreateMediaBuySchemaCompliance:
         """UC-002-S07: get_product_ids returns unique IDs preserving order.
 
         Spec: UNSPECIFIED (implementation-defined helper; spec defines product_id per package)
+        Covers: UC-002-EXT-E-01
         """
         req = _make_request(
             packages=[
@@ -272,6 +279,7 @@ class TestCreateMediaBuyResponseShapes:
         Spec: CONFIRMED -- create-media-buy-response.json success required: ["media_buy_id", ...]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-response.json
         Ported from test_approval_error_handling_core.py::test_success_response_has_media_buy_id
+        Covers: UC-002-POST-04
         """
         resp = _make_success(media_buy_id="mb_123")
         assert resp.media_buy_id == "mb_123"
@@ -282,6 +290,7 @@ class TestCreateMediaBuyResponseShapes:
         Spec: CONFIRMED -- create-media-buy-response.json error: not anyOf [media_buy_id]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-response.json
         Ported from test_approval_error_handling_core.py::test_error_response_has_errors_not_media_buy_id
+        Covers: UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-02
         """
         from adcp.types import Error
 
@@ -294,6 +303,7 @@ class TestCreateMediaBuyResponseShapes:
 
         Spec: UNSPECIFIED (implementation-defined internal field exclusion)
         Ported from test_response_shapes.py::test_internal_fields_excluded
+        Covers: UC-002-MAIN-21
         """
         resp = _make_success(
             media_buy_id="mb_123",
@@ -306,6 +316,7 @@ class TestCreateMediaBuyResponseShapes:
         """UC-002-R04: CreateMediaBuyResult supports (response, status) unpacking.
 
         Spec: UNSPECIFIED (implementation-defined result wrapper pattern)
+        Covers: UC-002-MAIN-21
         """
         success = _make_success(media_buy_id="mb_1")
         result = CreateMediaBuyResult(status="completed", response=success)
@@ -317,6 +328,7 @@ class TestCreateMediaBuyResponseShapes:
         """UC-002-R05: CreateMediaBuyResult.model_dump includes status at top level.
 
         Spec: UNSPECIFIED (implementation-defined result wrapper serialization)
+        Covers: UC-002-MAIN-21
         """
         success = _make_success(media_buy_id="mb_1")
         result = CreateMediaBuyResult(status="completed", response=success)
@@ -328,6 +340,7 @@ class TestCreateMediaBuyResponseShapes:
         """UC-002-R06: CreateMediaBuyError.__str__ mentions error count.
 
         Spec: UNSPECIFIED (implementation-defined string representation)
+        Covers: UC-002-POST-02
         """
         from adcp.types import Error
 
@@ -338,6 +351,7 @@ class TestCreateMediaBuyResponseShapes:
         """UC-002-R07: CreateMediaBuySuccess.__str__ mentions media_buy_id.
 
         Spec: UNSPECIFIED (implementation-defined string representation)
+        Covers: UC-002-POST-04
         """
         resp = _make_success(media_buy_id="mb_123")
         assert "mb_123" in str(resp)
@@ -353,6 +367,7 @@ class TestCreateMediaBuyValidation:
         Spec: CONFIRMED -- package-request.json requires product_id; seller validates product existence
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/package-request.json
         Ported from test_create_media_buy_behavioral.py::test_product_not_found_returns_error
+        Covers: UC-002-EXT-B-01
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -423,6 +438,7 @@ class TestCreateMediaBuyValidation:
 
         Spec: UNSPECIFIED (implementation-defined spend cap enforcement; spec has no daily cap concept)
         Ported from test_create_media_buy_behavioral.py::test_max_daily_spend_exceeded
+        Covers: UC-002-EXT-K-01
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -497,6 +513,7 @@ class TestCreateMediaBuyValidation:
         Spec: CONFIRMED -- cpm-option.json description implies XOR; Pydantic validator enforces it
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/pricing-options/cpm-option.json
         Ported from test_create_media_buy_behavioral.py::test_both_fixed_price_and_floor_price_rejected
+        Covers: UC-002-EXT-N-06
         """
         with pytest.raises(ValidationError):
             PricingOption(
@@ -512,6 +529,7 @@ class TestCreateMediaBuyValidation:
         Spec: CONFIRMED -- cpm-option.json description implies XOR; Pydantic validator enforces it
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/pricing-options/cpm-option.json
         Ported from test_create_media_buy_behavioral.py::test_neither_fixed_price_nor_floor_price_rejected
+        Covers: UC-002-EXT-N-07
         """
         with pytest.raises(ValidationError):
             PricingOption(
@@ -527,6 +545,7 @@ class TestCreateMediaBuyValidation:
         Priority: P0
         Type: unit
         Source: UC-002, salesagent-7gnv
+        Covers: UC-002-UPG-03
         """
         req = _make_request(buyer_campaign_ref="camp-ref-123")
         assert req.buyer_campaign_ref == "camp-ref-123"
@@ -547,6 +566,7 @@ class TestCreateMediaBuyValidation:
         Priority: P0
         Type: unit
         Source: UC-002, salesagent-7gnv
+        Covers: UC-002-UPG-05
         """
         req = _make_request(ext={"custom_key": "custom_value"})
         assert req.ext is not None
@@ -568,6 +588,7 @@ class TestCreateMediaBuyValidation:
         Priority: P1
         Type: unit
         Source: UC-002, salesagent-7gnv
+        Covers: UC-002-UPG-06
         """
         req = _make_request(account_id="acc_123")
         assert req.account_id == "acc_123"
@@ -580,6 +601,7 @@ class TestCreateMediaBuyValidation:
         Priority: P1
         Type: unit
         Source: UC-002 main flow, BR-RULE-008
+        Covers: UC-002-EXT-A-01
         """
         # A request with zero budget for all packages should be rejected
         # (at validation time or _impl time)
@@ -603,6 +625,7 @@ class TestCreateMediaBuyValidation:
         Priority: P1
         Type: unit
         Source: UC-002, BR-RULE-009
+        Covers: UC-002-EXT-E-01
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -635,6 +658,7 @@ class TestCreateMediaBuyValidation:
         Priority: P1
         Type: unit
         Source: UC-002 main flow
+        Covers: UC-002-EXT-C-04
         """
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
@@ -652,6 +676,7 @@ class TestCreateMediaBuyValidation:
         Priority: P1
         Type: unit
         Source: UC-002, BR-RULE-013
+        Covers: UC-002-EXT-C-02
         """
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
@@ -662,19 +687,6 @@ class TestCreateMediaBuyValidation:
                 packages=[{"product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm_usd_fixed"}],
             )
 
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_unsupported_currency_rejected in test_media_buy_v3.py", run=False
-    )
-    def test_unsupported_currency_rejected(self):
-        """UC-002-V12: package currency not in tenant limits rejected.
-
-        Spec: UNSPECIFIED (implementation-defined tenant currency configuration)
-        Priority: P2
-        Type: unit
-        Source: UC-002
-        """
-        pytest.fail("Currency validation requires integration test with real database")
-
     def test_pricing_model_not_offered_rejected(self):
         """UC-002-V13: pricing_model not in product's options rejected.
 
@@ -683,6 +695,7 @@ class TestCreateMediaBuyValidation:
         Priority: P1
         Type: unit
         Source: UC-002, BR-RULE-006
+        Covers: UC-002-EXT-N-01
         """
         from src.core.tools.media_buy_create import _validate_pricing_model_selection
 
@@ -708,6 +721,7 @@ class TestCreateMediaBuyValidation:
         Priority: P1
         Type: unit
         Source: UC-002, BR-RULE-006
+        Covers: UC-002-EXT-N-04
         """
         from src.core.tools.media_buy_create import _validate_pricing_model_selection
 
@@ -747,6 +761,7 @@ class TestCreateMediaBuyValidation:
         Priority: P1
         Type: unit
         Source: UC-002, BR-RULE-011
+        Covers: UC-002-CC-MINIMUM-SPEND-PER-02
         """
         from src.core.tools.media_buy_create import _validate_pricing_model_selection
 
@@ -788,6 +803,7 @@ class TestCreateMediaBuyCreativeValidation:
 
         Spec: UNSPECIFIED (implementation-defined creative pre-validation)
         Ported from test_create_media_buy_behavioral.py::test_creative_missing_url_raises_invalid_creatives
+        Covers: UC-002-EXT-G-01
         """
         from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
 
@@ -825,6 +841,7 @@ class TestCreateMediaBuyCreativeValidation:
         Priority: P1
         Type: unit
         Source: UC-002, BR-RULE-026
+        Covers: UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-01
         """
         from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
 
@@ -854,6 +871,7 @@ class TestCreateMediaBuyCreativeValidation:
         Priority: P1
         Type: unit
         Source: UC-002, BR-RULE-026
+        Covers: UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-02
         """
         from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
 
@@ -883,6 +901,7 @@ class TestCreateMediaBuyCreativeValidation:
         Priority: P1
         Type: unit
         Source: UC-002, BR-RULE-026
+        Covers: UC-002-EXT-P-01
         """
         from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
 
@@ -934,6 +953,7 @@ class TestCreateMediaBuyCreativeValidation:
         Priority: P2
         Type: unit
         Source: UC-002
+        Covers: UC-002-ALT-WITH-INLINE-CREATIVES-03
         """
         from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
 
@@ -967,6 +987,7 @@ class TestCreateMediaBuyCreativeValidation:
         Priority: P2
         Type: unit
         Source: UC-002
+        Covers: UC-002-EXT-G-04
         """
         from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
 
@@ -1017,6 +1038,7 @@ class TestCreateMediaBuyStatusDetermination:
 
         Spec: CONFIRMED -- media-buy-status.json: completed = "Media buy has finished running"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
+        Covers: UC-002-MAIN-21
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
 
@@ -1030,6 +1052,7 @@ class TestCreateMediaBuyStatusDetermination:
 
         Spec: CONFIRMED -- media-buy-status.json: active = "Media buy is currently running"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
+        Covers: UC-002-MAIN-21
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
 
@@ -1043,6 +1066,7 @@ class TestCreateMediaBuyStatusDetermination:
 
         Spec: CONFIRMED -- media-buy-status.json: pending_activation = "Media buy created but not yet activated"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
+        Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-03
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
 
@@ -1056,6 +1080,7 @@ class TestCreateMediaBuyStatusDetermination:
 
         Spec: CONFIRMED -- media-buy-status.json: pending_activation = "Media buy created but not yet activated"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
+        Covers: UC-002-MAIN-21
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
 
@@ -1069,6 +1094,7 @@ class TestCreateMediaBuyStatusDetermination:
 
         Spec: CONFIRMED -- media-buy-status.json: pending_activation = "Media buy created but not yet activated"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
+        Covers: UC-002-MAIN-21
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
 
@@ -1086,6 +1112,7 @@ class TestCreateMediaBuyImplAuth:
         """UC-002-A01: None identity raises error.
 
         Spec: UNSPECIFIED (implementation-defined authentication boundary)
+        Covers: UC-002-EXT-I-01
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -1099,6 +1126,7 @@ class TestCreateMediaBuyImplAuth:
 
         Spec: UNSPECIFIED (implementation-defined principal resolution)
         Ported from test_create_media_buy_behavioral.py pattern.
+        Covers: UC-002-EXT-I-02
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -1122,6 +1150,7 @@ class TestCreateMediaBuyImplAuth:
         Priority: P0
         Type: unit
         Source: UC-002 ext-a
+        Covers: UC-002-PRECOND-03
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -1144,6 +1173,7 @@ class TestCreateMediaBuyImplAuth:
         Priority: P1
         Type: unit
         Source: UC-002 main flow
+        Covers: UC-002-PRECOND-03
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.services.setup_checklist_service import SetupIncompleteError
@@ -1171,52 +1201,6 @@ class TestCreateMediaBuyImplAuth:
                 await _create_media_buy_impl(req, identity=identity)
 
 
-class TestCreateMediaBuyManualApproval:
-    """UC-002 alt-manual: manual approval / HITL flow."""
-
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_manual_approval_creates_pending_workflow_step in test_media_buy_v3.py",
-        run=False,
-    )
-    def test_manual_approval_creates_pending_workflow_step(self):
-        """UC-002-MA01: when human_review_required, status is 'submitted'.
-
-        Spec: UNSPECIFIED (implementation-defined HITL workflow)
-        Priority: P1
-        Type: unit
-        Source: UC-002 alt-manual, BR-RULE-017
-        """
-        pytest.fail("Manual approval flow requires integration test with real database")
-
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_manual_approval_stores_raw_request in test_media_buy_v3.py",
-        run=False,
-    )
-    def test_manual_approval_stores_raw_request(self):
-        """UC-002-MA02: raw_request preserved in DB for deferred adapter call.
-
-        Spec: UNSPECIFIED (implementation-defined deferred execution pattern)
-        Priority: P1
-        Type: unit
-        Source: UC-002 alt-manual, BR-RULE-020
-        """
-        pytest.fail("Manual approval raw_request storage requires integration test with real database")
-
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_execute_approved_calls_adapter in test_media_buy_v3.py (currently xfail: status not updated)",
-        run=False,
-    )
-    def test_execute_approved_calls_adapter(self):
-        """UC-002-MA03: approved buy triggers adapter creation.
-
-        Spec: UNSPECIFIED (implementation-defined approval execution)
-        Priority: P1
-        Type: unit
-        Source: UC-002 alt-manual
-        """
-        pytest.fail("execute_approved_media_buy requires integration test with real database")
-
-
 class TestCreateMediaBuyAdapterInteraction:
     """UC-002 adapter call: _execute_adapter_media_buy_creation behavior."""
 
@@ -1227,6 +1211,7 @@ class TestCreateMediaBuyAdapterInteraction:
         Priority: P1
         Type: unit
         Source: UC-002, BR-RULE-020
+        Covers: UC-002-EXT-J-01
         """
         from adcp.types import Error
 
@@ -1260,6 +1245,7 @@ class TestCreateMediaBuyAdapterInteraction:
         Priority: P1
         Type: unit
         Source: UC-002
+        Covers: UC-002-EXT-J-03
         """
         from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
 
@@ -1292,6 +1278,7 @@ class TestCreateMediaBuyAdapterInteraction:
         When dry_run=True, _create_media_buy_impl must NOT call
         _execute_adapter_media_buy_creation. It should return a simulated
         CreateMediaBuySuccess with a dry_run_ prefixed media_buy_id.
+        Covers: UC-002-MAIN-19
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -1410,6 +1397,7 @@ class TestUpdateMediaBuySchemaCompliance:
 
         Spec: CONFIRMED -- update-media-buy-request.json oneOf requires media_buy_id OR buyer_ref
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
+        Covers: UC-003-MAIN-01
         """
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
         assert req.media_buy_id == "mb_1"
@@ -1419,6 +1407,7 @@ class TestUpdateMediaBuySchemaCompliance:
 
         Spec: CONFIRMED -- update-media-buy-request.json start_time refs start-timing.json, end_time is date-time
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
+        Covers: UC-003-ALT-UPDATE-TIMING-01
         """
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_1",
@@ -1433,6 +1422,7 @@ class TestUpdateMediaBuySchemaCompliance:
 
         Spec: CONFIRMED -- update-media-buy-request.json start_time refs start-timing.json (oneOf: "asap" | datetime)
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/start-timing.json
+        Covers: UC-003-ALT-UPDATE-TIMING-02
         """
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="asap")
         assert req.start_time == "asap"
@@ -1447,6 +1437,7 @@ class TestUpdateMediaBuySchemaCompliance:
         Priority: P0
         Type: unit
         Source: UC-003, salesagent-7gnv
+        Covers: UC-003-MAIN-11
         """
         # buyer_campaign_ref is a create-time field, not an update field.
         # GetMediaBuysMediaBuy (list response) should preserve it.
@@ -1471,6 +1462,7 @@ class TestUpdateMediaBuySchemaCompliance:
         Priority: P0
         Type: unit
         Source: UC-003, salesagent-7gnv
+        Covers: UC-003-MAIN-12
         """
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_1",
@@ -1491,6 +1483,7 @@ class TestUpdateMediaBuyResponseShapes:
         Spec: CONFIRMED -- update-media-buy-response.json success has affected_packages property
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
         Ported from test_update_media_buy_affected_packages.py::test_response_serialization_includes_affected_packages
+        Covers: UC-003-MAIN-09
         """
         resp = UpdateMediaBuySuccess(
             media_buy_id="mb_1",
@@ -1509,6 +1502,7 @@ class TestUpdateMediaBuyResponseShapes:
 
         Spec: CONFIRMED -- update-media-buy-response.json error: not anyOf [media_buy_id, buyer_ref, affected_packages]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
+        Covers: UC-003-EXT-O-05
         """
         from adcp.types import Error
 
@@ -1523,6 +1517,7 @@ class TestUpdateMediaBuyResponseShapes:
 
         Spec: UNSPECIFIED (implementation-defined internal field exclusion)
         Ported from test_update_media_buy_affected_packages.py pattern.
+        Covers: UC-003-MAIN-09
         """
         pkg = AffectedPackage(
             package_id="pkg_1",
@@ -1546,6 +1541,7 @@ class TestUpdateMediaBuyMainFlow:
         Priority: P0
         Type: unit
         Source: UC-003 main flow
+        Covers: UC-003-MAIN-01
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -1622,6 +1618,7 @@ class TestUpdateMediaBuyMainFlow:
         Priority: P0
         Type: unit
         Source: UC-003, BR-RULE-021
+        Covers: UC-003-MAIN-02
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -1698,6 +1695,7 @@ class TestUpdateMediaBuyMainFlow:
         Priority: P0
         Type: unit
         Source: UC-003, BR-RULE-022
+        Covers: UC-003-MAIN-03
         """
         from src.core.schemas import AdCPPackageUpdate
 
@@ -1720,6 +1718,7 @@ class TestUpdateMediaBuyMainFlow:
         Priority: P1
         Type: unit
         Source: UC-003, BR-RULE-022
+        Covers: UC-003-MAIN-04
         """
         from src.core.tools.media_buy_update import _build_update_request
 
@@ -1739,6 +1738,7 @@ class TestUpdateMediaBuyPauseResume:
         Priority: P0
         Type: unit
         Source: UC-003 alt-pause
+        Covers: UC-003-ALT-PAUSE-RESUME-CAMPAIGN-01
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -1796,6 +1796,7 @@ class TestUpdateMediaBuyPauseResume:
         Priority: P0
         Type: unit
         Source: UC-003 alt-pause
+        Covers: UC-003-ALT-PAUSE-RESUME-CAMPAIGN-02
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -1851,6 +1852,7 @@ class TestUpdateMediaBuyPauseResume:
         Priority: P2
         Type: unit
         Source: UC-003 alt-pause
+        Covers: UC-003-ALT-PAUSE-RESUME-CAMPAIGN-03
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -1911,6 +1913,7 @@ class TestUpdateMediaBuyTiming:
         Spec: CONFIRMED -- update-media-buy-request.json has start_time and end_time properties
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Ported from test_update_media_buy_behavioral.py::test_valid_date_range_persists_to_db
+        Covers: UC-003-ALT-UPDATE-TIMING-01
         """
         # Schema accepts valid range
         req = UpdateMediaBuyRequest(
@@ -1928,6 +1931,7 @@ class TestUpdateMediaBuyTiming:
         Priority: P1
         Type: unit
         Source: UC-003 ext-e, BR-RULE-013
+        Covers: UC-003-EXT-E-02
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -1994,6 +1998,7 @@ class TestUpdateMediaBuyTiming:
         Priority: P1
         Type: unit
         Source: UC-003 alt-timing, BR-RULE-012
+        Covers: UC-003-ALT-UPDATE-TIMING-04
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -2071,6 +2076,7 @@ class TestUpdateMediaBuyCampaignBudget:
         Priority: P1
         Type: unit
         Source: UC-003 alt-budget, BR-RULE-008
+        Covers: UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-01
         """
         from src.core.schemas import AdCPPackageUpdate, Budget
 
@@ -2097,6 +2103,7 @@ class TestUpdateMediaBuyCampaignBudget:
         Priority: P1
         Type: unit
         Source: UC-003 ext-d, BR-RULE-008
+        Covers: UC-003-EXT-D-01
         """
         from src.core.schemas import Budget
 
@@ -2111,6 +2118,7 @@ class TestUpdateMediaBuyCampaignBudget:
         Priority: P2
         Type: unit
         Source: UC-003 ext-d, BR-RULE-008
+        Covers: UC-003-EXT-D-02
         """
         from src.core.schemas import Budget
 
@@ -2129,6 +2137,7 @@ class TestUpdateMediaBuyCreativeIds:
         Priority: P0
         Type: unit
         Source: UC-003 alt-creative-ids, BR-RULE-024
+        Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-01
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -2229,6 +2238,7 @@ class TestUpdateMediaBuyCreativeIds:
         Priority: P1
         Type: unit
         Source: UC-003 ext-i
+        Covers: UC-003-EXT-I-01
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -2294,6 +2304,7 @@ class TestUpdateMediaBuyCreativeIds:
         Priority: P1
         Type: unit
         Source: UC-003 ext-j, BR-RULE-026
+        Covers: UC-003-EXT-J-01
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -2376,6 +2387,7 @@ class TestUpdateMediaBuyCreativeIds:
         Priority: P1
         Type: unit
         Source: UC-003 ext-j, BR-RULE-026
+        Covers: UC-003-EXT-J-03
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -2459,6 +2471,7 @@ class TestUpdateMediaBuyCreativeIds:
         Priority: P1
         Type: unit
         Source: UC-003 alt-creative-ids, BR-RULE-024
+        Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-06
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -2561,39 +2574,6 @@ class TestUpdateMediaBuyCreativeIds:
         assert uow_session.add.called
 
 
-class TestUpdateMediaBuyCreativeAssignments:
-    """UC-003 alt-creative-assignments: weighted/placement-targeted assignments."""
-
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_creative_assignments_with_weights in test_media_buy_v3.py (currently xfail)",
-        run=False,
-    )
-    def test_creative_assignments_with_weights(self):
-        """UC-003-CA01: creative_assignments replaces all with specified weights.
-
-        Spec: CONFIRMED -- package-update.json has creative_assignments with replacement semantics
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/package-update.json
-        Priority: P1
-        Type: unit
-        Source: UC-003 alt-creative-assignments, BR-RULE-024
-        """
-        pytest.fail("creative_assignments with weights requires integration test with real database")
-
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_invalid_placement_ids_rejected in test_media_buy_v3.py (currently xfail)",
-        run=False,
-    )
-    def test_invalid_placement_ids_rejected(self):
-        """UC-003-CA02: placement_ids not in product rejected.
-
-        Spec: UNSPECIFIED (implementation-defined placement validation)
-        Priority: P1
-        Type: unit
-        Source: UC-003 ext-m, BR-RULE-028
-        """
-        pytest.fail("placement_ids validation requires integration test with real database")
-
-
 class TestUpdateMediaBuyIdentification:
     """UC-003 ext-b: media buy resolution (XOR identification)."""
 
@@ -2605,6 +2585,7 @@ class TestUpdateMediaBuyIdentification:
         Priority: P1
         Type: unit
         Source: UC-003 ext-b, BR-RULE-021
+        Covers: UC-003-EXT-B-03
         """
         # Per AdCP spec, providing both media_buy_id and buyer_ref is invalid (oneOf)
         with pytest.raises(ValidationError):
@@ -2622,6 +2603,7 @@ class TestUpdateMediaBuyIdentification:
         Priority: P1
         Type: unit
         Source: UC-003 ext-b, BR-RULE-021
+        Covers: UC-003-EXT-B-04
         """
         # Per AdCP spec, providing neither media_buy_id nor buyer_ref is invalid (oneOf)
         with pytest.raises(ValidationError):
@@ -2637,6 +2619,7 @@ class TestUpdateMediaBuyIdentification:
         Priority: P1
         Type: unit
         Source: UC-003 ext-b
+        Covers: UC-003-EXT-B-01
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -2672,6 +2655,7 @@ class TestUpdateMediaBuyIdentification:
         Priority: P1
         Type: unit
         Source: UC-003 ext-b
+        Covers: UC-003-EXT-B-02
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -2710,6 +2694,7 @@ class TestUpdateMediaBuyOwnership:
         Priority: P0
         Type: unit
         Source: UC-003 ext-c
+        Covers: UC-003-EXT-C-01
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -2756,6 +2741,7 @@ class TestUpdateMediaBuyManualApproval:
         Priority: P1
         Type: unit
         Source: UC-003 alt-manual, BR-RULE-017
+        Covers: UC-003-ALT-MANUAL-APPROVAL-REQUIRED-01
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -2813,6 +2799,7 @@ class TestUpdateMediaBuyManualApproval:
         Priority: P1
         Type: unit
         Source: UC-003 alt-manual
+        Covers: UC-003-ALT-MANUAL-APPROVAL-REQUIRED-02
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -2869,6 +2856,7 @@ class TestUpdateMediaBuyAdapterFailure:
         Priority: P1
         Type: unit
         Source: UC-003 ext-o, BR-RULE-020
+        Covers: UC-003-EXT-O-01
         """
         from adcp.types import Error
 
@@ -2923,6 +2911,7 @@ class TestUpdateMediaBuyAdapterFailure:
         Priority: P0
         Type: unit
         Source: UC-003 ext-o, BR-RULE-020
+        Covers: UC-003-EXT-O-04
         """
         from adcp.types import Error
 
@@ -3756,6 +3745,7 @@ class TestDeliveryImplPricingLookup:
         Priority: P0
         Type: unit
         Source: UC-004, salesagent-mq3n
+        Covers: UC-002-EXT-N-08
         """
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -4115,34 +4105,6 @@ class TestGetMediaBuysResponseShape:
         assert pkgs[0]["package_id"] == "pkg_1"
         assert pkgs[1]["package_id"] == "pkg_2"
 
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_snapshot_populated_when_requested in test_media_buy_v3.py (currently xfail: H-4)",
-        run=False,
-    )
-    def test_snapshot_populated_when_requested(self):
-        """GMB-RS03: include_snapshot=true populates snapshot per package.
-
-        Spec: UNSPECIFIED (implementation-defined snapshot feature)
-        Priority: P1
-        Type: unit
-        Source: get_media_buys, adcp 3.6.0
-        """
-        pytest.fail("Snapshot population requires integration test with real database")
-
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_creative_approvals_populated in test_media_buy_v3.py (currently xfail: H-4)",
-        run=False,
-    )
-    def test_creative_approvals_populated(self):
-        """GMB-RS04: creative approval status per package.
-
-        Spec: UNSPECIFIED (implementation-defined creative approval reporting)
-        Priority: P1
-        Type: unit
-        Source: get_media_buys
-        """
-        pytest.fail("Creative approvals population requires integration test with real database")
-
 
 class TestGetMediaBuysImplAuth:
     """get_media_buys: authentication and principal checks."""
@@ -4228,6 +4190,7 @@ class TestBRRule018AtomicResponse:
 
         Spec: CONFIRMED -- create-media-buy-response.json success: not required ["errors"]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-response.json
+        Covers: UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-01
         """
         resp = _make_success()
         dumped = resp.model_dump()
@@ -4238,6 +4201,7 @@ class TestBRRule018AtomicResponse:
 
         Spec: CONFIRMED -- create-media-buy-response.json error: not anyOf [media_buy_id]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-response.json
+        Covers: UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-02
         """
         from adcp.types import Error
 
@@ -4251,6 +4215,7 @@ class TestBRRule018AtomicResponse:
 
         Spec: CONFIRMED -- update-media-buy-response.json success: not required ["errors"]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
+        Covers: UC-003-EXT-O-05
         """
         resp = UpdateMediaBuySuccess(media_buy_id="mb_1", buyer_ref="test")
         dumped = resp.model_dump()
@@ -4261,45 +4226,13 @@ class TestBRRule018AtomicResponse:
 
         Spec: CONFIRMED -- update-media-buy-response.json error: not anyOf [affected_packages]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
+        Covers: UC-003-EXT-O-05
         """
         from adcp.types import Error
 
         resp = UpdateMediaBuyError(errors=[Error(code="test", message="fail")])
         dumped = resp.model_dump()
         assert dumped.get("affected_packages") is None
-
-
-class TestBRRule020AdapterAtomicity:
-    """BR-RULE-020: adapter success = records persisted, adapter error = no records."""
-
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_adapter_success_persists_records in test_media_buy_v3.py",
-        run=False,
-    )
-    def test_adapter_success_persists_records(self):
-        """BR-020-01: successful adapter call creates DB records.
-
-        Spec: CONFIRMED -- create-media-buy-response.json: "media buy is either fully created or not created at all"
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-response.json
-        Priority: P1
-        Type: integration
-        Source: BR-RULE-020
-        """
-        pytest.fail("Adapter success persistence requires integration test with real database")
-
-    @pytest.mark.xfail(
-        reason="Covered by integration test: test_adapter_failure_no_db_changes in test_media_buy_v3.py", run=False
-    )
-    def test_adapter_failure_no_db_changes(self):
-        """BR-020-02: failed adapter call creates no DB records.
-
-        Spec: CONFIRMED -- create-media-buy-response.json: "media buy is either fully created or not created at all"
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-response.json
-        Priority: P0
-        Type: integration
-        Source: BR-RULE-020
-        """
-        pytest.fail("Adapter failure atomicity requires integration test with real database")
 
 
 class TestBRRule043ContextEcho:
@@ -4313,6 +4246,7 @@ class TestBRRule043ContextEcho:
         Priority: P1
         Type: unit
         Source: BR-RULE-043
+        Covers: BR-RULE-043-01
         """
         context_obj = {"conversation_id": "conv_123", "agent_id": "buyer_agent"}
 
@@ -4348,6 +4282,7 @@ class TestBRRule043ContextEcho:
         Priority: P1
         Type: unit
         Source: BR-RULE-043
+        Covers: BR-RULE-043-01
         """
         context_obj = {"conversation_id": "conv_456", "request_id": "req_789"}
 
@@ -4389,6 +4324,7 @@ class TestBRRule043ContextEcho:
         Priority: P1
         Type: unit
         Source: BR-RULE-043
+        Covers: BR-RULE-043-01
         """
         context_obj = {"conversation_id": "conv_789", "agent_id": "test_agent"}
 

@@ -250,6 +250,7 @@ class TestDeliveryPollingSingleBuy:
         CONFIRMED: reporting_period (required), currency (required), media_buy_deliveries (required),
         aggregated_totals.impressions/spend/media_buy_count (required), media_buy_deliveries[].status (required),
         media_buy_deliveries[].totals (required), media_buy_deliveries[].by_package (required).
+        Covers: UC-004-MAIN-01
         """
         buy = _make_mock_media_buy(
             media_buy_id="mb_single",
@@ -333,6 +334,7 @@ class TestDeliveryPollingMultiBuy:
         CONFIRMED: aggregated_totals.impressions (required, >=0), aggregated_totals.spend (required, >=0),
         aggregated_totals.media_buy_count (required, >=0). Spec defines these as combined metrics across
         all returned media buys.
+        Covers: UC-004-MAIN-03
         """
         buy1 = _make_mock_media_buy(
             media_buy_id="mb_agg_1",
@@ -411,6 +413,7 @@ class TestDeliveryIdentificationModes:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
         CONFIRMED: media_buy_ids is an optional array of strings (minItems: 1).
+        Covers: UC-004-MAIN-01
         """
         buy = _make_mock_media_buy(media_buy_id="mb_id1")
         mock_adapter = MagicMock()
@@ -450,6 +453,7 @@ class TestDeliveryIdentificationModes:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
         CONFIRMED: buyer_refs is an optional array of strings (minItems: 1).
+        Covers: UC-004-MAIN-02
         """
         buy = _make_mock_media_buy(media_buy_id="mb_ref1", buyer_ref="buyer_A")
         mock_adapter = MagicMock()
@@ -488,6 +492,7 @@ class TestDeliveryIdentificationModes:
 
         Spec: UNSPECIFIED (implementation-defined precedence when both identifiers provided).
         Request schema allows both fields simultaneously but does not define precedence.
+        Covers: UC-004-MAIN-05
         """
         buy = _make_mock_media_buy(media_buy_id="mb_priority")
         mock_adapter = MagicMock()
@@ -529,6 +534,7 @@ class TestDeliveryIdentificationModes:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
         CONFIRMED: media_buy_ids and buyer_refs are both optional (no required fields in request schema).
+        Covers: UC-004-MAIN-04
         """
         buy = _make_mock_media_buy(media_buy_id="mb_all1")
         mock_adapter = MagicMock()
@@ -576,6 +582,7 @@ class TestDeliveryIdentificationModes:
         Priority: P1
         Type: unit
         Source: UC-004, salesagent-mexj
+        Covers: UC-004-MAIN-17
         """
         # Request 3 IDs, only 1 found
         buy = _make_mock_media_buy(media_buy_id="mb_found")
@@ -620,6 +627,7 @@ class TestDeliveryIdentificationModes:
         Priority: P1
         Type: unit
         Source: UC-004, salesagent-mexj
+        Covers: UC-004-MAIN-18
         """
         # Request 2 IDs, none found
         req = GetMediaBuyDeliveryRequest(
@@ -658,6 +666,7 @@ class TestDeliveryStatusFilter:
         Spec: UNSPECIFIED (implementation-defined 'all' filter value).
         The spec's media-buy-status enum is [pending_activation, active, paused, completed];
         'all' is not a spec-defined status value.
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-06
         """
         from src.core.tools.media_buy_delivery import _get_target_media_buys
 
@@ -699,6 +708,7 @@ class TestDeliveryStatusFilter:
 
         Spec: UNSPECIFIED (implementation-defined default when status_filter omitted).
         Request schema has status_filter as optional with no default.
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-05
         """
         patches = _standard_patches(target_buys=[])
         req = GetMediaBuyDeliveryRequest()
@@ -722,6 +732,7 @@ class TestDeliveryStatusFilter:
         """UC-004-FILT-01 (partial): default filter returns only active buys.
 
         Spec: UNSPECIFIED (implementation-defined default filter behavior).
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-01
         """
         from src.core.tools.media_buy_delivery import _get_target_media_buys
 
@@ -755,6 +766,7 @@ class TestDeliveryStatusFilter:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
         CONFIRMED: status_filter accepts media-buy-status enum including 'completed'.
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-02
         """
         from src.core.tools.media_buy_delivery import _get_target_media_buys
 
@@ -791,6 +803,7 @@ class TestDeliveryStatusFilter:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
         CONFIRMED: status_filter accepts media-buy-status enum including 'paused'.
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-03
         """
         from src.core.tools.media_buy_delivery import _get_target_media_buys
 
@@ -820,6 +833,7 @@ class TestDeliveryStatusFilter:
         """UC-004-FILT-04: no media buys match filter returns empty result.
 
         Spec: UNSPECIFIED (implementation-defined empty-result behavior).
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-04
         """
         from src.core.tools.media_buy_delivery import _get_target_media_buys
 
@@ -850,6 +864,7 @@ class TestDeliveryStatusFilter:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/enums/media-buy-status.json
         CONFIRMED: enum values are [pending_activation, active, paused, completed].
+        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-07
         """
         valid_values = {"pending_activation", "active", "paused", "completed"}
         actual_values = {s.value for s in MediaBuyStatus}
@@ -870,6 +885,7 @@ class TestDeliveryDateRange:
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
         CONFIRMED: start_date and end_date are optional strings with YYYY-MM-DD pattern.
         Response reporting_period has required start/end datetime fields.
+        Covers: UC-004-ALT-CUSTOM-DATE-RANGE-01
         """
         req = GetMediaBuyDeliveryRequest(
             start_date="2025-03-15",
@@ -887,6 +903,7 @@ class TestDeliveryDateRange:
         Spec: UNSPECIFIED (implementation-defined default date range).
         Spec says "When omitted along with end_date, returns campaign lifetime data"
         but implementation uses 30-day window.
+        Covers: UC-004-MAIN-06
         """
         req = GetMediaBuyDeliveryRequest()
 
@@ -903,6 +920,7 @@ class TestDeliveryDateRange:
         Spec: UNSPECIFIED (implementation-defined default for missing end_date).
         Current impl: when only start_date is provided (no end_date), falls through
         to the 30-day default window because the condition checks both start_date AND end_date.
+        Covers: UC-004-ALT-CUSTOM-DATE-RANGE-02
         """
         req = GetMediaBuyDeliveryRequest(
             start_date="2025-03-15",
@@ -923,6 +941,7 @@ class TestDeliveryDateRange:
         Spec: UNSPECIFIED (implementation-defined default for missing start_date).
         Current impl: when only end_date is provided (no start_date), falls through
         to the 30-day default window because the condition checks both start_date AND end_date.
+        Covers: UC-004-ALT-CUSTOM-DATE-RANGE-03
         """
         req = GetMediaBuyDeliveryRequest(
             end_date="2025-04-15",
@@ -941,6 +960,7 @@ class TestDeliveryDateRange:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
         CONFIRMED: start_date/end_date are explicit request parameters that define the reporting period.
+        Covers: UC-004-ALT-CUSTOM-DATE-RANGE-04
         """
         req = GetMediaBuyDeliveryRequest(
             start_date="2025-07-01",
@@ -978,6 +998,7 @@ class TestDeliveryPricingOptionLookup:
         CRITICAL: pricing_option_ids from JSON raw_request are strings (e.g., "42").
         PricingOption.id is an Integer PK. The query must cast to int before .in_().
         See salesagent-mq3n.
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
         """
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1002,6 +1023,7 @@ class TestDeliveryPricingOptionLookup:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
         CONFIRMED: spend (type: number, minimum: 0) and impressions (type: number, minimum: 0) are defined.
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
         """
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpm",
@@ -1049,6 +1071,7 @@ class TestDeliveryPricingOptionLookup:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
         CONFIRMED: clicks (type: number, minimum: 0) and spend are defined metrics.
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
         """
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpc",
@@ -1097,6 +1120,7 @@ class TestDeliveryPricingOptionLookup:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/pricing-option.json
         CONFIRMED: flat-rate-option is one of the pricing option types.
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
         """
         buy = _make_mock_media_buy(
             media_buy_id="mb_flat",
@@ -1154,6 +1178,7 @@ class TestDeliveryUpgradeCompat:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
         CONFIRMED: media_buy_deliveries[].buyer_ref is an optional string field.
+        Covers: UC-004-MAIN-16
         """
         buy = _make_mock_media_buy(
             media_buy_id="mb_ref",
@@ -1188,6 +1213,7 @@ class TestDeliveryUpgradeCompat:
         Spec: UNSPECIFIED (implementation-defined serialization mechanism).
         Verifies that model_dump() correctly serializes nested MediaBuyDeliveryData,
         DeliveryTotals, and PackageDelivery via NestedModelSerializerMixin.
+        Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-01
         """
         buy = _make_mock_media_buy(media_buy_id="mb_serial", buyer_ref="buyer_s")
         mock_adapter = MagicMock()
@@ -1237,6 +1263,7 @@ class TestDeliveryUpgradeCompat:
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
         CONFIRMED: ext field references core/ext.json; additionalProperties: true on response.
         Verifies that ext field can be set and is preserved through serialization.
+        Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
         """
         response = GetMediaBuyDeliveryResponse(
             reporting_period={"start": datetime(2025, 1, 1, tzinfo=UTC), "end": datetime(2025, 6, 30, tzinfo=UTC)},
@@ -1269,6 +1296,7 @@ class TestDeliveryAuthErrors:
         """UC-004-EXT-A1: no principal_id returns principal_id_missing error.
 
         Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
+        Covers: UC-004-EXT-A-01
         """
         identity = ResolvedIdentity(
             principal_id="",
@@ -1290,6 +1318,7 @@ class TestDeliveryAuthErrors:
         """UC-004-EXT-B1: principal ID not in tenant returns principal_not_found.
 
         Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
+        Covers: UC-004-EXT-B-01
         """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
         identity = _make_identity(principal_id="ghost_principal")
@@ -1308,6 +1337,7 @@ class TestDeliveryAuthErrors:
         Spec: UNSPECIFIED (implementation-defined security boundary).
         Delivery is a read-only operation. Auth failure must not cause any DB writes
         or adapter calls. Verifies that get_adapter and _get_target_media_buys are never called.
+        Covers: UC-004-EXT-A-02
         """
         identity = ResolvedIdentity(
             principal_id="",
@@ -1353,6 +1383,7 @@ class TestDeliveryMediaBuyNotFound:
         Priority: P1
         Type: unit
         Source: UC-004, salesagent-mexj
+        Covers: UC-004-EXT-C-01
         """
         req = GetMediaBuyDeliveryRequest(
             media_buy_ids=["mb_nonexistent"],
@@ -1380,6 +1411,7 @@ class TestDeliveryMediaBuyNotFound:
         Priority: P1
         Type: unit
         Source: UC-004, salesagent-mexj, BR-RULE-030
+        Covers: UC-004-EXT-C-02
         """
         buy = _make_mock_media_buy(media_buy_id="mb_exists")
         mock_adapter = MagicMock()
@@ -1419,6 +1451,7 @@ class TestDeliveryMediaBuyNotFound:
         Priority: P1
         Type: unit
         Source: UC-004, salesagent-mexj
+        Covers: UC-004-EXT-C-03
         """
         req = GetMediaBuyDeliveryRequest(
             buyer_refs=["buyer_phantom"],
@@ -1454,6 +1487,7 @@ class TestDeliveryOwnership:
         Spec: UNSPECIFIED (implementation-defined security boundary).
         _get_target_media_buys filters by principal_id, so buys owned by other principals
         are simply not found. The impl then reports them as media_buy_not_found errors.
+        Covers: UC-004-EXT-D-01
         """
         # Request a buy that exists but is owned by another principal
         # _get_target_media_buys returns empty because the DB query filters by principal_id
@@ -1477,6 +1511,7 @@ class TestDeliveryOwnership:
         When a principal requests a buy they don't own, the error code must be
         media_buy_not_found (same as genuinely nonexistent), not ownership_mismatch.
         This prevents information leakage about the existence of other principals' buys.
+        Covers: UC-004-EXT-D-02
         """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_secret"])
 
@@ -1496,6 +1531,7 @@ class TestDeliveryOwnership:
         Spec: UNSPECIFIED (implementation-defined security boundary).
         When requesting multiple IDs, only owned buys are returned. Non-owned buys
         appear as media_buy_not_found errors (same as genuinely missing).
+        Covers: UC-004-EXT-D-03
         """
         buy_owned = _make_mock_media_buy(media_buy_id="mb_mine")
         mock_adapter = MagicMock()
@@ -1540,6 +1576,7 @@ class TestDeliveryInvalidDateRange:
 
         Spec: UNSPECIFIED (implementation-defined date range validation).
         Spec defines start_date/end_date as string patterns but no ordering constraint.
+        Covers: UC-004-EXT-E-01
         """
         req = GetMediaBuyDeliveryRequest(
             start_date="2025-03-15",
@@ -1556,6 +1593,7 @@ class TestDeliveryInvalidDateRange:
         """UC-004-EXT-E2: start_date > end_date returns invalid_date_range.
 
         Spec: UNSPECIFIED (implementation-defined date range validation).
+        Covers: UC-004-EXT-E-02
         """
         req = GetMediaBuyDeliveryRequest(
             start_date="2025-03-20",
@@ -1574,6 +1612,7 @@ class TestDeliveryInvalidDateRange:
         Spec: UNSPECIFIED (implementation-defined error handling behavior).
         Invalid date range must not cause any adapter calls or DB writes beyond
         the initial auth check.
+        Covers: UC-004-EXT-E-03
         """
         req = GetMediaBuyDeliveryRequest(
             start_date="2025-03-20",
@@ -1618,6 +1657,7 @@ class TestDeliveryAdapterError:
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
         CONFIRMED: errors array (items: core/error.json) is an optional field for task-specific
         errors and warnings.
+        Covers: UC-004-EXT-F-01
         """
         buy = _make_mock_media_buy(media_buy_id="mb_err")
         mock_adapter = MagicMock()
@@ -1644,6 +1684,7 @@ class TestDeliveryAdapterError:
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
         CONFIRMED: reporting_period is a required field in the response, so it must be present
         even when errors occur.
+        Covers: UC-004-EXT-F-02
         """
         buy = _make_mock_media_buy(media_buy_id="mb_err2", currency="EUR")
         mock_adapter = MagicMock()
@@ -1670,6 +1711,7 @@ class TestDeliveryAdapterError:
 
         Spec: UNSPECIFIED (implementation-defined audit/logging behavior).
         When adapter raises an exception, the error must be logged.
+        Covers: UC-004-EXT-F-03
         """
         buy = _make_mock_media_buy(media_buy_id="mb_log")
         mock_adapter = MagicMock()
@@ -1699,6 +1741,7 @@ class TestDeliveryAdapterError:
         Spec: UNSPECIFIED (implementation-defined error handling behavior).
         Delivery is a read-only operation. Adapter errors must not cause any DB writes.
         The response returns error info but doesn't modify any state.
+        Covers: UC-004-EXT-F-04
         """
         buy = _make_mock_media_buy(media_buy_id="mb_nowrite")
         mock_adapter = MagicMock()
@@ -1754,6 +1797,7 @@ class TestDeliveryWebhookHappyPath:
         "when notification_type is not 'final'".
         Tests WebhookDeliveryService.send_delivery_webhook: when next_expected_interval_seconds
         is provided and is_final=False, next_expected_at is included in the payload.
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
         """
         service = WebhookDeliveryService()
 
@@ -1785,6 +1829,7 @@ class TestDeliveryWebhookHappyPath:
         CONFIRMED: authentication.schemes supports ['HMAC-SHA256'] for signature verification.
         Tests that WebhookDeliveryService._generate_hmac_signature produces a valid hex signature,
         and that signing with the same inputs is deterministic.
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
         service = WebhookDeliveryService()
 
@@ -1815,6 +1860,7 @@ class TestDeliveryWebhookHappyPath:
         (get_media_buy_delivery), not in webhook notifications."
         Tests that the webhook payload built by send_delivery_webhook does not include
         aggregated_totals.
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-09
         """
         service = WebhookDeliveryService()
 
@@ -1841,6 +1887,7 @@ class TestDeliveryWebhookHappyPath:
         "If omitted, all available metrics are included."
         Tests that optional metrics (clicks, ctr) are only included in the webhook
         payload when explicitly provided.
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
         """
         service = WebhookDeliveryService()
 
@@ -1889,6 +1936,7 @@ class TestDeliveryWebhookHappyPath:
         Verifies that the webhook service accepts a status parameter and includes it
         in the payload. The caller is responsible for filtering to active-only buys
         before invoking send_delivery_webhook.
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-11
         """
         service = WebhookDeliveryService()
 
@@ -1925,6 +1973,7 @@ class TestDeliveryWebhookRetry:
         """UC-004-EXT-G3: 5 consecutive failures transitions to OPEN state.
 
         Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        Covers: UC-004-EXT-G-03
         """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
 
@@ -1940,6 +1989,7 @@ class TestDeliveryWebhookRetry:
         """UC-004-EXT-G3: OPEN circuit -> can_attempt() returns False.
 
         Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        Covers: UC-004-EXT-G-03
         """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
         for _ in range(5):
@@ -1952,6 +2002,7 @@ class TestDeliveryWebhookRetry:
         """UC-004-EXT-G4: OPEN state + timeout -> HALF_OPEN.
 
         Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        Covers: UC-004-EXT-G-04
         """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
         for _ in range(5):
@@ -1966,6 +2017,7 @@ class TestDeliveryWebhookRetry:
         """UC-004-EXT-G4: HALF_OPEN + 2 successes -> CLOSED.
 
         Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        Covers: UC-004-EXT-G-04
         """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
         for _ in range(5):
@@ -1982,6 +2034,7 @@ class TestDeliveryWebhookRetry:
         """UC-004-EXT-G4: HALF_OPEN + failure -> back to OPEN.
 
         Spec: UNSPECIFIED (implementation-defined circuit breaker behavior).
+        Covers: UC-004-EXT-G-04
         """
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, timeout_seconds=60)
         for _ in range(5):
@@ -2003,6 +2056,7 @@ class TestDeliveryWebhookRetry:
         401 and 403 are 4xx client errors. The deliver_webhook_with_retry function
         does NOT retry on 4xx errors (only 5xx). So auth rejections fail immediately
         with 1 attempt.
+        Covers: UC-004-EXT-G-06
         """
         from src.core.webhook_delivery import WebhookDelivery as WHDelivery
         from src.core.webhook_delivery import deliver_webhook_with_retry
@@ -2039,6 +2093,7 @@ class TestDeliveryWebhookRetry:
         WebhookDeliveryService.send_delivery_webhook catches all exceptions and
         returns False instead of raising. This ensures webhook failures don't propagate
         as synchronous errors to the buyer's delivery query.
+        Covers: UC-004-EXT-G-08
         """
         service = WebhookDeliveryService()
 
@@ -2072,6 +2127,7 @@ class TestDeliveryProtocol:
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/protocol-envelope.json
         CONFIRMED: protocol envelope wraps task responses with status field.
         Tests that ProtocolEnvelope.wrap correctly wraps a delivery response.
+        Covers: UC-004-MAIN-12
         """
         from src.core.protocol_envelope import ProtocolEnvelope
 
@@ -2101,6 +2157,7 @@ class TestDeliveryProtocol:
         Spec: UNSPECIFIED (MCP transport-specific implementation detail).
         Tests that the MCP wrapper (get_media_buy_delivery) returns a ToolResult
         with both content (string) and structured_content (response object).
+        Covers: UC-004-MAIN-13
         """
         from fastmcp.tools.tool import ToolResult
 
@@ -2137,6 +2194,7 @@ class TestDeliveryProtocol:
         CONFIRMED: delivery-metrics.json defines impressions, spend, clicks, ctr, views,
         completed_views, completion_rate, conversions, conversion_value, roas, cost_per_acquisition,
         viewability, engagement_rate, cost_per_click, quartile_data, dooh_metrics, etc.
+        Covers: UC-004-MAIN-19
         """
         buy = _make_mock_media_buy(media_buy_id="mb_fields")
         mock_adapter = MagicMock()
@@ -2173,6 +2231,7 @@ class TestDeliveryProtocol:
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
         CONFIRMED: daily_breakdown, effective_rate, viewability, by_creative are all optional
         fields in the spec (no required constraint).
+        Covers: UC-004-MAIN-20
         """
         buy = _make_mock_media_buy(media_buy_id="mb_optional")
         mock_adapter = MagicMock()

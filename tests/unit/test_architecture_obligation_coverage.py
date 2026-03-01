@@ -1,16 +1,17 @@
-"""Guard: Behavioral obligations must have integration test coverage.
+"""Guard: Behavioral obligations must have test coverage.
 
 Every obligation tagged with ``**Layer** behavioral`` in docs/test-obligations/
 must either:
-1. Have a matching ``Covers: <obligation-id>`` in an integration test, OR
+1. Have a matching ``Covers: <obligation-id>`` in a test (integration or unit), OR
 2. Be listed in the KNOWN_UNCOVERED allowlist (JSON file)
 
-The allowlist can only SHRINK — adding new uncovered obligations fails CI.
-When integration tests are written, remove the covered ID from the allowlist
-(the stale-entry test enforces this).
+The guard scans:
+- Integration tests: tests/integration/test_*_v3.py
+- Unit entity tests: tests/unit/test_media_buy.py, test_creative.py, test_delivery.py
 
-Phase 2 will reclassify pure schema obligations as ``Layer: schema``, shrinking
-the behavioral set without writing new tests.
+The allowlist can only SHRINK — adding new uncovered obligations fails CI.
+When tests are written, remove the covered ID from the allowlist
+(the stale-entry test enforces this).
 
 See: scripts/tag_obligation_ids.py (assigns IDs to obligation docs)
 """
@@ -23,7 +24,11 @@ from pathlib import Path
 
 OBLIGATIONS_DIR = Path(__file__).resolve().parents[2] / "docs" / "test-obligations"
 INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration"
+UNIT_DIR = Path(__file__).resolve().parents[2] / "tests" / "unit"
 ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_coverage_allowlist.json"
+
+# Unit test entity files that carry Covers: tags
+_UNIT_ENTITY_FILES = ["test_media_buy.py", "test_creative.py", "test_delivery.py"]
 
 # Obligation ID pattern: PREFIX-SECTION-SEQ (e.g., UC-002-MAIN-01, BR-RULE-006-01)
 _OBLIGATION_ID_RE = re.compile(r"[A-Z][A-Z0-9]+-[\w-]+-\d{2}")
@@ -62,16 +67,29 @@ def _get_behavioral_obligations() -> set[str]:
 
 
 def _get_covered_obligations() -> set[str]:
-    """Extract ``Covers: <id>`` tags from integration test docstrings.
+    """Extract ``Covers: <id>`` tags from test docstrings.
 
+    Scans both integration tests (test_*_v3.py) and unit entity tests.
     Only matches single-line ``Covers: ID`` patterns (not bullet lists).
     """
     covered: set[str] = set()
-    for tf in INTEGRATION_DIR.glob("test_*_v3.py"):
-        for line in tf.read_text().splitlines():
+
+    def _scan_file(path: Path) -> None:
+        for line in path.read_text().splitlines():
             m = re.match(r"\s+Covers:\s+([\w-]+)", line)
             if m and _OBLIGATION_ID_RE.match(m.group(1)):
                 covered.add(m.group(1))
+
+    # Integration tests
+    for tf in INTEGRATION_DIR.glob("test_*_v3.py"):
+        _scan_file(tf)
+
+    # Unit entity tests
+    for name in _UNIT_ENTITY_FILES:
+        tf = UNIT_DIR / name
+        if tf.exists():
+            _scan_file(tf)
+
     return covered
 
 
@@ -104,13 +122,13 @@ def _load_allowlist() -> set[str]:
 
 
 class TestObligationCoverage:
-    """Structural guard: behavioral obligations must have integration tests."""
+    """Structural guard: behavioral obligations must have test coverage."""
 
     def test_no_new_uncovered_behavioral_obligations(self):
-        """Every behavioral obligation has an integration test or is in the allowlist.
+        """Every behavioral obligation has a test or is in the allowlist.
 
         Adding a new scenario to the obligation docs without a corresponding
-        integration test (or allowlist entry) fails this test.
+        test (or allowlist entry) fails this test.
         """
         behavioral = _get_behavioral_obligations()
         covered = _get_covered_obligations()
@@ -120,8 +138,8 @@ class TestObligationCoverage:
 
         assert not uncovered_and_not_allowed, (
             f"Found {len(uncovered_and_not_allowed)} behavioral obligation(s) with no "
-            f"integration test and not in the allowlist.\n"
-            f"Either write an integration test with 'Covers: <id>' or add to the "
+            f"test and not in the allowlist.\n"
+            f"Either write a test with 'Covers: <id>' or add to the "
             f"allowlist (obligation_coverage_allowlist.json):\n"
             + "\n".join(f"  {oid}" for oid in sorted(uncovered_and_not_allowed))
         )
@@ -152,7 +170,7 @@ class TestObligationCoverage:
         stale = allowlist & covered
         assert not stale, (
             f"Found {len(stale)} obligation(s) in the allowlist that already have "
-            f"integration tests.\n"
+            f"tests.\n"
             f"Remove these from obligation_coverage_allowlist.json:\n" + "\n".join(f"  {oid}" for oid in sorted(stale))
         )
 
@@ -192,8 +210,8 @@ class TestObligationCoverage:
             f"  {oid}: {', '.join(files)}" for oid, files in sorted(duplicates.items())
         )
 
-    def test_integration_tests_reference_valid_obligations(self):
-        """``Covers:`` tags in integration tests must reference real obligation IDs."""
+    def test_tests_reference_valid_obligations(self):
+        """``Covers:`` tags in tests must reference real obligation IDs."""
         all_ids = _get_all_obligation_ids()
         covered = _get_covered_obligations()
 
