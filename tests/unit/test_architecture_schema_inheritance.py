@@ -16,6 +16,18 @@ import importlib
 import inspect
 
 
+def _get_schema_source_files() -> list["Path"]:
+    """Return all Python source files in the schemas package."""
+    from pathlib import Path
+
+    schemas_dir = Path("src/core/schemas")
+    if schemas_dir.is_dir():
+        return [p for p in schemas_dir.glob("*.py") if p.name != "__init__.py"]
+    # Fallback: monolithic schemas.py
+    mono = Path("src/core/schemas.py")
+    return [mono] if mono.exists() else []
+
+
 def _get_library_type_mapping() -> dict[str, type]:
     """Build mapping of local class names to their expected library base types.
 
@@ -25,41 +37,40 @@ def _get_library_type_mapping() -> dict[str, type]:
     Returns dict like: {"Product": <class adcp.types.Product>, ...}
     """
     import ast
-    from pathlib import Path
-
-    schemas_path = Path("src/core/schemas.py")
-    source = schemas_path.read_text()
-    tree = ast.parse(source)
 
     mapping: dict[str, type] = {}
 
-    # Find all "from adcp... import X as LibraryX" statements
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("adcp"):
-            for alias in node.names:
-                if alias.asname and alias.asname.startswith("Library"):
-                    # e.g. "from adcp.types import Product as LibraryProduct"
-                    # Local class name = alias.asname without "Library" prefix
-                    local_name = alias.asname.removeprefix("Library")
-                    # Import the actual library type
-                    try:
-                        mod = importlib.import_module(node.module)
-                        lib_type = getattr(mod, alias.name, None)
-                        if lib_type is not None and inspect.isclass(lib_type):
-                            mapping[local_name] = lib_type
-                    except (ImportError, AttributeError):
-                        pass
+    for schemas_path in _get_schema_source_files():
+        source = schemas_path.read_text()
+        tree = ast.parse(source)
+
+        # Find all "from adcp... import X as LibraryX" statements
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("adcp"):
+                for alias in node.names:
+                    if alias.asname and alias.asname.startswith("Library"):
+                        # e.g. "from adcp.types import Product as LibraryProduct"
+                        # Local class name = alias.asname without "Library" prefix
+                        local_name = alias.asname.removeprefix("Library")
+                        # Import the actual library type
+                        try:
+                            mod = importlib.import_module(node.module)
+                            lib_type = getattr(mod, alias.name, None)
+                            if lib_type is not None and inspect.isclass(lib_type):
+                                mapping[local_name] = lib_type
+                        except (ImportError, AttributeError):
+                            pass
 
     return mapping
 
 
 def _get_local_schema_classes() -> dict[str, type]:
-    """Get all classes defined in src.core.schemas."""
+    """Get all classes defined in src.core.schemas (including submodules)."""
     schemas = importlib.import_module("src.core.schemas")
     classes = {}
     for name, obj in inspect.getmembers(schemas, inspect.isclass):
-        # Only include classes actually defined in schemas module
-        if obj.__module__ == "src.core.schemas":
+        # Include classes defined in the schemas package or its submodules
+        if obj.__module__ and obj.__module__.startswith("src.core.schemas"):
             classes[name] = obj
     return classes
 
@@ -75,20 +86,20 @@ def _get_class_own_field_names(class_name: str) -> set[str]:
     appear on subclasses after model_rebuild().
     """
     import ast
-    from pathlib import Path
 
     global _CLASS_OWN_FIELDS
     if _CLASS_OWN_FIELDS is None:
         _CLASS_OWN_FIELDS = {}
-        source = Path("src/core/schemas.py").read_text()
-        tree = ast.parse(source)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                fields = set()
-                for item in node.body:
-                    if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
-                        fields.add(item.target.id)
-                _CLASS_OWN_FIELDS[node.name] = fields
+        for schemas_path in _get_schema_source_files():
+            source = schemas_path.read_text()
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    fields = set()
+                    for item in node.body:
+                        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                            fields.add(item.target.id)
+                    _CLASS_OWN_FIELDS[node.name] = fields
 
     return _CLASS_OWN_FIELDS.get(class_name, set())
 
