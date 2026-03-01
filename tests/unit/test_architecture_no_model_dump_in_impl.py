@@ -24,7 +24,7 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): All 29 violations need migration to repository pattern.
+# FIXME(salesagent-hr8n): 25 violations remain (4 fixed by salesagent-lfto).
 KNOWN_VIOLATIONS = {
     # _update_media_buy_impl: 23 violations (workflow step response_data)
     ("media_buy_update.py", 185),  # req.model_dump() → request_data_for_workflow
@@ -54,12 +54,6 @@ KNOWN_VIOLATIONS = {
     ("products.py", 677),  # req.filters.model_dump() in logger.info
     # _list_creatives_impl: 1 violation (filter dict conversion)
     ("creatives/listing.py", 151),  # filters.model_dump(exclude_none=True)
-    # _create_media_buy_impl: 4 violations (input normalization + DB storage)
-    # FIXME(salesagent-v0kb): These should use typed repository methods
-    ("media_buy_create.py", 1299),  # push_notification_config.model_dump() — input normalization
-    ("media_buy_create.py", 1390),  # req.model_dump() — workflow request_data storage
-    ("media_buy_create.py", 2010),  # req.model_dump() — raw_request_dict for package processing
-    ("media_buy_create.py", 2947),  # req.model_dump() — raw_request DB storage
 }
 
 

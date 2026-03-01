@@ -237,6 +237,86 @@ class MediaBuyRepository:
     # MediaBuy writes
     # ------------------------------------------------------------------
 
+    def create_from_request(
+        self,
+        *,
+        media_buy_id: str,
+        req: Any,
+        principal_id: str,
+        advertiser_name: str,
+        budget: Decimal | float,
+        currency: str,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        status: str = "draft",
+        order_name: str | None = None,
+        campaign_objective: str | None = None,
+        kpi_goal: str | None = None,
+        package_id_map: dict[int, str] | None = None,
+        by_alias: bool = False,
+        created_at: datetime.datetime | None = None,
+    ) -> MediaBuy:
+        """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
+
+        This is the preferred method for creating media buys from _impl functions.
+        The request model is serialized here (not in business logic) per the
+        no-model-dump-in-impl architectural principle.
+
+        Args:
+            media_buy_id: Unique media buy identifier.
+            req: CreateMediaBuyRequest Pydantic model (serialized here, not by caller).
+            principal_id: Principal ID for ownership.
+            advertiser_name: Display name of the advertiser.
+            budget: Total budget for the media buy.
+            currency: Currency code (e.g., "USD").
+            start_time: Campaign start time.
+            end_time: Campaign end time.
+            status: Initial status (default: "draft").
+            order_name: Order name (defaults to req.po_number or "Order-{id}").
+            campaign_objective: Optional campaign objective.
+            kpi_goal: Optional KPI goal.
+            package_id_map: Map of package index → package_id to inject into serialized packages.
+            by_alias: Whether to serialize with field aliases (e.g., content_uri).
+            created_at: Optional explicit created_at timestamp.
+
+        Returns:
+            The created MediaBuy ORM object (added to session, not committed).
+        """
+        raw = req.model_dump(mode="json", by_alias=by_alias)
+        if package_id_map:
+            packages = raw.get("packages", [])
+            for idx, pkg_id in package_id_map.items():
+                if idx < len(packages):
+                    packages[idx]["package_id"] = pkg_id
+
+        kwargs: dict[str, Any] = {
+            "media_buy_id": media_buy_id,
+            "tenant_id": self._tenant_id,
+            "principal_id": principal_id,
+            "buyer_ref": getattr(req, "buyer_ref", None),
+            "order_name": order_name or getattr(req, "po_number", None) or f"Order-{media_buy_id}",
+            "advertiser_name": advertiser_name,
+            "budget": budget,
+            "currency": currency,
+            "start_date": start_time.date(),
+            "end_date": end_time.date(),
+            "start_time": start_time,
+            "end_time": end_time,
+            "status": status,
+            "raw_request": raw,
+        }
+        if campaign_objective is not None:
+            kwargs["campaign_objective"] = campaign_objective
+        if kpi_goal is not None:
+            kwargs["kpi_goal"] = kpi_goal
+        if created_at is not None:
+            kwargs["created_at"] = created_at
+
+        media_buy = MediaBuy(**kwargs)
+        self._session.add(media_buy)
+        self._session.flush()
+        return media_buy
+
     def create(self, media_buy: MediaBuy) -> MediaBuy:
         """Persist a new media buy within this tenant.
 

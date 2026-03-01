@@ -463,7 +463,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     """
     from sqlalchemy import select
 
-    from src.core.database.models import MediaBuy
     from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.database.repositories import MediaBuyUoW
 
@@ -1279,7 +1278,7 @@ from src.services.slack_notifier import get_slack_notifier
 
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    push_notification_config: dict[str, Any] | BaseModel | None = None,
+    push_notification_config: dict[str, Any] | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
 ) -> CreateMediaBuyResult:
@@ -1287,17 +1286,12 @@ async def _create_media_buy_impl(
 
     Args:
         req: Validated CreateMediaBuyRequest with all protocol fields
-        push_notification_config: Push notification config for status updates (model or dict)
+        push_notification_config: Push notification config dict (transport wrapper serializes models)
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:
         CreateMediaBuyResult wrapping response and status
     """
-    # Normalize push_notification_config to dict for downstream dict-based operations
-    # (A2A server passes a2a.types.PushNotificationConfig model)
-    if push_notification_config is not None and isinstance(push_notification_config, BaseModel):
-        push_notification_config = push_notification_config.model_dump(mode="json")
-
     request_start_time = time.time()
 
     # Warn if unsupported reporting_webhook frequency is requested
@@ -1386,15 +1380,10 @@ async def _create_media_buy_impl(
                 persistent_ctx = ctx_manager.create_context(tenant_id=tenant["tenant_id"], principal_id=principal_id)
 
         # Create workflow step for tracking this operation
-        # Prepare request data with protocol detection
-        request_data_for_workflow = req.model_dump(mode="json")
-
-        # Store protocol type for webhook payload creation
-        request_data_for_workflow["protocol"] = identity.protocol
-
-        # Store push_notification_config in workflow step request_data (same pattern as sync_creatives)
+        # Pass model directly — ContextManager serializes at the DB boundary
+        workflow_metadata: dict[str, Any] = {"protocol": identity.protocol}
         if push_notification_config:
-            request_data_for_workflow["push_notification_config"] = push_notification_config
+            workflow_metadata["push_notification_config"] = push_notification_config
 
         step = ctx_manager.create_workflow_step(
             context_id=persistent_ctx.context_id,
@@ -1402,7 +1391,8 @@ async def _create_media_buy_impl(
             owner="system",
             status="in_progress",
             tool_name="create_media_buy",
-            request_data=request_data_for_workflow,
+            request_data=req,
+            request_metadata=workflow_metadata,
         )
 
         # Register push notification config if provided (MCP/A2A protocol support)
@@ -2007,7 +1997,7 @@ async def _create_media_buy_impl(
             # Generate permanent package IDs (not dependent on media buy ID)
             # These IDs will be used whether the media buy is pending or approved
             pending_packages = []
-            raw_request_dict = req.model_dump(mode="json", by_alias=True)  # Serialize with aliases (e.g., content_uri)
+            package_id_map: dict[int, str] = {}  # 0-based index → package_id
 
             # req.packages validated earlier in _create_media_buy_impl
             assert req.packages is not None, "packages required - validated earlier"
@@ -2051,8 +2041,8 @@ async def _create_media_buy_impl(
                     )
                 )
 
-                # Update the package in raw_request with the generated package_id so UI can find it
-                raw_request_dict["packages"][idx - 1]["package_id"] = package_id
+                # Track package_id for injection into serialized raw_request (0-based index)
+                package_id_map[idx - 1] = package_id
 
             # Remap package_pricing_info from index-based keys to actual package IDs
             # Note: pending_packages loop used enumerate(req.packages, 1) but pricing used enumerate(req.packages) starting at 0
@@ -2069,26 +2059,24 @@ async def _create_media_buy_impl(
 
             # Create media buy record in the database with permanent ID
             # Status is "pending_approval" but the ID is final
+            # Repository handles raw_request serialization + package_id injection at the DB boundary
             with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
                 assert pending_uow.session is not None and pending_uow.media_buys is not None
-                pending_buy = MediaBuy(
+                pending_uow.media_buys.create_from_request(
                     media_buy_id=media_buy_id,
-                    buyer_ref=req.buyer_ref,
+                    req=req,
                     principal_id=principal.principal_id,
-                    tenant_id=tenant["tenant_id"],
-                    status="pending_approval",
-                    order_name=f"{req.buyer_ref} - {start_time.strftime('%Y-%m-%d')}",
                     advertiser_name=principal.name,
                     budget=total_budget,
-                    currency=request_currency or "USD",  # Use request_currency from validation above
-                    start_date=start_time.date(),
-                    end_date=end_time.date(),
+                    currency=request_currency or "USD",
                     start_time=start_time,
                     end_time=end_time,
-                    raw_request=raw_request_dict,  # Now includes package_id in each package
+                    status="pending_approval",
+                    order_name=f"{req.buyer_ref} - {start_time.strftime('%Y-%m-%d')}",
+                    package_id_map=package_id_map,
+                    by_alias=True,
                     created_at=datetime.now(UTC),
                 )
-                pending_uow.media_buys.create(pending_buy)
                 logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
 
             # Log to activity feed for manual approval case
@@ -2926,27 +2914,22 @@ async def _create_media_buy_impl(
         )
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
+        # Repository handles raw_request serialization at the DB boundary
         with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
             assert create_uow.media_buys is not None
-            new_media_buy = MediaBuy(
+            create_uow.media_buys.create_from_request(
                 media_buy_id=response.media_buy_id,
-                tenant_id=tenant["tenant_id"],
+                req=req,
                 principal_id=principal_id,
-                buyer_ref=req.buyer_ref,  # AdCP v2.4 buyer reference
-                order_name=req.po_number or f"Order-{response.media_buy_id}",
                 advertiser_name=principal.name,
-                campaign_objective=getattr(req, "campaign_objective", ""),  # Optional field
-                kpi_goal=getattr(req, "kpi_goal", ""),  # Optional field
-                budget=total_budget,  # Extract total budget
-                currency=request_currency,  # AdCP v2.4 currency field (resolved above)
-                start_date=start_time.date(),  # Legacy field for compatibility
-                end_date=end_time.date(),  # Legacy field for compatibility
-                start_time=start_time,  # AdCP v2.4 datetime scheduling (resolved from 'asap' if needed)
-                end_time=end_time,  # AdCP v2.4 datetime scheduling
+                budget=total_budget,
+                currency=request_currency,
+                start_time=start_time,
+                end_time=end_time,
                 status=media_buy_status,
-                raw_request=req.model_dump(mode="json"),
+                campaign_objective=getattr(req, "campaign_objective", "") or "",
+                kpi_goal=getattr(req, "kpi_goal", "") or "",
             )
-            create_uow.media_buys.create(new_media_buy)
             # UoW auto-commits on clean exit
 
         # Populate media_packages table for structured querying

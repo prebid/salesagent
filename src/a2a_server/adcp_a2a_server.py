@@ -1295,8 +1295,14 @@ class AdCPRequestHandler(RequestHandler):
             ValueError: For unknown skills or invalid parameters
         """
         # Inject push_notification_config into parameters for skills that need it
+        # Serialize to dict at the transport boundary — _impl accepts dict, not BaseModel
         if push_notification_config and skill_name in ("create_media_buy", "sync_creatives"):
-            parameters = {**parameters, "push_notification_config": push_notification_config}
+            pnc_dict = (
+                push_notification_config.model_dump(mode="json")
+                if hasattr(push_notification_config, "model_dump")
+                else push_notification_config
+            )
+            parameters = {**parameters, "push_notification_config": pnc_dict}
         logger.info(f"Handling explicit skill: {skill_name} with parameters: {list(parameters.keys())}")
 
         # Validate identity for non-discovery skills
