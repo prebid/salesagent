@@ -1,9 +1,19 @@
 """Canonical test suite for UC-004: Deliver Media Buy Metrics.
 
-Spec verification: 2026-02-26
+Spec verification: 2026-03-02 (salesagent-jz3y tightening pass)
 adcp spec commit: 8f26baf3
 adcp-client-python commit: a08805d
 Verified: 30/59 CONFIRMED, 24/59 UNSPECIFIED, 5 CONTRADICTS (salesagent-mexj), 0 SPEC_AMBIGUOUS
+
+Schema-library alignment (salesagent-jz3y):
+  - GetMediaBuyDeliveryRequest.account_id: now inherited from library (was local)
+  - GetMediaBuyDeliveryRequest.account/reporting_dimensions/include_package_daily_breakdown/
+    attribution_window: documented as salesagent extensions (NOT in adcp spec)
+  - DeliveryTotals/PackageDelivery.video_completions: FIXME -- spec uses completed_views
+  - DailyBreakdown webhook fields: FIXME -- misplaced, belong on response level
+  - DeliveryStatus enum: added flight_ended, goal_met to match library
+  - MediaBuyDeliveryData.status "ready": FIXME -- spec uses pending_activation
+  - MediaBuyDeliveryData: missing buyer_campaign_ref from spec (TODO)
 
 This module maps every test obligation from docs/test-obligations/UC-004-deliver-media-buy-metrics.md
 to either a real test or a skip stub. It covers:

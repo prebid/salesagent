@@ -42,12 +42,17 @@ class DeliveryType(str, Enum):
 
 
 class DeliveryStatus(str, Enum):
-    """Operational delivery state of a package."""
+    """Operational delivery state of a package.
+
+    CONFIRMED: matches adcp library DeliveryStatus enum values.
+    """
 
     delivering = "delivering"
     not_delivering = "not_delivering"
     completed = "completed"
     budget_exhausted = "budget_exhausted"
+    flight_ended = "flight_ended"
+    goal_met = "goal_met"
 
 
 # ---------------------------------------------------------------------------
@@ -73,26 +78,26 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Fields in AdCP spec but not yet in adcp library v3.2.0
-    account_id: str | None = Field(
-        None,
-        description="Filter delivery data to a specific account",
-    )
+    # account_id: inherited from library (was local, now in adcp library)
+
+    # --- Salesagent extensions (NOT in adcp spec/library) ---
+    # TODO(salesagent-jz3y): Move these to ext field or propose as spec additions.
+    # These fields are salesagent-specific extensions not present in the adcp spec.
     account: dict[str, Any] | None = Field(
         None,
-        description="Filter delivery data to a specific account (spec: account-ref.json)",
+        description="Filter delivery data to a specific account (salesagent extension, not in adcp spec)",
     )
     reporting_dimensions: dict[str, Any] | None = Field(
         None,
-        description="Request dimensional breakdowns in delivery reporting (geo, device_type, device_platform, audience, placement)",
+        description="Request dimensional breakdowns (salesagent extension, not in adcp spec)",
     )
     include_package_daily_breakdown: bool | None = Field(
         None,
-        description="When true, include daily_breakdown arrays within each package in by_package",
+        description="Include daily_breakdown arrays within each package (salesagent extension, not in adcp spec)",
     )
     attribution_window: dict[str, Any] | None = Field(
         None,
-        description="Attribution window to apply for conversion metrics (post_click, post_view, model)",
+        description="Attribution window for conversion metrics (salesagent extension; adcp spec has this on response only)",
     )
 
 
@@ -102,13 +107,24 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
 
 # AdCP-compliant delivery models
+# FIXME(salesagent-jz3y): DeliveryTotals and PackageDelivery duplicate fields from
+# adcp library Totals/ByPackageItem instead of inheriting. These should extend the
+# library types (Pattern #1). Blocked on aligning video_completions -> completed_views
+# and adjusting all adapter call sites.
 class DeliveryTotals(SalesAgentBaseModel):
-    """Aggregate metrics for a media buy or package."""
+    """Aggregate metrics for a media buy or package.
+
+    Note: Does not yet extend library Totals. Library uses ``completed_views``;
+    salesagent uses ``video_completions``. A rename across all adapters is needed
+    before switching to inheritance.
+    """
 
     impressions: float = Field(ge=0, description="Total impressions delivered")
     spend: float = Field(ge=0, description="Total amount spent")
     clicks: float | None = Field(None, ge=0, description="Total clicks (if applicable)")
     ctr: float | None = Field(None, ge=0, le=1, description="Click-through rate (clicks/impressions)")
+    # FIXME(salesagent-jz3y): adcp spec uses ``completed_views``, not ``video_completions``.
+    # Rename across all adapters to align with spec, then inherit from library Totals.
     video_completions: float | None = Field(None, ge=0, description="Total video completions (if applicable)")
     completion_rate: float | None = Field(
         None, ge=0, le=1, description="Video completion rate (completions/impressions)"
@@ -116,13 +132,17 @@ class DeliveryTotals(SalesAgentBaseModel):
 
 
 class PackageDelivery(SalesAgentBaseModel):
-    """Metrics broken down by package."""
+    """Metrics broken down by package.
+
+    Note: Does not yet extend library ByPackageItem. See DeliveryTotals note.
+    """
 
     package_id: str = Field(description="Publisher's package identifier")
     buyer_ref: str | None = Field(None, description="Buyer's reference identifier for this package")
     impressions: float = Field(ge=0, description="Package impressions")
     spend: float = Field(ge=0, description="Package spend")
     clicks: float | None = Field(None, ge=0, description="Package clicks")
+    # FIXME(salesagent-jz3y): adcp spec uses ``completed_views``, not ``video_completions``.
     video_completions: float | None = Field(None, ge=0, description="Package video completions")
     pacing_index: float | None = Field(
         None, ge=0, description="Delivery pace (1.0 = on track, <1.0 = behind, >1.0 = ahead)"
@@ -143,28 +163,39 @@ class PackageDelivery(SalesAgentBaseModel):
 
 
 class DailyBreakdown(SalesAgentBaseModel):
-    """Day-by-day delivery metrics."""
+    """Day-by-day delivery metrics.
 
-    # Webhook-specific metadata (only present in webhook deliveries)
+    Note: Does not yet extend library DailyBreakdownItem. Library also includes
+    conversions, conversion_value, roas, new_to_brand_rate fields.
+    """
+
+    # FIXME(salesagent-jz3y): notification_type, partial_data, unavailable_count,
+    # sequence_number, next_expected_at are response-level webhook metadata, NOT
+    # per-day fields. The adcp library correctly places these on
+    # GetMediaBuyDeliveryResponse (already inherited). These fields are never
+    # populated on DailyBreakdown instances -- remove them once webhook service
+    # is confirmed not to depend on them here.
     notification_type: str | None = Field(
         None,
-        description="Type of webhook notification: scheduled = regular periodic update, final = campaign completed, delayed = data not yet available, adjusted = resending period with updated data (only present in webhook deliveries)",
+        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
     )
     partial_data: bool | None = Field(
         None,
-        description="Indicates if any media buys in this webhook have missing/delayed data (only present in webhook deliveries)",
+        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
     )
     unavailable_count: int | None = Field(
         None,
-        description="Number of media buys with reporting_delayed or failed status (only present in webhook deliveries when partial_data is true)",
+        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
         ge=0,
     )
     sequence_number: int | None = Field(
-        None, description="Sequential notification number (only present in webhook deliveries, starts at 1)", ge=1
+        None,
+        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
+        ge=1,
     )
     next_expected_at: str | None = Field(
         None,
-        description="ISO 8601 timestamp for next expected notification (only present in webhook deliveries when notification_type is not 'final')",
+        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
     )
 
     date: str = Field(description="Date (YYYY-MM-DD)", pattern=r"^\d{4}-\d{2}-\d{2}$")
@@ -173,12 +204,23 @@ class DailyBreakdown(SalesAgentBaseModel):
 
 
 class MediaBuyDeliveryData(SalesAgentBaseModel):
-    """AdCP-compliant delivery data for a single media buy."""
+    """AdCP-compliant delivery data for a single media buy.
+
+    Note: Does not yet extend library MediaBuyDelivery. Blocked on aligning
+    DeliveryTotals (video_completions -> completed_views) and PackageDelivery
+    with their library counterparts.
+
+    TODO(salesagent-jz3y): Add buyer_campaign_ref field from adcp spec
+    (present in library MediaBuyDelivery but missing here).
+    """
 
     media_buy_id: str = Field(description="Publisher's media buy identifier")
     buyer_ref: str | None = Field(None, description="Buyer's reference identifier for this media buy")
+    # FIXME(salesagent-jz3y): Library uses Status enum with ``pending_activation``
+    # where salesagent uses ``ready``. Align naming to spec when updating
+    # _compute_media_buy_status and all status references.
     status: Literal["ready", "active", "paused", "completed", "failed", "reporting_delayed"] = Field(
-        description="Current media buy status. 'ready' means scheduled to go live at flight start date."
+        description="Current media buy status. 'ready' means scheduled to go live at flight start date (spec: pending_activation)."
     )
     expected_availability: str | None = Field(
         default=None,
