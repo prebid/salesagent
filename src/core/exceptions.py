@@ -4,11 +4,15 @@ Business logic raises these exceptions. Transport layers (A2A, MCP, REST)
 translate them to their protocol's error format via registered handlers.
 
 Exception classes define the error vocabulary — transport layers format them.
+Each exception carries a recovery classification (transient/correctable/terminal)
+to help buyer agents decide whether to retry, fix, or abandon a request.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+
+RecoveryHint = Literal["transient", "correctable", "terminal"]
 
 
 class AdCPError(Exception):
@@ -18,27 +22,33 @@ class AdCPError(Exception):
         message: Human-readable error description.
         status_code: HTTP status code for REST/FastAPI responses.
         error_code: Machine-readable error code string.
+        recovery: Recovery classification for buyer agents.
         details: Optional structured error details.
     """
 
     status_code: int = 500
     error_code: str = "INTERNAL_ERROR"
+    recovery: RecoveryHint = "terminal"
 
     def __init__(
         self,
         message: str = "",
         *,
         details: dict[str, Any] | None = None,
+        recovery: RecoveryHint | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details
+        if recovery is not None:
+            self.recovery = recovery
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to response body dict."""
         result: dict[str, Any] = {
             "error_code": self.error_code,
             "message": self.message,
+            "recovery": self.recovery,
         }
         if self.details is not None:
             result["details"] = self.details
@@ -52,6 +62,7 @@ class AdCPValidationError(AdCPError):
 
     status_code = 400
     error_code = "VALIDATION_ERROR"
+    recovery: RecoveryHint = "correctable"
 
 
 class AdCPAuthenticationError(AdCPError):
@@ -80,6 +91,7 @@ class AdCPRateLimitError(AdCPError):
 
     status_code = 429
     error_code = "RATE_LIMIT_EXCEEDED"
+    recovery: RecoveryHint = "transient"
 
 
 class AdCPAdapterError(AdCPError):
@@ -87,6 +99,7 @@ class AdCPAdapterError(AdCPError):
 
     status_code = 502
     error_code = "ADAPTER_ERROR"
+    recovery: RecoveryHint = "transient"
 
 
 # ---------------------------------------------------------------------------
