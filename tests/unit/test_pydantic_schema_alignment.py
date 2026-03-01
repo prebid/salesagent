@@ -52,6 +52,17 @@ SCHEMA_TO_MODEL_MAP = {
     # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
+# These tests download schemas from adcontextprotocol.org/schemas/latest/ which
+# is a moving target — the live spec evolves ahead of the adcp library we depend on.
+# The adcp library (package 3.6.0) doesn't yet have fields like `fields`, `refine`,
+# `idempotency_key` that the latest spec defines. There are no versioned schema URLs.
+# xfail until the adcp library catches up (tracked in the 3.6 migration PR).
+_XFAIL_SCHEMA_DRIFT = pytest.mark.xfail(
+    reason="Live /schemas/latest/ has fields not yet in adcp library (fields, refine, idempotency_key). "
+    "No versioned schema URLs exist. Will be resolved with adcp protocol alignment.",
+    strict=False,
+)
+
 
 def _schema_ref_to_cache_path(schema_ref: str) -> Path:
     """Convert a schema ref to a local cache file path.
@@ -332,6 +343,7 @@ def generate_full_valid_request(schema: dict[str, Any]) -> dict[str, Any]:
 class TestPydanticSchemaAlignment:
     """Test that Pydantic models accept all fields from AdCP JSON schemas."""
 
+    @_XFAIL_SCHEMA_DRIFT
     @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
     def test_model_accepts_all_schema_fields(self, schema_ref: str, model_class: type):
         """Test that Pydantic model accepts ALL fields defined in JSON schema.
@@ -550,6 +562,7 @@ class TestSpecificFieldValidation:
 class TestFieldNameConsistency:
     """Test that field names match between Pydantic models and JSON schemas."""
 
+    @_XFAIL_SCHEMA_DRIFT
     @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
     def test_field_names_match_schema(self, schema_ref: str, model_class: type):
         """Test that Pydantic model field names match JSON schema property names."""
