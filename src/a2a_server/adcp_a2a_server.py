@@ -60,6 +60,9 @@ from src.core.tools import (
     create_media_buy_raw as core_create_media_buy_tool,
 )
 from src.core.tools import (
+    get_creative_delivery_raw as core_get_creative_delivery_tool,
+)
+from src.core.tools import (
     get_media_buy_delivery_raw as core_get_media_buy_delivery_tool,
 )
 from src.core.tools import (
@@ -366,6 +369,7 @@ class AdCPRequestHandler(RequestHandler):
             from src.core.schemas import (
                 CreateMediaBuyError,
                 CreateMediaBuySuccess,
+                GetCreativeDeliveryResponse,
                 GetMediaBuyDeliveryResponse,
                 GetMediaBuysResponse,
                 GetProductsResponse,
@@ -394,6 +398,7 @@ class AdCPRequestHandler(RequestHandler):
 
             # Non-union response types - use the concrete class directly
             response_map: dict[str, type] = {
+                "get_creative_delivery": GetCreativeDeliveryResponse,
                 "get_media_buy_delivery": GetMediaBuyDeliveryResponse,
                 "get_media_buys": GetMediaBuysResponse,
                 "get_products": GetProductsResponse,
@@ -1323,6 +1328,7 @@ class AdCPRequestHandler(RequestHandler):
             "update_media_buy": self._handle_update_media_buy_skill,
             "get_media_buys": self._handle_get_media_buys_skill,
             "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
+            "get_creative_delivery": self._handle_get_creative_delivery_skill,
             "update_performance_index": self._handle_update_performance_index_skill,
             # AdCP Spec Creative Management (centralized library approach)
             "sync_creatives": self._handle_sync_creatives_skill,
@@ -1902,6 +1908,35 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in get_media_buy_delivery skill: {e}")
             raise ServerError(InternalError(message=f"Unable to get media buy delivery: {str(e)}"))
 
+    async def _handle_get_creative_delivery_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+        """Handle get_creative_delivery skill invocation.
+
+        Per AdCP spec, at least one scoping filter is required:
+        media_buy_ids, media_buy_buyer_refs, or creative_ids.
+        """
+        try:
+            from src.core.schemas import GetCreativeDeliveryRequest
+
+            req = GetCreativeDeliveryRequest.model_validate(parameters)
+
+            response = core_get_creative_delivery_tool(
+                media_buy_ids=req.media_buy_ids,
+                media_buy_buyer_refs=req.media_buy_buyer_refs,
+                creative_ids=req.creative_ids,
+                account_id=req.account_id,
+                start_date=req.start_date,
+                end_date=req.end_date,
+                max_variants=req.max_variants,
+                context=parameters.get("context"),
+                identity=identity,
+            )
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Error in get_creative_delivery skill: {e}")
+            raise ServerError(InternalError(message=f"Unable to get creative delivery: {str(e)}"))
+
     async def _handle_update_performance_index_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit update_performance_index skill invocation (CRITICAL for optimization)."""
         try:
@@ -2142,6 +2177,12 @@ def create_agent_card() -> AgentCard:
                 name="get_media_buy_delivery",
                 description="Get delivery metrics and performance data for media buys",
                 tags=["delivery", "metrics", "performance", "monitoring", "adcp"],
+            ),
+            AgentSkill(
+                id="get_creative_delivery",
+                name="get_creative_delivery",
+                description="Get creative-level delivery metrics for media buys",
+                tags=["creative", "delivery", "metrics", "monitoring", "adcp"],
             ),
             AgentSkill(
                 id="update_performance_index",

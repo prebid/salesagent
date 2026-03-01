@@ -14,6 +14,7 @@ ALL_TOOLS = [
     "create_media_buy",
     "update_media_buy",
     "get_media_buy_delivery",
+    "get_creative_delivery",
     "get_media_buys",
     "sync_creatives",
     "list_creatives",

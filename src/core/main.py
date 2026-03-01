@@ -290,6 +290,7 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
 # Import error logging wrapper for centralized error visibility
 from src.core.tool_error_logging import with_error_logging
 from src.core.tools.capabilities import get_adcp_capabilities
+from src.core.tools.creative_delivery import get_creative_delivery
 from src.core.tools.creative_formats import list_creative_formats
 from src.core.tools.creatives import list_creatives, sync_creatives
 from src.core.tools.media_buy_create import create_media_buy
@@ -313,6 +314,7 @@ mcp.tool()(with_error_logging(list_authorized_properties))
 mcp.tool()(with_error_logging(create_media_buy))
 mcp.tool()(with_error_logging(update_media_buy))
 mcp.tool()(with_error_logging(get_media_buy_delivery))
+mcp.tool()(with_error_logging(get_creative_delivery))
 mcp.tool()(with_error_logging(get_media_buys))
 mcp.tool()(with_error_logging(update_performance_index))
 mcp.tool()(with_error_logging(list_tasks))

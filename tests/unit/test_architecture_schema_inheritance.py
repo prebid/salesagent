@@ -170,6 +170,7 @@ class TestSchemaInheritance:
             # Nested serialization overrides (Critical Pattern #4) —
             # Parent models re-declare list fields to use local subclass types
             ("CreateMediaBuyRequest", "packages"),
+            ("GetCreativeDeliveryResponse", "creatives"),
             ("GetMediaBuyDeliveryResponse", "aggregated_totals"),
             ("GetMediaBuyDeliveryResponse", "media_buy_deliveries"),
             ("GetProductsRequest", "pagination"),

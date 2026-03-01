@@ -663,6 +663,7 @@ class TestA2ASkillInvocation:
                     "create_media_buy",
                     "update_media_buy",  # Added for media buy management
                     "get_media_buy_delivery",  # Added for delivery metrics
+                    "get_creative_delivery",  # Added for creative-level delivery metrics
                     "update_performance_index",  # Added for performance optimization
                     "sync_creatives",
                     "list_creatives",

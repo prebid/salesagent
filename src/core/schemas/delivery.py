@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from adcp.types import AggregatedTotals as LibraryAggregatedTotals
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
+from adcp.types import DeliveryMetrics as LibraryDeliveryMetrics
+from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from adcp.types import PricingModel
@@ -328,3 +330,128 @@ class AdapterGetMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentB
     by_package: list[AdapterPackageDelivery]
     currency: str
     daily_breakdown: list[dict] | None = None  # Optional day-by-day delivery metrics
+
+
+# ---------------------------------------------------------------------------
+# Creative Delivery schemas (GH #1030)
+# ---------------------------------------------------------------------------
+
+
+class GetCreativeDeliveryRequest(SalesAgentBaseModel):
+    """Request creative-level delivery metrics.
+
+    Flattened from the adcp library's union-based GetCreativeDeliveryRequest
+    (RootModel of 3 variants). At least one scoping filter is required:
+    media_buy_ids, media_buy_buyer_refs, or creative_ids.
+
+    All fields mirror the adcp spec; this flat model is easier to work with
+    for MCP parameter expansion and validation.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    media_buy_ids: list[str] | None = Field(
+        None,
+        min_length=1,
+        description="Filter to specific media buys by publisher ID.",
+    )
+    media_buy_buyer_refs: list[str] | None = Field(
+        None,
+        min_length=1,
+        description="Filter to specific media buys by buyer reference ID.",
+    )
+    creative_ids: list[str] | None = Field(
+        None,
+        min_length=1,
+        description="Filter to specific creatives by ID.",
+    )
+    account_id: str | None = Field(
+        None,
+        description="Account context for routing and scoping.",
+    )
+    start_date: str | None = Field(
+        None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="Start date for delivery period (YYYY-MM-DD).",
+    )
+    end_date: str | None = Field(
+        None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="End date for delivery period (YYYY-MM-DD).",
+    )
+    max_variants: int | None = Field(
+        None,
+        ge=1,
+        description="Maximum number of variants to return per creative.",
+    )
+    context: Any | None = Field(None)
+
+
+class DeliveryMetrics(LibraryDeliveryMetrics):
+    """Creative delivery metrics extending the adcp library type.
+
+    All fields inherited from AdCP spec: impressions, clicks, ctr, spend,
+    views, completed_views, completion_rate, conversions, roas, reach,
+    frequency, viewability, quartile_data, etc.
+    """
+
+    pass  # All fields inherited from library
+
+
+class CreativeDeliveryData(SalesAgentBaseModel):
+    """Delivery data for a single creative within a media buy."""
+
+    creative_id: str = Field(description="Creative identifier")
+    format_id: dict[str, Any] | None = Field(None, description="Format identifier (FormatId object)")
+    media_buy_id: str | None = Field(None, description="Media buy this creative is assigned to")
+    totals: DeliveryMetrics | None = Field(None, description="Aggregate delivery metrics for this creative")
+    variant_count: int | None = Field(None, ge=0, description="Total number of variants for this creative")
+    variants: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Variant-level delivery data (initially empty, populated in follow-up)",
+    )
+
+
+class GetCreativeDeliveryResponse(NestedModelSerializerMixin, LibraryGetCreativeDeliveryResponse):
+    """Extends library GetCreativeDeliveryResponse.
+
+    Library provides: reporting_period, currency, creatives, errors,
+    pagination, media_buy_id, media_buy_buyer_ref, context, ext.
+
+    Local override:
+    - creatives: Uses local CreativeDeliveryData for consistent serialization
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    creatives: list[CreativeDeliveryData] = Field(  # type: ignore[assignment]
+        ..., description="Array of creative delivery data"
+    )
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for protocol envelope."""
+        count = len(self.creatives)
+        if count == 0:
+            return "No creative delivery data found for the specified period."
+        elif count == 1:
+            return "Retrieved delivery data for 1 creative."
+        return f"Retrieved delivery data for {count} creatives."
+
+
+class AdapterCreativeDeliveryItem(SalesAgentBaseModel):
+    """Creative delivery data returned by an adapter."""
+
+    creative_id: str
+    media_buy_id: str | None = None
+    impressions: float = 0.0
+    clicks: float | None = None
+    spend: float | None = None
+    ctr: float | None = None
+
+
+class AdapterGetCreativeDeliveryResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
+    """Response from adapter's get_creative_delivery method."""
+
+    creatives: list[AdapterCreativeDeliveryItem]
+    reporting_period: ReportingPeriod
+    currency: str

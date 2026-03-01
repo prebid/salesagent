@@ -17,6 +17,8 @@ from src.adapters.base import (
     TargetingCapabilities,
 )
 from src.core.schemas import (
+    AdapterCreativeDeliveryItem,
+    AdapterGetCreativeDeliveryResponse,
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
     CheckMediaBuyStatusResponse,
@@ -1272,6 +1274,70 @@ class MockAdServer(AdServerAdapter):
                 impressions=impressions, spend=spend, clicks=100, ctr=0.0, video_completions=5000, completion_rate=0.0
             ),
             by_package=by_package,
+            currency="USD",
+        )
+
+    def get_creative_delivery(
+        self,
+        media_buy_id: str,
+        date_range: ReportingPeriod,
+        creative_ids: list[str] | None = None,
+    ) -> AdapterGetCreativeDeliveryResponse:
+        """Simulates getting creative-level delivery data for a media buy."""
+        self.log(
+            f"[bold]MockAdServer.get_creative_delivery[/bold] for media buy '{media_buy_id}'",
+            dry_run_prefix=False,
+        )
+
+        # Generate simulated creative delivery data
+        creatives: list[AdapterCreativeDeliveryItem] = []
+
+        if media_buy_id in self._media_buys:
+            buy = self._media_buys[media_buy_id]
+            total_budget = buy["total_budget"]
+
+            # Simulate 2-4 creatives per media buy
+            num_creatives = random.randint(2, 4)
+            creative_budget_share = total_budget / num_creatives
+
+            for i in range(num_creatives):
+                cid = f"creative_{media_buy_id}_{i}"
+                if creative_ids and cid not in creative_ids:
+                    continue
+                impressions = random.randint(1000, 50000)
+                clicks = random.randint(10, int(impressions * 0.05))
+                spend = creative_budget_share * random.uniform(0.8, 1.2)
+                ctr = clicks / impressions if impressions > 0 else 0.0
+                creatives.append(
+                    AdapterCreativeDeliveryItem(
+                        creative_id=cid,
+                        media_buy_id=media_buy_id,
+                        impressions=float(impressions),
+                        clicks=float(clicks),
+                        spend=round(spend, 2),
+                        ctr=round(ctr, 4),
+                    )
+                )
+        else:
+            # Media buy not in adapter memory — generate placeholder data
+            impressions = random.randint(5000, 20000)
+            clicks = random.randint(50, int(impressions * 0.03))
+            spend = round(random.uniform(100.0, 500.0), 2)
+            ctr = clicks / impressions if impressions > 0 else 0.0
+            creatives.append(
+                AdapterCreativeDeliveryItem(
+                    creative_id=f"creative_{media_buy_id}_0",
+                    media_buy_id=media_buy_id,
+                    impressions=float(impressions),
+                    clicks=float(clicks),
+                    spend=spend,
+                    ctr=round(ctr, 4),
+                )
+            )
+
+        return AdapterGetCreativeDeliveryResponse(
+            creatives=creatives,
+            reporting_period=date_range,
             currency="USD",
         )
 
