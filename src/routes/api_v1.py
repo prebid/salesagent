@@ -43,9 +43,17 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 def _handle_tool_error(e: ToolError) -> JSONResponse:
     """Convert MCP ToolError to HTTP error response."""
+    from src.core.tool_error_logging import extract_error_info
+
+    error_code, error_message, recovery = extract_error_info(e)
     return JSONResponse(
         status_code=500,
-        content={"error_code": "INTERNAL_ERROR", "message": str(e), "details": None},
+        content={
+            "error_code": error_code,
+            "message": error_message,
+            "recovery": recovery,
+            "details": None,
+        },
     )
 
 
