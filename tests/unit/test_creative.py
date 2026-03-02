@@ -657,6 +657,48 @@ class TestSyncCreativesAuth:
                 identity=identity,
             )
 
+    def test_auth_error_is_operation_level(self):
+        """AUTH_REQUIRED is operation-level: no per-creative results returned.
+
+        The error is raised before any creative processing begins,
+        so no SyncCreativesResponse is ever constructed.
+
+        Covers: UC-006-EXT-A-02
+        """
+        from src.core.tools.creatives import _sync_creatives_impl
+
+        # Multiple creatives -- none should be processed
+        creatives = [
+            {"creative_id": "c1", "name": "Banner", "assets": {}},
+            {"creative_id": "c2", "name": "Video", "assets": {}},
+        ]
+        with pytest.raises(AdCPAuthenticationError):
+            _sync_creatives_impl(creatives=creatives)
+        # No return value -- exception is the entire response
+
+    def test_tenant_error_is_operation_level(self):
+        """TENANT_NOT_FOUND is operation-level: no per-creative results returned.
+
+        The error is raised before any creative processing begins.
+
+        Covers: UC-006-EXT-B-02
+        """
+        from src.core.tools.creatives import _sync_creatives_impl
+
+        identity = ResolvedIdentity(
+            principal_id="p1",
+            tenant_id="t1",
+            tenant=None,
+            protocol="mcp",
+        )
+        creatives = [
+            {"creative_id": "c1", "name": "Banner", "assets": {}},
+            {"creative_id": "c2", "name": "Video", "assets": {}},
+        ]
+        with pytest.raises(AdCPAuthenticationError):
+            _sync_creatives_impl(creatives=creatives, identity=identity)
+        # No return value -- exception is the entire response
+
 
 class TestCrossPrincipalIsolation:
     """BR-RULE-034: Cross-principal creative isolation.
@@ -1691,6 +1733,61 @@ class TestGenerativeCreativeBuild:
 
         return mock_format_obj, mock_config
 
+    def test_format_with_output_format_ids_classified_as_generative(self):
+        """Format with output_format_ids is classified as a generative creative.
+
+        The _create_new_creative code path checks for output_format_ids on the
+        format object; its presence triggers the Gemini build flow instead of
+        static preview.
+
+        Covers: UC-006-GENERATIVE-CREATIVE-BUILD-01
+        """
+        from src.core.tools.creatives._processing import _create_new_creative
+
+        mock_session = _make_mock_creative_repo()
+        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
+
+        with (
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context") as mock_run_async,
+            patch("src.core.config.get_config", return_value=mock_config),
+        ):
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+            mock_run_async.return_value = {
+                "status": "draft",
+                "context_id": "ctx_1",
+                "creative_output": {
+                    "assets": {},
+                    "output_format": {"url": "https://ai.example.com/output.png"},
+                },
+            }
+
+            creative = _make_creative_asset(assets={"message": {"content": "Create a banner ad"}})
+            result, _ = _create_new_creative(
+                creative=creative,
+                creative_repo=mock_session,
+                format_value=_format_id(),
+                approval_mode="auto-approve",
+                tenant=tenant,
+                webhook_url=None,
+                context=None,
+                all_formats=[mock_format_obj],
+                registry=MagicMock(),
+                principal_id="p1",
+            )
+
+            # Gemini build was called (generative path), not just preview
+            assert mock_run_async.called
+            action_val = result.action
+            if hasattr(action_val, "value"):
+                action_val = action_val.value
+            assert action_val != "failed"
+
     def test_prompt_extracted_from_message_role(self):
         """Prompt extracted from assets 'message' role first.
 
@@ -1788,6 +1885,59 @@ class TestGenerativeCreativeBuild:
 
             # Only 'brief' role, no 'message'
             creative = _make_creative_asset(assets={"brief": {"content": "Shoes ad brief"}})
+            result, _ = _create_new_creative(
+                creative=creative,
+                creative_repo=mock_session,
+                format_value=_format_id(),
+                approval_mode="auto-approve",
+                tenant=tenant,
+                webhook_url=None,
+                context=None,
+                all_formats=[mock_format_obj],
+                registry=MagicMock(),
+                principal_id="p1",
+            )
+
+            assert mock_run_async.called
+            action_val = result.action
+            if hasattr(action_val, "value"):
+                action_val = action_val.value
+            assert action_val != "failed"
+
+    def test_prompt_extracted_from_prompt_role(self):
+        """Prompt extracted from assets 'prompt' role when no 'message' or 'brief'.
+
+        GAP: BR-RULE-036 INV-2 -- prompt as third priority after message and brief.
+
+        Covers: UC-006-GENERATIVE-CREATIVE-BUILD-04
+        """
+        from src.core.tools.creatives._processing import _create_new_creative
+
+        mock_session = _make_mock_creative_repo()
+        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
+
+        with (
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context") as mock_run_async,
+            patch("src.core.config.get_config", return_value=mock_config),
+        ):
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+            mock_run_async.return_value = {
+                "status": "draft",
+                "context_id": "ctx_1",
+                "creative_output": {
+                    "assets": {},
+                    "output_format": {"url": "https://ai.example.com/output.png"},
+                },
+            }
+
+            # Only 'prompt' role -- no message or brief
+            creative = _make_creative_asset(assets={"prompt": {"content": "Design a banner for running shoes"}})
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -4161,6 +4311,31 @@ class TestExtensionGaps:
             assert results[0].assignment_errors is not None
             assert "missing_pkg" in results[0].assignment_errors
 
+    def test_ext_j_package_not_found_strict(self):
+        """Strict mode: non-existent package raises operation-level error.
+
+        Spec: CONFIRMED -- validation_mode 'strict' with missing package_id
+        raises AdCPNotFoundError at the operation level.
+        Covers: UC-006-EXT-J-01
+        """
+        from src.core.exceptions import AdCPNotFoundError
+        from src.core.tools.creatives._assignments import _process_assignments
+
+        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.execute.return_value.first.return_value = None
+
+            results = [SyncCreativeResult(creative_id="c1", action="created")]
+            with pytest.raises(AdCPNotFoundError, match="Package not found.*PKG-GONE"):
+                _process_assignments(
+                    assignments={"c1": ["PKG-GONE"]},
+                    results=results,
+                    tenant={"tenant_id": "t1"},
+                    validation_mode="strict",
+                )
+
     def test_ext_k_format_mismatch_strict(self):
         """Strict mode: format mismatch raises operation-level error.
 
@@ -4431,7 +4606,10 @@ class TestAsyncLifecycle:
     """
 
     def test_async_submitted_response(self):
-        """Async submitted acknowledgment conforms to adcp 3.6.0 schema."""
+        """Async submitted acknowledgment conforms to adcp 3.6.0 schema.
+
+        Covers: UC-006-ASYNC-LIFECYCLE-01
+        """
         from adcp.types.generated_poc.media_buy.sync_creatives_async_response_submitted import (
             SyncCreativesSubmitted,
         )
@@ -4446,7 +4624,10 @@ class TestAsyncLifecycle:
         assert empty.context is None
 
     def test_async_working_response(self):
-        """Async working response includes progress percentage and counts."""
+        """Async working response includes progress percentage and counts.
+
+        Covers: UC-006-ASYNC-LIFECYCLE-02
+        """
         from adcp.types.generated_poc.media_buy.sync_creatives_async_response_working import (
             SyncCreativesWorking,
         )
@@ -4466,7 +4647,10 @@ class TestAsyncLifecycle:
         assert data["current_step"] == "validating"
 
     def test_async_input_required_response(self):
-        """Async input-required response indicates what input is needed."""
+        """Async input-required response indicates what input is needed.
+
+        Covers: UC-006-ASYNC-LIFECYCLE-03
+        """
         from adcp.types.generated_poc.media_buy.sync_creatives_async_response_input_required import (
             Reason,
             SyncCreativesInputRequired,
@@ -4499,7 +4683,10 @@ class TestRequestConstraintValidation:
 
     def test_zero_creatives_rejected(self):
         """Empty creatives array should be rejected at schema level.
-        AdCP spec: sync-creatives-request.json creatives minItems: 1."""
+        AdCP spec: sync-creatives-request.json creatives minItems: 1.
+
+        Covers: UC-006-REQUEST-CONSTRAINT-VALIDATION-01
+        """
         from pydantic import ValidationError as PydanticValidationError
 
         with pytest.raises(PydanticValidationError):
@@ -4507,7 +4694,10 @@ class TestRequestConstraintValidation:
 
     def test_over_100_creatives_rejected(self):
         """Creatives array exceeding 100 should be rejected.
-        AdCP spec: sync-creatives-request.json creatives maxItems: 100."""
+        AdCP spec: sync-creatives-request.json creatives maxItems: 100.
+
+        Covers: UC-006-REQUEST-CONSTRAINT-VALIDATION-02
+        """
         from pydantic import ValidationError as PydanticValidationError
 
         creatives = [_make_creative(creative_id=f"c_{i}") for i in range(101)]
@@ -4528,7 +4718,10 @@ class TestDeleteMissingDefault:
     """
 
     def test_delete_missing_false_preserves_unlisted(self):
-        """When delete_missing not set, creatives not in batch remain unchanged."""
+        """When delete_missing not set, creatives not in batch remain unchanged.
+
+        Covers: UC-006-DELETE-MISSING-02
+        """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
         identity = _make_identity()
@@ -4593,7 +4786,10 @@ class TestAssignmentsResponseCompleteness:
     """
 
     def test_warnings_in_per_creative_results(self):
-        """Non-fatal issues in lenient mode appear in creative result warnings array."""
+        """Non-fatal issues in lenient mode appear in creative result warnings array.
+
+        Covers: UC-006-ASSIGNMENTS-RESPONSE-COMPLETENESS-02
+        """
         # SyncCreativeResult supports a warnings field per the spec
         result = SyncCreativeResult(
             creative_id="c1",
@@ -4604,6 +4800,22 @@ class TestAssignmentsResponseCompleteness:
         assert "warnings" in data
         assert len(data["warnings"]) == 2
         assert "Preview URL missing" in data["warnings"]
+
+    def test_assignment_errors_in_per_creative_results(self):
+        """Failed assignment in lenient mode appears in assignment_errors dict.
+
+        Covers: UC-006-ASSIGNMENTS-RESPONSE-COMPLETENESS-03
+        """
+        # SyncCreativeResult supports assignment_errors: dict mapping package_id -> error
+        result = SyncCreativeResult(
+            creative_id="c1",
+            action="created",
+            assignment_errors={"PKG-GONE": "Package not found: PKG-GONE"},
+        )
+        data = result.model_dump()
+        assert "assignment_errors" in data
+        assert "PKG-GONE" in data["assignment_errors"]
+        assert "Package not found" in data["assignment_errors"]["PKG-GONE"]
 
 
 # ============================================================================

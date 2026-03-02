@@ -276,7 +276,10 @@ class TestCreativeLifecycleMCP:
         ]
 
     def test_sync_creatives_create_new_creatives(self, sample_creatives):
-        """Test sync_creatives creates new creatives successfully."""
+        """Test sync_creatives creates new creatives successfully.
+
+        Covers: UC-006-MAIN-MCP-02
+        """
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
         identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
@@ -319,7 +322,10 @@ class TestCreativeLifecycleMCP:
             assert leaderboard_creative.data.get("height") == 90
 
     def test_sync_creatives_upsert_existing_creative(self):
-        """Test sync_creatives updates existing creative (default patch=False behavior)."""
+        """Test sync_creatives updates existing creative (default patch=False behavior).
+
+        Covers: UC-006-MAIN-MCP-03
+        """
         core_sync_creatives_tool, _ = self._import_mcp_tools()
         # First, create an existing creative
         with get_db_session() as session:
@@ -380,7 +386,10 @@ class TestCreativeLifecycleMCP:
             assert updated_creative.updated_at is not None
 
     def test_sync_creatives_with_package_assignments(self, sample_creatives):
-        """Test sync_creatives assigns creatives to packages using spec-compliant assignments dict."""
+        """Test sync_creatives assigns creatives to packages using spec-compliant assignments dict.
+
+        Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01
+        """
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
         # Get the creative_id from the first sample creative
@@ -443,7 +452,10 @@ class TestCreativeLifecycleMCP:
             assert assignment.media_buy_id == self.test_media_buy_id
 
     def test_sync_creatives_validation_failures(self):
-        """Test sync_creatives handles validation failures gracefully."""
+        """Test sync_creatives handles validation failures gracefully.
+
+        Covers: UC-006-EXT-C-01
+        """
         core_sync_creatives_tool, _ = self._import_mcp_tools()
         invalid_creatives = [
             {
@@ -891,7 +903,10 @@ class TestCreativeLifecycleMCP:
         assert creative_id == "assignment_test_1"
 
     def test_sync_creatives_authentication_required(self, sample_creatives):
-        """Test sync_creatives requires proper authentication."""
+        """Test sync_creatives requires proper authentication.
+
+        Covers: UC-006-EXT-A-01
+        """
         core_sync_creatives_tool, _ = self._import_mcp_tools()
         mock_context = MockContext("invalid-token")
 
