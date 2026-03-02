@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import MediaBuyStatus
 
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -927,3 +928,224 @@ class TestWebhookEndpoint2xxAcknowledgment:
         assert result["status"] == "delivered"
         assert result["response_code"] == 200
         assert result["attempts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-A-02
+# ---------------------------------------------------------------------------
+
+
+class TestUC004EXTA02AuthenticationFailure:
+    """Authentication failure returns no data and no state modification.
+
+    Covers: UC-004-EXT-A-02
+
+    Given: an authentication failure (identity=None)
+    When: _get_media_buy_delivery_impl is called
+    Then: AdCPValidationError is raised, no delivery data is returned,
+          and no state is modified (read-only operation).
+    """
+
+    def test_none_identity_raises_validation_error(self) -> None:
+        """No delivery data returned on auth failure.
+
+        Covers: UC-004-EXT-A-02
+        """
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            buyer_refs=None,
+            status_filter=None,
+            start_date=None,
+            end_date=None,
+            context=None,
+        )
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            _get_media_buy_delivery_impl(req, identity=None)
+
+        assert exc_info.value.message == "Context is required"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-B-01
+# ---------------------------------------------------------------------------
+
+
+class TestUC004EXTB01PrincipalNotFound:
+    """Covers: UC-004-EXT-B-01"""
+
+    def test_principal_not_found_returns_error_in_response(self):
+        """When a valid token is presented but the principal does not exist in the
+        tenant database, _get_media_buy_delivery_impl must return a response
+        whose errors list contains exactly one entry with code "principal_not_found".
+
+        Covers: UC-004-EXT-B-01
+        """
+        identity = _make_identity(principal_id="ghost_principal", tenant_id="test_tenant")
+        req = GetMediaBuyDeliveryRequest()
+
+        with patch(f"{_PATCH}.get_principal_object", return_value=None) as mock_get_principal:
+            response = _get_media_buy_delivery_impl(req, identity)
+
+        mock_get_principal.assert_called_once_with("ghost_principal", tenant_id="test_tenant")
+        assert response.errors is not None, "Expected errors list in response"
+        assert len(response.errors) == 1
+        assert response.errors[0].code == "principal_not_found"
+        assert response.media_buy_deliveries == []
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-C-01
+# ---------------------------------------------------------------------------
+
+
+class TestNonexistentMediaBuyIdReturnsNotFoundError:
+    """Requesting delivery for a nonexistent media_buy_id returns media_buy_not_found error.
+
+    Covers: UC-004-EXT-C-01
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_nonexistent_id_produces_media_buy_not_found_error(
+        self, mock_uow_cls, mock_get_principal, mock_get_adapter
+    ):
+        """When media_buy_ids contains an ID absent from the DB, response.errors includes
+        media_buy_not_found with the unresolved identifier.
+
+        Covers: UC-004-EXT-C-01
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_get_adapter.return_value = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = []
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["nonexistent_id"])
+
+        response = _get_media_buy_delivery_impl(req, _make_identity())
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert response.errors is not None
+        assert len(response.errors) == 1
+        error = response.errors[0]
+        assert error.code == "media_buy_not_found"
+        assert "nonexistent_id" in error.message
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-C-02
+# ---------------------------------------------------------------------------
+
+
+class TestPartialMediaBuyIdsNotFound:
+    """Mixed request: some IDs exist, some do not.
+
+    Covers: UC-004-EXT-C-02
+
+    SPEC CONFLICT NOTE:
+    - BR-RULE-030 (INV-5) says partial results should be returned.
+    - ext-c says an error should be returned for not-found IDs.
+    - ACTUAL PRODUCTION BEHAVIOR: BOTH -- partial results (mb_1 delivery data)
+      are returned in media_buy_deliveries, AND a media_buy_not_found error
+      for mb_999 is placed in the errors list. The implementation follows
+      BR-RULE-030 (partial results) while also satisfying the ext-c error
+      requirement by embedding errors alongside valid data.
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_partial_ids_returns_found_buy_and_not_found_error(
+        self, mock_uow_cls, mock_get_principal, mock_get_adapter
+    ):
+        """When some IDs exist and some don't, returns delivery for found IDs
+        and a media_buy_not_found error for missing IDs.
+
+        Covers: UC-004-EXT-C-02
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id="mb_1")
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(media_buy_id="mb_1", start_date=date(2020, 1, 1), end_date=date(2030, 12, 31))
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_1", "mb_999"],
+        )
+
+        response = _get_media_buy_delivery_impl(req, _make_identity())
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert len(response.media_buy_deliveries) == 1
+        assert response.media_buy_deliveries[0].media_buy_id == "mb_1"
+
+        assert response.errors is not None
+        assert len(response.errors) == 1
+        not_found_error = response.errors[0]
+        assert not_found_error.code == "media_buy_not_found"
+        assert "mb_999" in not_found_error.message
+
+        assert all("mb_1" not in e.message for e in response.errors)
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-C-03
+# ---------------------------------------------------------------------------
+
+
+class TestBuyerRefNotFound:
+    """Buyer ref lookup returns media_buy_not_found error in response.
+
+    Covers: UC-004-EXT-C-03
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_unknown_buyer_ref_produces_not_found_error(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """When buyer_refs contains a ref that matches no media buy, the response
+        contains an error with code 'media_buy_not_found'.
+
+        Covers: UC-004-EXT-C-03
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_get_adapter.return_value = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = []
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(buyer_refs=["no_such_ref"])
+
+        response = _get_media_buy_delivery_impl(req, _make_identity())
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert response.errors is not None, "Expected errors list, got None"
+        error_codes = [e.code for e in response.errors]
+        assert "media_buy_not_found" in error_codes, f"Expected 'media_buy_not_found' in errors, got: {error_codes}"
+        not_found_error = next(e for e in response.errors if e.code == "media_buy_not_found")
+        assert "no_such_ref" in not_found_error.message
