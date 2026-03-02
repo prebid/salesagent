@@ -176,6 +176,11 @@ class AdServerAdapter(ABC):
     # Subclasses should override with their supported channels
     default_channels: list[str] = []
 
+    # Default delivery measurement provider for products created by this adapter.
+    # Per AdCP spec, delivery_measurement is REQUIRED on all products.
+    # Subclasses should override with their specific measurement provider.
+    default_delivery_measurement: dict[str, str] = {"provider": "publisher"}
+
     # Adapter capabilities - override in subclasses
     capabilities: AdapterCapabilities = AdapterCapabilities()
 

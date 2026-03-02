@@ -59,6 +59,12 @@ class MockAdServer(AdServerAdapter):
     # Mock adapter supports all common channels for testing
     # V3 channel names: display, olv, streaming_audio, social
     default_channels = ["display", "olv", "streaming_audio", "social"]
+
+    # Mock adapter uses simulated measurement for testing
+    default_delivery_measurement = {
+        "provider": "mock",
+        "notes": "Simulated delivery measurement for testing",
+    }
     _media_buys: dict[str, dict[str, Any]] = {}
 
     # Schema and capabilities

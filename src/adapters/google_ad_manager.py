@@ -78,6 +78,12 @@ class GoogleAdManager(AdServerAdapter):
     # V3 channel names: video → olv, native → social
     default_channels = ["display", "olv", "social"]
 
+    # GAM provides its own delivery measurement via Google Ad Manager reporting
+    default_delivery_measurement = {
+        "provider": "google_ad_manager",
+        "notes": "Delivery measured by Google Ad Manager ad serving and reporting",
+    }
+
     def __init__(
         self,
         config: dict[str, Any],

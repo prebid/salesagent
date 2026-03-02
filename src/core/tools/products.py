@@ -88,6 +88,56 @@ def get_adapter_default_channels(adapter_type: str) -> list[str]:
     return []
 
 
+def get_adapter_default_delivery_measurement(adapter_type: str) -> dict[str, str]:
+    """Get default delivery_measurement for an adapter type.
+
+    Per AdCP spec, delivery_measurement is REQUIRED on all products.
+    This function returns the adapter-specific default when a product
+    does not have delivery_measurement configured.
+
+    Args:
+        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock")
+
+    Returns:
+        Dict with at least "provider" key for the adapter's default measurement.
+    """
+    adapter_classes: dict[str, type] = {}
+
+    try:
+        from src.adapters.google_ad_manager import GoogleAdManager
+
+        adapter_classes["google_ad_manager"] = GoogleAdManager
+    except ImportError:
+        pass
+
+    try:
+        from src.adapters.mock_ad_server import MockAdServer
+
+        adapter_classes["mock"] = MockAdServer
+    except ImportError:
+        pass
+
+    try:
+        from src.adapters.kevel import Kevel
+
+        adapter_classes["kevel"] = Kevel
+    except ImportError:
+        pass
+
+    try:
+        from src.adapters.triton_digital import TritonDigital
+
+        adapter_classes["triton"] = TritonDigital
+    except ImportError:
+        pass
+
+    adapter_class = adapter_classes.get(adapter_type)
+    if adapter_class and hasattr(adapter_class, "default_delivery_measurement"):
+        return adapter_class.default_delivery_measurement
+
+    return {"provider": "publisher"}
+
+
 def get_recommended_cpm(product: Product) -> float | None:
     """Extract recommended CPM from product's pricing_options.
 
@@ -392,6 +442,12 @@ async def _get_products_impl(
             details={"error_code": "POLICY_VIOLATION"},
         )
 
+    # Resolve adapter type for delivery_measurement defaults
+    ad_server_config = tenant.get("ad_server", {})
+    tenant_adapter_type = (
+        ad_server_config.get("adapter", "mock") if isinstance(ad_server_config, dict) else ad_server_config
+    )
+
     # Query products via repository (tenant-scoped)
     from src.core.database.repositories.uow import ProductUoW
 
@@ -403,7 +459,7 @@ async def _get_products_impl(
         products = []
         for product_obj in db_products:
             try:
-                validated_product = convert_product_model_to_schema(product_obj)
+                validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
             except Exception as e:
@@ -486,7 +542,7 @@ async def _get_products_impl(
             for variant_model in dynamic_variants:
                 # Convert database model to schema (returns library Product)
                 # Cast to our extended Product type for mypy compatibility
-                variant_schema = convert_product_model_to_schema(variant_model)
+                variant_schema = convert_product_model_to_schema(variant_model, adapter_type=tenant_adapter_type)
                 # Type: ignore - library Product is compatible with our extended Product at runtime
                 products.append(variant_schema)
 

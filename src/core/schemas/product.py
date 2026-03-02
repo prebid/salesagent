@@ -210,6 +210,7 @@ class Product(LibraryProduct):
             "description",
             "format_ids",
             "delivery_type",
+            "delivery_measurement",
             "is_custom",
         }
 
