@@ -27,7 +27,6 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.exceptions import AdCPAdapterError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
