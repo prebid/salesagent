@@ -145,8 +145,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     except ToolError as e:
         return _handle_tool_error(e)
 
-    result = response.model_dump(mode="json")
-    return apply_version_compat("get_products", result, body.adcp_version)
+    return apply_version_compat("get_products", response, body.adcp_version)
 
 
 @router.get("/capabilities")

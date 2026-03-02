@@ -368,54 +368,77 @@ def convert_product_model_to_schema(product_model) -> Product:
     return Product(**product_data)
 
 
-def add_v2_compat_to_pricing_options(product_dict: dict) -> dict:
-    """Add v2.x backward-compatible fields to pricing_options in a serialized product.
+def dump_pricing_option_v2_compat(po_model) -> dict:
+    """Serialize a pricing option model with v2.x backward-compat fields.
 
-    V3.0 changes that need v2.x compat:
-    - is_fixed removed: V2.x clients expect this discriminator field
-    - rate renamed to fixed_price: V2.x clients expect rate field
-    - floor moved from price_guidance.floor to top-level floor_price
-
-    This function adds backward-compat fields during serialization:
+    Takes a pricing option model object (CpmPricingOption, VcpmPricingOption, etc.)
+    and returns a serialized dict that includes v2.x fields:
     - is_fixed: True if fixed_price is present, False otherwise
     - rate: Copy of fixed_price when present (v2.x field name)
     - price_guidance.floor: Copy of floor_price when present
 
+    Handles both RootModel-wrapped and unwrapped pricing option types.
+
     Args:
-        product_dict: Serialized product dictionary (from model_dump)
+        po_model: A pricing option model (library type or RootModel wrapper).
 
     Returns:
-        Product dictionary with v2.x backward-compat fields added
+        Serialized pricing option dict with v2.x backward-compat fields added.
     """
-    if "pricing_options" not in product_dict:
-        return product_dict
+    # Unwrap RootModel if needed (adcp library wraps in PricingOption RootModel)
+    inner = getattr(po_model, "root", po_model)
 
-    for po in product_dict["pricing_options"]:
-        # Add is_fixed discriminator (v2.x expected this field)
-        fixed_price = po.get("fixed_price")
-        po["is_fixed"] = fixed_price is not None
+    # Serialize the model to dict
+    po_dict = inner.model_dump(mode="json", exclude_none=True)
 
-        # Add rate field (v2.x name for fixed_price)
-        if fixed_price is not None:
-            po["rate"] = fixed_price
+    # Read fields from the model, not the dict, to derive v2 compat values
+    fixed_price = getattr(inner, "fixed_price", None)
+    floor_price = getattr(inner, "floor_price", None)
 
-        # If floor_price is set, add floor to price_guidance for v2.x compat
-        floor_price = po.get("floor_price")
-        if floor_price is not None:
-            if "price_guidance" not in po:
-                po["price_guidance"] = {}
-            po["price_guidance"]["floor"] = floor_price
+    # Add is_fixed discriminator (v2.x expected this field)
+    po_dict["is_fixed"] = fixed_price is not None
+
+    # Add rate field (v2.x name for fixed_price)
+    if fixed_price is not None:
+        po_dict["rate"] = fixed_price
+
+    # If floor_price is set, add floor to price_guidance for v2.x compat
+    if floor_price is not None:
+        if "price_guidance" not in po_dict:
+            po_dict["price_guidance"] = {}
+        po_dict["price_guidance"]["floor"] = floor_price
+
+    return po_dict
+
+
+def dump_product_v2_compat(product) -> dict:
+    """Serialize a Product model with v2.x backward-compat pricing options.
+
+    Takes a Product model and returns a serialized dict where pricing_options
+    include v2.x backward-compat fields (is_fixed, rate, price_guidance.floor).
+
+    Args:
+        product: A Product model (schema object with pricing_options).
+
+    Returns:
+        Serialized product dict with v2.x backward-compat pricing options.
+    """
+    product_dict = product.model_dump(mode="json")
+
+    # Replace pricing_options with v2-compat serialization from models
+    if hasattr(product, "pricing_options") and product.pricing_options:
+        product_dict["pricing_options"] = [dump_pricing_option_v2_compat(po) for po in product.pricing_options]
 
     return product_dict
 
 
-def add_v2_compat_to_products(products: list[dict]) -> list[dict]:
-    """Add v2.x backward-compatible fields to a list of serialized products.
+def dump_products_v2_compat(products: list) -> list[dict]:
+    """Serialize a list of Product models with v2.x backward-compat pricing.
 
     Args:
-        products: List of serialized product dictionaries
+        products: List of Product model objects.
 
     Returns:
-        Products with v2.x backward-compat fields added
+        List of serialized product dicts with v2.x backward-compat fields.
     """
-    return [add_v2_compat_to_pricing_options(p) for p in products]
+    return [dump_product_v2_compat(p) for p in products]

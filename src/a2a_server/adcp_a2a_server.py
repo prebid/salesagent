@@ -1408,12 +1408,13 @@ class AdCPRequestHandler(RequestHandler):
             else:
                 # Capture human-readable message before converting to dict
                 message = str(response)
-                response_data = response.model_dump(mode="json")
+                # Serialize with model-level v2 compat (pricing options from models)
+                response_data = apply_version_compat("get_products", response, adcp_version)
                 # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
                 # since returning a dict bypasses that logic
                 response_data["message"] = message
                 response_data.setdefault("success", True)
-            return apply_version_compat("get_products", response_data, adcp_version)
+            return response_data
 
         except AdCPError:
             # Let AdCPError propagate to outer handler for proper translation
@@ -1993,12 +1994,10 @@ class AdCPRequestHandler(RequestHandler):
             # Convert to A2A response format with v2.x backward compatibility
             from src.core.version_compat import apply_version_compat
 
-            products = [product.model_dump(mode="json") for product in response.products]
-            response_data = {
-                "products": products,
-                "message": str(response),  # Use __str__ method for human-readable message
-            }
-            return apply_version_compat("get_products", response_data, None)
+            # Serialize with model-level v2 compat (adcp_version=None -> v2 compat applied)
+            response_data = apply_version_compat("get_products", response, None)
+            response_data["message"] = str(response)  # Use __str__ method for human-readable message
+            return response_data
 
         except Exception as e:
             logger.error(f"Error getting products: {e}")
