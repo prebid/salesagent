@@ -36,6 +36,7 @@ from src.core.tools.media_buy_delivery import (
     _get_target_media_buys,
     _resolve_delivery_status_filter,
 )
+from src.core.webhook_authenticator import WebhookAuthenticator
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
 
 # ---------------------------------------------------------------------------
@@ -464,3 +465,465 @@ class TestWebhookPayloadNotificationType:
         # Assert — notification_type is preserved in the response
         dumped = response.model_dump(mode="json")
         assert dumped["notification_type"] == notification_type
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookNotificationTypeScheduled:
+    """Normal periodic delivery sets notification_type to 'scheduled'.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
+    """
+
+    @pytest.mark.xfail(
+        reason="Production code does not auto-set notification_type based on delivery trigger. "
+        "_get_media_buy_delivery_impl constructs response without notification_type (defaults to None)."
+    )
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_periodic_delivery_sets_scheduled_type(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Normal periodic delivery should auto-set notification_type to 'scheduled'.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
+        """
+        # Arrange — normal delivery for an active buy
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(start_date=date(2026, 1, 1), end_date=date(2026, 12, 31))
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+        # Act
+        response = _get_media_buy_delivery_impl(req, _make_identity())
+
+        # Assert — notification_type should be "scheduled" for normal periodic delivery
+        dumped = response.model_dump(mode="json")
+        assert dumped["notification_type"] == "scheduled"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookNotificationTypeFinal:
+    """Completed campaign sets notification_type to 'final' with no next_expected_at.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.xfail(
+        reason="Production code does not auto-set notification_type or manage next_expected_at "
+        "based on campaign completion. _get_media_buy_delivery_impl leaves both as None."
+    )
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_completed_campaign_sets_final_type(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Completed campaign should set notification_type='final' and omit next_expected_at.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+        """
+        # Arrange — completed buy (end_date in the past)
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(start_date=date(2025, 1, 1), end_date=date(2025, 6, 30))
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+        # Act
+        response = _get_media_buy_delivery_impl(req, _make_identity())
+
+        # Assert — notification_type is "final" and next_expected_at is None
+        dumped = response.model_dump(mode="json")
+        assert dumped["notification_type"] == "final"
+        assert dumped["next_expected_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookSequenceNumber:
+    """Monotonically increasing sequence_number per media buy.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
+    """
+
+    @pytest.mark.xfail(
+        reason="Production code does not auto-assign or persist sequence_number. "
+        "_get_media_buy_delivery_impl leaves sequence_number as None (no auto-increment logic)."
+    )
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_sequence_number_auto_assigned(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Delivery response should auto-assign sequence_number starting from 1.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
+        """
+        # Arrange
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(start_date=date(2026, 1, 1), end_date=date(2026, 12, 31))
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+        # Act
+        response = _get_media_buy_delivery_impl(req, _make_identity())
+
+        # Assert — sequence_number should be auto-assigned (at least 1)
+        assert response.sequence_number is not None, "sequence_number should be auto-assigned"
+        assert response.sequence_number >= 1
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookNextExpectedAt:
+    """next_expected_at computed for non-final deliveries.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
+    """
+
+    @pytest.mark.xfail(
+        reason="Production code does not compute next_expected_at based on reporting frequency. "
+        "_get_media_buy_delivery_impl leaves next_expected_at as None."
+    )
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_next_expected_at_set_for_active_delivery(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Scheduled delivery for active buy should compute next_expected_at.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
+        """
+        # Arrange — active buy (non-final delivery)
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(start_date=date(2026, 1, 1), end_date=date(2026, 12, 31))
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+        # Act
+        response = _get_media_buy_delivery_impl(req, _make_identity())
+
+        # Assert — next_expected_at should be set for non-final delivery
+        assert response.next_expected_at is not None, "next_expected_at must be set for non-final delivery"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookHmacSha256Signing:
+    """Webhook payload signed with HMAC-SHA256.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
+    """
+
+    def test_sign_payload_produces_hmac_headers(self):
+        """WebhookAuthenticator.sign_payload produces HMAC-SHA256 signature headers.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
+        """
+        payload = {"media_buy_id": "mb_001", "impressions": 5000}
+        secret = "test-signing-secret"
+
+        # Act
+        headers = WebhookAuthenticator.sign_payload(payload, secret)
+
+        # Assert — HMAC-SHA256 signature header present with correct format
+        assert "X-Webhook-Signature" in headers
+        assert headers["X-Webhook-Signature"].startswith("sha256=")
+        assert len(headers["X-Webhook-Signature"]) > len("sha256=")
+
+        # Assert — timestamp header present for replay protection
+        assert "X-Webhook-Timestamp" in headers
+        assert headers["X-Webhook-Timestamp"].isdigit()
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookBearerTokenAuth:
+    """Webhook delivery with Bearer token authentication.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
+    """
+
+    @patch("src.core.webhook_delivery.get_db_session")
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
+    @patch("src.core.webhook_delivery.requests.post")
+    def test_bearer_token_sent_in_authorization_header(self, mock_post, mock_validate, mock_db_session):
+        """Bearer token is forwarded in Authorization header when set by caller.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
+        """
+        # Arrange
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        mock_db_session.return_value.__enter__ = MagicMock()
+        mock_db_session.return_value.__exit__ = MagicMock(return_value=False)
+
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"media_buy_id": "mb_001"},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer test-bearer-token-xyz",
+            },
+            max_retries=1,
+        )
+
+        # Act
+        success, result = deliver_webhook_with_retry(delivery)
+
+        # Assert — delivery succeeded
+        assert success is True
+        assert result["status"] == "delivered"
+
+        # Assert — Bearer token was sent in the request headers
+        call_args = mock_post.call_args
+        sent_headers = call_args.kwargs["headers"]
+        assert sent_headers["Authorization"] == "Bearer test-bearer-token-xyz"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-09
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookExcludesAggregatedTotals:
+    """Webhook payload does NOT include aggregated_totals.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-09
+    """
+
+    @pytest.mark.xfail(
+        reason="No webhook-specific payload assembly exists. GetMediaBuyDeliveryResponse.model_dump() "
+        "always includes aggregated_totals (required field). Webhook payload filtering not implemented."
+    )
+    def test_aggregated_totals_excluded_from_webhook_payload(self):
+        """Webhook delivery payload should NOT contain aggregated_totals (polling only).
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-09
+        """
+        from src.core.schemas import AggregatedTotals
+
+        # Arrange — construct standard delivery response
+        response = GetMediaBuyDeliveryResponse(
+            reporting_period={
+                "start": datetime(2026, 1, 1, tzinfo=UTC),
+                "end": datetime(2026, 1, 31, tzinfo=UTC),
+            },
+            currency="USD",
+            aggregated_totals=AggregatedTotals(
+                impressions=5000.0,
+                spend=250.0,
+                clicks=None,
+                video_completions=None,
+                media_buy_count=1,
+            ),
+            media_buy_deliveries=[],
+        )
+
+        # Act — dump as webhook payload
+        payload = response.model_dump(mode="json")
+
+        # Assert — aggregated_totals should NOT be in webhook payload
+        assert "aggregated_totals" not in payload
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookRequestedMetricsFiltering:
+    """Webhook filters to requested_metrics.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
+    """
+
+    @pytest.mark.xfail(
+        reason="requested_metrics field does not exist on GetMediaBuyDeliveryResponse or request schemas. "
+        "Metric filtering for webhook payloads not yet implemented."
+    )
+    def test_only_requested_metrics_in_payload(self):
+        """Webhook payload should only include metrics specified in requested_metrics.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
+        """
+        from src.core.schemas import AggregatedTotals
+
+        # Arrange — response with all metric types populated
+        response = GetMediaBuyDeliveryResponse(
+            reporting_period={
+                "start": datetime(2026, 1, 1, tzinfo=UTC),
+                "end": datetime(2026, 1, 31, tzinfo=UTC),
+            },
+            currency="USD",
+            aggregated_totals=AggregatedTotals(
+                impressions=5000.0,
+                spend=250.0,
+                clicks=100.0,
+                video_completions=50.0,
+                media_buy_count=1,
+            ),
+            media_buy_deliveries=[],
+        )
+
+        # Act — dump payload (simulating filtering to [impressions, clicks])
+        payload = response.model_dump(mode="json")
+        totals = payload["aggregated_totals"]
+
+        # Assert — only requested metrics should be present (spend excluded)
+        assert "spend" not in totals, "spend should be excluded when not in requested_metrics"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-11
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookOnlyActiveMediaBuys:
+    """Only active media buys trigger webhook delivery.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-11
+    """
+
+    @pytest.mark.xfail(
+        reason="deliver_webhook_with_retry does not check media buy status. "
+        "It sends whatever payload is given regardless of the media buy's state. "
+        "Webhook trigger scheduler with status filtering not yet implemented."
+    )
+    @patch("src.core.webhook_delivery.get_db_session")
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
+    @patch("src.core.webhook_delivery.requests.post")
+    def test_paused_media_buy_webhook_rejected(self, mock_post, mock_validate, mock_db_session):
+        """Webhook delivery should be rejected for paused media buys.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-11
+        """
+        # Arrange — webhook for a paused media buy
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        mock_db_session.return_value.__enter__ = MagicMock()
+        mock_db_session.return_value.__exit__ = MagicMock(return_value=False)
+
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"media_buy_id": "mb_paused", "status": "paused"},
+            headers={"Content-Type": "application/json"},
+            max_retries=1,
+        )
+
+        # Act
+        success, result = deliver_webhook_with_retry(delivery)
+
+        # Assert — should NOT deliver webhook for paused media buy
+        assert success is False, "Webhook should not be delivered for paused media buy"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-12
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookEndpoint2xxAcknowledgment:
+    """Endpoint acknowledges with 2xx — successful delivery recorded.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-12
+    """
+
+    @patch("src.core.webhook_delivery.get_db_session")
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
+    @patch("src.core.webhook_delivery.requests.post")
+    def test_2xx_response_records_successful_delivery(self, mock_post, mock_validate, mock_db_session):
+        """200 OK from buyer endpoint records delivery as successful.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-12
+        """
+        # Arrange
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        mock_db_session.return_value.__enter__ = MagicMock()
+        mock_db_session.return_value.__exit__ = MagicMock(return_value=False)
+
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"media_buy_id": "mb_001", "impressions": 5000},
+            headers={"Content-Type": "application/json"},
+            max_retries=1,
+        )
+
+        # Act
+        success, result = deliver_webhook_with_retry(delivery)
+
+        # Assert — delivery recorded as successful
+        assert success is True
+        assert result["status"] == "delivered"
+        assert result["response_code"] == 200
+        assert result["attempts"] == 1
