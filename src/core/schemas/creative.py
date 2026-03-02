@@ -126,17 +126,6 @@ class CreativeStatusEnum(Enum):
 
 
 # --- Creative Lifecycle ---
-class CreativeGroup(SalesAgentBaseModel):
-    """Groups creatives for organizational and management purposes."""
-
-    group_id: str
-    principal_id: str
-    name: str
-    description: str | None = None
-    created_at: datetime
-    tags: list[str] | None = []
-
-
 class Creative(LibraryCreative):
     """Individual creative asset - extends listing Creative with internal workflow fields.
 
@@ -671,17 +660,6 @@ class CheckCreativeStatusResponse(NestedModelSerializerMixin, SalesAgentBaseMode
     statuses: list[CreativeApprovalStatus]
 
 
-# New creative management endpoints
-class CreateCreativeGroupRequest(SalesAgentBaseModel):
-    name: str
-    description: str | None = None
-    tags: list[str] | None = []
-
-
-class CreateCreativeGroupResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
-    group: CreativeGroup
-
-
 class CreateCreativeRequest(SalesAgentBaseModel):
     """Create a creative in the library (not tied to a media buy)."""
 
@@ -823,14 +801,6 @@ class ApproveCreativeResponse(SalesAgentBaseModel):
     creative_id: str
     new_status: str
     detail: str
-
-
-class AdaptCreativeRequest(SalesAgentBaseModel):
-    media_buy_id: str
-    original_creative_id: str
-    target_format_id: str
-    new_creative_id: str
-    instructions: str | None = None
 
 
 class CreativeApproval(SalesAgentBaseModel):

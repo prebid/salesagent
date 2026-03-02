@@ -32,7 +32,6 @@ from src.core.database.models import (
 from src.core.schemas import (
     Creative,
     CreativeAssignment,
-    CreativeGroup,
     CreativeStatus,
     Error,  # noqa: F401 - Required for MCP protocol error handling (regression test PR #332)
     Product,
@@ -151,7 +150,6 @@ creative_engine = MockCreativeEngine(creative_engine_config)
 creative_statuses: dict[str, CreativeStatus] = {}
 product_catalog: list[Product] = []
 creative_library: dict[str, Creative] = {}  # creative_id -> Creative
-creative_groups: dict[str, CreativeGroup] = {}  # group_id -> CreativeGroup
 creative_assignments: dict[str, CreativeAssignment] = {}  # assignment_id -> CreativeAssignment
 
 # Authentication cache removed - FastMCP v2.11.0+ properly forwards headers

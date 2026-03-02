@@ -47,8 +47,6 @@ GAPS identified in this surface (skip-stubbed below):
   - delete_missing parameter handling
   - dry_run parameter handling
   - list_creatives_raw boundary-completeness (FIXME salesagent-v0kb)
-  - CreativeGroup CRUD operations (schema exists, no tool impl)
-  - AdaptCreativeRequest flow (schema exists, no tool impl)
   - Creative webhook delivery on approval
 """
 
@@ -2549,71 +2547,6 @@ class TestDryRun:
             # dry_run should NOT call session.add or session.commit
             mock_session.add.assert_not_called()
             mock_session.commit.assert_not_called()
-
-
-class TestCreativeGroupCRUD:
-    """CreativeGroup management operations.
-
-    Spec: UNSPECIFIED (no group management in current spec).
-    """
-
-    @pytest.mark.xfail(reason="CreativeGroup schema exists but no create_creative_group tool implementation yet")
-    def test_create_creative_group(self):
-        """CreateCreativeGroupRequest schema is defined; a create tool should exist."""
-        from src.core.schemas import CreateCreativeGroupRequest
-
-        req = CreateCreativeGroupRequest(name="Holiday Banners", description="Q4 campaign")
-        assert req.name == "Holiday Banners"
-
-        # The tool function should exist (will fail until implemented)
-        from src.core import tools
-
-        assert hasattr(tools, "create_creative_group") or hasattr(tools, "create_creative_group_raw"), (
-            "No create_creative_group tool found"
-        )
-
-    @pytest.mark.xfail(reason="CreativeGroup schema exists but no list/get creative groups tool yet")
-    def test_list_creative_groups(self):
-        """CreativeGroup schema is defined; a list tool should exist."""
-        from src.core.schemas import CreativeGroup
-
-        group = CreativeGroup(
-            group_id="g1",
-            principal_id="p1",
-            name="Test Group",
-            created_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
-        assert group.group_id == "g1"
-
-        from src.core import tools
-
-        assert hasattr(tools, "list_creative_groups") or hasattr(tools, "list_creative_groups_raw"), (
-            "No list_creative_groups tool found"
-        )
-
-
-class TestCreativeAdaptation:
-    """AdaptCreativeRequest flow.
-
-    Spec: UNSPECIFIED (no adaptation operation in current spec).
-    """
-
-    @pytest.mark.xfail(reason="AdaptCreativeRequest schema exists but no adapt_creative tool implementation yet")
-    def test_adapt_creative(self):
-        """AdaptCreativeRequest schema is defined; an adapt tool should exist."""
-        from src.core.schemas import AdaptCreativeRequest
-
-        req = AdaptCreativeRequest(
-            media_buy_id="mb1",
-            original_creative_id="c1",
-            target_format_id="video_640x480",
-            new_creative_id="c1_adapted",
-        )
-        assert req.target_format_id == "video_640x480"
-
-        from src.core import tools
-
-        assert hasattr(tools, "adapt_creative") or hasattr(tools, "adapt_creative_raw"), "No adapt_creative tool found"
 
 
 class TestCreativeWebhookDelivery:
