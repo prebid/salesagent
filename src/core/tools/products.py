@@ -986,12 +986,6 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
         # Use convert_product_model_to_schema for consistency
         loaded_products = []
         for product in products:
-            try:
-                # convert_product_model_to_schema returns library Product
-                # which is compatible with our extended Product at runtime
-                loaded_products.append(convert_product_model_to_schema(product))
-            except ValueError as e:
-                logger.warning(f"Skipping product {product.product_id}: {e}")
-                continue
+            loaded_products.append(convert_product_model_to_schema(product))
 
     return loaded_products
