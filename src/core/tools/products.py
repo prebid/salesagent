@@ -280,7 +280,6 @@ async def _get_products_impl(
     if policy_result and policy_result.status == PolicyStatus.BLOCKED:
         # Always block if policy says blocked
         logger.warning(f"Brief blocked by policy: {policy_result.reason}")
-        # Raise ToolError to properly signal failure to client
         raise AdCPAuthorizationError(
             policy_result.reason or "Blocked by policy", details={"error_code": "POLICY_VIOLATION"}
         )
@@ -781,7 +780,6 @@ async def get_products(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
     except ValueError as e:
-        # Convert ValueError from helper to ToolError with clear message
         raise AdCPValidationError(f"Invalid get_products request: {e}") from e
 
     # Read identity pre-resolved by MCPAuthMiddleware

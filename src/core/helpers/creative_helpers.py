@@ -519,7 +519,7 @@ def process_and_upload_package_creatives(
         - uploaded_ids_by_product: Mapping of product_id -> uploaded creative IDs
 
     Raises:
-        ToolError: If creative upload fails for any package (CREATIVES_UPLOAD_FAILED)
+        AdCPAdapterError: If creative upload fails for any package (CREATIVES_UPLOAD_FAILED)
 
     Example:
         >>> packages = [PackageRequest(product_id="p1", creatives=[creative1, creative2])]
@@ -585,7 +585,6 @@ def process_and_upload_package_creatives(
         except Exception as e:
             error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"
             logger.error(error_msg)
-            # Re-raise as ToolError for consistent error handling
             raise AdCPAdapterError(error_msg, details={"error_code": "CREATIVES_UPLOAD_FAILED"}) from e
 
     return updated_packages, uploaded_by_product

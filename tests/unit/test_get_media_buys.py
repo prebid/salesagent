@@ -381,12 +381,46 @@ class TestGetMediaBuysImpl:
         assert pkg_response.snapshot_unavailable_reason == SnapshotUnavailableReason.SNAPSHOT_UNSUPPORTED
 
     def test_identity_required(self):
-        """identity=None raises ToolError."""
+        """identity=None raises AdCPAuthenticationError, not MCP ToolError.
+
+        _impl functions are shared across MCP, A2A, and REST transports.
+        They must raise domain exceptions (AdCPError hierarchy), never
+        transport-specific types like ToolError.
+        """
+        from src.core.exceptions import AdCPAuthenticationError
+
+        req = self._make_request()
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
+            _get_media_buys_impl(req, None)
+
+    def test_account_id_filtering_raises_domain_exception(self):
+        """account_id filtering raises AdCPValidationError, not MCP ToolError.
+
+        Same principle: _impl must use domain exceptions for all transports.
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        req = self._make_request(account_id="some_account")
+        with pytest.raises(AdCPValidationError, match="account_id filtering is not yet supported"):
+            _get_media_buys_impl(req, make_identity())
+
+    def test_impl_does_not_raise_tool_error(self):
+        """_impl must never raise ToolError — it's an MCP transport concern.
+
+        Regression guard: if someone re-imports ToolError into _impl,
+        this test catches it.
+        """
         from fastmcp.exceptions import ToolError
 
         req = self._make_request()
-        with pytest.raises(ToolError, match="Identity is required"):
+        # identity=None should raise, but NOT ToolError
+        with pytest.raises(Exception) as exc_info:
             _get_media_buys_impl(req, None)
+        assert not isinstance(exc_info.value, ToolError), (
+            f"_get_media_buys_impl raised ToolError({exc_info.value}) — "
+            f"_impl functions must raise domain exceptions (AdCPError hierarchy), "
+            f"not MCP transport types"
+        )
 
 
 class TestGetMediaBuysResponseStructure:

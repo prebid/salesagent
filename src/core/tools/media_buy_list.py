@@ -19,6 +19,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import RootModel, ValidationError
 from sqlalchemy import select
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
@@ -82,10 +83,10 @@ def _get_media_buys_impl(
     from src.core.helpers.context_helpers import ensure_tenant_context
 
     if identity is None:
-        raise ToolError("Identity is required")
+        raise AdCPAuthenticationError("Identity is required")
 
     if req.account_id is not None:
-        raise ToolError("account_id filtering is not yet supported")
+        raise AdCPValidationError("account_id filtering is not yet supported")
 
     testing_ctx = identity.testing_context
     ensure_tenant_context(identity)

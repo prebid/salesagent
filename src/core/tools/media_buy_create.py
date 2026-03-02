@@ -229,7 +229,7 @@ def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant
         tenant_id: Tenant ID for database lookup
 
     Raises:
-        ToolError: If any creative is missing required fields (URL, dimensions)
+        AdCPValidationError: If any creative is missing required fields (URL, dimensions)
     """
     from sqlalchemy import select
 
@@ -951,7 +951,7 @@ def _validate_pricing_model_selection(
         }
 
     Raises:
-        ToolError: If pricing_model validation fails
+        AdCPValidationError: If pricing_model validation fails
     """
     from decimal import Decimal
 
@@ -1102,7 +1102,7 @@ async def _validate_and_convert_format_ids(
         List of validated FormatId dicts with {agent_url, id}
 
     Raises:
-        ToolError: If any format_id is invalid, unregistered, or doesn't exist
+        AdCPValidationError: If any format_id is invalid, unregistered, or doesn't exist
     """
     from src.core.creative_agent_registry import CreativeAgentRegistry
 
