@@ -1149,3 +1149,214 @@ class TestBuyerRefNotFound:
         assert "media_buy_not_found" in error_codes, f"Expected 'media_buy_not_found' in errors, got: {error_codes}"
         not_found_error = next(e for e in response.errors if e.code == "media_buy_not_found")
         assert "no_such_ref" in not_found_error.message
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-E-01
+# ---------------------------------------------------------------------------
+
+
+class TestEqualDateRangeReturnsInvalidDateRangeError:
+    """Equal start and end dates return invalid_date_range error.
+
+    Covers: UC-004-EXT-E-01
+
+    BR-RULE-013: start_date >= end_date is invalid.
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    def test_equal_dates_returns_invalid_date_range(self, mock_get_principal, mock_get_adapter):
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2026-03-15",
+            end_date="2026-03-15",
+        )
+
+        mock_get_principal.return_value = MagicMock(principal_id="test_principal")
+        mock_get_adapter.return_value = MagicMock()
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert response.media_buy_deliveries == []
+        assert len(response.errors) == 1
+        assert response.errors[0].code == "invalid_date_range"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-E-02
+# ---------------------------------------------------------------------------
+
+
+class TestStartDateAfterEndDateReturnsInvalidDateRangeError:
+    """Start date after end date returns invalid_date_range error.
+
+    Covers: UC-004-EXT-E-02
+
+    BR-RULE-013: start_date >= end_date is invalid.
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    def test_start_after_end_returns_invalid_date_range(self, mock_get_principal, mock_get_adapter):
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2026-03-20",
+            end_date="2026-03-10",
+        )
+
+        mock_get_principal.return_value = MagicMock(principal_id="test_principal")
+        mock_get_adapter.return_value = MagicMock()
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert response.media_buy_deliveries == []
+        assert len(response.errors) == 1
+        assert response.errors[0].code == "invalid_date_range"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-E-03
+# ---------------------------------------------------------------------------
+
+
+class TestInvalidDateRangeDoesNotFetchDeliveryData:
+    """Invalid date range causes no delivery data to be fetched.
+
+    Covers: UC-004-EXT-E-03
+
+    POST-F1: No delivery data is fetched or returned on date range error.
+    This proves the read-only property — the adapter is never invoked.
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    def test_invalid_date_range_does_not_call_adapter(self, mock_get_principal, mock_get_adapter):
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2026-03-20",
+            end_date="2026-03-10",
+        )
+
+        mock_get_principal.return_value = MagicMock(principal_id="test_principal")
+        mock_adapter = MagicMock()
+        mock_get_adapter.return_value = mock_adapter
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        # Verify error response
+        assert response.media_buy_deliveries == []
+        assert len(response.errors) == 1
+        assert response.errors[0].code == "invalid_date_range"
+
+        # Verify adapter's delivery method was never called (no data fetched)
+        mock_adapter.get_media_buy_delivery.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-F-01
+# ---------------------------------------------------------------------------
+
+
+class TestAdapterUnavailableReturnsAdapterError:
+    """Adapter unavailable (network error) returns adapter_error.
+
+    Covers: UC-004-EXT-F-01
+
+    POST-F2: buyer knows delivery data could not be retrieved.
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_adapter_connection_error_returns_adapter_error(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+        # Principal found
+        mock_get_principal.return_value = MagicMock(principal_id="test_principal")
+
+        # Set up UoW with repo returning one buy
+        buy = _make_buy(
+            media_buy_id="mb_001",
+            start_date=date(2020, 1, 1),
+            end_date=date(2030, 12, 31),
+        )
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.media_buys = mock_repo
+        mock_uow_cls.return_value = mock_uow
+
+        # Adapter raises ConnectionError (network error)
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = ConnectionError("Connection refused")
+        mock_get_adapter.return_value = mock_adapter
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        error_codes = [e.code for e in response.errors]
+        assert "adapter_error" in error_codes
+        adapter_error = next(e for e in response.errors if e.code == "adapter_error")
+        assert "mb_001" in adapter_error.message
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-F-02
+# ---------------------------------------------------------------------------
+
+
+class TestAdapterInternalServerErrorReturnsAdapterError:
+    """Adapter 500 internal server error returns adapter_error.
+
+    Covers: UC-004-EXT-F-02
+
+    Ext-f step 7b: ad server returns 500 → buyer gets adapter_error.
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_adapter_500_error_returns_adapter_error(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+        # Principal found
+        mock_get_principal.return_value = MagicMock(principal_id="test_principal")
+
+        # Set up UoW with repo returning one buy
+        buy = _make_buy(
+            media_buy_id="mb_001",
+            start_date=date(2020, 1, 1),
+            end_date=date(2030, 12, 31),
+        )
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.media_buys = mock_repo
+        mock_uow_cls.return_value = mock_uow
+
+        # Adapter raises RuntimeError simulating a 500 response
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = RuntimeError("500 Internal Server Error")
+        mock_get_adapter.return_value = mock_adapter
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        error_codes = [e.code for e in response.errors]
+        assert "adapter_error" in error_codes
+        adapter_error = next(e for e in response.errors if e.code == "adapter_error")
+        assert "mb_001" in adapter_error.message
