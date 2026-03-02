@@ -15,10 +15,10 @@ from adcp.types.generated_poc.media_buy.list_creatives_request import (
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
-from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
+from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
@@ -203,79 +203,24 @@ def _list_creatives_impl(
     total_count = 0
 
     with get_db_session() as session:
-        from src.core.database.models import Creative as DBCreative
-        from src.core.database.models import CreativeAssignment as DBAssignment
-        from src.core.database.models import MediaBuy
-
-        # Build query - filter by tenant AND principal for security
-        stmt = select(DBCreative).filter_by(tenant_id=tenant["tenant_id"], principal_id=principal_id)
-
-        # Filter out creatives without valid assets (legacy data)
-        # Using PostgreSQL JSONB ? operator to check if 'assets' key exists
-        stmt = stmt.where(DBCreative.data["assets"].isnot(None))
-
-        # Apply filters using local variables (already processed above)
-        # AdCP 2.5: Support plural media_buy_ids and buyer_refs filters
-        if effective_media_buy_ids:
-            # Filter by media buy assignments (OR logic - matches any)
-            stmt = stmt.join(DBAssignment, DBCreative.creative_id == DBAssignment.creative_id).where(
-                DBAssignment.media_buy_id.in_(effective_media_buy_ids)
-            )
-
-        if effective_buyer_refs:
-            # Filter by buyer_ref through media buy (OR logic - matches any)
-            # Only join if not already joined for media_buy_ids
-            if not effective_media_buy_ids:
-                stmt = stmt.join(DBAssignment, DBCreative.creative_id == DBAssignment.creative_id)
-            stmt = stmt.join(MediaBuy, DBAssignment.media_buy_id == MediaBuy.media_buy_id).where(
-                MediaBuy.buyer_ref.in_(effective_buyer_refs)
-            )
-
-        if status:
-            stmt = stmt.where(DBCreative.status == status)
-
-        if format:
-            stmt = stmt.where(DBCreative.format == format)
-
-        if tags:
-            # Simple tag filtering - in production, might use JSON operators
-            for tag in tags:
-                stmt = stmt.where(DBCreative.name.contains(tag))  # Simplified
-
-        if created_after_dt:
-            stmt = stmt.where(DBCreative.created_at >= created_after_dt)
-
-        if created_before_dt:
-            stmt = stmt.where(DBCreative.created_at <= created_before_dt)
-
-        if search:
-            # Search in name and description
-            search_term = f"%{search}%"
-            stmt = stmt.where(DBCreative.name.ilike(search_term))
-
-        # Get total count before pagination
-        from sqlalchemy import func
-        from sqlalchemy.orm import InstrumentedAttribute
-
-        total_count_result = session.scalar(select(func.count()).select_from(stmt.subquery()))
-        total_count = int(total_count_result) if total_count_result is not None else 0
-
-        # Apply sorting using local variables
-        sort_column: InstrumentedAttribute
-        if sort_by == "name":
-            sort_column = DBCreative.name
-        elif sort_by == "status":
-            sort_column = DBCreative.status
-        else:  # Default to created_date
-            sort_column = DBCreative.created_at
-
-        if valid_sort_order == "asc":
-            stmt = stmt.order_by(sort_column.asc())
-        else:
-            stmt = stmt.order_by(sort_column.desc())
-
-        # Apply pagination using local variables (already computed above)
-        db_creatives = session.scalars(stmt.offset(offset).limit(effective_limit)).all()
+        repo = CreativeRepository(session, tenant["tenant_id"])
+        result = repo.get_by_principal(
+            principal_id,
+            status=status,
+            format=format,
+            tags=tags,
+            created_after=created_after_dt,
+            created_before=created_before_dt,
+            search=search,
+            media_buy_ids=effective_media_buy_ids or None,
+            buyer_refs=effective_buyer_refs or None,
+            sort_by=sort_by,
+            sort_order=valid_sort_order,
+            offset=offset,
+            limit=effective_limit,
+        )
+        db_creatives = result.creatives
+        total_count = result.total_count
 
         # Convert to schema objects
         for db_creative in db_creatives:

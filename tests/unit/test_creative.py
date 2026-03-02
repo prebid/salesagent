@@ -139,6 +139,20 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
     return CreativeAsset(**defaults)
 
 
+def _make_mock_creative_repo(creative_id: str = "c_test_1") -> MagicMock:
+    """Create a MagicMock configured as a CreativeRepository.
+
+    The mock's create() returns an object with valid string attributes
+    so that Pydantic models (SyncCreativeResult) can serialize them.
+    """
+    mock_repo = MagicMock()
+    fake_db = MagicMock()
+    fake_db.creative_id = creative_id
+    fake_db.status = "pending_review"
+    mock_repo.create.return_value = fake_db
+    return mock_repo
+
+
 # ============================================================================
 # 1. SCHEMA COMPLIANCE
 # ============================================================================
@@ -1059,7 +1073,7 @@ class TestApprovalWorkflow:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
 
         with (
@@ -1083,7 +1097,7 @@ class TestApprovalWorkflow:
             )
 
             assert needs_approval is False
-            db_obj = mock_session.add.call_args[0][0]
+            db_obj = mock_session.create.return_value
             assert db_obj.status == CreativeStatusEnum.approved.value
 
     def test_require_human_sets_pending_review(self):
@@ -1094,7 +1108,7 @@ class TestApprovalWorkflow:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "require-human", "slack_webhook_url": None}
 
         with (
@@ -1130,7 +1144,7 @@ class TestApprovalWorkflow:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         # Tenant WITHOUT approval_mode key -- orchestrator defaults to require-human
         tenant = {"tenant_id": "t1", "slack_webhook_url": None}
 
@@ -1155,7 +1169,7 @@ class TestApprovalWorkflow:
             )
 
             assert needs_approval is True
-            db_obj = mock_session.add.call_args[0][0]
+            db_obj = mock_session.create.return_value
             assert db_obj.status == CreativeStatusEnum.pending_review.value
 
     def test_ai_powered_defers_slack_notification(self):
@@ -1687,7 +1701,7 @@ class TestGenerativeCreativeBuild:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
@@ -1749,7 +1763,7 @@ class TestGenerativeCreativeBuild:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
@@ -1802,7 +1816,7 @@ class TestGenerativeCreativeBuild:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
@@ -1860,7 +1874,7 @@ class TestGenerativeCreativeBuild:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
@@ -1980,7 +1994,7 @@ class TestGenerativeCreativeBuild:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
@@ -2029,9 +2043,9 @@ class TestGenerativeCreativeBuild:
             assert action_val != "failed"
 
             # Verify user assets were preserved (not overwritten by generative output)
-            db_obj = mock_session.add.call_args[0][0]
+            create_kwargs = mock_session.create.call_args.kwargs
             # The data field should have the user's URL, not the generative one
-            assert db_obj.data.get("url") == "https://user.example.com/my-ad.png"
+            assert create_kwargs["data"].get("url") == "https://user.example.com/my-ad.png"
 
     def test_missing_gemini_key_fails_generative(self):
         """Generative creative without GEMINI_API_KEY configured fails with clear error.
@@ -2042,7 +2056,7 @@ class TestGenerativeCreativeBuild:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session, gemini_key=None)
 
@@ -3988,7 +4002,7 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
 
         # Create a format object that has agent_url but preview returns empty

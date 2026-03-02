@@ -15,7 +15,13 @@ Usage:
         # auto-commits on clean exit, rolls back on exception
 """
 
+from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.uow import MediaBuyUoW
 
-__all__ = ["MediaBuyRepository", "MediaBuyUoW"]
+__all__ = [
+    "CreativeAssignmentRepository",
+    "CreativeRepository",
+    "MediaBuyRepository",
+    "MediaBuyUoW",
+]

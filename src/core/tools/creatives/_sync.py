@@ -135,6 +135,10 @@ def _sync_creatives_impl(
     all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
 
     with get_db_session() as session:
+        from src.core.database.repositories.creative import CreativeRepository
+
+        creative_repo = CreativeRepository(session, tenant["tenant_id"])
+
         # Check if any product in this tenant requires AI provenance metadata
         from src.core.database.models import Product as DBProduct
 
@@ -207,14 +211,7 @@ def _sync_creatives_impl(
                     # Check if creative exists (read-only) to determine would-create vs would-update
                     existing_creative = None
                     if creative.creative_id:
-                        from src.core.database.models import Creative as DBCreative
-
-                        stmt = select(DBCreative).filter_by(
-                            tenant_id=tenant["tenant_id"],
-                            principal_id=principal_id,
-                            creative_id=creative.creative_id,
-                        )
-                        existing_creative = session.scalars(stmt).first()
+                        existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
 
                     if existing_creative:
                         updated_count += 1
@@ -251,21 +248,13 @@ def _sync_creatives_impl(
                     # SECURITY: Must filter by principal_id to prevent cross-principal modification
                     existing_creative = None
                     if creative.creative_id:
-                        from src.core.database.models import Creative as DBCreative
-
-                        # Query for existing creative with security filter
-                        stmt = select(DBCreative).filter_by(
-                            tenant_id=tenant["tenant_id"],
-                            principal_id=principal_id,  # SECURITY: Prevent cross-principal modification
-                            creative_id=creative.creative_id,
-                        )
-                        existing_creative = session.scalars(stmt).first()
+                        existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
 
                     if existing_creative:
                         update_result, needs_approval = _update_existing_creative(
                             creative=creative,
                             existing_creative=existing_creative,
-                            session=session,
+                            creative_repo=creative_repo,
                             format_value=format_value,
                             approval_mode=approval_mode,
                             tenant=tenant,
@@ -325,7 +314,7 @@ def _sync_creatives_impl(
                         # Create new creative
                         create_result, needs_approval = _create_new_creative(
                             creative=creative,
-                            session=session,
+                            creative_repo=creative_repo,
                             format_value=format_value,
                             approval_mode=approval_mode,
                             tenant=tenant,
@@ -398,19 +387,13 @@ def _sync_creatives_impl(
 
         # Archive creatives not in the sync payload when delete_missing=True
         if delete_missing:
-            from src.core.database.models import Creative as DBCreative
-
             # Collect all creative IDs from the payload (regardless of success/failure)
             payload_creative_ids = {_get_field(c, "creative_id") for c in creatives}
             payload_creative_ids.discard(None)
 
             # Query for existing creatives belonging to this tenant+principal
             # that are NOT in the payload and NOT already archived
-            stmt = select(DBCreative).filter_by(
-                tenant_id=tenant["tenant_id"],
-                principal_id=principal_id,
-            )
-            existing_creatives = session.scalars(stmt).all()
+            existing_creatives = creative_repo.list_by_principal(principal_id)
 
             for db_creative in existing_creatives:
                 if db_creative.creative_id not in payload_creative_ids and db_creative.status != "archived":

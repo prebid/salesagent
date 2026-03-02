@@ -1,10 +1,12 @@
 """Creative create/update logic: DB persistence, agent validation, preview extraction."""
 
+from __future__ import annotations
+
 import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from pydantic import BaseModel
@@ -15,13 +17,16 @@ from src.core.validation_helpers import run_async_in_sync_context
 
 from ._assets import _build_creative_data, _extract_url_from_assets
 
+if TYPE_CHECKING:
+    from src.core.database.repositories.creative import CreativeRepository
+
 logger = logging.getLogger(__name__)
 
 
 def _update_existing_creative(
     creative: CreativeAsset,
     existing_creative: Any,
-    session: Any,
+    creative_repo: CreativeRepository,
     format_value: Any,
     approval_mode: str,
     tenant: dict[str, Any],
@@ -40,7 +45,7 @@ def _update_existing_creative(
     Args:
         creative: CreativeAsset model from the sync payload.
         existing_creative: Existing DBCreative model to update (mutated in-place).
-        session: SQLAlchemy session for flush and flag_modified.
+        creative_repo: CreativeRepository for DB operations (flush, update_data).
         format_value: Validated FormatId from Creative schema.
         approval_mode: Tenant approval mode (auto-approve, ai-powered, require-human).
         tenant: Tenant dict with tenant_id, slack_webhook_url, etc.
@@ -109,7 +114,7 @@ def _update_existing_creative(
             task_id = f"ai_review_{existing_creative.creative_id}_{uuid.uuid4().hex[:8]}"
 
             # Need to flush to ensure creative_id is available
-            session.flush()
+            creative_repo.flush()
 
             # Import the async function
             from src.admin.blueprints.creatives import _ai_review_creative_async
@@ -429,12 +434,7 @@ def _update_existing_creative(
     # In full upsert, consider all fields as changed
     changes.extend(["url", "click_url", "width", "height", "duration"])
 
-    existing_creative.data = data
-
-    # Mark JSONB field as modified for SQLAlchemy
-    from sqlalchemy.orm import attributes
-
-    attributes.flag_modified(existing_creative, "data")
+    creative_repo.update_data(existing_creative, data)
 
     # Record result for updated creative
     action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
@@ -456,7 +456,7 @@ def _update_existing_creative(
 
 def _create_new_creative(
     creative: CreativeAsset,
-    session: Any,
+    creative_repo: CreativeRepository,
     format_value: Any,
     approval_mode: str,
     tenant: dict[str, Any],
@@ -477,7 +477,6 @@ def _create_new_creative(
     Returns:
         Tuple of (SyncCreativeResult, needs_approval).
     """
-    from src.core.database.models import Creative as DBCreative
 
     # Extract creative_id for error reporting (must be defined before any validation)
     creative_id = creative.creative_id or "unknown"
@@ -761,22 +760,16 @@ def _create_new_creative(
     # Use validated format_value (already auto-upgraded from string)
     format_info = _extract_format_info(format_value)
 
-    db_creative = DBCreative(
-        tenant_id=tenant["tenant_id"],
-        creative_id=creative.creative_id or str(uuid.uuid4()),
+    db_creative = creative_repo.create(
+        creative_id=creative.creative_id or None,
         name=creative.name,
         agent_url=format_info["agent_url"],
         format=format_info["format_id"],
-        # Cast TypedDict to dict for SQLAlchemy column type
         format_parameters=cast(dict | None, format_info["parameters"]),
         principal_id=principal_id,
         status=creative_status,
-        created_at=datetime.now(UTC),
         data=data,
     )
-
-    session.add(db_creative)
-    session.flush()  # Get the ID
 
     # Update creative_id if it was generated (i6k: model attribute assignment)
     if not creative.creative_id:
