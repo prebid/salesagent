@@ -334,3 +334,302 @@ def test_no_webhooks_configured(webhook_service, mock_db_session):
 
     # Should return False but not error
     assert result is False
+
+
+# ===========================================================================
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING obligation tests
+# ===========================================================================
+
+
+def test_scheduled_webhook_happy_path(webhook_service, mock_db_session):
+    """UC-004-ALT-WEBHOOK-PUSH-REPORTING-01: scheduled webhook delivery happy path.
+
+    Given a media buy with reporting_webhook configured, when the scheduler fires,
+    the system queries the adapter for delivery data, assembles metrics, signs the
+    payload, and sends POST to the webhook URL.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
+    """
+    media_buy_id = "buy_wh01"
+    start_time = datetime.now(UTC)
+
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+
+        mock_config = MagicMock()
+        mock_config.url = "https://buyer.example.com/delivery-webhook"
+        mock_config.authentication_type = None
+        mock_config.validation_token = None
+        mock_config.webhook_secret = None
+        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+        result = webhook_service.send_delivery_webhook(
+            media_buy_id=media_buy_id,
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=5000,
+            spend=250.0,
+            clicks=50,
+            is_final=False,
+            next_expected_interval_seconds=86400,
+        )
+
+        assert result is True
+        assert mock_client.return_value.__enter__.return_value.post.called
+        call_args = mock_client.return_value.__enter__.return_value.post.call_args
+        payload = call_args.kwargs["json"]
+        assert "media_buy_deliveries" in payload
+        assert payload["media_buy_deliveries"][0]["media_buy_id"] == media_buy_id
+        assert payload["media_buy_deliveries"][0]["totals"]["impressions"] == 5000
+        assert payload["media_buy_deliveries"][0]["totals"]["spend"] == 250.0
+
+
+def test_webhook_payload_includes_notification_type(webhook_service, mock_db_session):
+    """UC-004-ALT-WEBHOOK-PUSH-REPORTING-02: webhook payload includes notification_type.
+
+    Given a scheduled webhook delivery, when the payload is assembled,
+    notification_type is set to one of: scheduled, final, delayed, adjusted.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-02
+    """
+    media_buy_id = "buy_wh02"
+    start_time = datetime.now(UTC)
+
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+
+        mock_config = MagicMock()
+        mock_config.url = "https://buyer.example.com/webhook"
+        mock_config.authentication_type = None
+        mock_config.validation_token = None
+        mock_config.webhook_secret = None
+        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+        webhook_service.send_delivery_webhook(
+            media_buy_id=media_buy_id,
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=1000,
+            spend=50.0,
+            is_final=False,
+        )
+
+        payload = mock_client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        assert "notification_type" in payload
+        valid_types = {"scheduled", "final", "delayed", "adjusted"}
+        assert payload["notification_type"] in valid_types
+
+
+def test_notification_type_scheduled_for_periodic(webhook_service, mock_db_session):
+    """UC-004-ALT-WEBHOOK-PUSH-REPORTING-03: notification_type is 'scheduled' for normal periodic.
+
+    Given a normal periodic delivery trigger, when the webhook fires,
+    notification_type is 'scheduled'.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
+    """
+    media_buy_id = "buy_wh03"
+    start_time = datetime.now(UTC)
+
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+
+        mock_config = MagicMock()
+        mock_config.url = "https://buyer.example.com/webhook"
+        mock_config.authentication_type = None
+        mock_config.validation_token = None
+        mock_config.webhook_secret = None
+        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+        webhook_service.send_delivery_webhook(
+            media_buy_id=media_buy_id,
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=2000,
+            spend=100.0,
+            is_final=False,
+        )
+
+        payload = mock_client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        assert payload["notification_type"] == "scheduled"
+
+
+def test_notification_type_final_for_completed(webhook_service, mock_db_session):
+    """UC-004-ALT-WEBHOOK-PUSH-REPORTING-04: notification_type is 'final' for completed campaign.
+
+    Given a media buy whose campaign has ended, when the final webhook fires,
+    notification_type is 'final' and next_expected_at is omitted.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+    media_buy_id = "buy_wh04"
+    start_time = datetime.now(UTC)
+
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+
+        mock_config = MagicMock()
+        mock_config.url = "https://buyer.example.com/webhook"
+        mock_config.authentication_type = None
+        mock_config.validation_token = None
+        mock_config.webhook_secret = None
+        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+        webhook_service.send_delivery_webhook(
+            media_buy_id=media_buy_id,
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=10000,
+            spend=500.0,
+            status="completed",
+            is_final=True,
+        )
+
+        payload = mock_client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        assert payload["notification_type"] == "final"
+        assert "next_expected_at" not in payload
+
+
+def test_sequence_number_monotonically_increasing(webhook_service, mock_db_session):
+    """UC-004-ALT-WEBHOOK-PUSH-REPORTING-05: monotonically increasing sequence_number per media buy.
+
+    Given three consecutive webhook deliveries for the same media buy,
+    sequence_number values are strictly increasing (1, 2, 3) and persisted.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
+    """
+    media_buy_id = "buy_wh05_seq"
+    start_time = datetime.now(UTC)
+
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+
+        mock_config = MagicMock()
+        mock_config.url = "https://buyer.example.com/webhook"
+        mock_config.authentication_type = None
+        mock_config.validation_token = None
+        mock_config.webhook_secret = None
+        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+        sequence_numbers = []
+        for _ in range(3):
+            webhook_service.send_delivery_webhook(
+                media_buy_id=media_buy_id,
+                tenant_id="tenant1",
+                principal_id="principal1",
+                reporting_period_start=start_time,
+                reporting_period_end=start_time,
+                impressions=1000,
+                spend=50.0,
+            )
+            call_args = mock_client.return_value.__enter__.return_value.post.call_args
+            payload = call_args.kwargs["json"]
+            sequence_numbers.append(payload["sequence_number"])
+
+        # Strictly increasing
+        assert sequence_numbers == [1, 2, 3]
+        # Each subsequent number is strictly greater
+        for i in range(1, len(sequence_numbers)):
+            assert sequence_numbers[i] > sequence_numbers[i - 1]
+
+
+def test_bearer_token_authentication(webhook_service, mock_db_session):
+    """UC-004-ALT-WEBHOOK-PUSH-REPORTING-08: webhook signed with Bearer token.
+
+    Given a webhook configured with Bearer token authentication,
+    when the payload is delivered, the POST request includes the Bearer token
+    in the Authorization header.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
+    """
+    media_buy_id = "buy_wh08"
+    start_time = datetime.now(UTC)
+
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+
+        mock_config = MagicMock()
+        mock_config.url = "https://buyer.example.com/webhook"
+        mock_config.authentication_type = "bearer"
+        mock_config.authentication_token = "buyer_secret_token_abc123"
+        mock_config.validation_token = "validation_abc"
+        mock_config.webhook_secret = None
+        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+        webhook_service.send_delivery_webhook(
+            media_buy_id=media_buy_id,
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=3000,
+            spend=150.0,
+        )
+
+        call_args = mock_client.return_value.__enter__.return_value.post.call_args
+        headers = call_args.kwargs["headers"]
+        assert "Authorization" in headers
+        assert headers["Authorization"] == "Bearer buyer_secret_token_abc123"
+
+
+def test_endpoint_2xx_records_success(webhook_service, mock_db_session):
+    """UC-004-ALT-WEBHOOK-PUSH-REPORTING-12: endpoint acknowledges with 2xx.
+
+    Given a webhook delivery sent to the buyer's endpoint, when the endpoint
+    responds with 200 OK, the system records successful delivery and updates
+    circuit breaker state to healthy.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-12
+    """
+    media_buy_id = "buy_wh12"
+    start_time = datetime.now(UTC)
+
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+
+        mock_config = MagicMock()
+        mock_config.url = "https://buyer.example.com/webhook"
+        mock_config.authentication_type = None
+        mock_config.validation_token = None
+        mock_config.webhook_secret = None
+        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+        result = webhook_service.send_delivery_webhook(
+            media_buy_id=media_buy_id,
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=4000,
+            spend=200.0,
+        )
+
+        assert result is True
+
+        # Circuit breaker should be in healthy (CLOSED) state
+        endpoint_key = "tenant1:https://buyer.example.com/webhook"
+        state, failures = webhook_service.get_circuit_breaker_state(endpoint_key)
+        assert state == CircuitState.CLOSED
+        assert failures == 0

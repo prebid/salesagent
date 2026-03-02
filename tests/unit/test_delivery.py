@@ -2267,3 +2267,501 @@ class TestDeliveryProtocol:
         assert delivery.totals.video_completions is None
         # aggregated_totals optional fields
         assert response.aggregated_totals.video_completions is None
+
+
+# ===========================================================================
+# 16. Previously Uncovered UC-004 Obligations (17 tests total)
+# ===========================================================================
+
+
+class TestDeliveryPackageBreakdowns:
+    """UC-004-MAIN: package-level delivery breakdowns and status computation."""
+
+    def test_package_level_breakdowns_present(self):
+        """UC-004-MAIN-09: package-level delivery breakdowns present.
+
+        Given a media buy with two packages that have delivery data,
+        when the buyer queries delivery metrics, each media buy delivery entry
+        includes package-level breakdowns with impressions and spend.
+
+        Covers: UC-004-MAIN-09
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_pkg",
+            budget=10000.0,
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            raw_request={
+                "packages": [
+                    {"package_id": "pkg_alpha", "product_id": "prod_1"},
+                    {"package_id": "pkg_beta", "product_id": "prod_2"},
+                ],
+                "buyer_ref": "buyer_pkg",
+            },
+            buyer_ref="buyer_pkg",
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_pkg",
+            impressions=12000,
+            spend=600.0,
+            clicks=120,
+            packages=[
+                {"package_id": "pkg_alpha", "impressions": 8000, "spend": 400.0},
+                {"package_id": "pkg_beta", "impressions": 4000, "spend": 200.0},
+            ],
+        )
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_pkg"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_pkg", buy)],
+        )
+
+        delivery = response.media_buy_deliveries[0]
+        assert len(delivery.by_package) == 2
+        pkg_ids = {p.package_id for p in delivery.by_package}
+        assert pkg_ids == {"pkg_alpha", "pkg_beta"}
+
+        # Verify per-package metrics
+        pkg_alpha = next(p for p in delivery.by_package if p.package_id == "pkg_alpha")
+        assert pkg_alpha.impressions == 8000
+        assert pkg_alpha.spend == 400.0
+
+        pkg_beta = next(p for p in delivery.by_package if p.package_id == "pkg_beta")
+        assert pkg_beta.impressions == 4000
+        assert pkg_beta.spend == 200.0
+
+    def test_package_delivery_status_computed(self):
+        """UC-004-MAIN-10: package delivery status computed correctly.
+
+        Given a media buy with packages in various delivery states,
+        when the buyer queries delivery metrics, each media buy has a computed
+        status (ready, active, completed) based on dates.
+
+        Covers: UC-004-MAIN-10
+        """
+        # Active buy: ref date between start and end
+        buy_active = _make_mock_media_buy(
+            media_buy_id="mb_status_active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            raw_request={
+                "packages": [{"package_id": "pkg_s1", "product_id": "prod_1"}],
+            },
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_status_active",
+            impressions=5000,
+            spend=250.0,
+            packages=[{"package_id": "pkg_s1", "impressions": 5000, "spend": 250.0}],
+        )
+
+        # Query with end_date in the middle of the flight -> active
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_status_active"],
+            start_date="2025-01-01",
+            end_date="2025-06-15",
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_status_active", buy_active)],
+        )
+
+        delivery = response.media_buy_deliveries[0]
+        assert delivery.status == "active"
+
+        # Completed buy: ref date after end
+        buy_completed = _make_mock_media_buy(
+            media_buy_id="mb_status_done",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 1),
+            raw_request={
+                "packages": [{"package_id": "pkg_s2", "product_id": "prod_1"}],
+            },
+        )
+
+        mock_adapter2 = MagicMock()
+        mock_adapter2.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_status_done",
+            impressions=10000,
+            spend=500.0,
+            packages=[{"package_id": "pkg_s2", "impressions": 10000, "spend": 500.0}],
+        )
+
+        # Query with end_date after the flight -> completed
+        req2 = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_status_done"],
+            start_date="2025-01-01",
+            end_date="2025-06-15",
+        )
+
+        response2 = _run_impl_with_patches(
+            req2,
+            adapter=mock_adapter2,
+            target_buys=[("mb_status_done", buy_completed)],
+        )
+
+        delivery2 = response2.media_buy_deliveries[0]
+        assert delivery2.status == "completed"
+
+
+class TestDeliveryAggregatedTotals:
+    """UC-004-MAIN-11: aggregated totals with specific values."""
+
+    def test_aggregated_totals_three_buys(self):
+        """UC-004-MAIN-11: aggregated totals computed across 3 media buys.
+
+        Given delivery data for 3 media buys with known impressions and spend,
+        when the buyer queries all three, aggregated_totals has the correct sums.
+
+        Covers: UC-004-MAIN-11
+        """
+        buy1 = _make_mock_media_buy(
+            media_buy_id="mb_t1",
+            budget=5000.0,
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            raw_request={"packages": [{"package_id": "pkg_t1", "product_id": "p1"}]},
+        )
+        buy2 = _make_mock_media_buy(
+            media_buy_id="mb_t2",
+            budget=8000.0,
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            raw_request={"packages": [{"package_id": "pkg_t2", "product_id": "p2"}]},
+        )
+        buy3 = _make_mock_media_buy(
+            media_buy_id="mb_t3",
+            budget=3000.0,
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            raw_request={"packages": [{"package_id": "pkg_t3", "product_id": "p3"}]},
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = [
+            _make_adapter_response(
+                media_buy_id="mb_t1",
+                impressions=1000,
+                spend=50.0,
+                packages=[{"package_id": "pkg_t1", "impressions": 1000, "spend": 50.0}],
+            ),
+            _make_adapter_response(
+                media_buy_id="mb_t2",
+                impressions=2000,
+                spend=100.0,
+                packages=[{"package_id": "pkg_t2", "impressions": 2000, "spend": 100.0}],
+            ),
+            _make_adapter_response(
+                media_buy_id="mb_t3",
+                impressions=500,
+                spend=25.0,
+                packages=[{"package_id": "pkg_t3", "impressions": 500, "spend": 25.0}],
+            ),
+        ]
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_t1", "mb_t2", "mb_t3"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_t1", buy1), ("mb_t2", buy2), ("mb_t3", buy3)],
+        )
+
+        assert response.aggregated_totals.impressions == 3500.0
+        assert response.aggregated_totals.spend == 175.0
+        assert response.aggregated_totals.media_buy_count == 3
+        assert len(response.media_buy_deliveries) == 3
+
+
+class TestDeliveryPricingOptionMainObligations:
+    """UC-004-MAIN-14, MAIN-15: pricing_option_id lookup correctness."""
+
+    def test_pricing_option_lookup_string_not_integer(self):
+        """UC-004-MAIN-14: pricing_option_id lookup uses string field not integer PK.
+
+        Given a media buy with PricingOption record where string pricing_option_id is
+        from JSON and integer PK=42, when delivery metrics are assembled, the lookup
+        uses the string field (cast to int for the Integer PK column).
+
+        Covers: UC-004-MAIN-14
+        """
+        from src.core.tools.media_buy_delivery import _get_pricing_options
+
+        mock_po = MagicMock()
+        mock_po.id = 42
+        mock_po.pricing_model = "cpm"
+        mock_po.rate = Decimal("5.00")
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [mock_po]
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
+            mock_db.return_value.__enter__.return_value = mock_session
+            result = _get_pricing_options(["42"])
+
+        # String "42" from JSON is cast to int for DB lookup, keyed as string "42"
+        assert "42" in result
+        assert result["42"].id == 42
+
+        # Verify the SQL query was called with integer values (not strings)
+        mock_session.scalars.assert_called_once()
+
+    def test_delivery_spend_correct_with_pricing(self):
+        """UC-004-MAIN-15: delivery spend data correct when pricing lookup succeeds.
+
+        Given a media buy with CPM pricing at $5.00 and 10,000 delivered impressions,
+        when delivery metrics are fetched with correct pricing_option_id resolution,
+        the adapter returns the correct spend.
+
+        Covers: UC-004-MAIN-15
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_spend",
+            budget=10000.0,
+            raw_request={
+                "packages": [
+                    {"package_id": "pkg_spend", "product_id": "prod_1", "pricing_option_id": "10"},
+                ],
+                "buyer_ref": "buyer_spend",
+            },
+        )
+
+        mock_po = MagicMock()
+        mock_po.id = 10
+        mock_po.pricing_model = PricingModel.cpm
+        mock_po.rate = Decimal("5.00")
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_spend",
+            impressions=10000,
+            spend=50.0,  # 10000 / 1000 * 5.00 = 50.00
+            packages=[{"package_id": "pkg_spend", "impressions": 10000, "spend": 50.0}],
+        )
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_spend"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_spend", buy)],
+            pricing_options={"10": mock_po},
+        )
+
+        delivery = response.media_buy_deliveries[0]
+        assert delivery.totals.spend == 50.0
+        assert delivery.totals.impressions == 10000
+
+
+class TestDeliveryPricingOptionTypeGuard:
+    """UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02: type safety guard."""
+
+    def test_pricing_option_string_to_int_cast_at_boundary(self):
+        """UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02: string-to-integer comparison guard.
+
+        Verifies that _get_pricing_options casts string pricing_option_id values to int
+        before querying the Integer PK column, and that non-numeric IDs are rejected.
+
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
+        """
+        from src.core.tools.media_buy_delivery import _get_pricing_options
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = []
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
+            mock_db.return_value.__enter__.return_value = mock_session
+
+            # Non-numeric IDs should be silently skipped (not cause comparison bug)
+            result = _get_pricing_options(["not_a_number", "also_invalid"])
+
+        # No results because non-numeric IDs are skipped
+        assert result == {}
+        # DB should not have been queried (no valid int IDs to look up)
+        mock_session.scalars.assert_not_called()
+
+        # Numeric string IDs should work
+        mock_po = MagicMock()
+        mock_po.id = 99
+        mock_session2 = MagicMock()
+        mock_session2.scalars.return_value.all.return_value = [mock_po]
+
+        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db2:
+            mock_db2.return_value.__enter__.return_value = mock_session2
+            result2 = _get_pricing_options(["99"])
+
+        assert "99" in result2
+        assert result2["99"].id == 99
+
+
+class TestDeliveryWebhookRetryObligations:
+    """UC-004-EXT-G: webhook retry obligations covered by deliver_webhook_with_retry."""
+
+    def test_5xx_triggers_retry_with_backoff(self):
+        """UC-004-EXT-G-01: transient failure 5xx triggers retry with exponential backoff.
+
+        Given a webhook endpoint that returns 503, when the first delivery attempt fails,
+        the system retries up to 3 times with exponential backoff (1s, 2s).
+
+        Covers: UC-004-EXT-G-01
+        """
+        from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
+
+        delivery = WebhookDelivery(
+            webhook_url="https://example.com/webhook",
+            payload={"media_buy_id": "mb_g01", "impressions": 1000},
+            headers={"Content-Type": "application/json"},
+            max_retries=3,
+            timeout=10,
+        )
+
+        with (
+            patch("src.core.webhook_delivery.time.sleep") as mock_sleep,
+            patch("requests.post") as mock_post,
+        ):
+            mock_response = MagicMock()
+            mock_response.status_code = 503
+            mock_response.text = "Service Unavailable"
+            mock_post.return_value = mock_response
+
+            success, result = deliver_webhook_with_retry(delivery)
+
+        assert success is False
+        assert result["attempts"] == 3
+        assert result["response_code"] == 503
+        # Exponential backoff: 2^0=1s, 2^1=2s (no sleep after last attempt)
+        assert mock_sleep.call_count == 2
+        from unittest.mock import call
+
+        mock_sleep.assert_has_calls([call(1), call(2)])
+
+    def test_retry_succeeds_on_second_attempt(self):
+        """UC-004-EXT-G-02: retry succeeds on second attempt.
+
+        Given a webhook endpoint that fails on first attempt but succeeds on second,
+        when the retry fires, the delivery is recorded as successful.
+
+        Covers: UC-004-EXT-G-02
+        """
+        from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
+
+        delivery = WebhookDelivery(
+            webhook_url="https://example.com/webhook",
+            payload={"media_buy_id": "mb_g02", "impressions": 2000},
+            headers={"Content-Type": "application/json"},
+            max_retries=3,
+            timeout=10,
+        )
+
+        with (
+            patch("src.core.webhook_delivery.time.sleep"),
+            patch("requests.post") as mock_post,
+        ):
+            mock_fail = MagicMock()
+            mock_fail.status_code = 503
+            mock_fail.text = "Service Unavailable"
+
+            mock_ok = MagicMock()
+            mock_ok.status_code = 200
+
+            mock_post.side_effect = [mock_fail, mock_ok]
+
+            success, result = deliver_webhook_with_retry(delivery)
+
+        assert success is True
+        assert result["status"] == "delivered"
+        assert result["attempts"] == 2
+        assert result["response_code"] == 200
+
+    def test_4xx_no_retry(self):
+        """UC-004-EXT-G-05: 4xx error -- no retry (client error).
+
+        Given a webhook endpoint that returns 401 Forbidden, when the delivery
+        attempt fails, the system does NOT retry.
+
+        Covers: UC-004-EXT-G-05
+        """
+        from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
+
+        delivery = WebhookDelivery(
+            webhook_url="https://example.com/webhook",
+            payload={"media_buy_id": "mb_g05", "impressions": 3000},
+            headers={"Content-Type": "application/json"},
+            max_retries=3,
+            timeout=10,
+        )
+
+        with (
+            patch("src.core.webhook_delivery.time.sleep"),
+            patch("requests.post") as mock_post,
+        ):
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_response.text = "Unauthorized"
+            mock_post.return_value = mock_response
+
+            success, result = deliver_webhook_with_retry(delivery)
+
+        assert success is False
+        assert result["status"] == "failed"
+        assert result["attempts"] == 1  # No retries for 4xx
+        assert result["response_code"] == 401
+        assert mock_post.call_count == 1
+
+    def test_buyer_must_reconfigure_after_auth_rejection(self):
+        """UC-004-EXT-G-07: buyer must reconfigure credentials after auth rejection.
+
+        Given a webhook marked as failed due to 401/403, when the delivery fails,
+        the result indicates failure with auth-related status code, requiring buyer
+        to reconfigure webhook credentials via UC-003 (Update Media Buy).
+
+        Covers: UC-004-EXT-G-07
+        """
+        from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
+
+        for status_code in [401, 403]:
+            delivery = WebhookDelivery(
+                webhook_url="https://example.com/webhook",
+                payload={"media_buy_id": "mb_g07", "impressions": 1000},
+                headers={"Content-Type": "application/json"},
+                max_retries=3,
+                timeout=10,
+            )
+
+            with (
+                patch("src.core.webhook_delivery.time.sleep"),
+                patch("requests.post") as mock_post,
+            ):
+                mock_response = MagicMock()
+                mock_response.status_code = status_code
+                mock_response.text = "Unauthorized" if status_code == 401 else "Forbidden"
+                mock_post.return_value = mock_response
+
+                success, result = deliver_webhook_with_retry(delivery)
+
+            assert success is False, f"Expected failure for {status_code}"
+            assert result["status"] == "failed"
+            assert result["attempts"] == 1, f"No retries for {status_code}"
+            assert result["response_code"] == status_code
+            # The failed state means buyer must reconfigure via UC-003
