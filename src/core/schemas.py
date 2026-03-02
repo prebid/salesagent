@@ -714,9 +714,8 @@ class Format(LibraryFormat):
             Tuple of (width, height) in pixels, or None if not available.
         """
         # Try format_id parameters first (AdCP 2.5 parameterized formats)
-        dims = self.format_id.get_dimensions()  # type: ignore[attr-defined]  # our FormatId subclass
-        if dims is not None:
-            return dims
+        if self.format_id.width is not None and self.format_id.height is not None:
+            return (self.format_id.width, self.format_id.height)
 
         # Try renders field (AdCP spec - renders is list of Render objects)
         if self.renders and len(self.renders) > 0:
