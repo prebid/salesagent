@@ -51,7 +51,7 @@ KNOWN_VIOLATIONS = {
     ("media_buy_update.py", 1193),  # response_data.model_dump()
     ("media_buy_update.py", 1255),  # final_response.model_dump()
     # _get_products_impl: 1 violation (logging)
-    ("products.py", 640),  # req.filters.model_dump() in logger.info
+    ("products.py", 641),  # req.filters.model_dump() in logger.info
     # _list_creatives_impl: 1 violation (filter dict conversion)
     ("creatives/listing.py", 151),  # filters.model_dump(exclude_none=True)
 }

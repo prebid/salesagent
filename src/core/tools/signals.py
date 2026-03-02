@@ -221,7 +221,7 @@ async def _activate_signal_impl(
 
     # Apply testing hooks
     if not identity:
-        raise AdCPValidationError("Context required for signal activation")
+        raise AdCPValidationError("Context required for signal activation", recovery="terminal")
     testing_ctx = identity.testing_context if identity else AdCPTestContext()
     campaign_info = {"endpoint": "activate_signal", "signal_id": signal_agent_segment_id}
     # Note: apply_testing_hooks modifies response data dict, not called here as no response yet

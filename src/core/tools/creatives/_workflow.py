@@ -46,7 +46,7 @@ def _create_sync_workflow_steps(
     )
 
     if persistent_ctx is None:
-        raise AdCPAdapterError("Failed to create workflow context")
+        raise AdCPAdapterError("Failed to create workflow context", recovery="terminal")
 
     with get_db_session() as session:
         for creative_info in creatives_needing_approval:
