@@ -774,7 +774,12 @@ class TestCrossPrincipalIsolation:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_repo = MagicMock()
+        # Make create() return a fake DB object with the expected attributes
+        fake_db_creative = MagicMock()
+        fake_db_creative.creative_id = "test-creative-1"
+        fake_db_creative.status = "approved"
+        mock_repo.create.return_value = fake_db_creative
         creative = _make_creative_asset()
         format_value = _format_id()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
@@ -792,7 +797,7 @@ class TestCrossPrincipalIsolation:
             creative = _make_creative_asset()
             result, needs_approval = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_repo,
                 format_value=format_value,
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -803,11 +808,10 @@ class TestCrossPrincipalIsolation:
                 principal_id="principal_42",
             )
 
-            # Verify DB model was created with correct principal_id
-            add_call = mock_session.add.call_args
-            assert add_call is not None
-            db_obj = add_call[0][0]
-            assert db_obj.principal_id == "principal_42"
+            # Verify repository create was called with correct principal_id
+            create_call = mock_repo.create.call_args
+            assert create_call is not None
+            assert create_call.kwargs["principal_id"] == "principal_42"
 
 
 # ============================================================================
@@ -1067,7 +1071,7 @@ class TestApprovalWorkflow:
             creative = _make_creative_asset()
             result, needs_approval = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -1102,7 +1106,7 @@ class TestApprovalWorkflow:
             creative = _make_creative_asset()
             result, needs_approval = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="require-human",
                 tenant=tenant,
@@ -1139,7 +1143,7 @@ class TestApprovalWorkflow:
             creative = _make_creative_asset()
             result, needs_approval = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="require-human",  # This is what the orchestrator passes
                 tenant=tenant,
@@ -1716,7 +1720,7 @@ class TestGenerativeCreativeBuild:
             )
             result, _ = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -1772,7 +1776,7 @@ class TestGenerativeCreativeBuild:
             creative = _make_creative_asset(assets={"brief": {"content": "Shoes ad brief"}})
             result, _ = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -1830,7 +1834,7 @@ class TestGenerativeCreativeBuild:
 
             result, _ = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -1887,7 +1891,7 @@ class TestGenerativeCreativeBuild:
 
             result, _ = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -1949,7 +1953,7 @@ class TestGenerativeCreativeBuild:
             result, _ = _update_existing_creative(
                 creative=creative,
                 existing_creative=mock_existing,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -2008,7 +2012,7 @@ class TestGenerativeCreativeBuild:
 
             result, _ = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -2058,7 +2062,7 @@ class TestGenerativeCreativeBuild:
             )
             result, _ = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -2528,7 +2532,7 @@ class TestCreativePreviewFailed:
 
             result, needs_approval = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=format_value,
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -3676,7 +3680,7 @@ class TestSyncCreativesMainFlowGaps:
             result, _ = _update_existing_creative(
                 creative=creative,
                 existing_creative=mock_existing,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=format_value,
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -4009,7 +4013,7 @@ class TestExtensionGaps:
             creative = _make_creative_asset()
             result, _ = _create_new_creative(
                 creative=creative,
-                session=mock_session,
+                creative_repo=mock_session,
                 format_value=_format_id(),
                 approval_mode="auto-approve",
                 tenant=tenant,
@@ -4879,3 +4883,104 @@ class TestProvenanceValidation:
         warning = check_provenance_required(creative, policy)
         assert warning is not None
         assert "provenance metadata is required" in warning
+
+
+# ============================================================================
+# 33. TYPED CREATIVE ASSIGNMENTS (salesagent-e5ao)
+# ============================================================================
+
+
+class TestTypedCreativeAssignments:
+    """Verify wire-facing schemas use typed list[CreativeAssignment], not dict.
+
+    Spec: CONFIRMED -- package.json and package-update.json define
+    creative_assignments as array of creative-assignment objects (creative_id,
+    placement_ids, weight), never as dict[str, list[str]].
+
+    salesagent-e5ao removed the legacy untyped LegacyUpdateMediaBuyRequest
+    and consolidated the in-memory dict to use typed CreativeAssignment.
+    """
+
+    def test_package_creative_assignments_is_typed_list(self):
+        """Package.creative_assignments accepts list[CreativeAssignment] objects.
+
+        Spec: CONFIRMED -- package.json creative_assignments is array of
+        creative-assignment objects.
+        Covers: salesagent-e5ao-01
+        """
+        from adcp.types import CreativeAssignment as LibraryCreativeAssignment
+
+        from src.core.schemas import Package
+
+        pkg = Package(
+            package_id="pkg_1",
+            creative_assignments=[
+                LibraryCreativeAssignment(creative_id="c_1", weight=70.0),
+                LibraryCreativeAssignment(creative_id="c_2", weight=30.0, placement_ids=["atf"]),
+            ],
+        )
+        data = pkg.model_dump()
+        assert isinstance(data["creative_assignments"], list)
+        assert len(data["creative_assignments"]) == 2
+        assert data["creative_assignments"][0]["creative_id"] == "c_1"
+        assert data["creative_assignments"][1]["placement_ids"] == ["atf"]
+
+    def test_adcp_package_update_creative_assignments_is_typed_list(self):
+        """AdCPPackageUpdate.creative_assignments accepts list[CreativeAssignment].
+
+        Spec: CONFIRMED -- package-update.json creative_assignments uses
+        replacement semantics with typed objects.
+        Covers: salesagent-e5ao-02
+        """
+        from adcp.types import CreativeAssignment as LibraryCreativeAssignment
+
+        from src.core.schemas._base import AdCPPackageUpdate
+
+        pkg_update = AdCPPackageUpdate(
+            package_id="pkg_1",
+            creative_assignments=[
+                LibraryCreativeAssignment(creative_id="c_1", weight=50.0),
+            ],
+        )
+        data = pkg_update.model_dump(exclude_none=True)
+        assert isinstance(data["creative_assignments"], list)
+        assert data["creative_assignments"][0]["creative_id"] == "c_1"
+        assert data["creative_assignments"][0]["weight"] == 50.0
+
+    def test_legacy_update_media_buy_request_removed(self):
+        """LegacyUpdateMediaBuyRequest (dict[str, list[str]]) is removed.
+
+        The legacy class used untyped dict[str, list[str]] for
+        creative_assignments which contradicted the AdCP spec.
+        It was dead code (never imported or used) and has been deleted.
+        Covers: salesagent-e5ao-03
+        """
+        import src.core.schemas._base as base_module
+
+        assert not hasattr(base_module, "LegacyUpdateMediaBuyRequest"), (
+            "LegacyUpdateMediaBuyRequest should be removed — it used untyped "
+            "dict[str, list[str]] for creative_assignments"
+        )
+
+    def test_in_memory_assignments_dict_is_typed(self):
+        """In-memory creative_assignments dict values are CreativeAssignment.
+
+        The module-level dict was consolidated from two dicts (untyped v1 +
+        typed v2) into a single typed dict[str, CreativeAssignment].
+        Covers: salesagent-e5ao-04
+        """
+        import typing
+
+        import src.core.main as main_module
+
+        # Verify the dict exists and is typed
+        assert hasattr(main_module, "creative_assignments")
+        hints = typing.get_type_hints(main_module)
+        ca_type = hints.get("creative_assignments")
+        # Should be dict[str, CreativeAssignment], not dict[str, dict[str, list[str]]]
+        assert ca_type is not None
+        origin = typing.get_origin(ca_type)
+        assert origin is dict
+        args = typing.get_args(ca_type)
+        assert args[0] is str
+        assert args[1] is CreativeAssignment

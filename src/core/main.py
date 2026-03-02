@@ -148,13 +148,11 @@ creative_engine = MockCreativeEngine(creative_engine_config)
 
 
 # --- In-Memory State ---
-creative_assignments: dict[str, dict[str, list[str]]] = {}
 creative_statuses: dict[str, CreativeStatus] = {}
 product_catalog: list[Product] = []
 creative_library: dict[str, Creative] = {}  # creative_id -> Creative
 creative_groups: dict[str, CreativeGroup] = {}  # group_id -> CreativeGroup
-creative_assignments_v2: dict[str, CreativeAssignment] = {}  # assignment_id -> CreativeAssignment
-# REMOVED: human_tasks dictionary - now using direct database queries only
+creative_assignments: dict[str, CreativeAssignment] = {}  # assignment_id -> CreativeAssignment
 
 # Authentication cache removed - FastMCP v2.11.0+ properly forwards headers
 

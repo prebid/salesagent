@@ -1888,15 +1888,6 @@ class CheckMediaBuyStatusResponse(SalesAgentBaseModel):
     creative_count: int = 0
 
 
-class LegacyUpdateMediaBuyRequest(SalesAgentBaseModel):
-    """Legacy update request - kept for backward compatibility."""
-
-    media_buy_id: str
-    new_budget: float | None = None
-    new_targeting_overlay: Targeting | None = None
-    creative_assignments: dict[str, list[str]] | None = None
-
-
 class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
     """Request delivery data for one or more media buys.
 
