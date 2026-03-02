@@ -544,7 +544,7 @@ class GAMOrdersDiscovery:
                         order_id = "unknown"
                         try:
                             order_id = str(getattr(gam_order, "id", "unknown"))
-                        except:
+                        except Exception:
                             pass
                         logger.error(f"Error processing order {order_id}: {e}")
                         continue
@@ -600,7 +600,7 @@ class GAMOrdersDiscovery:
                         li_id = "unknown"
                         try:
                             li_id = str(getattr(gam_line_item, "id", "unknown"))
-                        except:
+                        except Exception:
                             pass
                         logger.error(f"Error processing line item {li_id}: {e}")
                         continue

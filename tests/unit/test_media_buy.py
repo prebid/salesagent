@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -2727,7 +2727,7 @@ class TestUpdateMediaBuyOwnership:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            with pytest.raises(PermissionError, match="(?i)does not own"):
+            with pytest.raises(AdCPAuthorizationError, match="(?i)does not own"):
                 _update_media_buy_impl(req=req, identity=identity)
 
 

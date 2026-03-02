@@ -2228,7 +2228,7 @@ def delete_product(tenant_id, product_id):
         # Rollback on any error
         try:
             db_session.rollback()
-        except:
+        except Exception:
             pass
 
         # More specific error handling

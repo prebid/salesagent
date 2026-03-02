@@ -655,7 +655,7 @@ def get_sync_status(tenant_id, sync_id):
             if sync_job.summary:
                 try:
                     response["summary"] = json.loads(sync_job.summary)
-                except:
+                except Exception:
                     response["summary"] = sync_job.summary
 
             if sync_job.error_message:

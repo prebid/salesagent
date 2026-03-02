@@ -210,7 +210,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
                 sync_job.completed_at = datetime.now(UTC)
                 sync_job.error_message = str(e)
                 db_session.commit()
-            except:
+            except Exception:
                 pass  # Ignore secondary errors in error handling
 
             return jsonify({"sync_id": sync_id, "status": "failed", "error": str(e)}), 500

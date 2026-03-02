@@ -19,7 +19,7 @@ from pydantic import RootModel, ValidationError
 from rich.console import Console
 from sqlalchemy import select
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -559,7 +559,7 @@ def _require_admin(context: Context) -> None:
     """Verify the request is from an admin user."""
     principal_id = get_principal_id_from_context(context)
     if principal_id != "admin":
-        raise PermissionError("This operation requires admin privileges")
+        raise AdCPAuthorizationError("This operation requires admin privileges")
 
 
 def _resolve_delivery_status_filter(

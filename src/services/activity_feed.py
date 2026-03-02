@@ -34,7 +34,7 @@ class ActivityFeed:
         for activity in self.recent_activities[tenant_id]:
             try:
                 asyncio.create_task(websocket.send(json.dumps(activity)))
-            except:
+            except Exception:
                 pass
 
     def remove_connection(self, tenant_id: str, websocket):
@@ -200,7 +200,7 @@ class ActivityFeed:
                 return f"{delta.seconds // 60}m ago"
             else:
                 return "Just now"
-        except:
+        except Exception:
             return "Unknown"
 
 
