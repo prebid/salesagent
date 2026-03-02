@@ -2765,3 +2765,91 @@ class TestDeliveryWebhookRetryObligations:
             assert result["attempts"] == 1, f"No retries for {status_code}"
             assert result["response_code"] == status_code
             # The failed state means buyer must reconfigure via UC-003
+
+
+# ===========================================================================
+# Regression: outer exception handler must skip failed buy, not crash request
+# ===========================================================================
+
+
+class TestOuterExceptionHandlerSkipsBuy:
+    """Regression for salesagent-j2ai: raise e in outer except block.
+
+    media_buy_delivery.py has two try/except blocks per buy:
+    - Inner (line ~242): catches adapter call errors → returns error response
+    - Outer (line ~414): catches everything else in the per-buy loop
+
+    Bug: Yusufbek added 'raise e' at line 415 (commit 832beabc) as a debug aid.
+    This makes the outer handler re-raise instead of logging and continuing.
+    When a non-adapter error occurs (e.g., corrupted buy data), the entire
+    request crashes instead of skipping that buy and processing the rest.
+    """
+
+    def test_corrupted_buy_skipped_healthy_buy_still_returned(self):
+        """Outer handler logs error and continues to next buy.
+
+        Two buys: one with corrupted start_date (triggers TypeError in status
+        computation), one healthy. The healthy buy must still appear in the
+        response. Before the fix, raise e would crash the entire request.
+        """
+        # Corrupted buy: start_date is a string, not a date object.
+        # Status computation does `simulation_datetime.date() < buy_start_date`
+        # which raises TypeError when comparing date to str.
+        bad_buy = _make_mock_media_buy(media_buy_id="mb_bad")
+        bad_buy.start_date = "not-a-date"  # triggers TypeError in status computation
+
+        good_buy = _make_mock_media_buy(
+            media_buy_id="mb_good",
+            budget=5000.0,
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            raw_request={
+                "packages": [{"package_id": "pkg_1", "product_id": "prod_1"}],
+                "buyer_ref": "buyer_1",
+            },
+            buyer_ref="buyer_1",
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_good",
+            impressions=1000,
+            spend=50.0,
+            clicks=10,
+        )
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_bad", "mb_good"],
+            start_date="2025-01-01",
+            end_date="2025-12-31",
+        )
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_bad", bad_buy), ("mb_good", good_buy)],
+        )
+
+        # The healthy buy must be in the response
+        assert len(response.media_buy_deliveries) >= 1
+        delivered_ids = [d.media_buy_id for d in response.media_buy_deliveries]
+        assert "mb_good" in delivered_ids
+        # The corrupted buy must NOT be in the deliveries
+        assert "mb_bad" not in delivered_ids
+
+    def test_corrupted_buy_error_is_logged(self):
+        """Outer handler logs the error for the corrupted buy."""
+        bad_buy = _make_mock_media_buy(media_buy_id="mb_log_outer")
+        bad_buy.start_date = "not-a-date"
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_log_outer"])
+
+        with patch(f"{_PATCH_PREFIX}.logger") as mock_logger:
+            _run_impl_with_patches(
+                req,
+                target_buys=[("mb_log_outer", bad_buy)],
+            )
+
+        mock_logger.error.assert_called()
+        log_msg = mock_logger.error.call_args[0][0]
+        assert "mb_log_outer" in log_msg
