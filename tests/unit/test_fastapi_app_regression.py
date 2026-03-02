@@ -206,6 +206,27 @@ class TestHostnameValidation:
         assert "passwd" not in card.get("url", "")
         assert "../../" not in card.get("url", "")
 
+    def test_agent_card_ignores_invalid_host_header(self):
+        """Agent card falls back to default URL when Host header is invalid (salesagent-4r0m)."""
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        client = TestClient(app)
+
+        response = client.get(
+            "/.well-known/agent-card.json",
+            headers={
+                "Host": "evil.com/../../etc/passwd",
+            },
+        )
+
+        assert response.status_code == 200
+        card = response.json()
+        # URL should NOT contain the injected path
+        assert "passwd" not in card.get("url", "")
+        assert "../../" not in card.get("url", "")
+
 
 # ---------------------------------------------------------------------------
 # salesagent-agmq [P0]: Debug endpoints gated behind ADCP_TESTING
