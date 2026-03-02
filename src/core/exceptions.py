@@ -112,7 +112,7 @@ class AdCPRateLimitError(AdCPError):
     """Too many requests (429)."""
 
     status_code = 429
-    error_code = "RATE_LIMITED"
+    error_code = "RATE_LIMIT_EXCEEDED"
     recovery: RecoveryHint = "transient"
 
 

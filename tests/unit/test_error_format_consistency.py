@@ -570,7 +570,7 @@ class TestMCPRecoveryInErrorResponses:
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
             ("AdCPGoneError", "expired", "GONE", "terminal"),
             ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "terminal"),
-            ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
+            ("AdCPRateLimitError", "slow down", "RATE_LIMIT_EXCEEDED", "transient"),
             ("AdCPAdapterError", "GAM down", "ADAPTER_ERROR", "transient"),
             ("AdCPServiceUnavailableError", "offline", "SERVICE_UNAVAILABLE", "transient"),
         ],
@@ -709,3 +709,111 @@ class TestRecoveryOverrideInSerialization:
 
         code, message, recovery = extract_error_info(exc_info.value)
         assert recovery == "terminal"  # Custom, not default "transient"
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary consistency: error_codes match adcp-req canonical vocabulary
+# ---------------------------------------------------------------------------
+
+
+class TestErrorCodeVocabularyConsistency:
+    """Validate error_code strings against adcp-req ERROR_CODE_VOCABULARY.md.
+
+    The canonical vocabulary is defined in:
+    /docs/requirements/ERROR_CODE_VOCABULARY.md (adcp-req repo)
+
+    Our exception hierarchy must use canonical codes where the spec defines them.
+    Salesagent-specific codes (INTERNAL_ERROR, AUTHENTICATION_ERROR, etc.) are
+    allowed as vocabulary extensions but must be explicitly declared.
+    """
+
+    # Canonical codes from adcp-req spec + salesagent extensions
+    CANONICAL_ERROR_CODES = {
+        "INTERNAL_ERROR",  # HTTP 500 catch-all (salesagent extension)
+        "VALIDATION_ERROR",  # adcp-req: Generic Errors
+        "AUTHENTICATION_ERROR",  # HTTP 401 (salesagent extension)
+        "AUTHORIZATION_ERROR",  # HTTP 403 (salesagent extension)
+        "NOT_FOUND",  # Generic form of {ENTITY}_NOT_FOUND
+        "CONFLICT",  # Generic form of {ENTITY}_EXISTS
+        "GONE",  # HTTP 410 (salesagent extension)
+        "BUDGET_EXHAUSTED",  # HTTP 422 (salesagent extension)
+        "RATE_LIMIT_EXCEEDED",  # adcp-req: Rate Limiting / Quota Errors
+        "ADAPTER_ERROR",  # HTTP 502 (salesagent extension)
+        "SERVICE_UNAVAILABLE",  # adcp-req: Service/Infrastructure Errors
+    }
+
+    def test_all_exception_error_codes_are_canonical(self):
+        """Every AdCPError subclass error_code must be in the canonical vocabulary."""
+        from src.core.exceptions import (
+            AdCPAdapterError,
+            AdCPAuthenticationError,
+            AdCPAuthorizationError,
+            AdCPBudgetExhaustedError,
+            AdCPConflictError,
+            AdCPError,
+            AdCPGoneError,
+            AdCPNotFoundError,
+            AdCPRateLimitError,
+            AdCPServiceUnavailableError,
+            AdCPValidationError,
+        )
+
+        exception_classes = [
+            AdCPError,
+            AdCPValidationError,
+            AdCPAuthenticationError,
+            AdCPAuthorizationError,
+            AdCPNotFoundError,
+            AdCPConflictError,
+            AdCPGoneError,
+            AdCPBudgetExhaustedError,
+            AdCPRateLimitError,
+            AdCPAdapterError,
+            AdCPServiceUnavailableError,
+        ]
+
+        for exc_class in exception_classes:
+            code = exc_class.error_code
+            assert code in self.CANONICAL_ERROR_CODES, (
+                f"{exc_class.__name__}.error_code = {code!r} is not in the canonical vocabulary. "
+                f"If this is a new code, add it to CANONICAL_ERROR_CODES with a comment. "
+                f"If this is a renamed code, update the exception class."
+            )
+
+    def test_rate_limit_uses_canonical_code(self):
+        """AdCPRateLimitError must use RATE_LIMIT_EXCEEDED (not RATE_LIMITED).
+
+        adcp-req ERROR_CODE_VOCABULARY.md defines RATE_LIMIT_EXCEEDED as canonical.
+        RATE_LIMITED and THROTTLED are anti-patterns.
+        """
+        from src.core.exceptions import AdCPRateLimitError
+
+        assert AdCPRateLimitError.error_code == "RATE_LIMIT_EXCEEDED", (
+            f"AdCPRateLimitError.error_code = {AdCPRateLimitError.error_code!r}, "
+            f"expected 'RATE_LIMIT_EXCEEDED' per adcp-req vocabulary"
+        )
+
+    def test_canonical_vocabulary_covers_all_subclasses(self):
+        """CANONICAL_ERROR_CODES must have exactly one entry per exception subclass."""
+        from src.core.exceptions import AdCPError
+
+        # Discover all concrete subclasses
+        subclass_codes = set()
+        for cls in AdCPError.__subclasses__():
+            subclass_codes.add(cls.error_code)
+        # Include the base class
+        subclass_codes.add(AdCPError.error_code)
+
+        # Every subclass code must be in canonical set
+        missing = subclass_codes - self.CANONICAL_ERROR_CODES
+        assert not missing, (
+            f"Exception error_codes not in CANONICAL_ERROR_CODES: {missing}. "
+            f"Add them to the canonical set or fix the error_code."
+        )
+
+        # Every canonical code must correspond to a subclass
+        unused = self.CANONICAL_ERROR_CODES - subclass_codes
+        assert not unused, (
+            f"CANONICAL_ERROR_CODES entries without a matching exception: {unused}. "
+            f"Remove stale entries or create the missing exception class."
+        )

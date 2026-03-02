@@ -131,7 +131,7 @@ class TestExtractErrorInfoAdCPError:
 
         exc = AdCPRateLimitError("too fast")
         code, message, recovery = extract_error_info(exc)
-        assert code == "RATE_LIMITED"
+        assert code == "RATE_LIMIT_EXCEEDED"
         assert message == "too fast"
         assert recovery == "transient"
 
@@ -725,7 +725,7 @@ class TestRecoveryRoundtrip:
             (AdCPConflictError, "dup", "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", "GONE", "terminal"),
             (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "terminal"),
-            (AdCPRateLimitError, "slow", "RATE_LIMITED", "transient"),
+            (AdCPRateLimitError, "slow", "RATE_LIMIT_EXCEEDED", "transient"),
             (AdCPAdapterError, "down", "ADAPTER_ERROR", "transient"),
             (AdCPServiceUnavailableError, "offline", "SERVICE_UNAVAILABLE", "transient"),
         ]
@@ -841,7 +841,7 @@ class TestRecoveryRoundtrip:
             (AdCPConflictError, "dup", 409, "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", 410, "GONE", "terminal"),
             (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "terminal"),
-            (AdCPRateLimitError, "slow", 429, "RATE_LIMITED", "transient"),
+            (AdCPRateLimitError, "slow", 429, "RATE_LIMIT_EXCEEDED", "transient"),
             (AdCPAdapterError, "down", 502, "ADAPTER_ERROR", "transient"),
             (AdCPServiceUnavailableError, "offline", 503, "SERVICE_UNAVAILABLE", "transient"),
         ]
