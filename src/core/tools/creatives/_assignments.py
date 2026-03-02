@@ -80,7 +80,7 @@ def _process_assignments(
 
                         # Skip if in lenient mode, error if strict
                         if validation_mode == "strict":
-                            raise AdCPNotFoundError(error_msg)
+                            raise AdCPNotFoundError(error_msg, recovery="correctable")
                         else:
                             logger.warning(f"Package not found during assignment: {package_id}, skipping")
                             continue
