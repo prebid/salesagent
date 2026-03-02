@@ -1834,8 +1834,6 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle get_media_buys skill invocation."""
         try:
-            tool_context = self._make_tool_context(identity, "get_media_buys")
-
             response = core_get_media_buys_tool(
                 media_buy_ids=parameters.get("media_buy_ids"),
                 buyer_refs=parameters.get("buyer_refs"),
@@ -1843,7 +1841,7 @@ class AdCPRequestHandler(RequestHandler):
                 include_snapshot=parameters.get("include_snapshot", False),
                 account_id=parameters.get("account_id"),
                 context=parameters.get("context"),
-                ctx=tool_context,
+                identity=identity,
             )
 
             return response

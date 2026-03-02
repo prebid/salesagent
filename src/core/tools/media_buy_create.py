@@ -2259,7 +2259,7 @@ async def _create_media_buy_impl(
 
         # Get products for the media buy to check product-level auto-creation settings
         # Lazy import to avoid circular dependency with main.py
-        from src.core.main import get_product_catalog
+        from src.core.tools.products import get_product_catalog
 
         catalog = get_product_catalog(tenant_id=identity.tenant_id)
         product_ids = req.get_product_ids()
