@@ -31,10 +31,8 @@ ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_coverage_allowlis
 _UNIT_ENTITY_FILES = [
     "test_media_buy.py",
     "test_creative.py",
-    "test_delivery.py",
     "test_create_media_buy_behavioral.py",
     "test_update_media_buy_behavioral.py",
-    "test_delivery_behavioral.py",
     "test_webhook_delivery_service.py",
 ]
 
