@@ -70,7 +70,7 @@ class TestExceptionHierarchy:
         exc = AdCPRateLimitError("too many requests")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 429
-        assert exc.error_code == "RATE_LIMITED"
+        assert exc.error_code == "RATE_LIMIT_EXCEEDED"
 
     def test_adapter_error(self):
         """AdCPAdapterError must have status_code=502."""
