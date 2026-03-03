@@ -16,7 +16,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
 from adcp.types import MediaBuyStatus
@@ -39,6 +39,11 @@ from src.core.tools.media_buy_delivery import (
 )
 from src.core.webhook_authenticator import WebhookAuthenticator
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
+from src.services.webhook_delivery_service import (
+    CircuitBreaker,
+    CircuitState,
+    WebhookDeliveryService,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1360,3 +1365,537 @@ class TestAdapterInternalServerErrorReturnsAdapterError:
         assert "adapter_error" in error_codes
         adapter_error = next(e for e in response.errors if e.code == "adapter_error")
         assert "mb_001" in adapter_error.message
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-F-03
+# ---------------------------------------------------------------------------
+
+
+class TestAdapterFailureAuditTrail:
+    """Adapter failure is logged to the audit trail (NFR-003).
+
+    Covers: UC-004-EXT-F-03
+    """
+
+    @pytest.mark.xfail(
+        reason=(
+            "Production code at media_buy_delivery.py:267-268 catches adapter exceptions "
+            "and logs via logger.error() but does NOT write to the AuditLog database table "
+            "via AuditLogger.log_operation(). NFR-003 requires adapter failures to be "
+            "recorded in the persistent audit trail. Fix: import get_audit_logger in "
+            "_get_media_buy_delivery_impl and call log_operation(success=False) in the "
+            "inner except block (lines 267-283)."
+        ),
+        strict=True,
+    )
+    @patch(f"{_PATCH}._get_pricing_options", return_value={})
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    @patch(f"{_PATCH}._get_target_media_buys")
+    @patch("src.core.audit_logger.get_db_session")
+    def test_adapter_failure_writes_audit_log(
+        self,
+        mock_audit_db_session,
+        mock_get_target,
+        mock_uow_cls,
+        mock_get_principal,
+        mock_get_adapter,
+        mock_get_pricing,
+    ):
+        """When adapter.get_media_buy_delivery raises, the failure is audit-logged."""
+        identity = _make_identity()
+        buy = _make_buy(media_buy_id="mb_fail")
+
+        mock_principal = MagicMock()
+        mock_principal.principal_id = "test_principal"
+        mock_get_principal.return_value = mock_principal
+
+        adapter = MagicMock()
+        adapter.get_media_buy_delivery.side_effect = RuntimeError("GAM API timeout")
+        mock_get_adapter.return_value = adapter
+
+        mock_get_target.return_value = [("mb_fail", buy)]
+
+        mock_uow = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_packages.return_value = []
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        mock_session = MagicMock()
+        mock_audit_db_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_audit_db_session.return_value.__exit__ = MagicMock(return_value=False)
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_fail"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert response is not None
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert response.errors is not None
+        assert any(e.code == "adapter_error" for e in response.errors)
+
+        audit_adds = list(mock_session.add.call_args_list)
+        assert len(audit_adds) > 0, (
+            "No AuditLog records written to DB. Adapter failure must be recorded in audit trail per NFR-003."
+        )
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-F-04
+# ---------------------------------------------------------------------------
+
+
+class TestAdapterErrorNoStateMutation:
+    """Adapter error returns error response without modifying any state.
+
+    Covers: UC-004-EXT-F-04
+    """
+
+    @patch(f"{_PATCH}._get_pricing_options", return_value={})
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_adapter_error_returns_error_without_state_modification(
+        self,
+        mock_uow_cls: MagicMock,
+        mock_get_principal: MagicMock,
+        mock_get_adapter: MagicMock,
+        mock_get_pricing: MagicMock,
+    ) -> None:
+        """When adapter raises, response has adapter_error and zero deliveries.
+
+        Covers: UC-004-EXT-F-04
+        """
+        buy = _make_buy(media_buy_id="mb_err")
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        mock_get_principal.return_value = MagicMock()
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = RuntimeError("GAM API timeout")
+        mock_get_adapter.return_value = mock_adapter
+
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_err"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        result = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        assert result.errors is not None
+        assert len(result.errors) == 1
+        assert result.errors[0].code == "adapter_error"
+        assert "mb_err" in result.errors[0].message
+        assert result.media_buy_deliveries == []
+        assert result.aggregated_totals.impressions == 0.0
+        assert result.aggregated_totals.spend == 0.0
+        assert result.aggregated_totals.media_buy_count == 0
+        mock_uow.__exit__.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-01
+# ---------------------------------------------------------------------------
+
+
+class TestWebhook503RetryBackoff:
+    """Tests that a 503 webhook endpoint triggers retries with exponential backoff.
+
+    Covers: UC-004-EXT-G-01
+    """
+
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
+    @patch("src.core.webhook_delivery.time.sleep")
+    @patch("src.core.webhook_delivery.requests.post")
+    def test_503_triggers_retries_with_exponential_backoff(self, mock_post, mock_sleep, mock_validate):
+        """When a webhook returns 503, the system retries with exponential backoff.
+
+        Covers: UC-004-EXT-G-01
+
+        Verifies:
+        - All attempts are made (max_retries controls total attempts)
+        - Backoff delays follow 2^attempt pattern (1s, 2s, 4s)
+        - Final result is failure with correct attempt count
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.text = "Service Unavailable"
+        mock_post.return_value = mock_response
+
+        delivery = WebhookDelivery(
+            webhook_url="https://example.com/webhook",
+            payload={"event": "delivery.update", "media_buy_id": "mb_001"},
+            headers={"Content-Type": "application/json"},
+            max_retries=4,  # 1 initial + 3 retries = 4 total attempts
+            timeout=10,
+            tenant_id=None,
+            event_type=None,
+        )
+
+        success, result = deliver_webhook_with_retry(delivery)
+
+        assert success is False
+        assert result["status"] == "failed"
+        assert result["attempts"] == 4
+        assert result["response_code"] == 503
+        assert mock_post.call_count == 4
+        assert mock_sleep.call_count == 3
+        mock_sleep.assert_has_calls(
+            [
+                call(1),  # 2^0 = 1s after attempt 0
+                call(2),  # 2^1 = 2s after attempt 1
+                call(4),  # 2^2 = 4s after attempt 2
+            ]
+        )
+
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
+    @patch("src.core.webhook_delivery.time.sleep")
+    @patch("src.core.webhook_delivery.requests.post")
+    def test_503_no_backoff_after_final_attempt(self, mock_post, mock_sleep, mock_validate):
+        """No sleep occurs after the last attempt — only between attempts.
+
+        Covers: UC-004-EXT-G-01
+
+        With max_retries=4, there should be 3 sleeps (not 4).
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.text = "Service Unavailable"
+        mock_post.return_value = mock_response
+
+        delivery = WebhookDelivery(
+            webhook_url="https://example.com/webhook",
+            payload={"event": "test"},
+            headers={},
+            max_retries=4,
+            tenant_id=None,
+            event_type=None,
+        )
+
+        success, result = deliver_webhook_with_retry(delivery)
+
+        assert mock_sleep.call_count == 3
+        assert mock_post.call_count == 4
+
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
+    @patch("src.core.webhook_delivery.time.sleep")
+    @patch("src.core.webhook_delivery.requests.post")
+    def test_503_then_success_stops_retrying(self, mock_post, mock_sleep, mock_validate):
+        """If a retry succeeds, no further retries or backoff occur.
+
+        Covers: UC-004-EXT-G-01
+
+        First attempt returns 503, second attempt returns 200.
+        """
+        fail_response = MagicMock()
+        fail_response.status_code = 503
+        fail_response.text = "Service Unavailable"
+
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        ok_response.text = "OK"
+
+        mock_post.side_effect = [fail_response, ok_response]
+
+        delivery = WebhookDelivery(
+            webhook_url="https://example.com/webhook",
+            payload={"event": "delivery.update"},
+            headers={},
+            max_retries=4,
+            tenant_id=None,
+            event_type=None,
+        )
+
+        success, result = deliver_webhook_with_retry(delivery)
+
+        assert success is True
+        assert result["status"] == "delivered"
+        assert result["attempts"] == 2
+        assert mock_post.call_count == 2
+        assert mock_sleep.call_count == 1
+        mock_sleep.assert_called_once_with(1)
+
+    @pytest.mark.xfail(
+        reason="Production code does not add jitter to exponential backoff. "
+        "BR-RULE-029 specifies '1s, 2s, 4s + jitter' but deliver_webhook_with_retry "
+        "(src/core/webhook_delivery.py:226-228) uses exact 2**attempt with no randomization. "
+        "Jitter would be added at line 226 with e.g. backoff_time = 2**attempt + random.uniform(0, 0.5).",
+        strict=True,
+    )
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
+    @patch("src.core.webhook_delivery.time.sleep")
+    @patch("src.core.webhook_delivery.requests.post")
+    def test_backoff_includes_jitter(self, mock_post, mock_sleep, mock_validate):
+        """Backoff delays should include jitter to prevent thundering herd.
+
+        Covers: UC-004-EXT-G-01
+
+        BR-RULE-029 specifies exponential backoff with jitter.
+        Current implementation uses exact powers of 2 without randomization.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.text = "Service Unavailable"
+        mock_post.return_value = mock_response
+
+        delivery = WebhookDelivery(
+            webhook_url="https://example.com/webhook",
+            payload={"event": "test"},
+            headers={},
+            max_retries=4,
+            tenant_id=None,
+            event_type=None,
+        )
+
+        deliver_webhook_with_retry(delivery)
+
+        sleep_values = [c.args[0] for c in mock_sleep.call_args_list]
+        exact_powers = [1, 2, 4]
+
+        has_jitter = any(actual != expected for actual, expected in zip(sleep_values, exact_powers, strict=True))
+        assert has_jitter, f"Sleep values {sleep_values} are exact powers of 2 — no jitter detected"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-02
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookRetrySucceedsOnSecondAttempt:
+    """Webhook endpoint fails first, succeeds on retry -> delivery recorded as successful.
+
+    Covers: UC-004-EXT-G-02
+    """
+
+    @patch("src.core.webhook_delivery.time.sleep")
+    @patch("src.core.webhook_delivery._update_delivery_record")
+    @patch("src.core.webhook_delivery._create_delivery_record")
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, ""))
+    @patch("requests.post")
+    def test_transient_failure_then_success_records_delivered(
+        self, mock_post, mock_validator, mock_create, mock_update, mock_sleep
+    ):
+        """Given a webhook that 503s then 200s, the delivery result is 'delivered'.
+
+        Covers: UC-004-EXT-G-02
+        """
+        resp_503 = Mock()
+        resp_503.status_code = 503
+        resp_503.text = "Service Unavailable"
+
+        resp_200 = Mock()
+        resp_200.status_code = 200
+
+        mock_post.side_effect = [resp_503, resp_200]
+
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"media_buy_id": "mb_001", "event": "delivery.update"},
+            headers={"Content-Type": "application/json"},
+            max_retries=3,
+            timeout=10,
+            event_type="delivery.update",
+            tenant_id="test_tenant",
+            object_id="mb_001",
+        )
+
+        success, result = deliver_webhook_with_retry(delivery)
+
+        assert success is True
+        assert result["status"] == "delivered"
+        assert result["attempts"] == 2
+        assert result["response_code"] == 200
+
+        assert mock_update.call_count == 1
+        update_kwargs = mock_update.call_args.kwargs
+        assert update_kwargs["status"] == "delivered"
+        assert update_kwargs["attempts"] == 2
+        assert update_kwargs["response_code"] == 200
+        assert update_kwargs["delivered_at"] is not None
+
+        mock_sleep.assert_called_once_with(1)
+
+        assert mock_create.call_count == 1
+        create_kwargs = mock_create.call_args.kwargs
+        assert create_kwargs["tenant_id"] == "test_tenant"
+        assert create_kwargs["event_type"] == "delivery.update"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-03
+# ---------------------------------------------------------------------------
+
+
+class TestCircuitBreakerOpensAfterRetriesExhausted:
+    """Circuit breaker opens after consecutive failures suppress subsequent deliveries.
+
+    Covers: UC-004-EXT-G-03
+    """
+
+    def test_circuit_breaker_opens_after_threshold_failures(self):
+        """After failure_threshold consecutive failures, circuit breaker moves to OPEN.
+
+        Covers: UC-004-EXT-G-03
+        """
+        cb = CircuitBreaker(failure_threshold=3)
+
+        assert cb.state == CircuitState.CLOSED
+        assert cb.can_attempt() is True
+
+        cb.record_failure()
+        assert cb.state == CircuitState.CLOSED
+        cb.record_failure()
+        assert cb.state == CircuitState.CLOSED
+        cb.record_failure()
+
+        assert cb.state == CircuitState.OPEN
+        assert cb.can_attempt() is False
+
+    def test_open_circuit_breaker_suppresses_subsequent_deliveries(self):
+        """When circuit is OPEN, can_attempt returns False, suppressing deliveries.
+
+        Covers: UC-004-EXT-G-03
+        """
+        cb = CircuitBreaker(failure_threshold=3)
+
+        for _ in range(3):
+            cb.record_failure()
+
+        assert cb.state == CircuitState.OPEN
+
+        assert cb.can_attempt() is False
+        assert cb.can_attempt() is False
+        assert cb.can_attempt() is False
+
+    @patch("src.services.webhook_delivery_service.time.sleep")
+    @patch("src.services.webhook_delivery_service.random.uniform", return_value=0.0)
+    @patch("src.services.webhook_delivery_service.httpx.Client")
+    @patch("src.core.database.database_session.get_db_session")
+    def test_service_skips_delivery_when_circuit_open(self, mock_get_db, mock_client, mock_random, mock_sleep):
+        """WebhookDeliveryService skips webhook send when circuit breaker is OPEN.
+
+        Covers: UC-004-EXT-G-03
+        """
+        service = WebhookDeliveryService()
+
+        endpoint_key = "test_tenant:https://example.com/webhook"
+        mock_config = MagicMock()
+        mock_config.url = "https://example.com/webhook"
+        mock_config.authentication_type = None
+        mock_config.authentication_token = None
+        mock_config.webhook_secret = None
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+
+        mock_session = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = [mock_config]
+        mock_session.scalars.return_value = mock_scalars
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__.return_value = mock_session
+        mock_ctx.__exit__.return_value = None
+        mock_get_db.return_value = mock_ctx
+
+        start_time = datetime(2025, 6, 1, tzinfo=UTC)
+
+        for i in range(5):
+            service.send_delivery_webhook(
+                media_buy_id=f"mb_{i}",
+                tenant_id="test_tenant",
+                principal_id="p1",
+                reporting_period_start=start_time,
+                reporting_period_end=start_time,
+                impressions=1000,
+                spend=100.0,
+            )
+
+        state, failures = service.get_circuit_breaker_state(endpoint_key)
+        assert state == CircuitState.OPEN
+
+        mock_client.return_value.__enter__.return_value.post.reset_mock()
+
+        result = service.send_delivery_webhook(
+            media_buy_id="mb_suppressed",
+            tenant_id="test_tenant",
+            principal_id="p1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=1000,
+            spend=100.0,
+        )
+
+        assert result is False
+        mock_client.return_value.__enter__.return_value.post.assert_not_called()
+
+    @pytest.mark.xfail(
+        reason="reporting_delayed status is not set by _get_media_buy_delivery_impl "
+        "when circuit breaker is open. The schema supports 'reporting_delayed' "
+        "(src/core/schemas/delivery.py:224) and the circuit breaker logic exists in "
+        "src/services/webhook_delivery_service.py:40-121, but there is no integration "
+        "between the circuit breaker state and the delivery status computation in "
+        "src/core/tools/media_buy_delivery.py:219-230.",
+        strict=True,
+    )
+    @patch(f"{_PATCH}._get_pricing_options", return_value={})
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_delivery_marked_reporting_delayed_when_circuit_open(
+        self,
+        mock_uow_cls,
+        mock_get_principal,
+        mock_get_adapter,
+        mock_get_pricing,
+    ):
+        """Delivery should be marked reporting_delayed when circuit breaker is open.
+
+        Covers: UC-004-EXT-G-03
+        """
+        identity = _make_identity()
+        buy = _make_buy(media_buy_id="mb_001")
+
+        mock_get_principal.return_value = MagicMock()
+        mock_get_adapter.return_value = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert len(response.media_buy_deliveries) == 1
+        assert response.media_buy_deliveries[0].status == "reporting_delayed"
