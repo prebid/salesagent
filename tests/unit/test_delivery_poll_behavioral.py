@@ -1,8 +1,11 @@
-"""Behavioral tests for UC-004: Deliver Media Buy Metrics.
+"""Behavioral tests for UC-004 delivery polling (_get_media_buy_delivery_impl).
 
-Tests the delivery poll flow (_get_media_buy_delivery_impl), status filtering
-(_resolve_delivery_status_filter, _get_target_media_buys), and webhook delivery
-(deliver_webhook_with_retry) against per-obligation scenarios.
+Tests the delivery poll flow, status filtering, date range reporting,
+and pricing option lookup against per-obligation scenarios.
+
+Split from test_delivery_behavioral.py — see also:
+- test_delivery_webhook_behavioral.py (deliver_webhook_with_retry)
+- test_delivery_service_behavioral.py (WebhookDeliveryService, CircuitBreaker)
 
 Each test targets exactly one obligation ID and follows the 6 hard rules:
 1. MUST import from src.
@@ -16,7 +19,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import MagicMock, Mock, call, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from adcp.types import MediaBuyStatus, PricingModel
@@ -39,13 +42,6 @@ from src.core.tools.media_buy_delivery import (
     _get_pricing_options,
     _get_target_media_buys,
     _resolve_delivery_status_filter,
-)
-from src.core.webhook_authenticator import WebhookAuthenticator
-from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
-from src.services.webhook_delivery_service import (
-    CircuitBreaker,
-    CircuitState,
-    WebhookDeliveryService,
 )
 
 # ---------------------------------------------------------------------------
@@ -128,43 +124,24 @@ class TestCustomDateRangeBothProvided:
     Covers: UC-004-ALT-CUSTOM-DATE-RANGE-01
     """
 
-    @patch(f"{_PATCH}.get_adapter")
-    @patch(f"{_PATCH}.get_principal_object")
-    @patch(f"{_PATCH}.MediaBuyUoW")
-    def test_reporting_period_matches_requested_dates(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+    def test_reporting_period_matches_requested_dates(self):
         """When start_date and end_date are provided, reporting_period matches them.
 
         Covers: UC-004-ALT-CUSTOM-DATE-RANGE-01
         """
-        # Arrange
-        mock_get_principal.return_value = MagicMock()
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
-        mock_get_adapter.return_value = mock_adapter
+        from tests.harness import DeliveryPollEnv
 
-        buy = _make_buy(start_date=date(2026, 3, 1), end_date=date(2026, 3, 7))
+        with DeliveryPollEnv() as env:
+            env.add_buy(start_date=date(2026, 3, 1), end_date=date(2026, 3, 7))
+            env.set_adapter_response()
+            response = env.call_impl(media_buy_ids=["mb_001"], start_date="2026-03-01", end_date="2026-03-07")
+            assert response.reporting_period.start == datetime(2026, 3, 1, tzinfo=UTC)
+            assert response.reporting_period.end == datetime(2026, 3, 7, tzinfo=UTC)
 
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [buy]
-        mock_repo.get_packages.return_value = []
-        mock_uow = MagicMock()
-        mock_uow.media_buys = mock_repo
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow_cls.return_value = mock_uow
 
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_001"],
-            start_date="2026-03-01",
-            end_date="2026-03-07",
-        )
-
-        # Act
-        response = _get_media_buy_delivery_impl(req, _make_identity())
-
-        # Assert — reporting_period must match the requested dates
-        assert response.reporting_period.start == datetime(2026, 3, 1, tzinfo=UTC)
-        assert response.reporting_period.end == datetime(2026, 3, 7, tzinfo=UTC)
+# ---------------------------------------------------------------------------
+# UC-004-ALT-CUSTOM-DATE-RANGE-04
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -178,45 +155,24 @@ class TestCustomDateRangeOverridesDefault:
     Covers: UC-004-ALT-CUSTOM-DATE-RANGE-04
     """
 
-    @patch(f"{_PATCH}.get_adapter")
-    @patch(f"{_PATCH}.get_principal_object")
-    @patch(f"{_PATCH}.MediaBuyUoW")
-    def test_ninety_day_range_not_truncated(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+    def test_ninety_day_range_not_truncated(self):
         """A 90-day custom range is used in full — 30-day default NOT applied.
 
         Covers: UC-004-ALT-CUSTOM-DATE-RANGE-04
         """
-        # Arrange
-        mock_get_principal.return_value = MagicMock()
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
-        mock_get_adapter.return_value = mock_adapter
+        from tests.harness import DeliveryPollEnv
 
-        buy = _make_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        with DeliveryPollEnv() as env:
+            env.add_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+            env.set_adapter_response()
+            response = env.call_impl(media_buy_ids=["mb_001"], start_date="2025-01-01", end_date="2025-04-01")
+            delta = response.reporting_period.end - response.reporting_period.start
+            assert delta.days == 90, f"Expected 90-day range, got {delta.days} days"
 
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [buy]
-        mock_repo.get_packages.return_value = []
-        mock_uow = MagicMock()
-        mock_uow.media_buys = mock_repo
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow_cls.return_value = mock_uow
 
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_001"],
-            start_date="2025-01-01",
-            end_date="2025-04-01",  # 90 days
-        )
-
-        # Act
-        response = _get_media_buy_delivery_impl(req, _make_identity())
-
-        # Assert — reporting_period spans the FULL 90 days
-        period_start = response.reporting_period.start
-        period_end = response.reporting_period.end
-        delta = period_end - period_start
-        assert delta.days == 90, f"Expected 90-day range, got {delta.days} days"
+# ---------------------------------------------------------------------------
+# UC-004-ALT-STATUS-FILTERED-DELIVERY-02
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +228,11 @@ class TestStatusFilterCompleted:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-ALT-STATUS-FILTERED-DELIVERY-03
+# ---------------------------------------------------------------------------
+
+
 class TestStatusFilterPaused:
     """Filter by status 'paused' returns only paused media buys.
 
@@ -309,6 +270,11 @@ class TestStatusFilterPaused:
         # Assert — paused buy should be included
         returned_ids = [mb_id for mb_id, _ in result]
         assert "mb_paused" in returned_ids
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-STATUS-FILTERED-DELIVERY-07
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -376,62 +342,6 @@ class TestValidStatusValuesAccepted:
 # ---------------------------------------------------------------------------
 
 
-class TestWebhookDeliveryHappyPath:
-    """Scheduled webhook delivery happy path — POST with signed payload.
-
-    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
-    """
-
-    @patch("src.core.webhook_delivery.get_db_session")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_webhook_sends_signed_payload(self, mock_post, mock_validate, mock_db_session):
-        """Webhook delivery sends POST to configured URL with HMAC-signed payload.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
-        """
-        # Arrange
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_post.return_value = mock_response
-        mock_db_session.return_value.__enter__ = MagicMock()
-        mock_db_session.return_value.__exit__ = MagicMock(return_value=False)
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={
-                "media_buy_id": "mb_001",
-                "impressions": 5000,
-                "spend": 250.0,
-                "notification_type": "scheduled",
-            },
-            headers={"Content-Type": "application/json"},
-            signing_secret="test-secret-key",
-            max_retries=1,
-        )
-
-        # Act
-        success, result = deliver_webhook_with_retry(delivery)
-
-        # Assert — delivery succeeded with signed payload
-        assert success is True
-        assert result["status"] == "delivered"
-
-        # Verify POST was called with correct URL
-        call_args = mock_post.call_args
-        assert call_args.args[0] == "https://buyer.example.com/webhook"
-
-        # Verify HMAC signature headers were added
-        sent_headers = call_args.kwargs["headers"]
-        assert "X-Webhook-Signature" in sent_headers
-        assert "X-Webhook-Timestamp" in sent_headers
-
-        # Verify payload was sent
-        sent_payload = call_args.kwargs["json"]
-        assert sent_payload["media_buy_id"] == "mb_001"
-        assert sent_payload["notification_type"] == "scheduled"
-
-
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-02
 # ---------------------------------------------------------------------------
@@ -482,6 +392,11 @@ class TestWebhookPayloadNotificationType:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
+# ---------------------------------------------------------------------------
+
+
 class TestWebhookNotificationTypeScheduled:
     """Normal periodic delivery sets notification_type to 'scheduled'.
 
@@ -525,6 +440,11 @@ class TestWebhookNotificationTypeScheduled:
         # Assert — notification_type should be "scheduled" for normal periodic delivery
         dumped = response.model_dump(mode="json")
         assert dumped["notification_type"] == "scheduled"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +503,11 @@ class TestWebhookNotificationTypeFinal:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
+# ---------------------------------------------------------------------------
+
+
 class TestWebhookSequenceNumber:
     """Monotonically increasing sequence_number per media buy.
 
@@ -626,6 +551,11 @@ class TestWebhookSequenceNumber:
         # Assert — sequence_number should be auto-assigned (at least 1)
         assert response.sequence_number is not None, "sequence_number should be auto-assigned"
         assert response.sequence_number >= 1
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -682,82 +612,6 @@ class TestWebhookNextExpectedAt:
 # ---------------------------------------------------------------------------
 
 
-class TestWebhookHmacSha256Signing:
-    """Webhook payload signed with HMAC-SHA256.
-
-    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
-    """
-
-    def test_sign_payload_produces_hmac_headers(self):
-        """WebhookAuthenticator.sign_payload produces HMAC-SHA256 signature headers.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
-        """
-        payload = {"media_buy_id": "mb_001", "impressions": 5000}
-        secret = "test-signing-secret"
-
-        # Act
-        headers = WebhookAuthenticator.sign_payload(payload, secret)
-
-        # Assert — HMAC-SHA256 signature header present with correct format
-        assert "X-Webhook-Signature" in headers
-        assert headers["X-Webhook-Signature"].startswith("sha256=")
-        assert len(headers["X-Webhook-Signature"]) > len("sha256=")
-
-        # Assert — timestamp header present for replay protection
-        assert "X-Webhook-Timestamp" in headers
-        assert headers["X-Webhook-Timestamp"].isdigit()
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
-# ---------------------------------------------------------------------------
-
-
-class TestWebhookBearerTokenAuth:
-    """Webhook delivery with Bearer token authentication.
-
-    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
-    """
-
-    @patch("src.core.webhook_delivery.get_db_session")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_bearer_token_sent_in_authorization_header(self, mock_post, mock_validate, mock_db_session):
-        """Bearer token is forwarded in Authorization header when set by caller.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
-        """
-        # Arrange
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_post.return_value = mock_response
-        mock_db_session.return_value.__enter__ = MagicMock()
-        mock_db_session.return_value.__exit__ = MagicMock(return_value=False)
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"media_buy_id": "mb_001"},
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer test-bearer-token-xyz",
-            },
-            max_retries=1,
-        )
-
-        # Act
-        success, result = deliver_webhook_with_retry(delivery)
-
-        # Assert — delivery succeeded
-        assert success is True
-        assert result["status"] == "delivered"
-
-        # Assert — Bearer token was sent in the request headers
-        call_args = mock_post.call_args
-        sent_headers = call_args.kwargs["headers"]
-        assert sent_headers["Authorization"] == "Bearer test-bearer-token-xyz"
-
-
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-09
 # ---------------------------------------------------------------------------
@@ -802,6 +656,11 @@ class TestWebhookExcludesAggregatedTotals:
 
         # Assert — aggregated_totals should NOT be in webhook payload
         assert "aggregated_totals" not in payload
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -856,89 +715,6 @@ class TestWebhookRequestedMetricsFiltering:
 # ---------------------------------------------------------------------------
 
 
-class TestWebhookOnlyActiveMediaBuys:
-    """Only active media buys trigger webhook delivery.
-
-    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-11
-    """
-
-    @pytest.mark.xfail(
-        reason="deliver_webhook_with_retry does not check media buy status. "
-        "It sends whatever payload is given regardless of the media buy's state. "
-        "Webhook trigger scheduler with status filtering not yet implemented."
-    )
-    @patch("src.core.webhook_delivery.get_db_session")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_paused_media_buy_webhook_rejected(self, mock_post, mock_validate, mock_db_session):
-        """Webhook delivery should be rejected for paused media buys.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-11
-        """
-        # Arrange — webhook for a paused media buy
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_post.return_value = mock_response
-        mock_db_session.return_value.__enter__ = MagicMock()
-        mock_db_session.return_value.__exit__ = MagicMock(return_value=False)
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"media_buy_id": "mb_paused", "status": "paused"},
-            headers={"Content-Type": "application/json"},
-            max_retries=1,
-        )
-
-        # Act
-        success, result = deliver_webhook_with_retry(delivery)
-
-        # Assert — should NOT deliver webhook for paused media buy
-        assert success is False, "Webhook should not be delivered for paused media buy"
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-12
-# ---------------------------------------------------------------------------
-
-
-class TestWebhookEndpoint2xxAcknowledgment:
-    """Endpoint acknowledges with 2xx — successful delivery recorded.
-
-    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-12
-    """
-
-    @patch("src.core.webhook_delivery.get_db_session")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_2xx_response_records_successful_delivery(self, mock_post, mock_validate, mock_db_session):
-        """200 OK from buyer endpoint records delivery as successful.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-12
-        """
-        # Arrange
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_post.return_value = mock_response
-        mock_db_session.return_value.__enter__ = MagicMock()
-        mock_db_session.return_value.__exit__ = MagicMock(return_value=False)
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"media_buy_id": "mb_001", "impressions": 5000},
-            headers={"Content-Type": "application/json"},
-            max_retries=1,
-        )
-
-        # Act
-        success, result = deliver_webhook_with_retry(delivery)
-
-        # Assert — delivery recorded as successful
-        assert success is True
-        assert result["status"] == "delivered"
-        assert result["response_code"] == 200
-        assert result["attempts"] == 1
-
-
 # ---------------------------------------------------------------------------
 # UC-004-EXT-A-02
 # ---------------------------------------------------------------------------
@@ -980,6 +756,11 @@ class TestUC004EXTA02AuthenticationFailure:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-EXT-B-01
+# ---------------------------------------------------------------------------
+
+
 class TestUC004EXTB01PrincipalNotFound:
     """Covers: UC-004-EXT-B-01"""
 
@@ -1002,6 +783,11 @@ class TestUC004EXTB01PrincipalNotFound:
         assert response.errors[0].code == "principal_not_found"
         assert response.media_buy_deliveries == []
         assert isinstance(response, GetMediaBuyDeliveryResponse)
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-C-01
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -1048,6 +834,11 @@ class TestNonexistentMediaBuyIdReturnsNotFoundError:
         error = response.errors[0]
         assert error.code == "media_buy_not_found"
         assert "nonexistent_id" in error.message
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-C-02
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -1121,6 +912,11 @@ class TestPartialMediaBuyIdsNotFound:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-EXT-C-03
+# ---------------------------------------------------------------------------
+
+
 class TestBuyerRefNotFound:
     """Buyer ref lookup returns media_buy_not_found error in response.
 
@@ -1165,6 +961,11 @@ class TestBuyerRefNotFound:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-EXT-E-01
+# ---------------------------------------------------------------------------
+
+
 class TestEqualDateRangeReturnsInvalidDateRangeError:
     """Equal start and end dates return invalid_date_range error.
 
@@ -1192,6 +993,11 @@ class TestEqualDateRangeReturnsInvalidDateRangeError:
         assert response.media_buy_deliveries == []
         assert len(response.errors) == 1
         assert response.errors[0].code == "invalid_date_range"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-E-02
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -1233,6 +1039,11 @@ class TestStartDateAfterEndDateReturnsInvalidDateRangeError:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-EXT-E-03
+# ---------------------------------------------------------------------------
+
+
 class TestInvalidDateRangeDoesNotFetchDeliveryData:
     """Invalid date range causes no delivery data to be fetched.
 
@@ -1265,6 +1076,11 @@ class TestInvalidDateRangeDoesNotFetchDeliveryData:
 
         # Verify adapter's delivery method was never called (no data fetched)
         mock_adapter.get_media_buy_delivery.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-F-01
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -1324,6 +1140,11 @@ class TestAdapterUnavailableReturnsAdapterError:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-EXT-F-02
+# ---------------------------------------------------------------------------
+
+
 class TestAdapterInternalServerErrorReturnsAdapterError:
     """Adapter 500 internal server error returns adapter_error.
 
@@ -1369,6 +1190,11 @@ class TestAdapterInternalServerErrorReturnsAdapterError:
         assert "adapter_error" in error_codes
         adapter_error = next(e for e in response.errors if e.code == "adapter_error")
         assert "mb_001" in adapter_error.message
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-F-03
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -1458,6 +1284,11 @@ class TestAdapterFailureAuditTrail:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-EXT-F-04
+# ---------------------------------------------------------------------------
+
+
 class TestAdapterErrorNoStateMutation:
     """Adapter error returns error response without modifying any state.
 
@@ -1520,1170 +1351,6 @@ class TestAdapterErrorNoStateMutation:
 # ---------------------------------------------------------------------------
 # UC-004-EXT-G-01
 # ---------------------------------------------------------------------------
-
-
-class TestWebhook503RetryBackoff:
-    """Tests that a 503 webhook endpoint triggers retries with exponential backoff.
-
-    Covers: UC-004-EXT-G-01
-    """
-
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
-    @patch("src.core.webhook_delivery.time.sleep")
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_503_triggers_retries_with_exponential_backoff(self, mock_post, mock_sleep, mock_validate):
-        """When a webhook returns 503, the system retries with exponential backoff.
-
-        Covers: UC-004-EXT-G-01
-
-        Verifies:
-        - All attempts are made (max_retries controls total attempts)
-        - Backoff delays follow 2^attempt pattern (1s, 2s, 4s)
-        - Final result is failure with correct attempt count
-        """
-        mock_response = MagicMock()
-        mock_response.status_code = 503
-        mock_response.text = "Service Unavailable"
-        mock_post.return_value = mock_response
-
-        delivery = WebhookDelivery(
-            webhook_url="https://example.com/webhook",
-            payload={"event": "delivery.update", "media_buy_id": "mb_001"},
-            headers={"Content-Type": "application/json"},
-            max_retries=4,  # 1 initial + 3 retries = 4 total attempts
-            timeout=10,
-            tenant_id=None,
-            event_type=None,
-        )
-
-        success, result = deliver_webhook_with_retry(delivery)
-
-        assert success is False
-        assert result["status"] == "failed"
-        assert result["attempts"] == 4
-        assert result["response_code"] == 503
-        assert mock_post.call_count == 4
-        assert mock_sleep.call_count == 3
-        mock_sleep.assert_has_calls(
-            [
-                call(1),  # 2^0 = 1s after attempt 0
-                call(2),  # 2^1 = 2s after attempt 1
-                call(4),  # 2^2 = 4s after attempt 2
-            ]
-        )
-
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
-    @patch("src.core.webhook_delivery.time.sleep")
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_503_no_backoff_after_final_attempt(self, mock_post, mock_sleep, mock_validate):
-        """No sleep occurs after the last attempt — only between attempts.
-
-        Covers: UC-004-EXT-G-01
-
-        With max_retries=4, there should be 3 sleeps (not 4).
-        """
-        mock_response = MagicMock()
-        mock_response.status_code = 503
-        mock_response.text = "Service Unavailable"
-        mock_post.return_value = mock_response
-
-        delivery = WebhookDelivery(
-            webhook_url="https://example.com/webhook",
-            payload={"event": "test"},
-            headers={},
-            max_retries=4,
-            tenant_id=None,
-            event_type=None,
-        )
-
-        success, result = deliver_webhook_with_retry(delivery)
-
-        assert mock_sleep.call_count == 3
-        assert mock_post.call_count == 4
-
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
-    @patch("src.core.webhook_delivery.time.sleep")
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_503_then_success_stops_retrying(self, mock_post, mock_sleep, mock_validate):
-        """If a retry succeeds, no further retries or backoff occur.
-
-        Covers: UC-004-EXT-G-01
-
-        First attempt returns 503, second attempt returns 200.
-        """
-        fail_response = MagicMock()
-        fail_response.status_code = 503
-        fail_response.text = "Service Unavailable"
-
-        ok_response = MagicMock()
-        ok_response.status_code = 200
-        ok_response.text = "OK"
-
-        mock_post.side_effect = [fail_response, ok_response]
-
-        delivery = WebhookDelivery(
-            webhook_url="https://example.com/webhook",
-            payload={"event": "delivery.update"},
-            headers={},
-            max_retries=4,
-            tenant_id=None,
-            event_type=None,
-        )
-
-        success, result = deliver_webhook_with_retry(delivery)
-
-        assert success is True
-        assert result["status"] == "delivered"
-        assert result["attempts"] == 2
-        assert mock_post.call_count == 2
-        assert mock_sleep.call_count == 1
-        mock_sleep.assert_called_once_with(1)
-
-    @pytest.mark.xfail(
-        reason="Production code does not add jitter to exponential backoff. "
-        "BR-RULE-029 specifies '1s, 2s, 4s + jitter' but deliver_webhook_with_retry "
-        "(src/core/webhook_delivery.py:226-228) uses exact 2**attempt with no randomization. "
-        "Jitter would be added at line 226 with e.g. backoff_time = 2**attempt + random.uniform(0, 0.5).",
-        strict=True,
-    )
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, None))
-    @patch("src.core.webhook_delivery.time.sleep")
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_backoff_includes_jitter(self, mock_post, mock_sleep, mock_validate):
-        """Backoff delays should include jitter to prevent thundering herd.
-
-        Covers: UC-004-EXT-G-01
-
-        BR-RULE-029 specifies exponential backoff with jitter.
-        Current implementation uses exact powers of 2 without randomization.
-        """
-        mock_response = MagicMock()
-        mock_response.status_code = 503
-        mock_response.text = "Service Unavailable"
-        mock_post.return_value = mock_response
-
-        delivery = WebhookDelivery(
-            webhook_url="https://example.com/webhook",
-            payload={"event": "test"},
-            headers={},
-            max_retries=4,
-            tenant_id=None,
-            event_type=None,
-        )
-
-        deliver_webhook_with_retry(delivery)
-
-        sleep_values = [c.args[0] for c in mock_sleep.call_args_list]
-        exact_powers = [1, 2, 4]
-
-        has_jitter = any(actual != expected for actual, expected in zip(sleep_values, exact_powers, strict=True))
-        assert has_jitter, f"Sleep values {sleep_values} are exact powers of 2 — no jitter detected"
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-G-02
-# ---------------------------------------------------------------------------
-
-
-class TestWebhookRetrySucceedsOnSecondAttempt:
-    """Webhook endpoint fails first, succeeds on retry -> delivery recorded as successful.
-
-    Covers: UC-004-EXT-G-02
-    """
-
-    @patch("src.core.webhook_delivery.time.sleep")
-    @patch("src.core.webhook_delivery._update_delivery_record")
-    @patch("src.core.webhook_delivery._create_delivery_record")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url", return_value=(True, ""))
-    @patch("requests.post")
-    def test_transient_failure_then_success_records_delivered(
-        self, mock_post, mock_validator, mock_create, mock_update, mock_sleep
-    ):
-        """Given a webhook that 503s then 200s, the delivery result is 'delivered'.
-
-        Covers: UC-004-EXT-G-02
-        """
-        resp_503 = Mock()
-        resp_503.status_code = 503
-        resp_503.text = "Service Unavailable"
-
-        resp_200 = Mock()
-        resp_200.status_code = 200
-
-        mock_post.side_effect = [resp_503, resp_200]
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"media_buy_id": "mb_001", "event": "delivery.update"},
-            headers={"Content-Type": "application/json"},
-            max_retries=3,
-            timeout=10,
-            event_type="delivery.update",
-            tenant_id="test_tenant",
-            object_id="mb_001",
-        )
-
-        success, result = deliver_webhook_with_retry(delivery)
-
-        assert success is True
-        assert result["status"] == "delivered"
-        assert result["attempts"] == 2
-        assert result["response_code"] == 200
-
-        assert mock_update.call_count == 1
-        update_kwargs = mock_update.call_args.kwargs
-        assert update_kwargs["status"] == "delivered"
-        assert update_kwargs["attempts"] == 2
-        assert update_kwargs["response_code"] == 200
-        assert update_kwargs["delivered_at"] is not None
-
-        mock_sleep.assert_called_once_with(1)
-
-        assert mock_create.call_count == 1
-        create_kwargs = mock_create.call_args.kwargs
-        assert create_kwargs["tenant_id"] == "test_tenant"
-        assert create_kwargs["event_type"] == "delivery.update"
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-G-03
-# ---------------------------------------------------------------------------
-
-
-class TestCircuitBreakerOpensAfterRetriesExhausted:
-    """Circuit breaker opens after consecutive failures suppress subsequent deliveries.
-
-    Covers: UC-004-EXT-G-03
-    """
-
-    def test_circuit_breaker_opens_after_threshold_failures(self):
-        """After failure_threshold consecutive failures, circuit breaker moves to OPEN.
-
-        Covers: UC-004-EXT-G-03
-        """
-        cb = CircuitBreaker(failure_threshold=3)
-
-        assert cb.state == CircuitState.CLOSED
-        assert cb.can_attempt() is True
-
-        cb.record_failure()
-        assert cb.state == CircuitState.CLOSED
-        cb.record_failure()
-        assert cb.state == CircuitState.CLOSED
-        cb.record_failure()
-
-        assert cb.state == CircuitState.OPEN
-        assert cb.can_attempt() is False
-
-    def test_open_circuit_breaker_suppresses_subsequent_deliveries(self):
-        """When circuit is OPEN, can_attempt returns False, suppressing deliveries.
-
-        Covers: UC-004-EXT-G-03
-        """
-        cb = CircuitBreaker(failure_threshold=3)
-
-        for _ in range(3):
-            cb.record_failure()
-
-        assert cb.state == CircuitState.OPEN
-
-        assert cb.can_attempt() is False
-        assert cb.can_attempt() is False
-        assert cb.can_attempt() is False
-
-    @patch("src.services.webhook_delivery_service.time.sleep")
-    @patch("src.services.webhook_delivery_service.random.uniform", return_value=0.0)
-    @patch("src.services.webhook_delivery_service.httpx.Client")
-    @patch("src.core.database.database_session.get_db_session")
-    def test_service_skips_delivery_when_circuit_open(self, mock_get_db, mock_client, mock_random, mock_sleep):
-        """WebhookDeliveryService skips webhook send when circuit breaker is OPEN.
-
-        Covers: UC-004-EXT-G-03
-        """
-        service = WebhookDeliveryService()
-
-        endpoint_key = "test_tenant:https://example.com/webhook"
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = None
-        mock_config.authentication_token = None
-        mock_config.webhook_secret = None
-
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
-        mock_session = MagicMock()
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = [mock_config]
-        mock_session.scalars.return_value = mock_scalars
-        mock_ctx = MagicMock()
-        mock_ctx.__enter__.return_value = mock_session
-        mock_ctx.__exit__.return_value = None
-        mock_get_db.return_value = mock_ctx
-
-        start_time = datetime(2025, 6, 1, tzinfo=UTC)
-
-        for i in range(5):
-            service.send_delivery_webhook(
-                media_buy_id=f"mb_{i}",
-                tenant_id="test_tenant",
-                principal_id="p1",
-                reporting_period_start=start_time,
-                reporting_period_end=start_time,
-                impressions=1000,
-                spend=100.0,
-            )
-
-        state, failures = service.get_circuit_breaker_state(endpoint_key)
-        assert state == CircuitState.OPEN
-
-        mock_client.return_value.__enter__.return_value.post.reset_mock()
-
-        result = service.send_delivery_webhook(
-            media_buy_id="mb_suppressed",
-            tenant_id="test_tenant",
-            principal_id="p1",
-            reporting_period_start=start_time,
-            reporting_period_end=start_time,
-            impressions=1000,
-            spend=100.0,
-        )
-
-        assert result is False
-        mock_client.return_value.__enter__.return_value.post.assert_not_called()
-
-    @pytest.mark.xfail(
-        reason="reporting_delayed status is not set by _get_media_buy_delivery_impl "
-        "when circuit breaker is open. The schema supports 'reporting_delayed' "
-        "(src/core/schemas/delivery.py:224) and the circuit breaker logic exists in "
-        "src/services/webhook_delivery_service.py:40-121, but there is no integration "
-        "between the circuit breaker state and the delivery status computation in "
-        "src/core/tools/media_buy_delivery.py:219-230.",
-        strict=True,
-    )
-    @patch(f"{_PATCH}._get_pricing_options", return_value={})
-    @patch(f"{_PATCH}.get_adapter")
-    @patch(f"{_PATCH}.get_principal_object")
-    @patch(f"{_PATCH}.MediaBuyUoW")
-    def test_delivery_marked_reporting_delayed_when_circuit_open(
-        self,
-        mock_uow_cls,
-        mock_get_principal,
-        mock_get_adapter,
-        mock_get_pricing,
-    ):
-        """Delivery should be marked reporting_delayed when circuit breaker is open.
-
-        Covers: UC-004-EXT-G-03
-        """
-        identity = _make_identity()
-        buy = _make_buy(media_buy_id="mb_001")
-
-        mock_get_principal.return_value = MagicMock()
-        mock_get_adapter.return_value = MagicMock()
-
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [buy]
-        mock_repo.get_packages.return_value = []
-
-        mock_uow = MagicMock()
-        mock_uow.media_buys = mock_repo
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow_cls.return_value = mock_uow
-
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_001"],
-            start_date="2025-01-01",
-            end_date="2025-06-30",
-        )
-
-        response = _get_media_buy_delivery_impl(req, identity)
-
-        assert len(response.media_buy_deliveries) == 1
-        assert response.media_buy_deliveries[0].status == "reporting_delayed"
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-G-04
-# ---------------------------------------------------------------------------
-
-
-class TestCircuitBreakerHalfOpenProbe:
-    """When a circuit breaker is OPEN and the timeout elapses, the system
-    transitions to HALF_OPEN and allows a probe attempt.
-
-    Covers: UC-004-EXT-G-04
-    """
-
-    def test_open_circuit_transitions_to_half_open_after_timeout(self):
-        """Given an OPEN circuit breaker whose timeout has elapsed,
-        can_attempt() should transition state to HALF_OPEN and return True."""
-        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
-
-        # Force circuit into OPEN state with a failure time in the past
-        cb.state = CircuitState.OPEN
-        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
-
-        # When can_attempt is called (simulating the timer/probe check)
-        result = cb.can_attempt()
-
-        # Then the circuit transitions to HALF_OPEN and allows the probe
-        assert result is True
-        assert cb.state == CircuitState.HALF_OPEN
-        assert cb.success_count == 0  # Reset for tracking recovery successes
-
-    def test_open_circuit_stays_open_before_timeout(self):
-        """Given an OPEN circuit breaker whose timeout has NOT elapsed,
-        can_attempt() should return False and stay OPEN."""
-        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
-
-        cb.state = CircuitState.OPEN
-        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=30)
-
-        result = cb.can_attempt()
-
-        assert result is False
-        assert cb.state == CircuitState.OPEN
-
-    def test_half_open_probe_success_path(self):
-        """After transitioning to HALF_OPEN, a successful probe should be recorded.
-        With enough successes, the circuit closes."""
-        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
-
-        # Transition to HALF_OPEN via timeout expiry
-        cb.state = CircuitState.OPEN
-        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
-        assert cb.can_attempt() is True
-        assert cb.state == CircuitState.HALF_OPEN
-
-        # First successful probe
-        cb.record_success()
-        assert cb.state == CircuitState.HALF_OPEN  # Not yet enough successes
-        assert cb.success_count == 1
-
-        # Second successful probe -> closes the circuit
-        cb.record_success()
-        assert cb.state == CircuitState.CLOSED
-
-    def test_half_open_probe_failure_reopens_circuit(self):
-        """After transitioning to HALF_OPEN, a failed probe should reopen the circuit."""
-        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
-
-        # Transition to HALF_OPEN
-        cb.state = CircuitState.OPEN
-        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
-        assert cb.can_attempt() is True
-        assert cb.state == CircuitState.HALF_OPEN
-
-        # Probe fails
-        cb.record_failure()
-        assert cb.state == CircuitState.OPEN
-
-    def test_service_allows_probe_after_circuit_breaker_timeout(self):
-        """Integration test: WebhookDeliveryService uses circuit breaker
-        can_attempt() to allow half-open probe after timeout expires.
-
-        This verifies the service-level integration at _send_webhook_enhanced
-        where can_attempt() gates webhook delivery."""
-        service = WebhookDeliveryService()
-
-        endpoint_key = "test_tenant:https://example.com/webhook"
-        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
-        cb.state = CircuitState.OPEN
-        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
-
-        service._circuit_breakers[endpoint_key] = cb
-
-        # Verify the circuit breaker transitions when checked
-        assert cb.can_attempt() is True
-        assert cb.state == CircuitState.HALF_OPEN
-
-    def test_full_open_to_halfopen_via_failures_then_timeout(self):
-        """End-to-end: circuit starts CLOSED, accumulates failures to go OPEN,
-        then after timeout transitions to HALF_OPEN on next can_attempt()."""
-        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
-        assert cb.state == CircuitState.CLOSED
-
-        # Accumulate failures to trip the circuit
-        cb.record_failure()
-        cb.record_failure()
-        assert cb.state == CircuitState.CLOSED  # Not yet at threshold
-
-        cb.record_failure()
-        assert cb.state == CircuitState.OPEN  # Tripped
-
-        # Simulate time passing beyond timeout
-        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=61)
-
-        # Next attempt should transition to HALF_OPEN (the half-open probe)
-        result = cb.can_attempt()
-        assert result is True
-        assert cb.state == CircuitState.HALF_OPEN
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-G-05
-# ---------------------------------------------------------------------------
-
-
-class TestWebhook401ForbiddenNoRetry:
-    """Tests that 401 authentication errors are not retried.
-
-    Covers: UC-004-EXT-G-05
-    """
-
-    @patch("src.core.webhook_delivery._update_delivery_record")
-    @patch("src.core.webhook_delivery._create_delivery_record")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_401_response_is_not_retried_and_marked_failed(
-        self, mock_post, mock_validate, mock_create_record, mock_update_record
-    ):
-        """A 401 Forbidden response must cause immediate failure with no retries.
-
-        Covers: UC-004-EXT-G-05
-        """
-        # Arrange: URL validation passes
-        mock_validate.return_value = (True, None)
-
-        # Arrange: endpoint returns 401 Forbidden
-        mock_response = Mock()
-        mock_response.status_code = 401
-        mock_response.text = "Unauthorized - invalid credentials"
-        mock_post.return_value = mock_response
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"media_buy_id": "mb_001", "event": "delivery.update"},
-            headers={"Content-Type": "application/json"},
-            max_retries=3,
-            timeout=10,
-            event_type="delivery.update",
-            tenant_id="test_tenant",
-            object_id="mb_001",
-        )
-
-        # Act
-        success, result = deliver_webhook_with_retry(delivery)
-
-        # Assert: delivery failed
-        assert success is False
-        assert result["status"] == "failed"
-        assert result["response_code"] == 401
-
-        # Assert: exactly 1 attempt -- NO retries for 4xx
-        assert mock_post.call_count == 1
-        assert result["attempts"] == 1
-
-        # Assert: error message contains the status code
-        assert "401" in result["error"]
-
-    @patch("src.core.webhook_delivery._update_delivery_record")
-    @patch("src.core.webhook_delivery._create_delivery_record")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
-    @patch("src.core.webhook_delivery.requests.post")
-    def test_401_vs_500_retry_behavior_contrast(self, mock_post, mock_validate, mock_create_record, mock_update_record):
-        """Verify 401 does NOT retry while 500 DOES retry -- proves the branch matters.
-
-        Covers: UC-004-EXT-G-05
-        """
-        mock_validate.return_value = (True, None)
-
-        # --- 401 case: should stop immediately ---
-        mock_response_401 = Mock()
-        mock_response_401.status_code = 401
-        mock_response_401.text = "Unauthorized"
-        mock_post.return_value = mock_response_401
-
-        delivery_401 = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"event": "delivery"},
-            headers={},
-            max_retries=3,
-        )
-        success_401, result_401 = deliver_webhook_with_retry(delivery_401)
-
-        assert success_401 is False
-        assert result_401["attempts"] == 1
-        calls_for_401 = mock_post.call_count
-
-        # Reset mock
-        mock_post.reset_mock()
-
-        # --- 500 case: should retry all 3 attempts ---
-        mock_response_500 = Mock()
-        mock_response_500.status_code = 500
-        mock_response_500.text = "Internal Server Error"
-        mock_post.return_value = mock_response_500
-
-        delivery_500 = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"event": "delivery"},
-            headers={},
-            max_retries=3,
-        )
-        success_500, result_500 = deliver_webhook_with_retry(delivery_500)
-
-        assert success_500 is False
-        assert result_500["attempts"] == 3
-        calls_for_500 = mock_post.call_count
-
-        # The key contrast: 401 = 1 call, 500 = 3 calls
-        assert calls_for_401 == 1
-        assert calls_for_500 == 3
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-G-06
-# ---------------------------------------------------------------------------
-
-
-class TestEXT_G_06_HmacAuthRejection:
-    """HMAC auth rejection: 401/403 logs rejection, no retry, marks failed.
-
-    Covers: UC-004-EXT-G-06
-    """
-
-    @pytest.mark.parametrize("status_code", [401, 403])
-    @patch("src.core.webhook_delivery._update_delivery_record")
-    @patch("src.core.webhook_delivery._create_delivery_record")
-    @patch("src.core.webhook_delivery.requests.post")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
-    def test_auth_rejection_no_retry_marks_failed(
-        self,
-        mock_validate,
-        mock_post,
-        mock_create_record,
-        mock_update_record,
-        status_code,
-    ):
-        """401/403 from endpoint => single attempt, no retry, status=failed."""
-        mock_validate.return_value = (True, None)
-
-        mock_response = Mock()
-        mock_response.status_code = status_code
-        mock_response.text = "HMAC signature mismatch"
-        mock_post.return_value = mock_response
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"media_buy_id": "mb_001", "impressions": 5000},
-            headers={"Content-Type": "application/json"},
-            max_retries=3,
-            signing_secret="super-secret-key-for-hmac-signing",
-            event_type="delivery.report",
-            tenant_id="test_tenant",
-            object_id="mb_001",
-        )
-
-        success, result = deliver_webhook_with_retry(delivery)
-
-        assert success is False
-        assert result["status"] == "failed"
-        assert result["response_code"] == status_code
-        assert result["attempts"] == 1
-        assert mock_post.call_count == 1
-        assert f"Client error {status_code}" in result["error"]
-
-        mock_update_record.assert_called_once()
-        update_kwargs = mock_update_record.call_args
-        assert update_kwargs[1]["status"] == "failed"
-        assert update_kwargs[1]["response_code"] == status_code
-
-    @patch("src.core.webhook_delivery._update_delivery_record")
-    @patch("src.core.webhook_delivery._create_delivery_record")
-    @patch("src.core.webhook_delivery.requests.post")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
-    def test_hmac_headers_sent_before_rejection(
-        self,
-        mock_validate,
-        mock_post,
-        mock_create_record,
-        mock_update_record,
-    ):
-        """When signing_secret is provided, HMAC signature headers are added to request."""
-        mock_validate.return_value = (True, None)
-
-        mock_response = Mock()
-        mock_response.status_code = 401
-        mock_response.text = "Invalid signature"
-        mock_post.return_value = mock_response
-
-        payload = {"media_buy_id": "mb_001", "event": "delivery.report"}
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload=payload,
-            headers={"Content-Type": "application/json"},
-            signing_secret="my-webhook-secret-key",
-            event_type="delivery.report",
-            tenant_id="test_tenant",
-            object_id="mb_001",
-        )
-
-        deliver_webhook_with_retry(delivery)
-
-        sent_headers = mock_post.call_args[1]["headers"]
-        assert "X-Webhook-Signature" in sent_headers
-        assert sent_headers["X-Webhook-Signature"].startswith("sha256=")
-        assert "X-Webhook-Timestamp" in sent_headers
-
-    @patch("src.core.webhook_delivery._update_delivery_record")
-    @patch("src.core.webhook_delivery._create_delivery_record")
-    @patch("src.core.webhook_delivery.requests.post")
-    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
-    def test_auth_rejection_vs_server_error_retry_behavior(
-        self,
-        mock_validate,
-        mock_post,
-        mock_create_record,
-        mock_update_record,
-    ):
-        """Contrast: 401 does NOT retry, but 500 DOES retry -- proves branching."""
-        mock_validate.return_value = (True, None)
-
-        mock_response_401 = Mock()
-        mock_response_401.status_code = 401
-        mock_response_401.text = "Unauthorized"
-        mock_post.return_value = mock_response_401
-
-        delivery_auth_fail = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"test": True},
-            headers={},
-            max_retries=3,
-            event_type="delivery.report",
-            tenant_id="t1",
-        )
-
-        success_401, result_401 = deliver_webhook_with_retry(delivery_auth_fail)
-        assert success_401 is False
-        assert result_401["attempts"] == 1
-        assert mock_post.call_count == 1
-
-        mock_post.reset_mock()
-        mock_response_500 = Mock()
-        mock_response_500.status_code = 500
-        mock_response_500.text = "Internal Server Error"
-        mock_post.return_value = mock_response_500
-
-        delivery_server_fail = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"test": True},
-            headers={},
-            max_retries=3,
-            event_type="delivery.report",
-            tenant_id="t1",
-        )
-
-        with patch("src.core.webhook_delivery.time.sleep"):
-            success_500, result_500 = deliver_webhook_with_retry(delivery_server_fail)
-
-        assert success_500 is False
-        assert result_500["attempts"] == 3
-        assert mock_post.call_count == 3
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-G-07
-# ---------------------------------------------------------------------------
-
-
-class TestExtG07WebhookAuthFailureRecovery:
-    """Auth failure recovery: buyer must reconfigure credentials after 401/403.
-
-    Covers: UC-004-EXT-G-07
-    """
-
-    @pytest.mark.xfail(
-        reason=(
-            "No explicit auth-failure-blocks-until-reconfigured guard exists. "
-            "deliver_webhook_with_retry treats 401/403 as generic 4xx (no retry), "
-            "and the circuit breaker does not distinguish auth failures from other "
-            "errors. Recovery via UC-003 credential update is not enforced."
-        ),
-        strict=False,
-    )
-    def test_auth_failure_blocks_delivery_until_credentials_reconfigured(self):
-        """401/403 webhook failure should block delivery until credentials are reconfigured.
-
-        Covers: UC-004-EXT-G-07
-
-        Tests the full recovery cycle:
-        1. Webhook delivery fails with 401 (auth failure)
-        2. Subsequent deliveries are blocked (circuit breaker opens)
-        3. Buyer reconfigures credentials via UC-003
-        4. Delivery resumes with new credentials
-
-        The missing behavior: step 3 should be REQUIRED before step 4 can succeed.
-        Currently, the circuit breaker auto-recovers after timeout without requiring
-        credential reconfiguration.
-        """
-        # --- Step 1: Deliver webhook, receive 401 (auth failure) ---
-        mock_response_401 = Mock()
-        mock_response_401.status_code = 401
-        mock_response_401.text = "Unauthorized: invalid credentials"
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"media_buy_id": "mb_001", "status": "active"},
-            headers={"Content-Type": "application/json"},
-            max_retries=3,
-            timeout=10,
-            event_type="delivery.update",
-            tenant_id="test_tenant",
-            object_id="mb_001",
-        )
-
-        with (
-            patch("src.core.webhook_delivery.requests.post", return_value=mock_response_401),
-            patch(
-                "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
-                return_value=(True, None),
-            ),
-            patch("src.core.webhook_delivery._create_delivery_record"),
-            patch("src.core.webhook_delivery._update_delivery_record"),
-        ):
-            success, result = deliver_webhook_with_retry(delivery)
-
-        # VERIFY: 401 causes immediate failure (no retry for 4xx)
-        assert success is False
-        assert result["status"] == "failed"
-        assert result["response_code"] == 401
-        assert result["attempts"] == 1  # No retry for client errors
-        assert "Client error 401" in result["error"]
-
-        # --- Step 2: Circuit breaker should open after auth failures ---
-        cb = CircuitBreaker(failure_threshold=3)
-
-        # Simulate repeated 401 failures (as would happen with bad credentials)
-        for _ in range(3):
-            cb.record_failure()
-
-        assert cb.state == CircuitState.OPEN, "Circuit breaker should be OPEN after repeated auth failures"
-        assert cb.can_attempt() is False, "Delivery should be blocked while circuit is OPEN"
-
-        # --- Step 3: This is where the MISSING behavior would be ---
-        # The buyer should be REQUIRED to reconfigure credentials via UC-003
-        # (update_media_buy with new push_notification_config) before delivery
-        # can resume. Currently, the circuit breaker auto-recovers after timeout
-        # without any credential check.
-
-        # --- Step 4: After reconfiguration, delivery succeeds ---
-        mock_response_200 = Mock()
-        mock_response_200.status_code = 200
-        mock_response_200.text = "OK"
-
-        # Reset circuit breaker (simulating what would happen after credential update)
-        cb_fresh = CircuitBreaker(failure_threshold=3)
-        assert cb_fresh.state == CircuitState.CLOSED
-        assert cb_fresh.can_attempt() is True
-
-        delivery_after_reconfig = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"media_buy_id": "mb_001", "status": "active"},
-            headers={"Authorization": "Bearer new-valid-token"},
-            max_retries=3,
-            timeout=10,
-            event_type="delivery.update",
-            tenant_id="test_tenant",
-            object_id="mb_001",
-        )
-
-        with (
-            patch("src.core.webhook_delivery.requests.post", return_value=mock_response_200),
-            patch(
-                "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
-                return_value=(True, None),
-            ),
-            patch("src.core.webhook_delivery._create_delivery_record"),
-            patch("src.core.webhook_delivery._update_delivery_record"),
-        ):
-            success_after, result_after = deliver_webhook_with_retry(delivery_after_reconfig)
-
-        assert success_after is True
-        assert result_after["status"] == "delivered"
-
-        # THE KEY MISSING ASSERTION: The system should enforce that
-        # credential reconfiguration happened BEFORE allowing delivery to
-        # resume. This pytest.xfail marks the gap.
-        raise AssertionError(
-            "No auth-failure-specific guard exists. The circuit breaker provides "
-            "generic failure isolation but does not require credential reconfiguration "
-            "via UC-003 before resuming delivery after 401/403."
-        )
-
-    def test_401_causes_immediate_failure_no_retry(self):
-        """401 auth error is treated as 4xx client error: no retry.
-
-        Covers: UC-004-EXT-G-07
-        """
-        mock_response = Mock()
-        mock_response.status_code = 401
-        mock_response.text = "Unauthorized"
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"event": "delivery.update", "media_buy_id": "mb_001"},
-            headers={"Content-Type": "application/json"},
-            max_retries=3,
-            timeout=10,
-            event_type="delivery.update",
-            tenant_id="test_tenant",
-            object_id="mb_001",
-        )
-
-        with (
-            patch("src.core.webhook_delivery.requests.post", return_value=mock_response) as mock_post,
-            patch(
-                "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
-                return_value=(True, None),
-            ),
-            patch("src.core.webhook_delivery._create_delivery_record"),
-            patch("src.core.webhook_delivery._update_delivery_record") as mock_update,
-        ):
-            success, result = deliver_webhook_with_retry(delivery)
-
-        # 401 -> immediate failure, single attempt, no retries
-        assert success is False
-        assert result["response_code"] == 401
-        assert result["attempts"] == 1
-        assert result["status"] == "failed"
-
-        # Verify only ONE HTTP request was made (no retry)
-        mock_post.assert_called_once()
-
-        # Verify the failure was recorded in the database
-        mock_update.assert_called_once()
-        update_kwargs = mock_update.call_args
-        assert update_kwargs[1]["status"] == "failed"
-        assert update_kwargs[1]["response_code"] == 401
-
-    def test_403_causes_immediate_failure_no_retry(self):
-        """403 forbidden error is treated as 4xx client error: no retry.
-
-        Covers: UC-004-EXT-G-07
-        """
-        mock_response = Mock()
-        mock_response.status_code = 403
-        mock_response.text = "Forbidden"
-
-        delivery = WebhookDelivery(
-            webhook_url="https://buyer.example.com/webhook",
-            payload={"event": "delivery.update", "media_buy_id": "mb_001"},
-            headers={"Authorization": "Bearer expired-token"},
-            max_retries=3,
-            timeout=10,
-            event_type="delivery.update",
-            tenant_id="test_tenant",
-            object_id="mb_001",
-        )
-
-        with (
-            patch("src.core.webhook_delivery.requests.post", return_value=mock_response) as mock_post,
-            patch(
-                "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
-                return_value=(True, None),
-            ),
-            patch("src.core.webhook_delivery._create_delivery_record"),
-            patch("src.core.webhook_delivery._update_delivery_record") as mock_update,
-        ):
-            success, result = deliver_webhook_with_retry(delivery)
-
-        assert success is False
-        assert result["response_code"] == 403
-        assert result["attempts"] == 1
-        assert result["status"] == "failed"
-        mock_post.assert_called_once()
-
-    def test_circuit_breaker_opens_after_repeated_auth_failures(self):
-        """Circuit breaker opens after threshold auth failures, blocking delivery.
-
-        Covers: UC-004-EXT-G-07
-        """
-        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
-
-        # Initial state: CLOSED, attempts allowed
-        assert cb.state == CircuitState.CLOSED
-        assert cb.can_attempt() is True
-
-        # Simulate 3 consecutive 401 failures
-        cb.record_failure()  # failure 1
-        assert cb.state == CircuitState.CLOSED
-        cb.record_failure()  # failure 2
-        assert cb.state == CircuitState.CLOSED
-        cb.record_failure()  # failure 3: threshold reached
-
-        # Circuit should now be OPEN
-        assert cb.state == CircuitState.OPEN
-        assert cb.can_attempt() is False
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-G-08
-# ---------------------------------------------------------------------------
-
-
-class TestWebhookFailureNoSyncError:
-    """Webhook failure does not produce synchronous error to buyer.
-
-    Covers: UC-004-EXT-G-08
-    """
-
-    def test_send_delivery_webhook_returns_false_on_http_failure_never_raises(self):
-        """WebhookDeliveryService.send_delivery_webhook catches all exceptions
-        and returns False -- it never propagates to callers.
-
-        Covers: UC-004-EXT-G-08
-        """
-        service = WebhookDeliveryService()
-
-        with patch.object(service, "_send_webhook_enhanced", side_effect=Exception("network down")):
-            result = service.send_delivery_webhook(
-                media_buy_id="mb_001",
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
-                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
-                impressions=5000,
-                spend=250.0,
-                currency="USD",
-                status="active",
-            )
-
-        assert result is False
-
-    def test_send_delivery_webhook_returns_false_on_internal_failure(self):
-        """Even when _send_webhook_enhanced returns False (all retries exhausted),
-        send_delivery_webhook returns False gracefully.
-
-        Covers: UC-004-EXT-G-08
-        """
-        service = WebhookDeliveryService()
-
-        with patch.object(service, "_send_webhook_enhanced", return_value=False):
-            result = service.send_delivery_webhook(
-                media_buy_id="mb_002",
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
-                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
-                impressions=3000,
-                spend=150.0,
-            )
-
-        assert result is False
-
-    def test_sequence_number_increments_even_on_failed_delivery(self):
-        """Sequence numbers increment regardless of delivery outcome, creating
-        detectable gaps when deliveries fail -- the buyer detection mechanism.
-
-        Covers: UC-004-EXT-G-08
-        """
-        service = WebhookDeliveryService()
-
-        with patch.object(service, "_send_webhook_enhanced", return_value=False):
-            service.send_delivery_webhook(
-                media_buy_id="mb_seq",
-                tenant_id="t1",
-                principal_id="p1",
-                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
-                reporting_period_end=datetime(2025, 1, 31, tzinfo=UTC),
-                impressions=1000,
-                spend=50.0,
-            )
-            service.send_delivery_webhook(
-                media_buy_id="mb_seq",
-                tenant_id="t1",
-                principal_id="p1",
-                reporting_period_start=datetime(2025, 2, 1, tzinfo=UTC),
-                reporting_period_end=datetime(2025, 2, 28, tzinfo=UTC),
-                impressions=2000,
-                spend=100.0,
-            )
-
-        assert service._sequence_numbers["mb_seq"] == 2
-
-    def test_webhook_failure_does_not_affect_poll_response(self):
-        """The poll endpoint (_get_media_buy_delivery_impl) and webhook delivery
-        are completely separate code paths. A webhook failure in a background
-        process cannot propagate to the poll response.
-
-        Covers: UC-004-EXT-G-08
-        """
-        identity = _make_identity()
-        buy = _make_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
-        adapter_resp = _make_adapter_response()
-
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_001"],
-            start_date="2025-01-01",
-            end_date="2025-06-30",
-        )
-
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = adapter_resp
-
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [buy]
-        mock_repo.get_packages.return_value = []
-
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = Mock(return_value=mock_uow)
-        mock_uow.__exit__ = Mock(return_value=False)
-        mock_uow.media_buys = mock_repo
-
-        webhook_service = WebhookDeliveryService()
-        with patch.object(webhook_service, "_send_webhook_enhanced", side_effect=Exception("timeout")):
-            webhook_result = webhook_service.send_delivery_webhook(
-                media_buy_id="mb_001",
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
-                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
-                impressions=5000,
-                spend=250.0,
-            )
-
-        assert webhook_result is False
-
-        with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=mock_adapter),
-            patch(f"{_PATCH}.MediaBuyUoW", return_value=mock_uow),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
-        ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
-
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        assert isinstance(response, GetMediaBuyDeliveryResponse)
-        assert len(response.media_buy_deliveries) == 1
-        assert response.media_buy_deliveries[0].media_buy_id == "mb_001"
-        assert response.aggregated_totals.impressions == 5000
-        assert response.errors is None
-
-    def test_send_webhook_enhanced_catches_db_errors(self):
-        """_send_webhook_enhanced catches database errors when looking up
-        webhook configs, returning False instead of raising.
-
-        Covers: UC-004-EXT-G-08
-        """
-        service = WebhookDeliveryService()
-
-        with patch(
-            "src.core.database.database_session.get_db_session",
-            side_effect=Exception("DB connection refused"),
-        ):
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"test": "data"},
-            )
-
-        assert result is False
 
 
 # ---------------------------------------------------------------------------
@@ -2810,6 +1477,11 @@ class TestBuyerRefResolution:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-03
+# ---------------------------------------------------------------------------
+
+
 class TestMultipleMediaBuyDelivery:
     """Array-based identification returns delivery for all requested media buys.
 
@@ -2881,6 +1553,11 @@ class TestMultipleMediaBuyDelivery:
 
         mock_repo.get_by_principal.assert_called_once_with("test_principal", media_buy_ids=["mb_1", "mb_2", "mb_3"])
         assert adapter_mock.get_media_buy_delivery.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-04
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -3011,6 +1688,11 @@ class TestNoIdentifiersReturnAll:
         assert response.aggregated_totals.impressions == 5000.0
         assert response.aggregated_totals.spend == 500.0
         assert response.aggregated_totals.media_buy_count == 5
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-09
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -3268,6 +1950,11 @@ class TestPackageLevelBreakdowns:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-10
+# ---------------------------------------------------------------------------
+
+
 class TestPackageDeliveryStatus:
     """Media buy status computation based on package delivery states.
 
@@ -3481,6 +2168,11 @@ class TestPackageDeliveryStatus:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-11
+# ---------------------------------------------------------------------------
+
+
 class TestAggregatedTotalsMultipleBuys:
     """Aggregated totals are correctly summed across three media buys.
 
@@ -3598,6 +2290,11 @@ class TestAggregatedTotalsMultipleBuys:
         sum_spend = sum(d.totals.spend for d in response.media_buy_deliveries)
         assert agg.impressions == sum_impressions
         assert agg.spend == sum_spend
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-12
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -3741,6 +2438,11 @@ class TestProtocolEnvelopeStatusCompleted:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-13
+# ---------------------------------------------------------------------------
+
+
 class TestMCPToolResultContent:
     """MCP wrapper returns ToolResult with both content and structured_content.
 
@@ -3858,6 +2560,11 @@ class TestMCPToolResultContent:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-14
+# ---------------------------------------------------------------------------
+
+
 class TestPricingOptionStringLookup:
     """Verify pricing_option_id string field is used for lookup, not integer PK.
 
@@ -3928,6 +2635,11 @@ class TestPricingOptionStringLookup:
         result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant")
 
         assert len(result) > 0, "Non-numeric pricing_option_id 'cpm_usd_fixed' was silently discarded."
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-15
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -4031,6 +2743,13 @@ class TestDeliverySpendComputation:
 # --- OID: UC-004-MAIN-16 ---
 
 
+# ---------------------------------------------------------------------------
+# Batch 7: UC-004-MAIN-16 through UC-004-MAIN-20
+# ---------------------------------------------------------------------------
+
+# --- OID: UC-004-MAIN-16 ---
+
+
 class TestBuyerRefInDeliveryEntries:
     """Verify that buyer_ref from raw_request propagates to media_buy_deliveries entries.
 
@@ -4090,6 +2809,9 @@ class TestBuyerRefInDeliveryEntries:
             f"Expected buyer_ref='buyer_camp_1' but got '{delivery.buyer_ref}'. "
             "The delivery boundary must propagate buyer_ref from raw_request."
         )
+
+
+# --- OID: UC-004-MAIN-17 ---
 
 
 # --- OID: UC-004-MAIN-17 ---
@@ -4187,6 +2909,9 @@ class TestPartialResolutionMissingIds:
 # --- OID: UC-004-MAIN-18 ---
 
 
+# --- OID: UC-004-MAIN-18 ---
+
+
 class TestNonexistentMediaBuyIdsReturnEmptyDeliveries:
     """BR-RULE-030: Nonexistent media_buy_ids resolve to empty deliveries array.
 
@@ -4234,6 +2959,9 @@ class TestNonexistentMediaBuyIdsReturnEmptyDeliveries:
 
         # Adapter was never called (no buys to fetch delivery for)
         mock_get_adapter.return_value.get_media_buy_delivery.assert_not_called()
+
+
+# --- OID: UC-004-MAIN-19 ---
 
 
 # --- OID: UC-004-MAIN-19 ---
@@ -4482,6 +3210,9 @@ class TestDeliveryMetricsFieldPresence:
 # --- OID: UC-004-MAIN-20 ---
 
 
+# --- OID: UC-004-MAIN-20 ---
+
+
 class TestUnpopulatedFieldsGraceful:
     """Verify unpopulated schema fields (gaps G42, G44) handled without error.
 
@@ -4649,6 +3380,11 @@ class TestUnpopulatedFieldsGraceful:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
+# ---------------------------------------------------------------------------
+
+
 class TestPricingOptionStringToIntComparisonRejected:
     """PricingOption string-to-integer comparison is detected and rejected.
 
@@ -4726,6 +3462,11 @@ class TestPricingOptionStringToIntComparisonRejected:
         assert result.get("42") is None
         # Only the string pricing_option_id works
         assert result.get("cpc_usd_standard") is not None
+
+
+# ---------------------------------------------------------------------------
+# UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -4841,6 +3582,11 @@ class TestEndToEndDeliveryMetricsCpmPricing:
             hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "cpm_usd_fixed"
             for pkg in delivery.by_package
         )
+
+
+# ---------------------------------------------------------------------------
+# UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -4967,6 +3713,11 @@ class TestEndToEndDeliveryMetricsCpcPricing:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
+# ---------------------------------------------------------------------------
+
+
 class TestDeliveryMetricsFlatRatePricing:
     """End-to-end delivery metrics with FLAT_RATE pricing.
 
@@ -5075,6 +3826,11 @@ class TestDeliveryMetricsFlatRatePricing:
             hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "flat_rate_premium"
             for pkg in delivery.by_package
         )
+
+
+# ---------------------------------------------------------------------------
+# UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

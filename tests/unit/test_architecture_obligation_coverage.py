@@ -33,7 +33,9 @@ _UNIT_ENTITY_FILES = [
     "test_creative.py",
     "test_create_media_buy_behavioral.py",
     "test_update_media_buy_behavioral.py",
-    "test_delivery_behavioral.py",
+    "test_delivery_poll_behavioral.py",
+    "test_delivery_webhook_behavioral.py",
+    "test_delivery_service_behavioral.py",
     "test_webhook_delivery_service.py",
 ]
 
