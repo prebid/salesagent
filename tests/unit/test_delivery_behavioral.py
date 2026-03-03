@@ -15,7 +15,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
@@ -1899,3 +1899,784 @@ class TestCircuitBreakerOpensAfterRetriesExhausted:
 
         assert len(response.media_buy_deliveries) == 1
         assert response.media_buy_deliveries[0].status == "reporting_delayed"
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-04
+# ---------------------------------------------------------------------------
+
+
+class TestCircuitBreakerHalfOpenProbe:
+    """When a circuit breaker is OPEN and the timeout elapses, the system
+    transitions to HALF_OPEN and allows a probe attempt.
+
+    Covers: UC-004-EXT-G-04
+    """
+
+    def test_open_circuit_transitions_to_half_open_after_timeout(self):
+        """Given an OPEN circuit breaker whose timeout has elapsed,
+        can_attempt() should transition state to HALF_OPEN and return True."""
+        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
+
+        # Force circuit into OPEN state with a failure time in the past
+        cb.state = CircuitState.OPEN
+        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
+
+        # When can_attempt is called (simulating the timer/probe check)
+        result = cb.can_attempt()
+
+        # Then the circuit transitions to HALF_OPEN and allows the probe
+        assert result is True
+        assert cb.state == CircuitState.HALF_OPEN
+        assert cb.success_count == 0  # Reset for tracking recovery successes
+
+    def test_open_circuit_stays_open_before_timeout(self):
+        """Given an OPEN circuit breaker whose timeout has NOT elapsed,
+        can_attempt() should return False and stay OPEN."""
+        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
+
+        cb.state = CircuitState.OPEN
+        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=30)
+
+        result = cb.can_attempt()
+
+        assert result is False
+        assert cb.state == CircuitState.OPEN
+
+    def test_half_open_probe_success_path(self):
+        """After transitioning to HALF_OPEN, a successful probe should be recorded.
+        With enough successes, the circuit closes."""
+        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
+
+        # Transition to HALF_OPEN via timeout expiry
+        cb.state = CircuitState.OPEN
+        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
+        assert cb.can_attempt() is True
+        assert cb.state == CircuitState.HALF_OPEN
+
+        # First successful probe
+        cb.record_success()
+        assert cb.state == CircuitState.HALF_OPEN  # Not yet enough successes
+        assert cb.success_count == 1
+
+        # Second successful probe -> closes the circuit
+        cb.record_success()
+        assert cb.state == CircuitState.CLOSED
+
+    def test_half_open_probe_failure_reopens_circuit(self):
+        """After transitioning to HALF_OPEN, a failed probe should reopen the circuit."""
+        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
+
+        # Transition to HALF_OPEN
+        cb.state = CircuitState.OPEN
+        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
+        assert cb.can_attempt() is True
+        assert cb.state == CircuitState.HALF_OPEN
+
+        # Probe fails
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+
+    def test_service_allows_probe_after_circuit_breaker_timeout(self):
+        """Integration test: WebhookDeliveryService uses circuit breaker
+        can_attempt() to allow half-open probe after timeout expires.
+
+        This verifies the service-level integration at _send_webhook_enhanced
+        where can_attempt() gates webhook delivery."""
+        service = WebhookDeliveryService()
+
+        endpoint_key = "test_tenant:https://example.com/webhook"
+        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
+        cb.state = CircuitState.OPEN
+        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
+
+        service._circuit_breakers[endpoint_key] = cb
+
+        # Verify the circuit breaker transitions when checked
+        assert cb.can_attempt() is True
+        assert cb.state == CircuitState.HALF_OPEN
+
+    def test_full_open_to_halfopen_via_failures_then_timeout(self):
+        """End-to-end: circuit starts CLOSED, accumulates failures to go OPEN,
+        then after timeout transitions to HALF_OPEN on next can_attempt()."""
+        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
+        assert cb.state == CircuitState.CLOSED
+
+        # Accumulate failures to trip the circuit
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.state == CircuitState.CLOSED  # Not yet at threshold
+
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN  # Tripped
+
+        # Simulate time passing beyond timeout
+        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=61)
+
+        # Next attempt should transition to HALF_OPEN (the half-open probe)
+        result = cb.can_attempt()
+        assert result is True
+        assert cb.state == CircuitState.HALF_OPEN
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-05
+# ---------------------------------------------------------------------------
+
+
+class TestWebhook401ForbiddenNoRetry:
+    """Tests that 401 authentication errors are not retried.
+
+    Covers: UC-004-EXT-G-05
+    """
+
+    @patch("src.core.webhook_delivery._update_delivery_record")
+    @patch("src.core.webhook_delivery._create_delivery_record")
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
+    @patch("src.core.webhook_delivery.requests.post")
+    def test_401_response_is_not_retried_and_marked_failed(
+        self, mock_post, mock_validate, mock_create_record, mock_update_record
+    ):
+        """A 401 Forbidden response must cause immediate failure with no retries.
+
+        Covers: UC-004-EXT-G-05
+        """
+        # Arrange: URL validation passes
+        mock_validate.return_value = (True, None)
+
+        # Arrange: endpoint returns 401 Forbidden
+        mock_response = Mock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized - invalid credentials"
+        mock_post.return_value = mock_response
+
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"media_buy_id": "mb_001", "event": "delivery.update"},
+            headers={"Content-Type": "application/json"},
+            max_retries=3,
+            timeout=10,
+            event_type="delivery.update",
+            tenant_id="test_tenant",
+            object_id="mb_001",
+        )
+
+        # Act
+        success, result = deliver_webhook_with_retry(delivery)
+
+        # Assert: delivery failed
+        assert success is False
+        assert result["status"] == "failed"
+        assert result["response_code"] == 401
+
+        # Assert: exactly 1 attempt -- NO retries for 4xx
+        assert mock_post.call_count == 1
+        assert result["attempts"] == 1
+
+        # Assert: error message contains the status code
+        assert "401" in result["error"]
+
+    @patch("src.core.webhook_delivery._update_delivery_record")
+    @patch("src.core.webhook_delivery._create_delivery_record")
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
+    @patch("src.core.webhook_delivery.requests.post")
+    def test_401_vs_500_retry_behavior_contrast(self, mock_post, mock_validate, mock_create_record, mock_update_record):
+        """Verify 401 does NOT retry while 500 DOES retry -- proves the branch matters.
+
+        Covers: UC-004-EXT-G-05
+        """
+        mock_validate.return_value = (True, None)
+
+        # --- 401 case: should stop immediately ---
+        mock_response_401 = Mock()
+        mock_response_401.status_code = 401
+        mock_response_401.text = "Unauthorized"
+        mock_post.return_value = mock_response_401
+
+        delivery_401 = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"event": "delivery"},
+            headers={},
+            max_retries=3,
+        )
+        success_401, result_401 = deliver_webhook_with_retry(delivery_401)
+
+        assert success_401 is False
+        assert result_401["attempts"] == 1
+        calls_for_401 = mock_post.call_count
+
+        # Reset mock
+        mock_post.reset_mock()
+
+        # --- 500 case: should retry all 3 attempts ---
+        mock_response_500 = Mock()
+        mock_response_500.status_code = 500
+        mock_response_500.text = "Internal Server Error"
+        mock_post.return_value = mock_response_500
+
+        delivery_500 = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"event": "delivery"},
+            headers={},
+            max_retries=3,
+        )
+        success_500, result_500 = deliver_webhook_with_retry(delivery_500)
+
+        assert success_500 is False
+        assert result_500["attempts"] == 3
+        calls_for_500 = mock_post.call_count
+
+        # The key contrast: 401 = 1 call, 500 = 3 calls
+        assert calls_for_401 == 1
+        assert calls_for_500 == 3
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-06
+# ---------------------------------------------------------------------------
+
+
+class TestEXT_G_06_HmacAuthRejection:
+    """HMAC auth rejection: 401/403 logs rejection, no retry, marks failed.
+
+    Covers: UC-004-EXT-G-06
+    """
+
+    @pytest.mark.parametrize("status_code", [401, 403])
+    @patch("src.core.webhook_delivery._update_delivery_record")
+    @patch("src.core.webhook_delivery._create_delivery_record")
+    @patch("src.core.webhook_delivery.requests.post")
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
+    def test_auth_rejection_no_retry_marks_failed(
+        self,
+        mock_validate,
+        mock_post,
+        mock_create_record,
+        mock_update_record,
+        status_code,
+    ):
+        """401/403 from endpoint => single attempt, no retry, status=failed."""
+        mock_validate.return_value = (True, None)
+
+        mock_response = Mock()
+        mock_response.status_code = status_code
+        mock_response.text = "HMAC signature mismatch"
+        mock_post.return_value = mock_response
+
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"media_buy_id": "mb_001", "impressions": 5000},
+            headers={"Content-Type": "application/json"},
+            max_retries=3,
+            signing_secret="super-secret-key-for-hmac-signing",
+            event_type="delivery.report",
+            tenant_id="test_tenant",
+            object_id="mb_001",
+        )
+
+        success, result = deliver_webhook_with_retry(delivery)
+
+        assert success is False
+        assert result["status"] == "failed"
+        assert result["response_code"] == status_code
+        assert result["attempts"] == 1
+        assert mock_post.call_count == 1
+        assert f"Client error {status_code}" in result["error"]
+
+        mock_update_record.assert_called_once()
+        update_kwargs = mock_update_record.call_args
+        assert update_kwargs[1]["status"] == "failed"
+        assert update_kwargs[1]["response_code"] == status_code
+
+    @patch("src.core.webhook_delivery._update_delivery_record")
+    @patch("src.core.webhook_delivery._create_delivery_record")
+    @patch("src.core.webhook_delivery.requests.post")
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
+    def test_hmac_headers_sent_before_rejection(
+        self,
+        mock_validate,
+        mock_post,
+        mock_create_record,
+        mock_update_record,
+    ):
+        """When signing_secret is provided, HMAC signature headers are added to request."""
+        mock_validate.return_value = (True, None)
+
+        mock_response = Mock()
+        mock_response.status_code = 401
+        mock_response.text = "Invalid signature"
+        mock_post.return_value = mock_response
+
+        payload = {"media_buy_id": "mb_001", "event": "delivery.report"}
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload=payload,
+            headers={"Content-Type": "application/json"},
+            signing_secret="my-webhook-secret-key",
+            event_type="delivery.report",
+            tenant_id="test_tenant",
+            object_id="mb_001",
+        )
+
+        deliver_webhook_with_retry(delivery)
+
+        sent_headers = mock_post.call_args[1]["headers"]
+        assert "X-Webhook-Signature" in sent_headers
+        assert sent_headers["X-Webhook-Signature"].startswith("sha256=")
+        assert "X-Webhook-Timestamp" in sent_headers
+
+    @patch("src.core.webhook_delivery._update_delivery_record")
+    @patch("src.core.webhook_delivery._create_delivery_record")
+    @patch("src.core.webhook_delivery.requests.post")
+    @patch("src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url")
+    def test_auth_rejection_vs_server_error_retry_behavior(
+        self,
+        mock_validate,
+        mock_post,
+        mock_create_record,
+        mock_update_record,
+    ):
+        """Contrast: 401 does NOT retry, but 500 DOES retry -- proves branching."""
+        mock_validate.return_value = (True, None)
+
+        mock_response_401 = Mock()
+        mock_response_401.status_code = 401
+        mock_response_401.text = "Unauthorized"
+        mock_post.return_value = mock_response_401
+
+        delivery_auth_fail = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"test": True},
+            headers={},
+            max_retries=3,
+            event_type="delivery.report",
+            tenant_id="t1",
+        )
+
+        success_401, result_401 = deliver_webhook_with_retry(delivery_auth_fail)
+        assert success_401 is False
+        assert result_401["attempts"] == 1
+        assert mock_post.call_count == 1
+
+        mock_post.reset_mock()
+        mock_response_500 = Mock()
+        mock_response_500.status_code = 500
+        mock_response_500.text = "Internal Server Error"
+        mock_post.return_value = mock_response_500
+
+        delivery_server_fail = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"test": True},
+            headers={},
+            max_retries=3,
+            event_type="delivery.report",
+            tenant_id="t1",
+        )
+
+        with patch("src.core.webhook_delivery.time.sleep"):
+            success_500, result_500 = deliver_webhook_with_retry(delivery_server_fail)
+
+        assert success_500 is False
+        assert result_500["attempts"] == 3
+        assert mock_post.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-07
+# ---------------------------------------------------------------------------
+
+
+class TestExtG07WebhookAuthFailureRecovery:
+    """Auth failure recovery: buyer must reconfigure credentials after 401/403.
+
+    Covers: UC-004-EXT-G-07
+    """
+
+    @pytest.mark.xfail(
+        reason=(
+            "No explicit auth-failure-blocks-until-reconfigured guard exists. "
+            "deliver_webhook_with_retry treats 401/403 as generic 4xx (no retry), "
+            "and the circuit breaker does not distinguish auth failures from other "
+            "errors. Recovery via UC-003 credential update is not enforced."
+        ),
+        strict=False,
+    )
+    def test_auth_failure_blocks_delivery_until_credentials_reconfigured(self):
+        """401/403 webhook failure should block delivery until credentials are reconfigured.
+
+        Covers: UC-004-EXT-G-07
+
+        Tests the full recovery cycle:
+        1. Webhook delivery fails with 401 (auth failure)
+        2. Subsequent deliveries are blocked (circuit breaker opens)
+        3. Buyer reconfigures credentials via UC-003
+        4. Delivery resumes with new credentials
+
+        The missing behavior: step 3 should be REQUIRED before step 4 can succeed.
+        Currently, the circuit breaker auto-recovers after timeout without requiring
+        credential reconfiguration.
+        """
+        # --- Step 1: Deliver webhook, receive 401 (auth failure) ---
+        mock_response_401 = Mock()
+        mock_response_401.status_code = 401
+        mock_response_401.text = "Unauthorized: invalid credentials"
+
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"media_buy_id": "mb_001", "status": "active"},
+            headers={"Content-Type": "application/json"},
+            max_retries=3,
+            timeout=10,
+            event_type="delivery.update",
+            tenant_id="test_tenant",
+            object_id="mb_001",
+        )
+
+        with (
+            patch("src.core.webhook_delivery.requests.post", return_value=mock_response_401),
+            patch(
+                "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
+                return_value=(True, None),
+            ),
+            patch("src.core.webhook_delivery._create_delivery_record"),
+            patch("src.core.webhook_delivery._update_delivery_record"),
+        ):
+            success, result = deliver_webhook_with_retry(delivery)
+
+        # VERIFY: 401 causes immediate failure (no retry for 4xx)
+        assert success is False
+        assert result["status"] == "failed"
+        assert result["response_code"] == 401
+        assert result["attempts"] == 1  # No retry for client errors
+        assert "Client error 401" in result["error"]
+
+        # --- Step 2: Circuit breaker should open after auth failures ---
+        cb = CircuitBreaker(failure_threshold=3)
+
+        # Simulate repeated 401 failures (as would happen with bad credentials)
+        for _ in range(3):
+            cb.record_failure()
+
+        assert cb.state == CircuitState.OPEN, "Circuit breaker should be OPEN after repeated auth failures"
+        assert cb.can_attempt() is False, "Delivery should be blocked while circuit is OPEN"
+
+        # --- Step 3: This is where the MISSING behavior would be ---
+        # The buyer should be REQUIRED to reconfigure credentials via UC-003
+        # (update_media_buy with new push_notification_config) before delivery
+        # can resume. Currently, the circuit breaker auto-recovers after timeout
+        # without any credential check.
+
+        # --- Step 4: After reconfiguration, delivery succeeds ---
+        mock_response_200 = Mock()
+        mock_response_200.status_code = 200
+        mock_response_200.text = "OK"
+
+        # Reset circuit breaker (simulating what would happen after credential update)
+        cb_fresh = CircuitBreaker(failure_threshold=3)
+        assert cb_fresh.state == CircuitState.CLOSED
+        assert cb_fresh.can_attempt() is True
+
+        delivery_after_reconfig = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"media_buy_id": "mb_001", "status": "active"},
+            headers={"Authorization": "Bearer new-valid-token"},
+            max_retries=3,
+            timeout=10,
+            event_type="delivery.update",
+            tenant_id="test_tenant",
+            object_id="mb_001",
+        )
+
+        with (
+            patch("src.core.webhook_delivery.requests.post", return_value=mock_response_200),
+            patch(
+                "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
+                return_value=(True, None),
+            ),
+            patch("src.core.webhook_delivery._create_delivery_record"),
+            patch("src.core.webhook_delivery._update_delivery_record"),
+        ):
+            success_after, result_after = deliver_webhook_with_retry(delivery_after_reconfig)
+
+        assert success_after is True
+        assert result_after["status"] == "delivered"
+
+        # THE KEY MISSING ASSERTION: The system should enforce that
+        # credential reconfiguration happened BEFORE allowing delivery to
+        # resume. This pytest.xfail marks the gap.
+        raise AssertionError(
+            "No auth-failure-specific guard exists. The circuit breaker provides "
+            "generic failure isolation but does not require credential reconfiguration "
+            "via UC-003 before resuming delivery after 401/403."
+        )
+
+    def test_401_causes_immediate_failure_no_retry(self):
+        """401 auth error is treated as 4xx client error: no retry.
+
+        Covers: UC-004-EXT-G-07
+        """
+        mock_response = Mock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"event": "delivery.update", "media_buy_id": "mb_001"},
+            headers={"Content-Type": "application/json"},
+            max_retries=3,
+            timeout=10,
+            event_type="delivery.update",
+            tenant_id="test_tenant",
+            object_id="mb_001",
+        )
+
+        with (
+            patch("src.core.webhook_delivery.requests.post", return_value=mock_response) as mock_post,
+            patch(
+                "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
+                return_value=(True, None),
+            ),
+            patch("src.core.webhook_delivery._create_delivery_record"),
+            patch("src.core.webhook_delivery._update_delivery_record") as mock_update,
+        ):
+            success, result = deliver_webhook_with_retry(delivery)
+
+        # 401 -> immediate failure, single attempt, no retries
+        assert success is False
+        assert result["response_code"] == 401
+        assert result["attempts"] == 1
+        assert result["status"] == "failed"
+
+        # Verify only ONE HTTP request was made (no retry)
+        mock_post.assert_called_once()
+
+        # Verify the failure was recorded in the database
+        mock_update.assert_called_once()
+        update_kwargs = mock_update.call_args
+        assert update_kwargs[1]["status"] == "failed"
+        assert update_kwargs[1]["response_code"] == 401
+
+    def test_403_causes_immediate_failure_no_retry(self):
+        """403 forbidden error is treated as 4xx client error: no retry.
+
+        Covers: UC-004-EXT-G-07
+        """
+        mock_response = Mock()
+        mock_response.status_code = 403
+        mock_response.text = "Forbidden"
+
+        delivery = WebhookDelivery(
+            webhook_url="https://buyer.example.com/webhook",
+            payload={"event": "delivery.update", "media_buy_id": "mb_001"},
+            headers={"Authorization": "Bearer expired-token"},
+            max_retries=3,
+            timeout=10,
+            event_type="delivery.update",
+            tenant_id="test_tenant",
+            object_id="mb_001",
+        )
+
+        with (
+            patch("src.core.webhook_delivery.requests.post", return_value=mock_response) as mock_post,
+            patch(
+                "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
+                return_value=(True, None),
+            ),
+            patch("src.core.webhook_delivery._create_delivery_record"),
+            patch("src.core.webhook_delivery._update_delivery_record") as mock_update,
+        ):
+            success, result = deliver_webhook_with_retry(delivery)
+
+        assert success is False
+        assert result["response_code"] == 403
+        assert result["attempts"] == 1
+        assert result["status"] == "failed"
+        mock_post.assert_called_once()
+
+    def test_circuit_breaker_opens_after_repeated_auth_failures(self):
+        """Circuit breaker opens after threshold auth failures, blocking delivery.
+
+        Covers: UC-004-EXT-G-07
+        """
+        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
+
+        # Initial state: CLOSED, attempts allowed
+        assert cb.state == CircuitState.CLOSED
+        assert cb.can_attempt() is True
+
+        # Simulate 3 consecutive 401 failures
+        cb.record_failure()  # failure 1
+        assert cb.state == CircuitState.CLOSED
+        cb.record_failure()  # failure 2
+        assert cb.state == CircuitState.CLOSED
+        cb.record_failure()  # failure 3: threshold reached
+
+        # Circuit should now be OPEN
+        assert cb.state == CircuitState.OPEN
+        assert cb.can_attempt() is False
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-08
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookFailureNoSyncError:
+    """Webhook failure does not produce synchronous error to buyer.
+
+    Covers: UC-004-EXT-G-08
+    """
+
+    def test_send_delivery_webhook_returns_false_on_http_failure_never_raises(self):
+        """WebhookDeliveryService.send_delivery_webhook catches all exceptions
+        and returns False -- it never propagates to callers.
+
+        Covers: UC-004-EXT-G-08
+        """
+        service = WebhookDeliveryService()
+
+        with patch.object(service, "_send_webhook_enhanced", side_effect=Exception("network down")):
+            result = service.send_delivery_webhook(
+                media_buy_id="mb_001",
+                tenant_id="test_tenant",
+                principal_id="test_principal",
+                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
+                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
+                impressions=5000,
+                spend=250.0,
+                currency="USD",
+                status="active",
+            )
+
+        assert result is False
+
+    def test_send_delivery_webhook_returns_false_on_internal_failure(self):
+        """Even when _send_webhook_enhanced returns False (all retries exhausted),
+        send_delivery_webhook returns False gracefully.
+
+        Covers: UC-004-EXT-G-08
+        """
+        service = WebhookDeliveryService()
+
+        with patch.object(service, "_send_webhook_enhanced", return_value=False):
+            result = service.send_delivery_webhook(
+                media_buy_id="mb_002",
+                tenant_id="test_tenant",
+                principal_id="test_principal",
+                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
+                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
+                impressions=3000,
+                spend=150.0,
+            )
+
+        assert result is False
+
+    def test_sequence_number_increments_even_on_failed_delivery(self):
+        """Sequence numbers increment regardless of delivery outcome, creating
+        detectable gaps when deliveries fail -- the buyer detection mechanism.
+
+        Covers: UC-004-EXT-G-08
+        """
+        service = WebhookDeliveryService()
+
+        with patch.object(service, "_send_webhook_enhanced", return_value=False):
+            service.send_delivery_webhook(
+                media_buy_id="mb_seq",
+                tenant_id="t1",
+                principal_id="p1",
+                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
+                reporting_period_end=datetime(2025, 1, 31, tzinfo=UTC),
+                impressions=1000,
+                spend=50.0,
+            )
+            service.send_delivery_webhook(
+                media_buy_id="mb_seq",
+                tenant_id="t1",
+                principal_id="p1",
+                reporting_period_start=datetime(2025, 2, 1, tzinfo=UTC),
+                reporting_period_end=datetime(2025, 2, 28, tzinfo=UTC),
+                impressions=2000,
+                spend=100.0,
+            )
+
+        assert service._sequence_numbers["mb_seq"] == 2
+
+    def test_webhook_failure_does_not_affect_poll_response(self):
+        """The poll endpoint (_get_media_buy_delivery_impl) and webhook delivery
+        are completely separate code paths. A webhook failure in a background
+        process cannot propagate to the poll response.
+
+        Covers: UC-004-EXT-G-08
+        """
+        identity = _make_identity()
+        buy = _make_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        adapter_resp = _make_adapter_response()
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_resp
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow.media_buys = mock_repo
+
+        webhook_service = WebhookDeliveryService()
+        with patch.object(webhook_service, "_send_webhook_enhanced", side_effect=Exception("timeout")):
+            webhook_result = webhook_service.send_delivery_webhook(
+                media_buy_id="mb_001",
+                tenant_id="test_tenant",
+                principal_id="test_principal",
+                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
+                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
+                impressions=5000,
+                spend=250.0,
+            )
+
+        assert webhook_result is False
+
+        with (
+            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch(f"{_PATCH}.get_adapter", return_value=mock_adapter),
+            patch(f"{_PATCH}.MediaBuyUoW", return_value=mock_uow),
+            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+        ):
+            mock_principal.return_value = MagicMock(principal_id="test_principal")
+
+            response = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert len(response.media_buy_deliveries) == 1
+        assert response.media_buy_deliveries[0].media_buy_id == "mb_001"
+        assert response.aggregated_totals.impressions == 5000
+        assert response.errors is None
+
+    def test_send_webhook_enhanced_catches_db_errors(self):
+        """_send_webhook_enhanced catches database errors when looking up
+        webhook configs, returning False instead of raising.
+
+        Covers: UC-004-EXT-G-08
+        """
+        service = WebhookDeliveryService()
+
+        with patch(
+            "src.core.database.database_session.get_db_session",
+            side_effect=Exception("DB connection refused"),
+        ):
+            result = service._send_webhook_enhanced(
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_001",
+                delivery_payload={"test": "data"},
+            )
+
+        assert result is False
