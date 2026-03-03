@@ -1,45 +1,48 @@
-"""Base test environment for _impl function testing.
+"""Base integration test environment for _impl function testing.
 
-Subclasses override class attributes and methods to create domain-specific
-test environments. The base handles patch lifecycle (enter/exit) and provides
-a dict of active mocks keyed by short name.
+Uses real PostgreSQL database (requires ``integration_db`` fixture).
+Only mocks truly external services (adapters, HTTP calls).
 
-Design decision: explicit classes, not pytest fixtures.
-- Discoverability: ``grep "class DeliveryPollEnv"`` finds the API
-- Self-documentation: one file, one class, full API visible
-- Testability: harness classes can be tested without pytest fixture machinery
-- Token efficiency: agent prompt includes class docstring, not 110 lines of helpers
+Subclasses override:
+    EXTERNAL_PATCHES: dict[str, str]   -- {name: patch_target} for external-only mocks
+    _configure_mocks(): None           -- wire mock defaults
+    call_impl(**kwargs): Any           -- call production function
+
+Design: factory_boy factories are bound to a non-scoped session during
+__enter__ and unbound during __exit__. Production code uses its own
+sessions via get_db_session() — both see the same PostgreSQL test DB
+because integration_db resets the engine globals.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, _patch
+from unittest.mock import MagicMock, _patch, patch
 
 
-class ImplTestEnv:
-    """Base test environment for _impl function testing.
+class IntegrationEnv:
+    """Base integration test environment.
 
-    Subclasses override:
-        MODULE: str                       -- e.g. "src.core.tools.media_buy_delivery"
-        _patch_targets() -> dict          -- {short_name: full_patch_path}
-        _configure_defaults() -> None     -- wire up happy-path return values
-        call_impl(**kwargs) -> Any        -- call the production function
+    Uses real database (requires integration_db fixture).
+    Only mocks truly external services.
+
+    Subclasses define:
+        EXTERNAL_PATCHES: dict[str, str]   -- {name: patch_target}
+        _configure_mocks(): None           -- wire mock defaults
+        call_impl(**kwargs): Any           -- call production function
 
     Usage::
 
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=5000)
-            response = env.call_impl(media_buy_ids=["mb_001"])
-            assert response.aggregated_totals.impressions == 5000.0
-
-    Attributes:
-        mock: dict[str, MagicMock]  -- active mocks keyed by short name
-        identity: ResolvedIdentity  -- default identity (override via constructor)
+        @pytest.mark.requires_db
+        def test_something(self, integration_db):
+            with DeliveryPollEnv() as env:
+                tenant = TenantFactory(tenant_id="t1")
+                ...
+                response = env.call_impl(media_buy_ids=["mb_001"])
+                assert response.field == expected
     """
 
-    MODULE: str = ""  # Override in subclass
+    EXTERNAL_PATCHES: dict[str, str] = {}
 
     def __init__(
         self,
@@ -52,7 +55,8 @@ class ImplTestEnv:
         self._dry_run = dry_run
         self.mock: dict[str, MagicMock] = {}
         self._patchers: list[_patch[Any]] = []
-        self._identity: Any = None  # Lazy-built on first access
+        self._session: Any = None
+        self._identity: Any = None
 
     @property
     def identity(self) -> Any:
@@ -75,19 +79,7 @@ class ImplTestEnv:
             )
         return self._identity
 
-    def _patch_targets(self) -> dict[str, str]:
-        """Return {short_name: full.dotted.patch.path}.
-
-        Override in subclass. Example::
-
-            return {
-                "uow": f"{self.MODULE}.MediaBuyUoW",
-                "adapter": f"{self.MODULE}.get_adapter",
-            }
-        """
-        raise NotImplementedError
-
-    def _configure_defaults(self) -> None:
+    def _configure_mocks(self) -> None:
         """Wire up happy-path return values on self.mock entries.
 
         Called automatically after all patches are started.
@@ -102,22 +94,51 @@ class ImplTestEnv:
         """
         raise NotImplementedError
 
+    def _commit_factory_data(self) -> None:
+        """Ensure all factory-created data is committed before production code reads it."""
+        if self._session:
+            self._session.commit()
+
     # -- Context manager protocol ------------------------------------------
 
-    def __enter__(self) -> ImplTestEnv:
-        from unittest.mock import patch
+    def __enter__(self) -> IntegrationEnv:
+        # 1. Create non-scoped session for factory_boy (avoids conflicts
+        #    with production code's scoped_session via get_db_session())
+        from sqlalchemy.orm import Session as SASession
 
-        targets = self._patch_targets()
-        for short_name, target_path in targets.items():
-            patcher = patch(target_path)
-            mock_obj = patcher.start()
-            self.mock[short_name] = mock_obj
+        from src.core.database.database_session import get_engine
+
+        engine = get_engine()
+        self._session = SASession(bind=engine)
+
+        # 2. Bind all factory_boy factories to this session
+        from tests.factories import ALL_FACTORIES
+
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = self._session
+
+        # 3. Start external-only patches
+        for name, target in self.EXTERNAL_PATCHES.items():
+            patcher = patch(target)
+            self.mock[name] = patcher.start()
             self._patchers.append(patcher)
 
-        self._configure_defaults()
+        self._configure_mocks()
         return self
 
     def __exit__(self, *exc: object) -> bool:
+        # Unbind factories
+        from tests.factories import ALL_FACTORIES
+
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
+
+        # Close factory session
+        if self._session:
+            self._session.close()
+            self._session = None
+
+        # Stop patches
         for patcher in reversed(self._patchers):
             patcher.stop()
         self._patchers.clear()

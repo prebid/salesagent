@@ -1,27 +1,24 @@
-"""WebhookEnv — integration test environment for deliver_webhook_with_retry.
+"""WebhookEnv — test environment for deliver_webhook_with_retry.
 
-Patches: requests.post, WebhookURLValidator.validate_webhook_url, time.sleep
-         (all external/timing concerns).
-Real: get_db_session for delivery record tracking (fails silently if no table).
-
-Requires: integration_db fixture (creates test PostgreSQL DB).
+Patches: requests.post, WebhookURLValidator.validate_webhook_url,
+         time.sleep, get_db_session (all in src.core.webhook_delivery)
 
 Usage::
 
-    @pytest.mark.requires_db
-    def test_something(self, integration_db):
-        with WebhookEnv() as env:
-            env.set_http_status(200)
-            success, result = env.call_deliver(
-                webhook_url="https://example.com/hook",
-                payload={"event": "delivery.update"},
-            )
-            assert success is True
+    with WebhookEnv() as env:
+        env.set_http_status(200)
+        success, result = env.call_deliver(
+            webhook_url="https://example.com/hook",
+            payload={"event": "delivery.update"},
+        )
+        assert success is True
+        assert result["status"] == "delivered"
 
 Available mocks via env.mock:
     "post"      -- requests.post mock
     "validate"  -- WebhookURLValidator.validate_webhook_url mock
     "sleep"     -- time.sleep mock
+    "db"        -- get_db_session mock
 """
 
 from __future__ import annotations
@@ -30,14 +27,11 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
-from tests.harness._base import IntegrationEnv
+from tests.harness._base_unit import ImplTestEnv
 
 
-class WebhookEnv(IntegrationEnv):
-    """Integration test environment for deliver_webhook_with_retry.
-
-    Only mocks external HTTP calls, URL validation, and time.sleep.
-    DB operations for delivery tracking go through the real database.
+class WebhookEnv(ImplTestEnv):
+    """Test environment for deliver_webhook_with_retry.
 
     Fluent API:
         set_http_status(code, text)       -- configure single HTTP response
@@ -49,13 +43,15 @@ class WebhookEnv(IntegrationEnv):
 
     MODULE = "src.core.webhook_delivery"
 
-    EXTERNAL_PATCHES = {
-        "post": "src.core.webhook_delivery.requests.post",
-        "validate": "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
-        "sleep": "src.core.webhook_delivery.time.sleep",
-    }
+    def _patch_targets(self) -> dict[str, str]:
+        return {
+            "post": f"{self.MODULE}.requests.post",
+            "validate": f"{self.MODULE}.WebhookURLValidator.validate_webhook_url",
+            "sleep": f"{self.MODULE}.time.sleep",
+            "db": f"{self.MODULE}.get_db_session",
+        }
 
-    def _configure_mocks(self) -> None:
+    def _configure_defaults(self) -> None:
         # URL validation: valid by default
         self.mock["validate"].return_value = (True, None)
 
@@ -64,6 +60,12 @@ class WebhookEnv(IntegrationEnv):
         mock_response.status_code = 200
         mock_response.text = "OK"
         self.mock["post"].return_value = mock_response
+
+        # DB session: no-op context manager
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=MagicMock())
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        self.mock["db"].return_value = mock_ctx
 
     def set_http_status(self, code: int, text: str = "") -> None:
         """Configure requests.post to return a single response with the given status."""
@@ -78,6 +80,11 @@ class WebhookEnv(IntegrationEnv):
 
         Args:
             responses: List of (status_code, text) tuples.
+                       Each call to requests.post returns the next in sequence.
+
+        Example::
+
+            env.set_http_sequence([(503, "Unavailable"), (200, "OK")])
         """
         mocks = []
         for code, text in responses:
@@ -108,7 +115,6 @@ class WebhookEnv(IntegrationEnv):
         object_id: str | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         """Call deliver_webhook_with_retry with the given parameters."""
-        self._commit_factory_data()
         delivery = WebhookDelivery(
             webhook_url=webhook_url,
             payload=payload or {"event": "delivery.update", "media_buy_id": "mb_001"},
@@ -123,5 +129,5 @@ class WebhookEnv(IntegrationEnv):
         return deliver_webhook_with_retry(delivery)
 
     def call_impl(self, **kwargs: Any) -> Any:
-        """Alias for call_deliver to satisfy IntegrationEnv interface."""
+        """Alias for call_deliver to satisfy ImplTestEnv interface."""
         return self.call_deliver(**kwargs)

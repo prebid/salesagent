@@ -1,17 +1,17 @@
-"""Meta-tests for CircuitBreakerEnv — verifies the harness contract.
+"""Meta-tests for CircuitBreakerEnv (unit variant) — verifies the harness contract.
 
-These tests ensure the harness itself works correctly. They run in ``make quality``
+These tests ensure the unit harness itself works correctly. They run in ``make quality``
 but have no ``Covers:`` tags — they test infrastructure, not obligations.
 """
 
 from __future__ import annotations
 
 from src.services.webhook_delivery_service import CircuitState, WebhookDeliveryService
-from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
+from tests.harness.delivery_circuit_breaker_unit import CircuitBreakerEnv
 
 
 class TestCircuitBreakerEnvContract:
-    """Contract tests for CircuitBreakerEnv."""
+    """Contract tests for CircuitBreakerEnv (unit variant)."""
 
     def test_service_instantiation(self):
         """get_service returns a WebhookDeliveryService instance."""

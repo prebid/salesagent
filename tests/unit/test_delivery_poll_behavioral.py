@@ -129,7 +129,7 @@ class TestCustomDateRangeBothProvided:
 
         Covers: UC-004-ALT-CUSTOM-DATE-RANGE-01
         """
-        from tests.harness import DeliveryPollEnv
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
         with DeliveryPollEnv() as env:
             env.add_buy(start_date=date(2026, 3, 1), end_date=date(2026, 3, 7))
@@ -160,7 +160,7 @@ class TestCustomDateRangeOverridesDefault:
 
         Covers: UC-004-ALT-CUSTOM-DATE-RANGE-04
         """
-        from tests.harness import DeliveryPollEnv
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
         with DeliveryPollEnv() as env:
             env.add_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))

@@ -68,7 +68,7 @@ Map obligation prefix to required harness:
 **If harness missing: STOP IMMEDIATELY.** Print:
 ```
 No harness found for {domain}. Create tests/harness/{domain}.py first.
-See tests/harness/_base.py for the ImplTestEnv pattern.
+See tests/harness/_base.py for the IntegrationEnv pattern.
 ```
 
 Do NOT fall back to inline mocking. Generating tests without a harness
@@ -128,21 +128,50 @@ Write ONE test following all 7 hard rules:
 | 6 | Not mock-echo only | Does more than verify `mock.called` |
 | 7 | **No inline @patch** | MUST NOT define `@patch` decorators or inline UoW setup |
 
-**Test template (delivery poll):**
+**Test template (delivery poll — integration, preferred):**
 
 ```python
+import pytest
+from tests.factories import TenantFactory, PrincipalFactory, MediaBuyFactory
+
+@pytest.mark.requires_db
 class TestObligationName:
     """Short description of what's being tested.
 
     Covers: {OID}
     """
 
-    def test_specific_behavior(self):
+    def test_specific_behavior(self, integration_db):
         """What specific behavior is verified.
 
         Covers: {OID}
         """
         from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv() as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+            assert response.some_field == expected_value
+```
+
+**Test template (delivery poll — unit, backward compat):**
+
+```python
+class TestObligationName:
+    """Short description.
+
+    Covers: {OID}
+    """
+
+    def test_specific_behavior(self):
+        """What is verified.
+
+        Covers: {OID}
+        """
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
         with DeliveryPollEnv() as env:
             env.add_buy(media_buy_id="mb_001", ...)
@@ -352,6 +381,8 @@ Use `/obligation-test` when:
 
 ## See Also
 
-- `tests/harness/_base.py` — ImplTestEnv base class
+- `tests/harness/_base.py` — IntegrationEnv base class (real DB, integration-first)
+- `tests/harness/_base_unit.py` — ImplTestEnv base class (full mocking, backward compat)
+- `tests/factories/` — factory_boy model factories (auto-bound by IntegrationEnv)
 - `tests/harness/test_harness_*.py` — Gold standard usage examples
 - `/obligation-test` — Fallback for domains without harness

@@ -217,22 +217,21 @@ Never hardcode `/api/endpoint` - breaks with nginx prefix.
 - **Development/CI**: Default → `extra="forbid"` (strict validation)
 
 ### 8. Test Fixtures: Factory-Based, Not Inline
-**MANDATORY for new integration tests:** Use `polyfactory` factories for test data, not inline `session.add()` boilerplate.
+**MANDATORY for new integration tests:** Use `factory_boy` SQLAlchemy factories for test data, not inline `session.add()` boilerplate. Integration tests are the primary path for obligation testing; unit tests only for pure local logic.
 
 ```python
-# CORRECT: factory creates ORM instance with sane defaults
-from tests.factories import TenantFactory, MediaBuyFactory
+# CORRECT: factory_boy creates ORM instance with sane defaults + cascading
+from tests.factories import TenantFactory, PrincipalFactory, MediaBuyFactory
 
-@pytest.fixture
-def sample_tenant(integration_db):
-    return TenantFactory.create_sync()
-
-@pytest.fixture
-def sample_media_buy(sample_tenant, sample_principal):
-    return MediaBuyFactory.create_sync(
-        tenant_id=sample_tenant.tenant_id,
-        principal_id=sample_principal.principal_id,
-    )
+@pytest.mark.requires_db
+def test_delivery(self, integration_db):
+    with DeliveryPollEnv() as env:
+        tenant = TenantFactory(tenant_id="t1")
+        principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+        buy = MediaBuyFactory(tenant=tenant, principal=principal)
+        env.set_adapter_response(buy.media_buy_id, impressions=5000)
+        response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+        assert response.aggregated_totals.impressions == 5000.0
 ```
 
 ```python
@@ -248,9 +247,11 @@ with get_db_session() as session:
 ```
 
 **Rules:**
-- Shared fixtures (tenant, principal, products) defined once in `conftest.py` using factories
-- Test-specific data uses factory overrides, not copy-pasted setup blocks
-- Factories live in `tests/factories/` — ORM factories and Pydantic schema factories
+- Integration tests are the primary path — unit tests only for pure local logic
+- Factories live in `tests/factories/` using `factory_boy` (`SQLAlchemyModelFactory`)
+- `MediaBuyFactory()` auto-creates Tenant + CurrencyLimit + Principal via SubFactory cascading
+- Test harness envs (`IntegrationEnv`) auto-bind factory sessions on enter, unbind on exit
+- Unit harness variants (`_unit.py` suffix) exist for backward compatibility only
 - Never `session.add()` in test bodies — use factories or fixtures that use factories
 
 ---

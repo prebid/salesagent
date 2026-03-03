@@ -1,6 +1,6 @@
-"""Meta-tests for DeliveryPollEnv — verifies the harness contract.
+"""Meta-tests for DeliveryPollEnv (unit variant) — verifies the harness contract.
 
-These tests ensure the harness itself works correctly. They run in ``make quality``
+These tests ensure the unit harness itself works correctly. They run in ``make quality``
 but have no ``Covers:`` tags — they test infrastructure, not obligations.
 """
 
@@ -9,11 +9,11 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from src.core.schemas import GetMediaBuyDeliveryResponse
-from tests.harness.delivery_poll import DeliveryPollEnv
+from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 
 class TestDeliveryPollEnvContract:
-    """Contract tests for DeliveryPollEnv."""
+    """Contract tests for DeliveryPollEnv (unit variant)."""
 
     def test_default_env_returns_valid_response(self):
         """call_impl with one buy returns a GetMediaBuyDeliveryResponse."""

@@ -1,6 +1,6 @@
-"""Meta-tests for WebhookEnv — verifies the harness contract.
+"""Meta-tests for WebhookEnv (unit variant) — verifies the harness contract.
 
-These tests ensure the harness itself works correctly. They run in ``make quality``
+These tests ensure the unit harness itself works correctly. They run in ``make quality``
 but have no ``Covers:`` tags — they test infrastructure, not obligations.
 """
 
@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import requests
 
-from tests.harness.delivery_webhook import WebhookEnv
+from tests.harness.delivery_webhook_unit import WebhookEnv
 
 
 class TestWebhookEnvContract:
-    """Contract tests for WebhookEnv."""
+    """Contract tests for WebhookEnv (unit variant)."""
 
     def test_default_200_succeeds(self):
         """Default env delivers successfully with 200 OK."""

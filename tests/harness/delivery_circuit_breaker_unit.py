@@ -1,27 +1,26 @@
-"""CircuitBreakerEnv — integration test environment for WebhookDeliveryService.
+"""CircuitBreakerEnv — test environment for WebhookDeliveryService and CircuitBreaker.
 
-Patches: httpx.Client, time.sleep, random.uniform (external/timing concerns).
-Real: get_db_session for PushNotificationConfig queries (real DB).
-
-Requires: integration_db fixture (creates test PostgreSQL DB).
+Patches: httpx.Client, time.sleep, random.uniform, get_db_session
+         (all in src.services.webhook_delivery_service)
 
 Usage::
 
-    @pytest.mark.requires_db
-    def test_something(self, integration_db):
-        with CircuitBreakerEnv() as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant)
-            PushNotificationConfigFactory(tenant=tenant, principal=principal)
+    with CircuitBreakerEnv() as env:
+        breaker = env.get_breaker(failure_threshold=3)
+        for _ in range(3):
+            breaker.record_failure()
+        assert breaker.state == CircuitState.OPEN
 
-            env.set_http_response(200)
-            service = env.get_service()
-            result = service.send_delivery_webhook(...)
+    with CircuitBreakerEnv() as env:
+        env.set_http_response(200)
+        service = env.get_service()
+        service.send_delivery_webhook(...)
 
 Available mocks via env.mock:
     "client"    -- httpx.Client mock
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
+    "db"        -- get_db_session mock
 """
 
 from __future__ import annotations
@@ -34,35 +33,35 @@ from src.services.webhook_delivery_service import (
     CircuitBreaker,
     WebhookDeliveryService,
 )
-from tests.harness._base import IntegrationEnv
+from tests.harness._base_unit import ImplTestEnv
 
 
-class CircuitBreakerEnv(IntegrationEnv):
-    """Integration test environment for WebhookDeliveryService and CircuitBreaker.
-
-    Only mocks external HTTP client, timing, and randomness.
-    DB queries for PushNotificationConfig run against real database.
+class CircuitBreakerEnv(ImplTestEnv):
+    """Test environment for WebhookDeliveryService and CircuitBreaker.
 
     Fluent API:
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
         set_http_response(status_code)   -- configure httpx Client mock response
+        set_db_webhooks(webhook_list)    -- configure mock DB results
         call_send(...)                   -- call service.send_delivery_webhook
     """
 
     MODULE = "src.services.webhook_delivery_service"
 
-    EXTERNAL_PATCHES = {
-        "client": "src.services.webhook_delivery_service.httpx.Client",
-        "sleep": "src.services.webhook_delivery_service.time.sleep",
-        "random": "src.services.webhook_delivery_service.random.uniform",
-    }
-
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._service: WebhookDeliveryService | None = None
 
-    def _configure_mocks(self) -> None:
+    def _patch_targets(self) -> dict[str, str]:
+        return {
+            "client": f"{self.MODULE}.httpx.Client",
+            "sleep": f"{self.MODULE}.time.sleep",
+            "random": f"{self.MODULE}.random.uniform",
+            "db": "src.core.database.database_session.get_db_session",
+        }
+
+    def _configure_defaults(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
 
@@ -71,6 +70,17 @@ class CircuitBreakerEnv(IntegrationEnv):
         mock_response.status_code = 200
         self.mock["client"].return_value.__enter__.return_value.post.return_value = mock_response
 
+        # DB session: return a mock session with no webhook configs
+        mock_session = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = []
+        mock_session.scalars.return_value = mock_scalars
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__.return_value = mock_session
+        mock_ctx.__exit__.return_value = None
+        self.mock["db"].return_value = mock_ctx
+        self._db_session = mock_session
+
     def get_service(self) -> WebhookDeliveryService:
         """Return a WebhookDeliveryService instance (cached per env)."""
         if self._service is None:
@@ -78,7 +88,12 @@ class CircuitBreakerEnv(IntegrationEnv):
         return self._service
 
     def get_breaker(self, **kwargs: Any) -> CircuitBreaker:
-        """Return a fresh CircuitBreaker instance with the given params."""
+        """Return a fresh CircuitBreaker instance with the given params.
+
+        Example::
+
+            breaker = env.get_breaker(failure_threshold=3, timeout_seconds=30)
+        """
         return CircuitBreaker(**kwargs)
 
     def set_http_response(self, status_code: int) -> None:
@@ -86,6 +101,27 @@ class CircuitBreakerEnv(IntegrationEnv):
         mock_response = MagicMock()
         mock_response.status_code = status_code
         self.mock["client"].return_value.__enter__.return_value.post.return_value = mock_response
+
+    def set_db_webhooks(self, webhook_list: list[MagicMock]) -> None:
+        """Configure the mock DB to return the given webhook config list."""
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = webhook_list
+        self._db_session.scalars.return_value = mock_scalars
+
+    def make_webhook_config(
+        self,
+        url: str = "https://example.com/webhook",
+        auth_type: str | None = None,
+        auth_token: str | None = None,
+        secret: str | None = None,
+    ) -> MagicMock:
+        """Create a mock webhook config object."""
+        config = MagicMock()
+        config.url = url
+        config.authentication_type = auth_type
+        config.authentication_token = auth_token
+        config.webhook_secret = secret
+        return config
 
     def call_send(
         self,
@@ -99,7 +135,6 @@ class CircuitBreakerEnv(IntegrationEnv):
         **extra: Any,
     ) -> Any:
         """Call service.send_delivery_webhook with sensible defaults."""
-        self._commit_factory_data()
         service = self.get_service()
         return service.send_delivery_webhook(
             media_buy_id=media_buy_id,
@@ -113,5 +148,5 @@ class CircuitBreakerEnv(IntegrationEnv):
         )
 
     def call_impl(self, **kwargs: Any) -> Any:
-        """Alias for call_send to satisfy IntegrationEnv interface."""
+        """Alias for call_send to satisfy ImplTestEnv interface."""
         return self.call_send(**kwargs)
