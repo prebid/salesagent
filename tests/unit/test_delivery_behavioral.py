@@ -26,14 +26,18 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
+    DeliveryStatus,
     DeliveryTotals,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
+    PackageDelivery,
+    PricingModel,
     ReportingPeriod,
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import (
     _get_media_buy_delivery_impl,
+    _get_pricing_options,
     _get_target_media_buys,
     _resolve_delivery_status_filter,
 )
@@ -100,6 +104,7 @@ def _make_adapter_response(
     media_buy_id: str = "mb_001",
     impressions: int = 5000,
     spend: float = 250.0,
+    package_id: str = "pkg_001",
 ) -> AdapterGetMediaBuyDeliveryResponse:
     return AdapterGetMediaBuyDeliveryResponse(
         media_buy_id=media_buy_id,
@@ -108,7 +113,7 @@ def _make_adapter_response(
             end=datetime(2025, 12, 31, tzinfo=UTC),
         ),
         totals=DeliveryTotals(impressions=float(impressions), spend=spend),
-        by_package=[AdapterPackageDelivery(package_id="pkg_001", impressions=impressions, spend=spend)],
+        by_package=[AdapterPackageDelivery(package_id=package_id, impressions=impressions, spend=spend)],
         currency="USD",
     )
 
@@ -2680,3 +2685,1341 @@ class TestWebhookFailureNoSyncError:
             )
 
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-02
+# ---------------------------------------------------------------------------
+
+
+class TestBuyerRefResolution:
+    """Verify that buyer_refs resolve media buys when media_buy_ids is absent.
+
+    Covers: UC-004-MAIN-02
+    """
+
+    def test_get_target_media_buys_uses_buyer_refs_when_no_media_buy_ids(self):
+        """_get_target_media_buys passes buyer_refs to repo when media_buy_ids absent.
+
+        Covers: UC-004-MAIN-02
+        """
+        buy = _make_buy(media_buy_id="mb_100", buyer_ref="my_campaign_1")
+        repo = MagicMock()
+        repo.get_by_principal.return_value = [buy]
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=None,
+            buyer_refs=["my_campaign_1"],
+        )
+
+        reference_date = date(2025, 6, 15)
+
+        result = _get_target_media_buys(req, "test_principal", repo, reference_date)
+
+        repo.get_by_principal.assert_called_once_with("test_principal", buyer_refs=["my_campaign_1"])
+
+        assert len(result) == 1
+        assert result[0][0] == "mb_100"
+        assert result[0][1] is buy
+
+    def test_full_impl_returns_delivery_via_buyer_ref(self):
+        """_get_media_buy_delivery_impl returns delivery metrics when buyer_refs used.
+
+        Covers: UC-004-MAIN-02
+        """
+        identity = _make_identity()
+        today = date.today()
+        buy = _make_buy(
+            media_buy_id="mb_200",
+            buyer_ref="my_campaign_1",
+            start_date=today - timedelta(days=30),
+            end_date=today + timedelta(days=30),
+        )
+
+        adapter_resp = _make_adapter_response(
+            media_buy_id="mb_200",
+            impressions=8000,
+            spend=400.0,
+        )
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=None,
+            buyer_refs=["my_campaign_1"],
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.media_buys = mock_repo
+
+        mock_principal = MagicMock()
+
+        with (
+            patch(f"{_PATCH}.MediaBuyUoW", return_value=mock_uow),
+            patch(f"{_PATCH}.get_principal_object", return_value=mock_principal),
+            patch(f"{_PATCH}.get_adapter") as mock_get_adapter,
+            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+        ):
+            mock_adapter = MagicMock()
+            mock_adapter.get_media_buy_delivery.return_value = adapter_resp
+            mock_get_adapter.return_value = mock_adapter
+
+            response = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert len(response.media_buy_deliveries) == 1
+
+        delivery = response.media_buy_deliveries[0]
+        assert delivery.media_buy_id == "mb_200"
+        assert delivery.buyer_ref == "my_campaign_1"
+        assert delivery.totals.impressions == 8000.0
+        assert delivery.totals.spend == 400.0
+
+        assert response.aggregated_totals.media_buy_count == 1
+        assert response.aggregated_totals.impressions == 8000.0
+        assert response.aggregated_totals.spend == 400.0
+
+        mock_repo.get_by_principal.assert_called_once_with("test_principal", buyer_refs=["my_campaign_1"])
+
+    def test_buyer_refs_ignored_when_media_buy_ids_present(self):
+        """media_buy_ids takes precedence over buyer_refs per INV-2 rule.
+
+        Covers: UC-004-MAIN-02
+        """
+        buy = _make_buy(media_buy_id="mb_300", buyer_ref="my_campaign_1")
+        repo = MagicMock()
+        repo.get_by_principal.return_value = [buy]
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_300"],
+            buyer_refs=["my_campaign_1"],
+        )
+
+        reference_date = date(2025, 6, 15)
+        result = _get_target_media_buys(req, "test_principal", repo, reference_date)
+
+        repo.get_by_principal.assert_called_once_with("test_principal", media_buy_ids=["mb_300"])
+        assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-03
+# ---------------------------------------------------------------------------
+
+
+class TestMultipleMediaBuyDelivery:
+    """Array-based identification returns delivery for all requested media buys.
+
+    Covers: UC-004-MAIN-03
+    """
+
+    @patch(f"{_PATCH}._get_pricing_options", return_value={})
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_three_media_buys_returns_all_deliveries_and_aggregated_totals(
+        self,
+        mock_uow_cls,
+        mock_get_principal,
+        mock_get_adapter,
+        mock_pricing,
+    ):
+        """Given 3 media buys owned by buyer, when requesting all 3, get all 3 back with aggregated totals."""
+
+        buy_1 = _make_buy(media_buy_id="mb_1", buyer_ref="ref_1")
+        buy_2 = _make_buy(media_buy_id="mb_2", buyer_ref="ref_2")
+        buy_3 = _make_buy(media_buy_id="mb_3", buyer_ref="ref_3")
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy_1, buy_2, buy_3]
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        mock_get_principal.return_value = MagicMock()
+
+        adapter_mock = MagicMock()
+        adapter_mock.get_media_buy_delivery.side_effect = [
+            _make_adapter_response("mb_1", impressions=1000, spend=100.0, package_id="pkg_mb_1"),
+            _make_adapter_response("mb_2", impressions=2000, spend=200.0, package_id="pkg_mb_2"),
+            _make_adapter_response("mb_3", impressions=3000, spend=300.0, package_id="pkg_mb_3"),
+        ]
+        mock_get_adapter.return_value = adapter_mock
+
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_1", "mb_2", "mb_3"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert len(response.media_buy_deliveries) == 3
+        returned_ids = {d.media_buy_id for d in response.media_buy_deliveries}
+        assert returned_ids == {"mb_1", "mb_2", "mb_3"}
+
+        delivery_map = {d.media_buy_id: d for d in response.media_buy_deliveries}
+        assert delivery_map["mb_1"].totals.impressions == 1000
+        assert delivery_map["mb_1"].totals.spend == 100.0
+        assert delivery_map["mb_2"].totals.impressions == 2000
+        assert delivery_map["mb_2"].totals.spend == 200.0
+        assert delivery_map["mb_3"].totals.impressions == 3000
+        assert delivery_map["mb_3"].totals.spend == 300.0
+
+        agg = response.aggregated_totals
+        assert agg.media_buy_count == 3
+        assert agg.impressions == 6000.0
+        assert agg.spend == 600.0
+
+        mock_repo.get_by_principal.assert_called_once_with("test_principal", media_buy_ids=["mb_1", "mb_2", "mb_3"])
+        assert adapter_mock.get_media_buy_delivery.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-04
+# ---------------------------------------------------------------------------
+
+
+class TestNoIdentifiersReturnAll:
+    """No identifiers provided returns delivery data for ALL principal's media buys.
+
+    Covers: UC-004-MAIN-04
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_all_five_media_buys_returned_when_no_identifiers(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """When neither media_buy_ids nor buyer_refs is provided, response contains
+        delivery data for ALL 5 media buys owned by the principal.
+
+        Covers: UC-004-MAIN-04
+        """
+        today = datetime.now(UTC).date()
+        buys = [
+            _make_buy(
+                media_buy_id=f"mb_{i:03d}",
+                buyer_ref=f"ref_{i:03d}",
+                start_date=today - timedelta(days=30),
+                end_date=today + timedelta(days=30),
+                budget=10000.0 + i * 1000,
+            )
+            for i in range(1, 6)
+        ]
+
+        mock_get_principal.return_value = MagicMock()
+
+        def adapter_side_effect(media_buy_id, date_range, today):
+            idx = int(media_buy_id.split("_")[1])
+            return _make_adapter_response(
+                media_buy_id=media_buy_id,
+                impressions=1000 * idx,
+                spend=100.0 * idx,
+                package_id=f"pkg_{media_buy_id}",
+            )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = adapter_side_effect
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = buys
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        identity = _make_identity()
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=None,
+            buyer_refs=None,
+            status_filter=None,
+        )
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+        assert len(response.media_buy_deliveries) == 5
+        assert response.aggregated_totals.media_buy_count == 5
+
+        returned_ids = {d.media_buy_id for d in response.media_buy_deliveries}
+        expected_ids = {f"mb_{i:03d}" for i in range(1, 6)}
+        assert returned_ids == expected_ids
+
+        mock_repo.get_by_principal.assert_called_once_with("test_principal")
+        assert response.errors is None
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_aggregated_totals_sum_across_all_buys(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Aggregated totals reflect the sum of delivery across all 5 media buys.
+
+        Covers: UC-004-MAIN-04
+        """
+        today = datetime.now(UTC).date()
+        buys = [
+            _make_buy(
+                media_buy_id=f"mb_{i:03d}",
+                buyer_ref=f"ref_{i:03d}",
+                start_date=today - timedelta(days=30),
+                end_date=today + timedelta(days=30),
+            )
+            for i in range(1, 6)
+        ]
+
+        mock_get_principal.return_value = MagicMock()
+
+        def adapter_side_effect(media_buy_id, date_range, today):
+            return _make_adapter_response(
+                media_buy_id=media_buy_id,
+                impressions=1000,
+                spend=100.0,
+                package_id=f"pkg_{media_buy_id}",
+            )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = adapter_side_effect
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = buys
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest()
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert response.aggregated_totals.impressions == 5000.0
+        assert response.aggregated_totals.spend == 500.0
+        assert response.aggregated_totals.media_buy_count == 5
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-09
+# ---------------------------------------------------------------------------
+
+
+class TestPackageLevelBreakdowns:
+    """Media buy delivery includes per-package breakdowns with metrics.
+
+    Covers: UC-004-MAIN-09
+    """
+
+    @patch(f"{_PATCH}._get_pricing_options")
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_two_packages_each_have_own_metrics(
+        self,
+        mock_uow_cls,
+        mock_get_principal,
+        mock_get_adapter,
+        mock_get_pricing_options,
+    ):
+        """Two packages in a media buy each get distinct impressions, spend, and metric fields.
+
+        Covers: UC-004-MAIN-09
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_get_pricing_options.return_value = {}
+
+        adapter_response = AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id="mb_two_pkg",
+            reporting_period=ReportingPeriod(
+                start=datetime(2025, 3, 1, tzinfo=UTC),
+                end=datetime(2025, 3, 31, tzinfo=UTC),
+            ),
+            totals=DeliveryTotals(impressions=15000.0, spend=750.0),
+            by_package=[
+                AdapterPackageDelivery(package_id="pkg_A", impressions=10000, spend=500.0),
+                AdapterPackageDelivery(package_id="pkg_B", impressions=5000, spend=250.0),
+            ],
+            currency="USD",
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_response
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(
+            media_buy_id="mb_two_pkg",
+            start_date=date(2025, 3, 1),
+            end_date=date(2025, 3, 31),
+            raw_request={
+                "buyer_ref": "ref_two_pkg",
+                "packages": [
+                    {"package_id": "pkg_A", "product_id": "prod_A"},
+                    {"package_id": "pkg_B", "product_id": "prod_B"},
+                ],
+            },
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_two_pkg"],
+            start_date="2025-03-01",
+            end_date="2025-03-31",
+        )
+        identity = _make_identity()
+
+        result = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        assert len(result.media_buy_deliveries) == 1
+
+        delivery = result.media_buy_deliveries[0]
+        assert len(delivery.by_package) == 2
+
+        pkg_map = {p.package_id: p for p in delivery.by_package}
+        assert "pkg_A" in pkg_map
+        assert "pkg_B" in pkg_map
+
+        pkg_a = pkg_map["pkg_A"]
+        assert pkg_a.impressions == 10000.0
+        assert pkg_a.spend == 500.0
+
+        pkg_b = pkg_map["pkg_B"]
+        assert pkg_b.impressions == 5000.0
+        assert pkg_b.spend == 250.0
+
+        assert pkg_a.impressions != pkg_b.impressions
+        assert pkg_a.clicks is None
+        assert pkg_a.video_completions is None
+
+    @patch(f"{_PATCH}._get_pricing_options")
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_package_breakdowns_include_pacing_for_active_buy(
+        self,
+        mock_uow_cls,
+        mock_get_principal,
+        mock_get_adapter,
+        mock_get_pricing_options,
+    ):
+        """Active media buy packages report pacing_index=1.0.
+
+        Covers: UC-004-MAIN-09
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_get_pricing_options.return_value = {}
+
+        adapter_response = AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id="mb_active",
+            reporting_period=ReportingPeriod(
+                start=datetime(2025, 1, 1, tzinfo=UTC),
+                end=datetime(2025, 12, 31, tzinfo=UTC),
+            ),
+            totals=DeliveryTotals(impressions=8000.0, spend=400.0),
+            by_package=[
+                AdapterPackageDelivery(package_id="pkg_X", impressions=5000, spend=250.0),
+                AdapterPackageDelivery(package_id="pkg_Y", impressions=3000, spend=150.0),
+            ],
+            currency="USD",
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_response
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(
+            media_buy_id="mb_active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            raw_request={
+                "buyer_ref": "ref_active",
+                "packages": [
+                    {"package_id": "pkg_X", "product_id": "prod_X"},
+                    {"package_id": "pkg_Y", "product_id": "prod_Y"},
+                ],
+            },
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_active"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+        identity = _make_identity()
+
+        result = _get_media_buy_delivery_impl(req, identity)
+
+        delivery = result.media_buy_deliveries[0]
+        assert delivery.status == "active"
+
+        for pkg in delivery.by_package:
+            assert pkg.pacing_index == 1.0
+
+    @patch(f"{_PATCH}._get_pricing_options")
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_totals_reflect_sum_of_package_metrics(
+        self,
+        mock_uow_cls,
+        mock_get_principal,
+        mock_get_adapter,
+        mock_get_pricing_options,
+    ):
+        """Media buy totals are consistent with the sum of package-level metrics.
+
+        Covers: UC-004-MAIN-09
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_get_pricing_options.return_value = {}
+
+        adapter_response = AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id="mb_sum",
+            reporting_period=ReportingPeriod(
+                start=datetime(2025, 4, 1, tzinfo=UTC),
+                end=datetime(2025, 4, 30, tzinfo=UTC),
+            ),
+            totals=DeliveryTotals(impressions=12000.0, spend=600.0),
+            by_package=[
+                AdapterPackageDelivery(package_id="pkg_1", impressions=7000, spend=350.0),
+                AdapterPackageDelivery(package_id="pkg_2", impressions=5000, spend=250.0),
+            ],
+            currency="USD",
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_response
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(
+            media_buy_id="mb_sum",
+            start_date=date(2025, 4, 1),
+            end_date=date(2025, 4, 30),
+            raw_request={
+                "buyer_ref": "ref_sum",
+                "packages": [
+                    {"package_id": "pkg_1", "product_id": "prod_1"},
+                    {"package_id": "pkg_2", "product_id": "prod_2"},
+                ],
+            },
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_sum"],
+            start_date="2025-04-01",
+            end_date="2025-04-30",
+        )
+        identity = _make_identity()
+
+        result = _get_media_buy_delivery_impl(req, identity)
+
+        delivery = result.media_buy_deliveries[0]
+        assert delivery.totals.impressions == 12000.0
+        assert delivery.totals.spend == 600.0
+
+        pkg_impressions = sum(p.impressions for p in delivery.by_package)
+        pkg_spend = sum(p.spend for p in delivery.by_package)
+        assert pkg_impressions == delivery.totals.impressions
+        assert pkg_spend == delivery.totals.spend
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-10
+# ---------------------------------------------------------------------------
+
+
+class TestPackageDeliveryStatus:
+    """Media buy status computation based on package delivery states.
+
+    The production code computes media-buy-level status (ready/active/completed)
+    based on date comparison against the request end_date (reference_date).
+    Per-package delivery_status (delivering, completed, budget_exhausted,
+    flight_ended, goal_met) is NOT yet implemented in the delivery poll flow.
+
+    Covers: UC-004-MAIN-10
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_rq1_buy_before_start_has_ready_status(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Media buy before its start date gets status 'ready'.
+
+        Covers: UC-004-MAIN-10
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(
+            media_buy_id="mb_future",
+            start_date=date(2025, 6, 1),
+            end_date=date(2025, 12, 31),
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow.media_buys = mock_repo
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_future"],
+            status_filter=[MediaBuyStatus.pending_activation],
+            start_date="2025-01-01",
+            end_date="2025-03-15",
+        )
+        identity = _make_identity()
+        resp = _get_media_buy_delivery_impl(req, identity)
+
+        assert len(resp.media_buy_deliveries) == 1
+        assert resp.media_buy_deliveries[0].status == "ready"
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_rq2_buy_in_flight_has_active_status(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Media buy within its flight dates gets status 'active'.
+
+        Covers: UC-004-MAIN-10
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(
+            media_buy_id="mb_001",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow.media_buys = mock_repo
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2025-01-01",
+            end_date="2025-06-15",
+        )
+        identity = _make_identity()
+        resp = _get_media_buy_delivery_impl(req, identity)
+
+        assert len(resp.media_buy_deliveries) == 1
+        assert resp.media_buy_deliveries[0].status == "active"
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_rq3_buy_past_end_has_completed_status(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Media buy past its end date gets status 'completed'.
+
+        Covers: UC-004-MAIN-10
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id="mb_past")
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(
+            media_buy_id="mb_past",
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow.media_buys = mock_repo
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_past"],
+            status_filter=[MediaBuyStatus.completed],
+            start_date="2025-01-01",
+            end_date="2025-06-15",
+        )
+        identity = _make_identity()
+        resp = _get_media_buy_delivery_impl(req, identity)
+
+        assert len(resp.media_buy_deliveries) == 1
+        assert resp.media_buy_deliveries[0].status == "completed"
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_rq4_multiple_buys_different_statuses(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Multiple media buys return their respective date-based statuses.
+
+        Covers: UC-004-MAIN-10
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+
+        buy_future = _make_buy(
+            media_buy_id="mb_future",
+            start_date=date(2025, 9, 1),
+            end_date=date(2025, 12, 31),
+            raw_request={"buyer_ref": "ref_f", "packages": [{"package_id": "pkg_f", "product_id": "prod_001"}]},
+        )
+        buy_active = _make_buy(
+            media_buy_id="mb_active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            raw_request={"buyer_ref": "ref_a", "packages": [{"package_id": "pkg_a", "product_id": "prod_001"}]},
+        )
+        buy_completed = _make_buy(
+            media_buy_id="mb_completed",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+            raw_request={"buyer_ref": "ref_c", "packages": [{"package_id": "pkg_c", "product_id": "prod_001"}]},
+        )
+
+        mock_adapter.get_media_buy_delivery.side_effect = [
+            _make_adapter_response(media_buy_id="mb_future", package_id="pkg_f"),
+            _make_adapter_response(media_buy_id="mb_active", package_id="pkg_a"),
+            _make_adapter_response(media_buy_id="mb_completed", package_id="pkg_c"),
+        ]
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy_future, buy_active, buy_completed]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow.media_buys = mock_repo
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_future", "mb_active", "mb_completed"],
+            status_filter=[MediaBuyStatus.pending_activation, MediaBuyStatus.active, MediaBuyStatus.completed],
+            start_date="2025-01-01",
+            end_date="2025-06-15",
+        )
+        identity = _make_identity()
+        resp = _get_media_buy_delivery_impl(req, identity)
+
+        assert len(resp.media_buy_deliveries) == 3
+        status_map = {d.media_buy_id: d.status for d in resp.media_buy_deliveries}
+        assert status_map["mb_future"] == "ready"
+        assert status_map["mb_active"] == "active"
+        assert status_map["mb_completed"] == "completed"
+
+    def test_rq5_package_delivery_has_no_delivery_status_field(self):
+        """PackageDelivery lacks delivery_status -- obligation gap.
+
+        Covers: UC-004-MAIN-10
+        """
+        assert DeliveryStatus.delivering.value == "delivering"
+        assert DeliveryStatus.completed.value == "completed"
+        assert DeliveryStatus.budget_exhausted.value == "budget_exhausted"
+        assert DeliveryStatus.flight_ended.value == "flight_ended"
+        assert DeliveryStatus.goal_met.value == "goal_met"
+
+        field_names = set(PackageDelivery.model_fields.keys())
+        assert "delivery_status" not in field_names, (
+            "If this fails, delivery_status was added to PackageDelivery -- "
+            "update this test to PASS and verify the computation logic."
+        )
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-11
+# ---------------------------------------------------------------------------
+
+
+class TestAggregatedTotalsMultipleBuys:
+    """Aggregated totals are correctly summed across three media buys.
+
+    Covers: UC-004-MAIN-11
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_aggregated_totals_sum_across_three_buys(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Three media buys with known metrics produce correct aggregated totals.
+
+        Covers: UC-004-MAIN-11
+        """
+        mock_get_principal.return_value = MagicMock()
+
+        buy_1 = _make_buy(media_buy_id="mb_1", buyer_ref="ref_1", budget=5000.0)
+        buy_2 = _make_buy(media_buy_id="mb_2", buyer_ref="ref_2", budget=10000.0)
+        buy_3 = _make_buy(media_buy_id="mb_3", buyer_ref="ref_3", budget=2500.0)
+
+        adapter_responses = {
+            "mb_1": _make_adapter_response(media_buy_id="mb_1", impressions=1000, spend=50.0, package_id="pkg_mb_1"),
+            "mb_2": _make_adapter_response(media_buy_id="mb_2", impressions=2000, spend=100.0, package_id="pkg_mb_2"),
+            "mb_3": _make_adapter_response(media_buy_id="mb_3", impressions=500, spend=25.0, package_id="pkg_mb_3"),
+        }
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = lambda media_buy_id, **kw: adapter_responses[media_buy_id]
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy_1, buy_2, buy_3]
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_1", "mb_2", "mb_3"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+
+        agg = response.aggregated_totals
+        assert agg.impressions == 3500.0
+        assert agg.spend == 175.0
+        assert agg.media_buy_count == 3
+
+        assert len(response.media_buy_deliveries) == 3
+        delivery_ids = {d.media_buy_id for d in response.media_buy_deliveries}
+        assert delivery_ids == {"mb_1", "mb_2", "mb_3"}
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_per_buy_totals_match_individual_adapter_data(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Each media_buy_delivery has correct individual totals from its adapter response.
+
+        Covers: UC-004-MAIN-11
+        """
+        mock_get_principal.return_value = MagicMock()
+
+        buy_1 = _make_buy(media_buy_id="mb_1", buyer_ref="ref_1", budget=5000.0)
+        buy_2 = _make_buy(media_buy_id="mb_2", buyer_ref="ref_2", budget=10000.0)
+        buy_3 = _make_buy(media_buy_id="mb_3", buyer_ref="ref_3", budget=2500.0)
+
+        adapter_responses = {
+            "mb_1": _make_adapter_response(media_buy_id="mb_1", impressions=1000, spend=50.0, package_id="pkg_mb_1"),
+            "mb_2": _make_adapter_response(media_buy_id="mb_2", impressions=2000, spend=100.0, package_id="pkg_mb_2"),
+            "mb_3": _make_adapter_response(media_buy_id="mb_3", impressions=500, spend=25.0, package_id="pkg_mb_3"),
+        }
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = lambda media_buy_id, **kw: adapter_responses[media_buy_id]
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy_1, buy_2, buy_3]
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_1", "mb_2", "mb_3"],
+            start_date="2025-01-01",
+            end_date="2025-06-30",
+        )
+
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        by_id = {d.media_buy_id: d for d in response.media_buy_deliveries}
+
+        assert by_id["mb_1"].totals.impressions == 1000.0
+        assert by_id["mb_1"].totals.spend == 50.0
+        assert by_id["mb_2"].totals.impressions == 2000.0
+        assert by_id["mb_2"].totals.spend == 100.0
+        assert by_id["mb_3"].totals.impressions == 500.0
+        assert by_id["mb_3"].totals.spend == 25.0
+
+        agg = response.aggregated_totals
+        sum_impressions = sum(d.totals.impressions for d in response.media_buy_deliveries)
+        sum_spend = sum(d.totals.spend for d in response.media_buy_deliveries)
+        assert agg.impressions == sum_impressions
+        assert agg.spend == sum_spend
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-12
+# ---------------------------------------------------------------------------
+
+
+class TestProtocolEnvelopeStatusCompleted:
+    """Successful delivery query returns a well-formed response (protocol envelope).
+
+    Covers: UC-004-MAIN-12
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_successful_query_returns_response_type(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """_impl returns GetMediaBuyDeliveryResponse on success.
+
+        Covers: UC-004-MAIN-12
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(start_date=date(2026, 1, 1), end_date=date(2026, 6, 30))
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+        identity = _make_identity()
+
+        response = _get_media_buy_delivery_impl(req, identity)
+        assert isinstance(response, GetMediaBuyDeliveryResponse)
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_successful_query_has_no_errors(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Successful delivery query returns errors=None.
+
+        Covers: UC-004-MAIN-12
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(start_date=date(2026, 1, 1), end_date=date(2026, 6, 30))
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+        identity = _make_identity()
+
+        response = _get_media_buy_delivery_impl(req, identity)
+        assert response.errors is None
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_successful_query_contains_delivery_data(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Successful query populates media_buy_deliveries.
+
+        Covers: UC-004-MAIN-12
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(start_date=date(2026, 1, 1), end_date=date(2026, 6, 30))
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+        identity = _make_identity()
+
+        response = _get_media_buy_delivery_impl(req, identity)
+        assert len(response.media_buy_deliveries) == 1
+        assert response.media_buy_deliveries[0].media_buy_id == "mb_001"
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_successful_query_has_required_envelope_fields(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Protocol envelope includes all required top-level fields.
+
+        Covers: UC-004-MAIN-12
+        """
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response()
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(start_date=date(2026, 1, 1), end_date=date(2026, 6, 30))
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+        identity = _make_identity()
+
+        response = _get_media_buy_delivery_impl(req, identity)
+        assert response.reporting_period is not None
+        assert response.currency is not None
+        assert response.aggregated_totals is not None
+        assert response.media_buy_deliveries is not None
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-13
+# ---------------------------------------------------------------------------
+
+
+class TestMCPToolResultContent:
+    """MCP wrapper returns ToolResult with both content and structured_content.
+
+    Covers: UC-004-MAIN-13
+    """
+
+    @staticmethod
+    def _stub_delivery_response():
+        """Build a minimal GetMediaBuyDeliveryResponse for wrapper testing."""
+        from src.core.schemas import AggregatedTotals
+
+        return GetMediaBuyDeliveryResponse(
+            reporting_period={
+                "start": datetime(2025, 1, 1, tzinfo=UTC),
+                "end": datetime(2025, 12, 31, tzinfo=UTC),
+            },
+            currency="USD",
+            aggregated_totals=AggregatedTotals(impressions=5000.0, spend=250.0, media_buy_count=1),
+            media_buy_deliveries=[],
+        )
+
+    async def test_tool_result_has_content_and_structured_content(self):
+        """MCP wrapper wraps _impl response in ToolResult with both fields.
+
+        Covers: UC-004-MAIN-13
+        """
+        from unittest.mock import AsyncMock
+
+        from fastmcp.server.context import Context
+        from fastmcp.tools.tool import ToolResult
+
+        from src.core.tools.media_buy_delivery import get_media_buy_delivery
+
+        stub_response = self._stub_delivery_response()
+
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=None)
+
+        with patch("src.core.tools.media_buy_delivery._get_media_buy_delivery_impl") as mock_impl:
+            mock_impl.return_value = stub_response
+
+            result = await get_media_buy_delivery(
+                media_buy_ids=["mb_001"],
+                ctx=mock_ctx,
+            )
+
+            assert isinstance(result, ToolResult)
+            assert result.content is not None
+            assert len(result.content) > 0
+            assert result.structured_content is not None
+            assert isinstance(result.structured_content, dict)
+            assert result.structured_content["currency"] == "USD"
+
+    async def test_structured_content_contains_response_fields(self):
+        """structured_content dict contains all top-level response fields.
+
+        Covers: UC-004-MAIN-13
+        """
+        from unittest.mock import AsyncMock
+
+        from fastmcp.server.context import Context
+
+        from src.core.tools.media_buy_delivery import get_media_buy_delivery
+
+        stub_response = self._stub_delivery_response()
+
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=None)
+
+        with patch("src.core.tools.media_buy_delivery._get_media_buy_delivery_impl") as mock_impl:
+            mock_impl.return_value = stub_response
+
+            result = await get_media_buy_delivery(
+                media_buy_ids=["mb_001"],
+                ctx=mock_ctx,
+            )
+
+            sc = result.structured_content
+            assert "reporting_period" in sc
+            assert "currency" in sc
+            assert "aggregated_totals" in sc
+            assert "media_buy_deliveries" in sc
+
+    async def test_content_is_string_representation(self):
+        """content field contains a human-readable string form of the response.
+
+        Covers: UC-004-MAIN-13
+        """
+        from unittest.mock import AsyncMock
+
+        from fastmcp.server.context import Context
+
+        from src.core.tools.media_buy_delivery import get_media_buy_delivery
+
+        stub_response = self._stub_delivery_response()
+
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=None)
+
+        with patch("src.core.tools.media_buy_delivery._get_media_buy_delivery_impl") as mock_impl:
+            mock_impl.return_value = stub_response
+
+            result = await get_media_buy_delivery(
+                media_buy_ids=["mb_001"],
+                ctx=mock_ctx,
+            )
+
+            content_text = result.content[0].text if hasattr(result.content[0], "text") else str(result.content[0])
+            assert len(content_text) > 0
+            assert "No delivery data found" in content_text or "delivery" in content_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-14
+# ---------------------------------------------------------------------------
+
+
+class TestPricingOptionStringLookup:
+    """Verify pricing_option_id string field is used for lookup, not integer PK.
+
+    Bug: salesagent-mq3n -- string-to-integer comparison silently drops pricing
+    context, resulting in silent data loss (no clicks calculated for CPC buys).
+
+    Covers: UC-004-MAIN-14
+    """
+
+    @pytest.mark.xfail(
+        reason=(
+            "BUG salesagent-mq3n: _get_pricing_options casts string pricing_option_id "
+            "to int and queries PricingOption.id (integer PK). Non-numeric IDs like "
+            "'cpm_usd_fixed' are silently discarded."
+        ),
+        strict=True,
+    )
+    @patch(f"{_PATCH}.get_db_session")
+    def test_get_pricing_options_uses_string_id_not_integer_pk(self, mock_session_ctx):
+        """_get_pricing_options should return dict keyed by string pricing_option_id.
+
+        Covers: UC-004-MAIN-14
+        """
+        mock_pricing_option = MagicMock()
+        mock_pricing_option.id = 42
+        mock_pricing_option.pricing_option_id = "cpm_usd_fixed"
+        mock_pricing_option.pricing_model = "cpm"
+        mock_pricing_option.rate = 5.00
+        mock_pricing_option.tenant_id = "test_tenant"
+
+        mock_session = MagicMock()
+        mock_session_ctx.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_session_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        mock_session.scalars.return_value.all.return_value = [mock_pricing_option]
+
+        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant")
+
+        assert "cpm_usd_fixed" in result, (
+            f"Expected key 'cpm_usd_fixed', got keys: {list(result.keys())}. "
+            f"_get_pricing_options incorrectly uses integer PK."
+        )
+        assert result["cpm_usd_fixed"] is mock_pricing_option
+
+    @pytest.mark.xfail(
+        reason=(
+            "BUG salesagent-mq3n: _get_pricing_options tries int() on string IDs. "
+            "Non-numeric strings are silently discarded."
+        ),
+        strict=True,
+    )
+    @patch(f"{_PATCH}.get_db_session")
+    def test_non_numeric_pricing_option_id_is_not_silently_discarded(self, mock_session_ctx):
+        """Non-numeric string pricing_option_ids must not be dropped.
+
+        Covers: UC-004-MAIN-14
+        """
+        mock_pricing_option = MagicMock()
+        mock_pricing_option.id = 42
+        mock_pricing_option.pricing_option_id = "cpm_usd_fixed"
+        mock_pricing_option.pricing_model = "cpm"
+        mock_pricing_option.rate = 5.00
+
+        mock_session = MagicMock()
+        mock_session_ctx.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_session_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        mock_session.scalars.return_value.all.return_value = [mock_pricing_option]
+
+        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant")
+
+        assert len(result) > 0, "Non-numeric pricing_option_id 'cpm_usd_fixed' was silently discarded."
+
+
+# ---------------------------------------------------------------------------
+# UC-004-MAIN-15
+# ---------------------------------------------------------------------------
+
+
+class TestDeliverySpendComputation:
+    """CPM spend computation: impressions / 1000 * rate propagates through delivery.
+
+    Covers: UC-004-MAIN-15
+    """
+
+    @patch(f"{_PATCH}._get_pricing_options", return_value={})
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_cpm_spend_propagated_to_totals_and_aggregated(
+        self, mock_uow_cls, mock_get_principal, mock_get_adapter, mock_pricing
+    ):
+        """Adapter returns CPM-computed spend ($50 for 10k imps at $5 CPM);
+        _impl propagates it to media-buy totals AND aggregated_totals.
+
+        Covers: UC-004-MAIN-15
+        """
+        cpm_rate = 5.00
+        impressions = 10_000
+        expected_spend = impressions / 1000 * cpm_rate  # $50.00
+
+        mock_get_principal.return_value = MagicMock()
+
+        adapter_response = AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id="mb_cpm",
+            reporting_period=ReportingPeriod(
+                start=datetime(2025, 6, 1, tzinfo=UTC),
+                end=datetime(2025, 6, 30, tzinfo=UTC),
+            ),
+            totals=DeliveryTotals(impressions=float(impressions), spend=expected_spend),
+            by_package=[
+                AdapterPackageDelivery(
+                    package_id="pkg_cpm_001",
+                    impressions=impressions,
+                    spend=expected_spend,
+                )
+            ],
+            currency="USD",
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_response
+        mock_get_adapter.return_value = mock_adapter
+
+        buy = _make_buy(
+            media_buy_id="mb_cpm",
+            start_date=date(2025, 6, 1),
+            end_date=date(2025, 6, 30),
+            budget=500.0,
+            raw_request={
+                "buyer_ref": "ref_cpm",
+                "pricing_option_id": None,
+                "packages": [{"package_id": "pkg_cpm_001", "product_id": "prod_001"}],
+            },
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_cpm"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        response = _get_media_buy_delivery_impl(req, _make_identity())
+
+        assert len(response.media_buy_deliveries) == 1
+        mb_delivery = response.media_buy_deliveries[0]
+
+        assert mb_delivery.totals.spend == expected_spend
+        assert mb_delivery.totals.impressions == impressions
+
+        assert response.aggregated_totals.spend == expected_spend
+        assert response.aggregated_totals.impressions == float(impressions)
+
+        assert len(mb_delivery.by_package) == 1
+        pkg = mb_delivery.by_package[0]
+        assert pkg.package_id == "pkg_cpm_001"
+        assert pkg.spend == expected_spend
+        assert pkg.impressions == float(impressions)
