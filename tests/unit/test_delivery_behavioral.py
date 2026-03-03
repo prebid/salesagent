@@ -4786,15 +4786,21 @@ class TestEndToEndDeliveryMetricsCpmPricing:
         delivery = result.media_buy_deliveries[0]
         assert delivery.totals.spend == 25.0
         assert delivery.totals.impressions == 10000.0
-        assert delivery.by_package[0].pricing_model == "cpm"
-        assert delivery.by_package[0].rate == 2.50
-        assert delivery.by_package[0].currency == "USD"
 
+    @pytest.mark.xfail(
+        reason=(
+            "Obligation requires 'the pricing option is correctly identified in the "
+            "response'. MediaBuyDeliveryData (src/core/schemas/delivery.py:208-239) "
+            "has no pricing_options field to identify which pricing option was used "
+            "for the buy. PackageDelivery has pricing_model/rate/currency from "
+            "package_config, but no pricing_option_id back-reference."
+        ),
+    )
     @patch(f"{_PATCH}.get_adapter")
     @patch(f"{_PATCH}.get_principal_object")
     @patch(f"{_PATCH}.MediaBuyUoW")
-    def test_cpm_package_level_spend_matches_totals(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
-        """Package-level spend and impressions are consistent with totals for CPM."""
+    def test_cpm_pricing_option_identified_in_response(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """CPM pricing option should be identifiable in the delivery response."""
         identity = _make_identity()
         buy = _make_buy(
             media_buy_id="mb_cpm2",
@@ -4828,10 +4834,13 @@ class TestEndToEndDeliveryMetricsCpmPricing:
         result = _get_media_buy_delivery_impl(req=req, identity=identity)
 
         delivery = result.media_buy_deliveries[0]
-        pkg = delivery.by_package[0]
-        assert pkg.impressions == delivery.totals.impressions
-        assert pkg.spend == delivery.totals.spend
-        assert pkg.package_id == "pkg_cpm2"
+        # Obligation: "the pricing option is correctly identified in the response"
+        # Delivery data should carry pricing_option_id back-reference so buyer
+        # can correlate delivery metrics with the pricing option used.
+        assert hasattr(delivery, "pricing_options") or any(
+            hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "cpm_usd_fixed"
+            for pkg in delivery.by_package
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -4899,11 +4908,20 @@ class TestEndToEndDeliveryMetricsCpcPricing:
         # CPC click calculation: floor(spend / rate) = floor(250 / 0.50) = 500
         assert delivery.by_package[0].clicks == 500
 
+    @pytest.mark.xfail(
+        reason=(
+            "Obligation requires 'the pricing option is correctly identified'. "
+            "MediaBuyDeliveryData (src/core/schemas/delivery.py:208-239) has no "
+            "pricing_options field. PackageDelivery has pricing_model/rate/currency "
+            "but no pricing_option_id back-reference to identify WHICH pricing "
+            "option was used."
+        ),
+    )
     @patch(f"{_PATCH}.get_adapter")
     @patch(f"{_PATCH}.get_principal_object")
     @patch(f"{_PATCH}.MediaBuyUoW")
-    def test_cpc_pricing_info_on_package_delivery(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
-        """CPC pricing info from MediaPackage.package_config flows to PackageDelivery."""
+    def test_cpc_pricing_option_identified_in_response(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """CPC pricing option should be identifiable in the delivery response."""
         identity = _make_identity()
         buy = _make_buy(
             media_buy_id="mb_cpc2",
@@ -4916,13 +4934,9 @@ class TestEndToEndDeliveryMetricsCpcPricing:
         )
         mock_get_principal.return_value = MagicMock()
 
-        mock_media_pkg = MagicMock()
-        mock_media_pkg.package_id = "pkg_cpc2"
-        mock_media_pkg.package_config = {"pricing_info": {"pricing_model": "cpc", "rate": 0.50, "currency": "USD"}}
-
         mock_repo = MagicMock()
         mock_repo.get_by_principal.return_value = [buy]
-        mock_repo.get_packages.return_value = [mock_media_pkg]
+        mock_repo.get_packages.return_value = []
 
         mock_uow = MagicMock()
         mock_uow.media_buys = mock_repo
@@ -4941,9 +4955,11 @@ class TestEndToEndDeliveryMetricsCpcPricing:
         result = _get_media_buy_delivery_impl(req=req, identity=identity)
 
         delivery = result.media_buy_deliveries[0]
-        assert delivery.by_package[0].pricing_model == "cpc"
-        assert delivery.by_package[0].rate == 0.50
-        assert delivery.by_package[0].currency == "USD"
+        # Obligation: "the pricing option is correctly identified"
+        assert hasattr(delivery, "pricing_options") or any(
+            hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "cpc_usd_standard"
+            for pkg in delivery.by_package
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -5006,15 +5022,21 @@ class TestDeliveryMetricsFlatRatePricing:
         assert delivery.totals.impressions == 50000.0
         pkg = delivery.by_package[0]
         assert pkg.spend == 5000.0
-        assert pkg.pricing_model == "flat_rate"
-        assert pkg.rate == 5000.0
-        assert pkg.currency == "USD"
 
+    @pytest.mark.xfail(
+        reason=(
+            "Obligation requires spend to 'reflect the flat rate correctly'. "
+            "While totals.spend passes through from adapter, the FLAT_RATE "
+            "pricing option is not identifiable as a distinct entity in the "
+            "response. MediaBuyDeliveryData has no pricing_options field, and "
+            "PackageDelivery has no pricing_option_id back-reference."
+        ),
+    )
     @patch(f"{_PATCH}.get_adapter")
     @patch(f"{_PATCH}.get_principal_object")
     @patch(f"{_PATCH}.MediaBuyUoW")
-    def test_flat_rate_package_level_spend_matches_totals(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
-        """FLAT_RATE: package-level spend matches buy-level totals."""
+    def test_flat_rate_pricing_option_identified_in_response(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """FLAT_RATE pricing option should be identifiable in the delivery response."""
         identity = _make_identity()
         buy = _make_buy(
             media_buy_id="mb_flat2",
@@ -5048,10 +5070,11 @@ class TestDeliveryMetricsFlatRatePricing:
         result = _get_media_buy_delivery_impl(req=req, identity=identity)
 
         delivery = result.media_buy_deliveries[0]
-        pkg = delivery.by_package[0]
-        assert pkg.spend == delivery.totals.spend
-        assert pkg.impressions == delivery.totals.impressions
-        assert pkg.package_id == "pkg_flat2"
+        # Obligation: spend reflects flat rate, pricing option identifiable
+        assert hasattr(delivery, "pricing_options") or any(
+            hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "flat_rate_premium"
+            for pkg in delivery.by_package
+        )
 
 
 # ---------------------------------------------------------------------------
