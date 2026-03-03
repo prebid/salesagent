@@ -184,6 +184,13 @@ def test_name(self):
 The xfail test STILL must follow all 6 rules. The `Covers:` tag still
 removes the OID from the allowlist (the guard counts xfail as covered).
 
+### Alternative: Team-Based Execution
+
+For higher quality at scale, use `/obligation-team` instead of this skill.
+It spawns one agent per obligation with fresh context and mandatory Right
+Questions self-checks. Each agent gets zero batch pressure and full context
+for its single obligation. See `.claude/commands/obligation-team.md`.
+
 ## Anti-Patterns
 
 - Don't skip research — shallow understanding produces mock-echo tests

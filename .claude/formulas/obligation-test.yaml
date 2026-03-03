@@ -219,6 +219,43 @@ iterate:
 
            If ANY answer is "no", rewrite the test.
 
+        5. **Right Questions Self-Check** (MANDATORY — answer before closing):
+
+           RQ-1: Am I calling the function that implements this behavior?
+             - Trace the call chain. Does your test call the function that
+               contains the LOGIC described in the obligation?
+             - FAIL if test only constructs a schema and calls model_dump()
+             - FAIL if test calls deliver_webhook_with_retry for an obligation
+               about webhook SCHEDULING (wrong layer)
+             - For xfail: call WHERE the behavior WOULD be implemented
+
+           RQ-2: Did I import (not redefine) production helpers?
+             - Check every function/lambda defined in your test code
+               (excluding test_ and _make_ prefixes)
+             - Search production code: grep -rn "def <name>" src/core/tools/
+             - If production has this function → import it, don't redefine
+
+           RQ-3: Would my assertion catch a regression?
+             - Imagine production returns a WRONG value. Does your assertion catch it?
+             - FAIL: assert result is not None (passes for ANY non-None)
+             - FAIL: assert len(result) > 0 (passes for any non-empty list)
+             - PASS: assert result.status == "pending_approval" (specific value)
+             - PASS: assert returned_ids == ["mb_completed"] (exact match)
+
+           RQ-4: (xfail only) Does my test call where the feature would go?
+             - WHAT is missing? WHERE would it go? Does the test CALL that location?
+             - FAIL: "behavior would be in webhook scheduler" but test calls
+               deliver_webhook_with_retry (wrong layer)
+             - PASS: test calls _get_media_buy_delivery_impl where the feature
+               would be added
+
+           RQ-5: Are all my @patch decorators exercised by the code path?
+             - For each @patch: does the production code path actually call it?
+             - If you removed the patch, would the test behave differently?
+             - Remove dead patches — they add noise and false confidence
+
+           If ANY answer is "no" or "FAIL", rewrite the test.
+
         5. **If the test must be xfail** (production code doesn't implement the
            behavior yet):
            ```python
@@ -276,6 +313,24 @@ iterate:
         ```
         **PASS if**: exit code 0 (PASSED) or test is xfail.
         **FAIL if**: ERROR (not FAIL — a FAIL from assertion is OK for xfail tests).
+
+        ## Check 3b: Right Questions (for xfail tests)
+
+        If the test is marked xfail, verify:
+
+        1. Test calls an `_impl` function or production utility (not just schema):
+           ```bash
+           TEST_FILE=$(grep -rl "Covers: {OID}" tests/)
+           grep -E "_impl|_get_target|deliver_webhook|WebhookAuth" "$TEST_FILE" | grep -v "^#\|^.*import" | head -5
+           ```
+           **FAIL if**: no matches (test doesn't call production logic).
+
+        2. The xfail reason names WHERE the behavior would be implemented:
+           ```bash
+           grep -A1 "xfail" "$TEST_FILE" | grep "reason="
+           ```
+           **FAIL if**: reason is vague ("not implemented") without naming a
+           specific function or module where it would go.
 
         ## Check 4: make quality
 
