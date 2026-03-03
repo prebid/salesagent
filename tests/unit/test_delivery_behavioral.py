@@ -31,7 +31,6 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
     PackageDelivery,
-    PricingModel,
     ReportingPeriod,
 )
 from src.core.testing_hooks import AdCPTestContext
@@ -4023,3 +4022,623 @@ class TestDeliverySpendComputation:
         assert pkg.package_id == "pkg_cpm_001"
         assert pkg.spend == expected_spend
         assert pkg.impressions == float(impressions)
+
+
+# ---------------------------------------------------------------------------
+# Batch 7: UC-004-MAIN-16 through UC-004-MAIN-20
+# ---------------------------------------------------------------------------
+
+# --- OID: UC-004-MAIN-16 ---
+
+
+class TestBuyerRefInDeliveryEntries:
+    """Verify that buyer_ref from raw_request propagates to media_buy_deliveries entries.
+
+    Covers: UC-004-MAIN-16
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_buyer_ref_propagates_to_delivery_entry(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """When a media buy has buyer_ref='buyer_camp_1' in raw_request,
+        each media_buy_deliveries entry must include buyer_ref='buyer_camp_1'.
+        """
+        # Given: a media buy created with buyer_campaign_ref="buyer_camp_1"
+        buy = _make_buy(
+            media_buy_id="mb_camp",
+            buyer_ref="buyer_camp_1",
+            raw_request={
+                "buyer_ref": "buyer_camp_1",
+                "buyer_campaign_ref": "buyer_camp_1",
+                "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],
+            },
+        )
+
+        # Set up mocks
+        mock_get_principal.return_value = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        mock_adapter = MagicMock()
+        adapter_resp = _make_adapter_response(media_buy_id="mb_camp", package_id="pkg_001")
+        mock_adapter.get_media_buy_delivery.return_value = adapter_resp
+        mock_get_adapter.return_value = mock_adapter
+
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_camp"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        # When: delivery metrics are returned
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        # Then: each media_buy_deliveries entry includes buyer_ref matching "buyer_camp_1"
+        assert len(response.media_buy_deliveries) == 1
+        delivery = response.media_buy_deliveries[0]
+        assert delivery.buyer_ref == "buyer_camp_1", (
+            f"Expected buyer_ref='buyer_camp_1' but got '{delivery.buyer_ref}'. "
+            "The delivery boundary must propagate buyer_ref from raw_request."
+        )
+
+
+# --- OID: UC-004-MAIN-17 ---
+
+
+class TestPartialResolutionMissingIds:
+    """Partial resolution returns found buys only, reports missing as errors.
+
+    Covers: UC-004-MAIN-17
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_missing_id_excluded_from_deliveries_with_error(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """When some media_buy_ids don't exist, return data for found ones
+        and report missing IDs in the errors array.
+
+        Covers: UC-004-MAIN-17
+        """
+        # --- Arrange ---
+        identity = _make_identity()
+
+        # Two buys exist, mb_999 does not
+        buy_1 = _make_buy(
+            media_buy_id="mb_1",
+            buyer_ref="ref_1",
+            raw_request={
+                "buyer_ref": "ref_1",
+                "packages": [{"package_id": "pkg_1", "product_id": "prod_1"}],
+            },
+        )
+        buy_2 = _make_buy(
+            media_buy_id="mb_2",
+            buyer_ref="ref_2",
+            raw_request={
+                "buyer_ref": "ref_2",
+                "packages": [{"package_id": "pkg_2", "product_id": "prod_2"}],
+            },
+        )
+
+        # Configure UoW mock: repo.get_by_principal returns only mb_1 and mb_2
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy_1, buy_2]
+        mock_repo.get_packages.return_value = []  # No package pricing config
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        # Principal exists
+        mock_principal = MagicMock()
+        mock_get_principal.return_value = mock_principal
+
+        # Adapter returns delivery data for each buy
+        mock_adapter = MagicMock()
+
+        def adapter_delivery_side_effect(media_buy_id, date_range, today):
+            return _make_adapter_response(
+                media_buy_id=media_buy_id,
+                package_id=f"pkg_{media_buy_id.split('_')[1]}",
+            )
+
+        mock_adapter.get_media_buy_delivery.side_effect = adapter_delivery_side_effect
+        mock_get_adapter.return_value = mock_adapter
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_1", "mb_999", "mb_2"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        # --- Act ---
+        response = _get_media_buy_delivery_impl(req, identity)
+
+        # --- Assert ---
+        # Delivery data returned for mb_1 and mb_2 only
+        returned_ids = {d.media_buy_id for d in response.media_buy_deliveries}
+        assert returned_ids == {"mb_1", "mb_2"}, f"Expected delivery for mb_1 and mb_2 only, got {returned_ids}"
+
+        # mb_999 is NOT in deliveries
+        assert "mb_999" not in returned_ids
+
+        # Errors array reports mb_999 as not found
+        assert response.errors is not None, "Expected errors for missing mb_999"
+        error_messages = [e.message for e in response.errors]
+        assert any("mb_999" in msg for msg in error_messages), f"Expected error mentioning mb_999, got {error_messages}"
+
+        # Aggregated totals reflect only the 2 found buys
+        assert response.aggregated_totals.media_buy_count == 2
+
+
+# --- OID: UC-004-MAIN-18 ---
+
+
+class TestNonexistentMediaBuyIdsReturnEmptyDeliveries:
+    """BR-RULE-030: Nonexistent media_buy_ids resolve to empty deliveries array.
+
+    Covers: UC-004-MAIN-18
+    """
+
+    def test_nonexistent_ids_return_empty_media_buy_deliveries(self):
+        """Requesting delivery for nonexistent media_buy_ids returns empty deliveries.
+
+        Covers: UC-004-MAIN-18
+        """
+        identity = _make_identity()
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["nonexistent_1"],
+            start_date="2025-01-01",
+            end_date="2025-12-31",
+        )
+
+        mock_principal = MagicMock()
+        mock_repo = MagicMock()
+        # Repository returns empty list -- ID doesn't exist in DB
+        mock_repo.get_by_principal.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.media_buys = mock_repo
+
+        with (
+            patch(f"{_PATCH}.get_principal_object", return_value=mock_principal),
+            patch(f"{_PATCH}.get_adapter") as mock_get_adapter,
+            patch(f"{_PATCH}.MediaBuyUoW", return_value=mock_uow),
+        ):
+            result = _get_media_buy_delivery_impl(req, identity)
+
+        # Core assertion: media_buy_deliveries is an empty list
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        assert result.media_buy_deliveries == []
+        assert result.aggregated_totals.media_buy_count == 0
+        assert result.aggregated_totals.impressions == 0.0
+        assert result.aggregated_totals.spend == 0.0
+
+        # The repo was queried with the nonexistent ID
+        mock_repo.get_by_principal.assert_called_once_with("test_principal", media_buy_ids=["nonexistent_1"])
+
+        # Adapter was never called (no buys to fetch delivery for)
+        mock_get_adapter.return_value.get_media_buy_delivery.assert_not_called()
+
+
+# --- OID: UC-004-MAIN-19 ---
+
+
+class TestDeliveryMetricsFieldPresence:
+    """Tests that delivery metrics include the required schema fields.
+
+    Covers: UC-004-MAIN-19
+    """
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_totals_include_impressions_spend_clicks_ctr(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Delivery totals include impressions, spend, clicks, and ctr fields.
+
+        Covers: UC-004-MAIN-19
+        """
+        # Arrange
+        identity = _make_identity()
+        buy = _make_buy()
+        adapter_resp = _make_adapter_response(impressions=5000, spend=250.0)
+
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_resp
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_uow = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        # Act
+        result = _get_media_buy_delivery_impl(req, identity)
+
+        # Assert - response is well-formed
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        assert len(result.media_buy_deliveries) == 1
+
+        delivery = result.media_buy_deliveries[0]
+        totals = delivery.totals
+
+        # Core metric fields must be present on totals
+        assert totals.impressions == 5000.0
+        assert totals.spend == 250.0
+        # clicks field exists (set to 0 in current impl)
+        assert totals.clicks is not None or hasattr(totals, "clicks")
+        # ctr field exists (computed from clicks/impressions)
+        assert hasattr(totals, "ctr")
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_totals_include_video_completions_field(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Delivery totals include video_completions field (where applicable).
+
+        Covers: UC-004-MAIN-19
+        """
+        # Arrange
+        identity = _make_identity()
+        buy = _make_buy()
+        adapter_resp = _make_adapter_response(impressions=5000, spend=250.0)
+
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_resp
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_uow = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        # Act
+        result = _get_media_buy_delivery_impl(req, identity)
+
+        # Assert - video_completions field exists on totals (currently None)
+        delivery = result.media_buy_deliveries[0]
+        assert hasattr(delivery.totals, "video_completions")
+        # Field is optional and currently always None in impl
+        assert delivery.totals.video_completions is None
+
+    @pytest.mark.xfail(
+        reason="DeliveryTotals schema does not include 'conversions' field. "
+        "Obligation requires conversions metric but it is missing from "
+        "src/core/schemas/delivery.py:DeliveryTotals (lines 116-133). "
+        "Would need to add conversions field to DeliveryTotals and populate "
+        "it in _get_media_buy_delivery_impl (src/core/tools/media_buy_delivery.py:396-403).",
+        strict=True,
+    )
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_totals_include_conversions_field(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Delivery totals include conversions metric field.
+
+        Covers: UC-004-MAIN-19
+        """
+        # Arrange
+        identity = _make_identity()
+        buy = _make_buy()
+        adapter_resp = _make_adapter_response(impressions=5000, spend=250.0)
+
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_resp
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_uow = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        # Act
+        result = _get_media_buy_delivery_impl(req, identity)
+
+        # Assert - conversions field should exist on totals
+        delivery = result.media_buy_deliveries[0]
+        assert hasattr(delivery.totals, "conversions")
+
+    @pytest.mark.xfail(
+        reason="DeliveryTotals schema does not include 'viewability' field. "
+        "Obligation requires viewability metric but it is missing from "
+        "src/core/schemas/delivery.py:DeliveryTotals (lines 116-133). "
+        "Would need to add viewability field to DeliveryTotals and populate "
+        "it in _get_media_buy_delivery_impl (src/core/tools/media_buy_delivery.py:396-403).",
+        strict=True,
+    )
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_totals_include_viewability_field(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Delivery totals include viewability metric field.
+
+        Covers: UC-004-MAIN-19
+        """
+        # Arrange
+        identity = _make_identity()
+        buy = _make_buy()
+        adapter_resp = _make_adapter_response(impressions=5000, spend=250.0)
+
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_resp
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_uow = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        # Act
+        result = _get_media_buy_delivery_impl(req, identity)
+
+        # Assert - viewability field should exist on totals
+        delivery = result.media_buy_deliveries[0]
+        assert hasattr(delivery.totals, "viewability")
+
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_aggregated_totals_include_core_metrics(self, mock_uow_cls, mock_get_principal, mock_get_adapter):
+        """Response aggregated_totals include impressions, spend, clicks fields.
+
+        Covers: UC-004-MAIN-19
+        """
+        # Arrange
+        identity = _make_identity()
+        buy = _make_buy()
+        adapter_resp = _make_adapter_response(impressions=5000, spend=250.0)
+
+        mock_get_principal.return_value = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = adapter_resp
+        mock_get_adapter.return_value = mock_adapter
+
+        mock_uow = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+        mock_repo.get_packages.return_value = []
+        mock_uow.media_buys = mock_repo
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_001"],
+            start_date="2025-06-01",
+            end_date="2025-06-30",
+        )
+
+        # Act
+        result = _get_media_buy_delivery_impl(req, identity)
+
+        # Assert - aggregated totals contain core metrics
+        agg = result.aggregated_totals
+        assert agg.impressions == 5000.0
+        assert agg.spend == 250.0
+        assert agg.media_buy_count == 1
+        # clicks field is present (may be None if no clicks)
+        assert hasattr(agg, "clicks")
+
+
+# --- OID: UC-004-MAIN-20 ---
+
+
+class TestUnpopulatedFieldsGraceful:
+    """Verify unpopulated schema fields (gaps G42, G44) handled without error.
+
+    Covers: UC-004-MAIN-20
+    """
+
+    @patch(f"{_PATCH}._get_pricing_options", return_value={})
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_daily_breakdown_is_none_without_error(self, mock_uow, mock_principal, mock_adapter, mock_pricing):
+        """Production sets daily_breakdown=None; response assembles without error.
+
+        Covers: UC-004-MAIN-20
+        """
+        buy = _make_buy()
+        mock_principal.return_value = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_packages.return_value = []
+        mock_uow_ctx = MagicMock()
+        mock_uow_ctx.media_buys = mock_repo
+        mock_uow.return_value.__enter__ = MagicMock(return_value=mock_uow_ctx)
+        mock_uow.return_value.__exit__ = MagicMock(return_value=False)
+
+        adapter_resp = _make_adapter_response()
+        mock_adapter.return_value.get_media_buy_delivery.return_value = adapter_resp
+
+        with patch(
+            f"{_PATCH}._get_target_media_buys",
+            return_value=[("mb_001", buy)],
+        ):
+            req = GetMediaBuyDeliveryRequest(
+                media_buy_ids=["mb_001"],
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
+            identity = _make_identity()
+            result = _get_media_buy_delivery_impl(req, identity)
+
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        assert len(result.media_buy_deliveries) == 1
+        delivery = result.media_buy_deliveries[0]
+        # daily_breakdown is explicitly None (gap G42) — no error raised
+        assert delivery.daily_breakdown is None
+
+    def test_delivery_totals_schema_lacks_effective_rate_and_viewability(self):
+        """DeliveryTotals does not have effective_rate or viewability fields (gap G44).
+
+        The local DeliveryTotals schema intentionally omits these adcp library fields
+        (blocked on video_completions -> completed_views rename). Construction
+        succeeds without them, documenting the known gap.
+
+        Covers: UC-004-MAIN-20
+        """
+        # Construct DeliveryTotals the same way production does (line 396-403
+        # in media_buy_delivery.py) — effective_rate and viewability are absent
+        totals = DeliveryTotals(
+            impressions=5000.0,
+            spend=250.0,
+            clicks=0,
+            ctr=None,
+            video_completions=None,
+            completion_rate=None,
+        )
+        # These fields exist in adcp library Totals but NOT in local DeliveryTotals
+        assert not hasattr(totals, "effective_rate") or "effective_rate" not in DeliveryTotals.model_fields
+        assert not hasattr(totals, "viewability") or "viewability" not in DeliveryTotals.model_fields
+        # Construction succeeded — no error from missing fields
+        assert totals.impressions == 5000.0
+        assert totals.spend == 250.0
+
+    def test_package_delivery_schema_lacks_creative_level_breakdowns(self):
+        """PackageDelivery does not have by_creative / creative_level_breakdowns (gap G42).
+
+        The local PackageDelivery schema intentionally omits by_creative (present
+        in adcp library ByPackageItem). Construction succeeds without it.
+
+        Covers: UC-004-MAIN-20
+        """
+        # Construct PackageDelivery the same way production does (lines 353-371)
+        pkg = PackageDelivery(
+            package_id="pkg_001",
+            buyer_ref="ref_001",
+            impressions=5000.0,
+            spend=250.0,
+            clicks=None,
+            video_completions=None,
+            pacing_index=1.0,
+            pricing_model=None,
+            rate=None,
+            currency=None,
+        )
+        # by_creative exists in library ByPackageItem but NOT in local PackageDelivery
+        assert "by_creative" not in PackageDelivery.model_fields
+        # Construction succeeded — no error from missing field
+        assert pkg.package_id == "pkg_001"
+        assert pkg.impressions == 5000.0
+
+    @patch(f"{_PATCH}._get_pricing_options", return_value={})
+    @patch(f"{_PATCH}.get_adapter")
+    @patch(f"{_PATCH}.get_principal_object")
+    @patch(f"{_PATCH}.MediaBuyUoW")
+    def test_full_response_assembles_with_all_gap_fields_absent(
+        self, mock_uow, mock_principal, mock_adapter, mock_pricing
+    ):
+        """End-to-end: _impl returns valid response despite gap fields being absent.
+
+        Verifies that daily_breakdown=None, no effective_rate on totals,
+        no viewability on totals, and no by_creative on packages all coexist
+        without raising any validation or runtime error.
+
+        Covers: UC-004-MAIN-20
+        """
+        buy = _make_buy()
+        mock_principal.return_value = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_packages.return_value = []
+        mock_uow_ctx = MagicMock()
+        mock_uow_ctx.media_buys = mock_repo
+        mock_uow.return_value.__enter__ = MagicMock(return_value=mock_uow_ctx)
+        mock_uow.return_value.__exit__ = MagicMock(return_value=False)
+
+        adapter_resp = _make_adapter_response()
+        mock_adapter.return_value.get_media_buy_delivery.return_value = adapter_resp
+
+        with patch(
+            f"{_PATCH}._get_target_media_buys",
+            return_value=[("mb_001", buy)],
+        ):
+            req = GetMediaBuyDeliveryRequest(
+                media_buy_ids=["mb_001"],
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
+            result = _get_media_buy_delivery_impl(req, _make_identity())
+
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        delivery = result.media_buy_deliveries[0]
+
+        # Gap G42: daily_breakdown is None
+        assert delivery.daily_breakdown is None
+
+        # Gap G44: effective_rate not on local DeliveryTotals
+        assert "effective_rate" not in DeliveryTotals.model_fields
+
+        # Gap G44: viewability not on local DeliveryTotals
+        assert "viewability" not in DeliveryTotals.model_fields
+
+        # Gap G42: creative_level_breakdowns (by_creative) not on PackageDelivery
+        for pkg in delivery.by_package:
+            assert "by_creative" not in type(pkg).model_fields
+
+        # Response serializes cleanly — None fields excluded per AdCP convention
+        dumped = result.model_dump()
+        assert "media_buy_deliveries" in dumped
+        # daily_breakdown=None is excluded by AdCPBaseModel's exclude_none=True
+        assert "daily_breakdown" not in dumped["media_buy_deliveries"][0]
+        # effective_rate and viewability not present (gap fields)
+        assert "effective_rate" not in dumped["media_buy_deliveries"][0].get("totals", {})
+        assert "viewability" not in dumped["media_buy_deliveries"][0].get("totals", {})
