@@ -7,6 +7,7 @@ from adcp.types.generated_poc.enums.validation_mode import ValidationMode
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
 from ._sync import _sync_creatives_impl
@@ -42,6 +43,8 @@ async def sync_creatives(
     Returns:
         ToolResult with SyncCreativesResponse data
     """
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+
     # Phase 1a: Pass typed models directly to impl (no more model_dump conversion)
     validation_mode_str = validation_mode.value if validation_mode else "strict"
 
@@ -54,7 +57,7 @@ async def sync_creatives(
         validation_mode=validation_mode_str,
         push_notification_config=push_notification_config,
         context=context,
-        ctx=ctx,
+        identity=identity,
     )
     return ToolResult(content=str(response), structured_content=response)
 
@@ -69,6 +72,7 @@ def sync_creatives_raw(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ):
     """Sync creative assets to the centralized creative library (raw function for A2A server use).
 
@@ -84,10 +88,16 @@ def sync_creatives_raw(
         push_notification_config: Push notification config for status updates
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
+        identity: ResolvedIdentity (transport-agnostic, preferred over ctx)
 
     Returns:
         SyncCreativesResponse with synced creatives and assignments
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx)
+
     return _sync_creatives_impl(
         creatives=creatives,
         assignments=assignments,
@@ -97,5 +107,5 @@ def sync_creatives_raw(
         validation_mode=validation_mode,
         push_notification_config=push_notification_config,
         context=context,
-        ctx=ctx,
+        identity=identity,
     )

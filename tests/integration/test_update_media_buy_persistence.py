@@ -20,6 +20,7 @@ from src.core.database.models import (
 from src.core.database.models import (
     Principal as ModelPrincipal,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -27,20 +28,15 @@ from src.core.tools.media_buy_update import _update_media_buy_impl
 # Tests that used _verify_principal directly will need to test through the public API
 
 
-class MockContext:
-    """Mock FastMCP Context for testing."""
-
-    def __init__(self, tenant_id: str, principal_id: str, token: str):
-        self.headers = {
-            "x-adcp-auth": token,
-            "host": f"{tenant_id}.test.com",
-        }
-        self.meta = {
-            "headers": {
-                "x-adcp-auth": token,
-                "host": f"{tenant_id}.test.com",
-            }
-        }
+def _make_identity(tenant_id: str, principal_id: str, token: str) -> ResolvedIdentity:
+    """Create a ResolvedIdentity for testing."""
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant={"tenant_id": tenant_id},
+        auth_token=token,
+        protocol="mcp",
+    )
 
 
 @pytest.fixture
@@ -146,15 +142,15 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
         }
     )
 
-    # Create mock context
-    context = MockContext(tenant_id, principal_id, token)
+    # Create identity
+    identity = _make_identity(tenant_id, principal_id, token)
 
     # Test: Call update_media_buy (should not raise "Media buy not found")
     req = UpdateMediaBuyRequest(
         media_buy_id=media_buy_id,
         buyer_ref="updated_ref",
     )
-    response = _update_media_buy_impl(req=req, ctx=context)
+    response = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response
     assert isinstance(response, UpdateMediaBuyResponse)
@@ -168,7 +164,7 @@ def test_update_media_buy_requires_context():
     """Test update_media_buy raises error when context is None."""
     # Note: This will first hit Pydantic validation if buyer_ref is also provided
     # So we only provide media_buy_id to avoid the oneOf constraint
-    with pytest.raises(ValueError, match="Context is required"):
+    with pytest.raises(ValueError, match="Identity is required"):
         req = UpdateMediaBuyRequest(media_buy_id="buy_test_123")
         _update_media_buy_impl(req=req)
 
@@ -177,7 +173,7 @@ def test_update_media_buy_requires_context():
 def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
     """Test update_media_buy raises error when buyer_ref lookup fails."""
     # Use valid authentication from fixture (required after auth ordering fix)
-    context = MockContext(
+    identity = _make_identity(
         tenant_id=test_tenant_setup["tenant_id"],
         principal_id=test_tenant_setup["principal_id"],
         token=test_tenant_setup["token"],
@@ -188,4 +184,4 @@ def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
     # This tests the buyer_ref lookup path when the media buy doesn't exist.
     with pytest.raises(ValueError, match="Media buy with buyer_ref 'nonexistent_ref' not found"):
         req = UpdateMediaBuyRequest(buyer_ref="nonexistent_ref")
-        _update_media_buy_impl(req=req, ctx=context)
+        _update_media_buy_impl(req=req, identity=identity)

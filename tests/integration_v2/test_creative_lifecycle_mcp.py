@@ -18,6 +18,7 @@ import pytest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from sqlalchemy import select
 
+from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     Creative as DBCreative,
@@ -27,7 +28,9 @@ from src.core.database.models import (
     MediaBuy,
     Principal,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, SyncCreativesResponse
+from src.core.testing_hooks import AdCPTestContext
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -52,6 +55,21 @@ class TestCreativeLifecycleMCP:
         from src.core.tools.creatives import list_creatives_raw, sync_creatives_raw
 
         return sync_creatives_raw, list_creatives_raw
+
+    def _make_identity(self, tenant_id=None, principal_id=None, tenant_overrides=None):
+        """Create a ResolvedIdentity for tests, using stored test data as defaults."""
+        tid = tenant_id or self.test_tenant_id
+        pid = principal_id or self.test_principal_id
+        tenant_dict = {"tenant_id": tid}
+        if tenant_overrides:
+            tenant_dict.update(tenant_overrides)
+        return ResolvedIdentity(
+            principal_id=pid,
+            tenant_id=tid,
+            tenant=tenant_dict,
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            protocol="mcp",
+        )
 
     @pytest.fixture(autouse=True)
     def mock_format_registry(self):
@@ -257,55 +275,50 @@ class TestCreativeLifecycleMCP:
             },
         ]
 
-    def test_sync_creatives_create_new_creatives(self, mock_context, sample_creatives):
+    def test_sync_creatives_create_new_creatives(self, sample_creatives):
         """Test sync_creatives creates new creatives successfully."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch(
-                "src.core.tools.creatives.get_current_tenant",
-                return_value={"tenant_id": self.test_tenant_id, "approval_mode": "auto-approve"},
-            ),
-        ):
-            # Call sync_creatives tool (uses default patch=False for full upsert)
-            response = core_sync_creatives_tool(creatives=sample_creatives, ctx=mock_context)
+        identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
 
-            # Verify response structure (AdCP-compliant domain response)
-            assert isinstance(response, SyncCreativesResponse)
-            # Domain response has creatives list with action field (not results/summary)
-            assert len(response.creatives) == 3
-            assert all(c.get("action") == "created" for c in response.creatives if isinstance(c, dict))
-            # Verify __str__() generates correct message
-            message = str(response)
-            assert "3 created" in message or "Creative sync completed" in message
+        # Call sync_creatives tool (uses default patch=False for full upsert)
+        response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
 
-            # Verify database persistence
-            with get_db_session() as session:
-                db_creatives = session.scalars(select(DBCreative).filter_by(tenant_id=self.test_tenant_id)).all()
-                assert len(db_creatives) == 3
+        # Verify response structure (AdCP-compliant domain response)
+        assert isinstance(response, SyncCreativesResponse)
+        # Domain response has creatives list with action field (not results/summary)
+        assert len(response.creatives) == 3
+        assert all(c.get("action") == "created" for c in response.creatives if isinstance(c, dict))
+        # Verify __str__() generates correct message
+        message = str(response)
+        assert "3 created" in message or "Creative sync completed" in message
 
-                # Verify display creative
-                display_creative = next((c for c in db_creatives if c.format == "display_300x250_image"), None)
-                assert display_creative is not None
-                assert display_creative.name == "Banner Ad 300x250"
-                assert display_creative.data.get("url") == "https://example.com/banner.jpg"
-                assert display_creative.data.get("width") == 300
-                assert display_creative.data.get("height") == 250
-                assert display_creative.status == "approved"  # Auto-approved due to approval_mode setting
+        # Verify database persistence
+        with get_db_session() as session:
+            db_creatives = session.scalars(select(DBCreative).filter_by(tenant_id=self.test_tenant_id)).all()
+            assert len(db_creatives) == 3
 
-                # Verify video creative
-                video_creative = next((c for c in db_creatives if c.format == "video_instream_15s"), None)
-                assert video_creative is not None
-                assert video_creative.data.get("duration") == 30.0
+            # Verify display creative
+            display_creative = next((c for c in db_creatives if c.format == "display_300x250_image"), None)
+            assert display_creative is not None
+            assert display_creative.name == "Banner Ad 300x250"
+            assert display_creative.data.get("url") == "https://example.com/banner.jpg"
+            assert display_creative.data.get("width") == 300
+            assert display_creative.data.get("height") == 250
+            assert display_creative.status == "approved"  # Auto-approved due to approval_mode setting
 
-                # Verify leaderboard creative
-                leaderboard_creative = next((c for c in db_creatives if c.format == "display_728x90_image"), None)
-                assert leaderboard_creative is not None
-                assert leaderboard_creative.data.get("width") == 728
-                assert leaderboard_creative.data.get("height") == 90
+            # Verify video creative
+            video_creative = next((c for c in db_creatives if c.format == "video_instream_15s"), None)
+            assert video_creative is not None
+            assert video_creative.data.get("duration") == 30.0
 
-    def test_sync_creatives_upsert_existing_creative(self, mock_context):
+            # Verify leaderboard creative
+            leaderboard_creative = next((c for c in db_creatives if c.format == "display_728x90_image"), None)
+            assert leaderboard_creative is not None
+            assert leaderboard_creative.data.get("width") == 728
+            assert leaderboard_creative.data.get("height") == 90
+
+    def test_sync_creatives_upsert_existing_creative(self):
         """Test sync_creatives updates existing creative (default patch=False behavior)."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
         # First, create an existing creative
@@ -341,34 +354,32 @@ class TestCreativeLifecycleMCP:
             }
         ]
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-        ):
-            # Upsert with patch=False (default): full replacement
-            response = core_sync_creatives_tool(creatives=updated_creative_data, ctx=mock_context)
+        identity = self._make_identity()
 
-            # Verify response (domain response has creatives list, not summary/results)
-            assert len(response.creatives) == 1
-            # Check action on creative item
-            creative_item = response.creatives[0]
-            if isinstance(creative_item, dict):
-                assert creative_item.get("action") == "updated"
-            else:
-                assert creative_item.action == CreativeAction.updated
+        # Upsert with patch=False (default): full replacement
+        response = core_sync_creatives_tool(creatives=updated_creative_data, identity=identity)
 
-            # Verify database update
-            with get_db_session() as session:
-                updated_creative = session.scalars(
-                    select(DBCreative).filter_by(tenant_id=self.test_tenant_id, creative_id="creative_update_test")
-                ).first()
+        # Verify response (domain response has creatives list, not summary/results)
+        assert len(response.creatives) == 1
+        # Check action on creative item
+        creative_item = response.creatives[0]
+        if isinstance(creative_item, dict):
+            assert creative_item.get("action") == "updated"
+        else:
+            assert creative_item.action == CreativeAction.updated
 
-                assert updated_creative.name == "Updated Creative Name"
-                assert updated_creative.data.get("url") == "https://example.com/updated.jpg"
-                assert updated_creative.data.get("click_url") == "https://advertiser.com/updated-landing"
-                assert updated_creative.updated_at is not None
+        # Verify database update
+        with get_db_session() as session:
+            updated_creative = session.scalars(
+                select(DBCreative).filter_by(tenant_id=self.test_tenant_id, creative_id="creative_update_test")
+            ).first()
 
-    def test_sync_creatives_with_package_assignments(self, mock_context, sample_creatives):
+            assert updated_creative.name == "Updated Creative Name"
+            assert updated_creative.data.get("url") == "https://example.com/updated.jpg"
+            assert updated_creative.data.get("click_url") == "https://advertiser.com/updated-landing"
+            assert updated_creative.updated_at is not None
+
+    def test_sync_creatives_with_package_assignments(self, sample_creatives):
         """Test sync_creatives assigns creatives to packages using spec-compliant assignments dict."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
@@ -376,35 +387,31 @@ class TestCreativeLifecycleMCP:
         creative_data = sample_creatives[:1]
         creative_id = creative_data[0]["creative_id"]
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-        ):
-            # Use spec-compliant assignments dict: creative_id → package_ids
-            response = core_sync_creatives_tool(
-                creatives=creative_data,
-                assignments={creative_id: ["package_1", "package_2"]},
-                ctx=mock_context,
-            )
+        identity = self._make_identity()
 
-            # Verify response structure
-            assert isinstance(response, SyncCreativesResponse)
-            assert len(response.creatives) > 0
+        # Use spec-compliant assignments dict: creative_id -> package_ids
+        response = core_sync_creatives_tool(
+            creatives=creative_data,
+            assignments={creative_id: ["package_1", "package_2"]},
+            identity=identity,
+        )
 
-            # Verify database assignments (assignments are separate from creatives list)
-            with get_db_session() as session:
-                assignments = session.scalars(
-                    select(CreativeAssignment).filter_by(
-                        tenant_id=self.test_tenant_id, media_buy_id=self.test_media_buy_id
-                    )
-                ).all()
+        # Verify response structure
+        assert isinstance(response, SyncCreativesResponse)
+        assert len(response.creatives) > 0
 
-                assert len(assignments) == 2
-                package_ids = [a.package_id for a in assignments]
-                assert "package_1" in package_ids
-                assert "package_2" in package_ids
+        # Verify database assignments (assignments are separate from creatives list)
+        with get_db_session() as session:
+            assignments = session.scalars(
+                select(CreativeAssignment).filter_by(tenant_id=self.test_tenant_id, media_buy_id=self.test_media_buy_id)
+            ).all()
 
-    def test_sync_creatives_with_assignments_lookup(self, mock_context, sample_creatives):
+            assert len(assignments) == 2
+            package_ids = [a.package_id for a in assignments]
+            assert "package_1" in package_ids
+            assert "package_2" in package_ids
+
+    def test_sync_creatives_with_assignments_lookup(self, sample_creatives):
         """Test sync_creatives with assignments dict (spec-compliant approach)."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
@@ -412,32 +419,30 @@ class TestCreativeLifecycleMCP:
         creative_data = sample_creatives[:1]
         creative_id = creative_data[0]["creative_id"]
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-        ):
-            # Use spec-compliant assignments dict
-            response = core_sync_creatives_tool(
-                creatives=creative_data,
-                assignments={creative_id: ["package_buyer_ref"]},
-                ctx=mock_context,
-            )
+        identity = self._make_identity()
 
-            # Verify response structure
-            assert isinstance(response, SyncCreativesResponse)
-            assert len(response.creatives) > 0
+        # Use spec-compliant assignments dict
+        response = core_sync_creatives_tool(
+            creatives=creative_data,
+            assignments={creative_id: ["package_buyer_ref"]},
+            identity=identity,
+        )
 
-            # Verify assignment in database (assignments are separate from creatives list)
-            with get_db_session() as session:
-                assignment = session.scalars(
-                    select(CreativeAssignment).filter_by(
-                        tenant_id=self.test_tenant_id, creative_id=creative_id, package_id="package_buyer_ref"
-                    )
-                ).first()
-                assert assignment is not None
-                assert assignment.media_buy_id == self.test_media_buy_id
+        # Verify response structure
+        assert isinstance(response, SyncCreativesResponse)
+        assert len(response.creatives) > 0
 
-    def test_sync_creatives_validation_failures(self, mock_context):
+        # Verify assignment in database (assignments are separate from creatives list)
+        with get_db_session() as session:
+            assignment = session.scalars(
+                select(CreativeAssignment).filter_by(
+                    tenant_id=self.test_tenant_id, creative_id=creative_id, package_id="package_buyer_ref"
+                )
+            ).first()
+            assert assignment is not None
+            assert assignment.media_buy_id == self.test_media_buy_id
+
+    def test_sync_creatives_validation_failures(self):
         """Test sync_creatives handles validation failures gracefully."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
         invalid_creatives = [
@@ -454,39 +459,37 @@ class TestCreativeLifecycleMCP:
             },
         ]
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-        ):
-            response = core_sync_creatives_tool(creatives=invalid_creatives, ctx=mock_context)
+        identity = self._make_identity()
 
-            # Should sync valid creative but fail on invalid one
-            # Domain response has creatives list with action field
-            assert len(response.creatives) == 2
-            # Count actions from creatives list (check both dict and object access)
-            created_count = 0
-            failed_count = 0
-            for c in response.creatives:
-                if isinstance(c, dict):
-                    action = c.get("action")
-                else:
-                    action = getattr(c, "action", None)
-                if action in ("created", CreativeAction.created):
-                    created_count += 1
-                elif action in ("failed", CreativeAction.failed):
-                    failed_count += 1
-            assert created_count == 1, f"Expected 1 created, got {created_count}. Creatives: {response.creatives}"
-            assert failed_count == 1, f"Expected 1 failed, got {failed_count}. Creatives: {response.creatives}"
-            # Note: __str__() message may vary based on implementation - it's generated from creatives list
+        response = core_sync_creatives_tool(creatives=invalid_creatives, identity=identity)
 
-            # Verify only valid creative was persisted
-            with get_db_session() as session:
-                db_creatives = session.scalars(select(DBCreative).filter_by(tenant_id=self.test_tenant_id)).all()
-                creative_ids = [c.creative_id for c in db_creatives]
-                assert "valid_creative" in creative_ids
-                assert "invalid_creative" not in creative_ids
+        # Should sync valid creative but fail on invalid one
+        # Domain response has creatives list with action field
+        assert len(response.creatives) == 2
+        # Count actions from creatives list (check both dict and object access)
+        created_count = 0
+        failed_count = 0
+        for c in response.creatives:
+            if isinstance(c, dict):
+                action = c.get("action")
+            else:
+                action = getattr(c, "action", None)
+            if action in ("created", CreativeAction.created):
+                created_count += 1
+            elif action in ("failed", CreativeAction.failed):
+                failed_count += 1
+        assert created_count == 1, f"Expected 1 created, got {created_count}. Creatives: {response.creatives}"
+        assert failed_count == 1, f"Expected 1 failed, got {failed_count}. Creatives: {response.creatives}"
+        # Note: __str__() message may vary based on implementation - it's generated from creatives list
 
-    def test_list_creatives_no_filters(self, mock_context):
+        # Verify only valid creative was persisted
+        with get_db_session() as session:
+            db_creatives = session.scalars(select(DBCreative).filter_by(tenant_id=self.test_tenant_id)).all()
+            creative_ids = [c.creative_id for c in db_creatives]
+            assert "valid_creative" in creative_ids
+            assert "invalid_creative" not in creative_ids
+
+    def test_list_creatives_no_filters(self):
         """Test list_creatives returns all creatives when no filters applied."""
         _, core_list_creatives_tool = self._import_mcp_tools()
         # Create test creatives in database
@@ -518,32 +521,24 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-            patch(
-                "fastmcp.server.dependencies.get_http_headers",
-                return_value={
-                    "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.example.com",
-                },
-            ),
-        ):
-            response = core_list_creatives_tool(ctx=mock_context)
+        identity = self._make_identity()
+        set_current_tenant({"tenant_id": self.test_tenant_id})
 
-            # Verify response structure
-            assert isinstance(response, ListCreativesResponse)
-            assert len(response.creatives) == 5
-            assert response.query_summary.total_matching == 5
-            assert response.query_summary.returned == 5
-            assert response.pagination.has_more is False
+        response = core_list_creatives_tool(identity=identity)
 
-            # Verify creatives are sorted by created_date desc by default
-            creative_names = [c.get("name") if isinstance(c, dict) else c.name for c in response.creatives]
-            assert creative_names[0] == "Test Creative 0"  # Most recent
-            assert creative_names[-1] == "Test Creative 4"  # Oldest
+        # Verify response structure
+        assert isinstance(response, ListCreativesResponse)
+        assert len(response.creatives) == 5
+        assert response.query_summary.total_matching == 5
+        assert response.query_summary.returned == 5
+        assert response.pagination.has_more is False
 
-    def test_list_creatives_with_status_filter(self, mock_context):
+        # Verify creatives are sorted by created_date desc by default
+        creative_names = [c.get("name") if isinstance(c, dict) else c.name for c in response.creatives]
+        assert creative_names[0] == "Test Creative 0"  # Most recent
+        assert creative_names[-1] == "Test Creative 4"  # Oldest
+
+    def test_list_creatives_with_status_filter(self):
         """Test list_creatives filters by status correctly."""
         _, core_list_creatives_tool = self._import_mcp_tools()
         # Create creatives with different statuses
@@ -576,44 +571,36 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-            patch(
-                "fastmcp.server.dependencies.get_http_headers",
-                return_value={
-                    "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.example.com",
-                },
-            ),
-        ):
-            # Test approved filter
-            response = core_list_creatives_tool(status="approved", ctx=mock_context)
-            assert len(response.creatives) == 3
-            # Check status field (handle both dict, object, and enum)
-            for c in response.creatives:
-                status_val = c.get("status") if isinstance(c, dict) else getattr(c, "status", None)
-                # Handle enum values - get the string value
-                from enum import Enum
+        identity = self._make_identity()
+        set_current_tenant({"tenant_id": self.test_tenant_id})
 
-                if isinstance(status_val, Enum):
-                    status_val = status_val.value
-                assert status_val == "approved"
+        # Test approved filter
+        response = core_list_creatives_tool(status="approved", identity=identity)
+        assert len(response.creatives) == 3
+        # Check status field (handle both dict, object, and enum)
+        for c in response.creatives:
+            status_val = c.get("status") if isinstance(c, dict) else getattr(c, "status", None)
+            # Handle enum values - get the string value
+            from enum import Enum
 
-            # Test pending_review filter (correct AdCP status value)
-            response = core_list_creatives_tool(status="pending_review", ctx=mock_context)
-            assert len(response.creatives) == 2
-            # Check status field (handle both dict, object, and enum)
-            for c in response.creatives:
-                status_val = c.get("status") if isinstance(c, dict) else getattr(c, "status", None)
-                # Handle enum values - get the string value
-                from enum import Enum
+            if isinstance(status_val, Enum):
+                status_val = status_val.value
+            assert status_val == "approved"
 
-                if isinstance(status_val, Enum):
-                    status_val = status_val.value
-                assert status_val == "pending_review"
+        # Test pending_review filter (correct AdCP status value)
+        response = core_list_creatives_tool(status="pending_review", identity=identity)
+        assert len(response.creatives) == 2
+        # Check status field (handle both dict, object, and enum)
+        for c in response.creatives:
+            status_val = c.get("status") if isinstance(c, dict) else getattr(c, "status", None)
+            # Handle enum values - get the string value
+            from enum import Enum
 
-    def test_list_creatives_with_format_filter(self, mock_context):
+            if isinstance(status_val, Enum):
+                status_val = status_val.value
+            assert status_val == "pending_review"
+
+    def test_list_creatives_with_format_filter(self):
         """Test list_creatives filters by format correctly."""
         _, core_list_creatives_tool = self._import_mcp_tools()
         # Create creatives with different formats
@@ -646,54 +633,46 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-            patch(
-                "fastmcp.server.dependencies.get_http_headers",
-                return_value={
-                    "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.example.com",
-                },
-            ),
-        ):
-            # Test display format filter
-            response = core_list_creatives_tool(format="display_300x250_image", ctx=mock_context)
-            assert len(response.creatives) == 2
-            # Check format field (may be string, FormatId object, or dict)
-            for c in response.creatives:
-                if isinstance(c, dict):
-                    format_val = c.get("format")
-                else:
-                    format_val = getattr(c, "format", None)
-                # Handle FormatId object by checking its id attribute
-                if hasattr(format_val, "id"):
-                    format_id = format_val.id
-                elif isinstance(format_val, dict):
-                    format_id = format_val.get("id")
-                else:
-                    format_id = format_val
-                assert format_id == "display_300x250_image"
+        identity = self._make_identity()
+        set_current_tenant({"tenant_id": self.test_tenant_id})
 
-            # Test video format filter
-            response = core_list_creatives_tool(format="video_instream_15s", ctx=mock_context)
-            assert len(response.creatives) == 3
-            # Check format field (may be string, FormatId object, or dict)
-            for c in response.creatives:
-                if isinstance(c, dict):
-                    format_val = c.get("format")
-                else:
-                    format_val = getattr(c, "format", None)
-                # Handle FormatId object by checking its id attribute
-                if hasattr(format_val, "id"):
-                    format_id = format_val.id
-                elif isinstance(format_val, dict):
-                    format_id = format_val.get("id")
-                else:
-                    format_id = format_val
-                assert format_id == "video_instream_15s"
+        # Test display format filter
+        response = core_list_creatives_tool(format="display_300x250_image", identity=identity)
+        assert len(response.creatives) == 2
+        # Check format field (may be string, FormatId object, or dict)
+        for c in response.creatives:
+            if isinstance(c, dict):
+                format_val = c.get("format")
+            else:
+                format_val = getattr(c, "format", None)
+            # Handle FormatId object by checking its id attribute
+            if hasattr(format_val, "id"):
+                format_id = format_val.id
+            elif isinstance(format_val, dict):
+                format_id = format_val.get("id")
+            else:
+                format_id = format_val
+            assert format_id == "display_300x250_image"
 
-    def test_list_creatives_with_date_filters(self, mock_context):
+        # Test video format filter
+        response = core_list_creatives_tool(format="video_instream_15s", identity=identity)
+        assert len(response.creatives) == 3
+        # Check format field (may be string, FormatId object, or dict)
+        for c in response.creatives:
+            if isinstance(c, dict):
+                format_val = c.get("format")
+            else:
+                format_val = getattr(c, "format", None)
+            # Handle FormatId object by checking its id attribute
+            if hasattr(format_val, "id"):
+                format_id = format_val.id
+            elif isinstance(format_val, dict):
+                format_id = format_val.get("id")
+            else:
+                format_id = format_val
+            assert format_id == "video_instream_15s"
+
+    def test_list_creatives_with_date_filters(self):
         """Test list_creatives filters by creation date range."""
         _, core_list_creatives_tool = self._import_mcp_tools()
         now = datetime.now(UTC)
@@ -730,28 +709,20 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-            patch(
-                "fastmcp.server.dependencies.get_http_headers",
-                return_value={
-                    "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.example.com",
-                },
-            ),
-        ):
-            # Test created_after filter
-            created_after = (now - timedelta(days=5)).isoformat()
-            response = core_list_creatives_tool(created_after=created_after, ctx=mock_context)
-            assert len(response.creatives) == 2  # Only recent creatives
+        identity = self._make_identity()
+        set_current_tenant({"tenant_id": self.test_tenant_id})
 
-            # Test created_before filter
-            created_before = (now - timedelta(days=5)).isoformat()
-            response = core_list_creatives_tool(created_before=created_before, ctx=mock_context)
-            assert len(response.creatives) == 2  # Only old creatives
+        # Test created_after filter
+        created_after = (now - timedelta(days=5)).isoformat()
+        response = core_list_creatives_tool(created_after=created_after, identity=identity)
+        assert len(response.creatives) == 2  # Only recent creatives
 
-    def test_list_creatives_with_search(self, mock_context):
+        # Test created_before filter
+        created_before = (now - timedelta(days=5)).isoformat()
+        response = core_list_creatives_tool(created_before=created_before, identity=identity)
+        assert len(response.creatives) == 2  # Only old creatives
+
+    def test_list_creatives_with_search(self):
         """Test list_creatives search functionality."""
         _, core_list_creatives_tool = self._import_mcp_tools()
         # Create creatives with searchable names
@@ -791,34 +762,26 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-            patch(
-                "fastmcp.server.dependencies.get_http_headers",
-                return_value={
-                    "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.example.com",
-                },
-            ),
-        ):
-            # Search for "Holiday"
-            response = core_list_creatives_tool(search="Holiday", ctx=mock_context)
-            assert len(response.creatives) == 2
-            # Check name field (handle both dict and object)
-            for c in response.creatives:
-                name_val = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
-                assert "Holiday" in name_val
+        identity = self._make_identity()
+        set_current_tenant({"tenant_id": self.test_tenant_id})
 
-            # Search for "Banner"
-            response = core_list_creatives_tool(search="Banner", ctx=mock_context)
-            assert len(response.creatives) == 2
-            # Check name field (handle both dict and object)
-            for c in response.creatives:
-                name_val = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
-                assert "Banner" in name_val
+        # Search for "Holiday"
+        response = core_list_creatives_tool(search="Holiday", identity=identity)
+        assert len(response.creatives) == 2
+        # Check name field (handle both dict and object)
+        for c in response.creatives:
+            name_val = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+            assert "Holiday" in name_val
 
-    def test_list_creatives_pagination_and_sorting(self, mock_context):
+        # Search for "Banner"
+        response = core_list_creatives_tool(search="Banner", identity=identity)
+        assert len(response.creatives) == 2
+        # Check name field (handle both dict and object)
+        for c in response.creatives:
+            name_val = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+            assert "Banner" in name_val
+
+    def test_list_creatives_pagination_and_sorting(self):
         """Test list_creatives pagination and sorting options."""
         _, core_list_creatives_tool = self._import_mcp_tools()
         # Create multiple creatives for pagination testing
@@ -839,45 +802,37 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-            patch(
-                "fastmcp.server.dependencies.get_http_headers",
-                return_value={
-                    "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.example.com",
-                },
-            ),
-        ):
-            # Test first page
-            response = core_list_creatives_tool(page=1, limit=10, ctx=mock_context)
-            assert len(response.creatives) == 10
-            assert response.query_summary.total_matching == 25
-            assert response.query_summary.returned == 10
-            assert response.pagination.has_more is True
-            assert response.pagination.current_page == 1
+        identity = self._make_identity()
+        set_current_tenant({"tenant_id": self.test_tenant_id})
 
-            # Test second page
-            response = core_list_creatives_tool(page=2, limit=10, ctx=mock_context)
-            assert len(response.creatives) == 10
-            assert response.query_summary.returned == 10
-            assert response.pagination.has_more is True
-            assert response.pagination.current_page == 2
+        # Test first page
+        response = core_list_creatives_tool(page=1, limit=10, identity=identity)
+        assert len(response.creatives) == 10
+        assert response.query_summary.total_matching == 25
+        assert response.query_summary.returned == 10
+        assert response.pagination.has_more is True
+        assert response.pagination.current_page == 1
 
-            # Test last page
-            response = core_list_creatives_tool(page=3, limit=10, ctx=mock_context)
-            assert len(response.creatives) == 5
-            assert response.query_summary.returned == 5
-            assert response.pagination.has_more is False
-            assert response.pagination.current_page == 3
+        # Test second page
+        response = core_list_creatives_tool(page=2, limit=10, identity=identity)
+        assert len(response.creatives) == 10
+        assert response.query_summary.returned == 10
+        assert response.pagination.has_more is True
+        assert response.pagination.current_page == 2
 
-            # Test name sorting ascending
-            response = core_list_creatives_tool(sort_by="name", sort_order="asc", limit=5, ctx=mock_context)
-            creative_names = [c.get("name") if isinstance(c, dict) else c.name for c in response.creatives]
-            assert creative_names == sorted(creative_names)
+        # Test last page
+        response = core_list_creatives_tool(page=3, limit=10, identity=identity)
+        assert len(response.creatives) == 5
+        assert response.query_summary.returned == 5
+        assert response.pagination.has_more is False
+        assert response.pagination.current_page == 3
 
-    def test_list_creatives_with_media_buy_assignments(self, mock_context):
+        # Test name sorting ascending
+        response = core_list_creatives_tool(sort_by="name", sort_order="asc", limit=5, identity=identity)
+        creative_names = [c.get("name") if isinstance(c, dict) else c.name for c in response.creatives]
+        assert creative_names == sorted(creative_names)
+
+    def test_list_creatives_with_media_buy_assignments(self):
         """Test list_creatives filters by media buy assignments."""
         _, core_list_creatives_tool = self._import_mcp_tools()
         # Create creatives and assignments
@@ -917,30 +872,22 @@ class TestCreativeLifecycleMCP:
             session.add(assignment)
             session.commit()
 
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-            patch(
-                "fastmcp.server.dependencies.get_http_headers",
-                return_value={
-                    "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.example.com",
-                },
-            ),
-        ):
-            # Filter by media_buy_id - should only return assigned creative
-            response = core_list_creatives_tool(media_buy_id=self.test_media_buy_id, ctx=mock_context)
-            assert len(response.creatives) == 1
-            creative = response.creatives[0]
-            creative_id = creative.get("creative_id") if isinstance(creative, dict) else creative.creative_id
-            assert creative_id == "assignment_test_1"
+        identity = self._make_identity()
+        set_current_tenant({"tenant_id": self.test_tenant_id})
 
-            # Filter by buyer_ref - should also work
-            response = core_list_creatives_tool(buyer_ref=self.test_buyer_ref, ctx=mock_context)
-            assert len(response.creatives) == 1
-            creative = response.creatives[0]
-            creative_id = creative.get("creative_id") if isinstance(creative, dict) else creative.creative_id
-            assert creative_id == "assignment_test_1"
+        # Filter by media_buy_id - should only return assigned creative
+        response = core_list_creatives_tool(media_buy_id=self.test_media_buy_id, identity=identity)
+        assert len(response.creatives) == 1
+        creative = response.creatives[0]
+        creative_id = creative.get("creative_id") if isinstance(creative, dict) else creative.creative_id
+        assert creative_id == "assignment_test_1"
+
+        # Filter by buyer_ref - should also work
+        response = core_list_creatives_tool(buyer_ref=self.test_buyer_ref, identity=identity)
+        assert len(response.creatives) == 1
+        creative = response.creatives[0]
+        creative_id = creative.get("creative_id") if isinstance(creative, dict) else creative.creative_id
+        assert creative_id == "assignment_test_1"
 
     def test_sync_creatives_authentication_required(self, sample_creatives):
         """Test sync_creatives requires proper authentication."""
@@ -951,69 +898,61 @@ class TestCreativeLifecycleMCP:
         # Authentication errors manifest as various exception types (ToolError, ValueError, etc.)
         from fastmcp.exceptions import ToolError
 
-        with pytest.raises((ToolError, ValueError, RuntimeError)):
+        from src.core.exceptions import AdCPAuthenticationError
+
+        with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
             core_sync_creatives_tool(creatives=sample_creatives, ctx=mock_context)
 
     def test_list_creatives_authentication_optional(self, mock_context):
         """Test list_creatives authentication behavior."""
         from fastmcp.exceptions import ToolError
 
+        from src.core.exceptions import AdCPAuthenticationError
+
         _, core_list_creatives_tool = self._import_mcp_tools()
 
         # Test 1: Invalid token should raise error
         mock_context = MockContext("invalid-token")
-        with pytest.raises((ToolError, ValueError, RuntimeError)):
+        with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
             core_list_creatives_tool(ctx=mock_context)
 
         # Test 2: No token also requires auth (list_creatives is not anonymous)
         mock_context_no_auth = MockContext(None)
-        with pytest.raises((ToolError, ValueError, RuntimeError)):
+        with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
             core_list_creatives_tool(ctx=mock_context_no_auth)
 
-    def test_sync_creatives_missing_tenant(self, mock_context, sample_creatives):
+    def test_sync_creatives_missing_tenant(self, sample_creatives):
         """Test sync_creatives when tenant lookup succeeds even with approval_mode provided.
 
-        Note: The function uses get_principal_id_from_context which does its own tenant lookup,
+        Note: The function uses identity.principal_id and identity.tenant for auth/tenant context,
         so providing tenant_id with approval_mode ensures proper creative status handling.
         """
         core_sync_creatives_tool, _ = self._import_mcp_tools()
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch(
-                "src.core.tools.creatives.get_current_tenant",
-                return_value={"tenant_id": self.test_tenant_id, "approval_mode": "auto-approve"},
-            ),
-        ):
-            # The function works with tenant_id and approval_mode
-            response = core_sync_creatives_tool(creatives=sample_creatives, ctx=mock_context)
-            assert isinstance(response, SyncCreativesResponse)
 
-    def test_list_creatives_empty_results(self, mock_context):
+        identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
+
+        # The function works with tenant_id and approval_mode
+        response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        assert isinstance(response, SyncCreativesResponse)
+
+    def test_list_creatives_empty_results(self):
         """Test list_creatives handles empty results gracefully."""
         _, core_list_creatives_tool = self._import_mcp_tools()
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch("src.core.tools.creatives.get_current_tenant", return_value={"tenant_id": self.test_tenant_id}),
-            patch(
-                "fastmcp.server.dependencies.get_http_headers",
-                return_value={
-                    "x-adcp-auth": "test-token-123",
-                    "host": "creative-test.sales-agent.example.com",
-                },
-            ),
-        ):
-            # Query with filters that match nothing
-            response = core_list_creatives_tool(status="rejected", ctx=mock_context)  # No rejected creatives exist
 
-            assert len(response.creatives) == 0
-            assert response.query_summary.total_matching == 0
-            assert response.query_summary.returned == 0
-            assert response.pagination.has_more is False
+        identity = self._make_identity()
+        set_current_tenant({"tenant_id": self.test_tenant_id})
+
+        # Query with filters that match nothing
+        response = core_list_creatives_tool(status="rejected", identity=identity)  # No rejected creatives exist
+
+        assert len(response.creatives) == 0
+        assert response.query_summary.total_matching == 0
+        assert response.query_summary.returned == 0
+        assert response.pagination.has_more is False
 
     def test_validate_creatives_missing_required_fields(self, mock_context):
         """Test _validate_creatives_before_adapter_call detects missing required fields."""
-        from fastmcp.exceptions import ToolError
-
+        from src.core.exceptions import AdCPValidationError
         from src.core.schemas import PackageRequest
         from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
 
@@ -1059,7 +998,7 @@ class TestCreativeLifecycleMCP:
         )
 
         with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format):
-            with pytest.raises(ToolError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(packages, self.test_tenant_id)
 
             error_msg = str(exc_info.value).lower()
@@ -1070,15 +1009,10 @@ class TestCreativeLifecycleMCP:
         """Test create_media_buy accepts creative_ids in packages."""
         # First, sync creatives to have IDs to reference
         core_sync_creatives_tool, _ = self._import_mcp_tools()
-        with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch(
-                "src.core.tools.creatives.get_current_tenant",
-                return_value={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
-            ),
-        ):
-            sync_response = core_sync_creatives_tool(creatives=sample_creatives, ctx=mock_context)
-            assert len(sync_response.creatives) == 3
+
+        identity = self._make_identity(tenant_overrides={"approval_mode": "require-human"})
+        sync_response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        assert len(sync_response.creatives) == 3
 
         # Update creatives in database to have platform_creative_id
         # This simulates that the creatives have already been uploaded to GAM
@@ -1109,24 +1043,22 @@ class TestCreativeLifecycleMCP:
         # Create media buy with creative_ids in packages
         creative_ids = [c["creative_id"] for c in sample_creatives]
 
+        # Build ResolvedIdentity instead of patching removed auth functions
+        from src.core.resolved_identity import ResolvedIdentity
+        from src.core.testing_hooks import AdCPTestContext
+
+        identity = ResolvedIdentity(
+            principal_id=self.test_principal_id,
+            tenant_id=self.test_tenant_id,
+            tenant={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="creative_lifecycle_test"),
+            protocol="mcp",
+        )
+
         with (
-            patch("src.core.tools.creatives.get_principal_id_from_context", return_value=self.test_principal_id),
-            patch(
-                "src.core.tools.creatives.get_current_tenant",
-                return_value={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
-            ),
-            # Patch media_buy_create module's imports (separate from creatives module)
-            patch(
-                "src.core.tools.media_buy_create.get_principal_id_from_context",
-                return_value=self.test_principal_id,
-            ),
-            patch(
-                "src.core.tools.media_buy_create.get_current_tenant",
-                return_value={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
-            ),
             patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter,
-            patch("src.core.main.get_product_catalog") as mock_catalog,
+            patch("src.core.tools.products.get_product_catalog") as mock_catalog,
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch(
                 "src.core.tools.media_buy_create._validate_creatives_before_adapter_call"
@@ -1218,10 +1150,10 @@ class TestCreativeLifecycleMCP:
                 start_time=datetime.now(UTC) + timedelta(days=1),
                 end_time=datetime.now(UTC) + timedelta(days=30),
                 po_number="PO-TEST-123",
-                ctx=mock_context,
+                identity=identity,
             )
 
-            # Verify response — create_media_buy_raw returns CreateMediaBuyResult
+            # Verify response -- create_media_buy_raw returns CreateMediaBuyResult
             # which supports tuple unpacking: (domain_response, status)
             domain_response, status = response
             print(f"DEBUG create_media_buy response: {domain_response}")

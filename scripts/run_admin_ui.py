@@ -18,11 +18,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.admin.app import create_app
 
 # Create Flask app
-app, socketio = create_app()
+app = create_app()
 
 if __name__ == "__main__":
     # Get port from environment
-    port = int(os.environ.get("ADMIN_UI_PORT", 8001))
+    port = int(os.environ.get("ADCP_SALES_PORT", 8080))
     print(f"Starting Admin UI on port {port} (production mode)")
 
     # Use waitress as the production WSGI server

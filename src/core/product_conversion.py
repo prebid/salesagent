@@ -170,18 +170,27 @@ def convert_pricing_option_to_adcp(
             return vcpm_result
 
     elif pricing_model == "cpc":
-        # CPC: V3 uses fixed_price for fixed-rate
-        if not is_fixed:
-            raise ValueError(
-                f"Auction CPC pricing option {pricing_option_id} is not supported. "
-                f"CPC pricing requires fixed_price. Use fixed-rate CPC (with rate parameter)."
+        if is_fixed:
+            if not rate:
+                raise ValueError(f"Fixed CPC pricing option {pricing_option_id} requires rate")
+            return CpcPricingOption(
+                **common_fields,
+                fixed_price=float(rate),
             )
-        if not rate:
-            raise ValueError(f"Fixed CPC pricing option {pricing_option_id} requires rate")
-        return CpcPricingOption(
-            **common_fields,
-            fixed_price=float(rate),
-        )
+        else:
+            if not price_guidance:
+                raise ValueError(f"Auction CPC pricing option {pricing_option_id} requires price_guidance")
+            cpc_result = CpcPricingOption(
+                **common_fields,
+                price_guidance=price_guidance,
+            )
+            if floor_price is not None:
+                cpc_result = CpcPricingOption(
+                    **common_fields,
+                    floor_price=float(floor_price),
+                    price_guidance=price_guidance,
+                )
+            return cpc_result
 
     elif pricing_model == "cpcv":
         # CPCV (Cost Per Completed View) - typically fixed rate

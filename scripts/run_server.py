@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Run the AdCP Sales Agent with HTTP transport."""
+"""Run the AdCP Sales Agent with HTTP transport.
+
+Starts the unified FastAPI application via uvicorn, serving MCP, A2A,
+and Admin UI from a single process.
+"""
 
 import os
-import subprocess
 import sys
 
 
@@ -14,18 +17,18 @@ def main():
         sys.path.insert(0, ".")
         from src.core.startup import initialize_application
 
-        print("🚀 Initializing AdCP Sales Agent...")
+        print("Initializing AdCP Sales Agent...")
         initialize_application()
-        print("✅ Application initialization completed")
+        print("Application initialization completed")
 
     except SystemExit:
-        print("❌ Application initialization failed - check logs")
+        print("Application initialization failed - check logs")
         sys.exit(1)
     except Exception as e:
-        print(f"❌ Startup error: {e}")
+        print(f"Startup error: {e}")
         sys.exit(1)
 
-    port = os.environ.get("ADCP_SALES_PORT", "8080")
+    port = int(os.environ.get("ADCP_SALES_PORT", "8080"))
     host = os.environ.get("ADCP_SALES_HOST", "0.0.0.0")
 
     # Check if we're in production (Docker or Fly.io)
@@ -38,26 +41,13 @@ def main():
     print(f"Starting AdCP Sales Agent on {host}:{port}")
     print(f"Server endpoint: http://{host}:{port}/")
 
-    # Run the server
-    cmd = [
-        sys.executable,
-        "-c",
-        f"""
-import sys
-sys.path.insert(0, '.')
-from src.core.main import mcp
-mcp.run(transport='http', host='{host}', port={port})
-""",
-    ]
+    import uvicorn
 
     try:
-        subprocess.run(cmd, check=True)
+        uvicorn.run("src.app:app", host=host, port=port, log_level="info")
     except KeyboardInterrupt:
         print("\nServer stopped.")
         sys.exit(0)
-    except subprocess.CalledProcessError as e:
-        print(f"Error running server: {e}")
-        sys.exit(1)
 
 
 if __name__ == "__main__":

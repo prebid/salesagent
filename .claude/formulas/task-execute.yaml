@@ -224,45 +224,126 @@ iterate:
       depends_on: ["review-{TASK_ID}"]
       labels: ["atom:triage"]
 
-    # ── Atom 4: Implement ─────────────────────────────────────────
+    # ── Atom 4: Write Regression Test (TDD Red) ────────────────────
+    - id: "write-test-{TASK_ID}"
+      title: "Write regression test for {TASK_ID}"
+      description: |
+        Write a failing test that defines the expected behavior for {TASK_ID}.
+        This is the TDD "red" step — the test MUST exist and MUST fail before
+        any implementation begins.
+
+        ## Prerequisites
+
+        Run `bd show {TASK_ID}`. Read:
+        - **Design**: Core Invariant + Implementation Plan
+        - **Notes**: Research findings, architect review
+
+        ## Instructions
+
+        1. **Identify what to test**: From the implementation plan, determine
+           the key behavior that this task adds or changes. What should be true
+           after implementation that isn't true now?
+
+        2. **Choose test location**:
+           - Unit test: `tests/unit/test_<area>.py` (most common)
+           - Integration test: `tests/integration/test_<area>.py` (if DB-dependent)
+           - Follow existing test file organization
+
+        3. **Write the failing test**:
+           - Test the BEHAVIOR, not the implementation details
+           - One test per distinct behavior change
+           - Use descriptive test names: `test_<what>_<when>_<expected>`
+           - Follow existing test patterns in the same file
+
+        4. **Run and confirm it fails for the RIGHT reason**:
+           ```bash
+           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           ```
+           - ImportError or NameError = wrong reason (test has a bug)
+           - AssertionError with clear message = right reason (behavior doesn't exist yet)
+           - If the test already passes: the behavior already exists. Document this
+             and consider whether additional edge case tests are needed.
+
+        5. **For refactors/rewrites** (behavior should NOT change):
+           - Verify existing tests pass BEFORE your changes:
+             ```bash
+             uv run pytest tests/unit/test_<area>.py -x -v
+             ```
+           - Write additional tests for edge cases the refactor must preserve
+           - These tests should PASS now (they guard existing behavior)
+
+        ## When to Skip (with justification)
+
+        If the task is PURELY dead code removal or comment/doc changes:
+        ```bash
+        bd update {TASK_ID} --append-notes "## Regression Test: Skipped
+        Task is [dead code removal / documentation only] — no behavioral change to test.
+        Existing tests provide sufficient coverage."
+        ```
+        Close this atom. But if ANY behavior changes, a test is MANDATORY.
+
+        ## Store Test Reference
+
+        ```bash
+        bd update {TASK_ID} --append-notes "## Regression Test
+        - Test: tests/unit/test_<area>.py::test_<name>
+        - Status: FAILING (expected — TDD red step)
+        - Tests expected behavior: [one sentence]"
+        ```
+
+        ## Gate
+
+        Do NOT close this atom until:
+        - A failing test exists, OR
+        - Skip justification is documented
+
+      acceptance: "Failing test exists that defines the expected behavior. Test reference written to task notes. Test fails for the right reason (AssertionError, not ImportError)."
+      depends_on: ["triage-{TASK_ID}"]
+      depends_on_prev_barrier: true
+      labels: ["atom:write-test"]
+
+    # ── Atom 5: Implement (TDD Green + Refactor) ─────────────────
     - id: "implement-{TASK_ID}"
       title: "Implement {TASK_ID}"
       description: |
-        Implement beads task {TASK_ID} following the researched and reviewed plan.
+        Implement beads task {TASK_ID} — make the failing test pass (TDD green),
+        then refactor.
 
         ## Prerequisites
 
         Run `bd show {TASK_ID}`. The bead contains everything you need:
         - **Description**: What the task is
-        - **Notes**: Research findings, architect review, any refinements
+        - **Notes**: Research findings, architect review, regression test reference
         - **Design**: Architecture decisions and implementation plan
 
         Read ALL of these before writing any code.
 
-        ## Pre-Implementation Invariant Check
+        ## Pre-Implementation Checks
 
-        Before writing ANY code, re-read the ## Core Invariant from the design field.
-        For each file you plan to modify, ask:
-
-        > "Does this change maintain the invariant?"
-
-        If the answer is "no" or "unclear" for any change, STOP. Update the task
-        notes explaining the conflict and leave this atom open for direction.
-
-        ## Workflow
-
-        Follow TDD (Red-Green-Refactor):
-
-        1. **Red**: Write failing test that describes desired behavior
+        1. **Verify the regression test still fails** (from the write-test atom):
            ```bash
            uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
            ```
-           Confirm it fails for the right reason.
+           If the test now passes (e.g., someone else implemented it), note this
+           and close the atom.
 
-        2. **Green**: Write minimum code to make the test pass
+        2. **Invariant check**: Re-read the ## Core Invariant from the design field.
+           For each file you plan to modify, ask:
+           > "Does this change maintain the invariant?"
+           If "no" or "unclear" for any change, STOP and leave this atom open.
+
+        ## Workflow (TDD Green + Refactor)
+
+        1. **Green**: Write minimum code to make the failing test pass
            - Follow CLAUDE.md critical patterns
            - Follow existing codebase conventions found in research
            - Don't add extras not covered by tests
+
+        2. **Verify**:
+           ```bash
+           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           ```
+           The previously failing test must now pass.
 
         3. **Refactor**: With passing tests as safety net
            - Remove duplication, improve naming, simplify logic
@@ -307,12 +388,11 @@ iterate:
         bd close {TASK_ID}
         ```
 
-      acceptance: "make quality passes. No existing tests were modified without documented justification. Changes maintain the Core Invariant. Original task {TASK_ID} closed."
-      depends_on: ["triage-{TASK_ID}"]
-      depends_on_prev_barrier: true
+      acceptance: "make quality passes. Regression test from write-test atom now passes. No existing tests modified without documented justification. Changes maintain the Core Invariant. Original task {TASK_ID} closed."
+      depends_on: ["write-test-{TASK_ID}"]
       labels: ["atom:implement"]
 
-    # ── Atom 5: Commit ────────────────────────────────────────────
+    # ── Atom 7: Commit ────────────────────────────────────────────
     - id: "commit-{TASK_ID}"
       title: "Commit implementation for {TASK_ID}"
       description: |

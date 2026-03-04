@@ -97,28 +97,23 @@ async def test_invalid_get_products_response():
 async def test_get_products_request_validation():
     """Test validation of get-products request parameters.
 
-    Per AdCP spec, buying_mode is required. Two modes:
-    - 'brief': publisher curates recommendations; requires 'brief' field
-    - 'wholesale': buyer requests raw inventory; 'brief' must not be provided
+    Per AdCP spec, buying_mode is required. When buying_mode is 'brief',
+    the brief field is also required. When 'wholesale', brief must not be provided.
     """
     async with AdCPSchemaValidator() as validator:
-        # Wholesale mode - minimal valid request (no brief needed)
-        wholesale_request = {"buying_mode": "wholesale"}
-        await validator.validate_request("get-products", wholesale_request)
-
-        # Brief mode - requires buying_mode and brief
+        # Brief mode with brief text
         brief_request = {"buying_mode": "brief", "brief": "Looking for display advertising"}
         await validator.validate_request("get-products", brief_request)
 
-        # Wholesale with brand context (no brief) - brand uses domain reference
-        wholesale_with_brand = {"buying_mode": "wholesale", "brand": {"domain": "example.com"}}
-        await validator.validate_request("get-products", wholesale_with_brand)
+        # Wholesale mode (no brief)
+        wholesale_request = {"buying_mode": "wholesale"}
+        await validator.validate_request("get-products", wholesale_request)
 
-        # Full brief request with brand
+        # Brief mode with brand_manifest
         full_request = {
             "buying_mode": "brief",
             "brief": "Looking for display advertising",
-            "brand": {"domain": "example.com"},
+            "brand_manifest": {"url": "https://example.com", "name": "Example Brand"},
         }
         await validator.validate_request("get-products", full_request)
 

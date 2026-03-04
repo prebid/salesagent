@@ -12,19 +12,18 @@ import time
 from typing import Any, cast
 
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_from_context
-from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
 from src.core.helpers import log_tool_activity
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
-from src.core.testing_hooks import get_testing_context
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.validation_helpers import safe_parse_json_field
 
@@ -32,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 def _list_authorized_properties_impl(
-    req: ListAuthorizedPropertiesRequest | None = None, context: Context | ToolContext | None = None
+    req: ListAuthorizedPropertiesRequest | None = None, identity: ResolvedIdentity | None = None
 ) -> ListAuthorizedPropertiesResponse:
     """List all properties this agent is authorized to represent (AdCP spec endpoint).
 
@@ -41,7 +40,7 @@ def _list_authorized_properties_impl(
 
     Args:
         req: Request parameters including optional tag filters
-        context: FastMCP context for authentication
+        identity: Resolved identity for authentication
 
     Returns:
         ListAuthorizedPropertiesResponse with properties and tag metadata
@@ -52,44 +51,30 @@ def _list_authorized_properties_impl(
     if req is None:
         req = ListAuthorizedPropertiesRequest()
 
-    # Get tenant and principal from context
-    # Authentication is OPTIONAL for discovery endpoints (returns public inventory)
-    # require_valid_token=False means invalid tokens are treated like missing tokens (discovery endpoint behavior)
-    principal_id, tenant = get_principal_from_context(
-        context,
-        require_valid_token=False,
-    )  # May return (None, tenant) for public discovery
-
-    # Set tenant context if returned
-    if tenant:
-        set_current_tenant(tenant)
-    else:
-        tenant = get_current_tenant()
+    # Extract principal and tenant from resolved identity
+    principal_id = identity.principal_id if identity else None
+    tenant = identity.tenant if identity else None
 
     if not tenant:
-        raise ToolError(
-            "TENANT_ERROR",
+        raise AdCPAuthenticationError(
             "Could not resolve tenant from request context (no subdomain, virtual host, or x-adcp-tenant header found)",
+            details={"error_code": "TENANT_ERROR"},
         )
 
     tenant_id = tenant["tenant_id"]
 
     # Apply testing hooks
-    from src.core.testing_hooks import AdCPTestContext
-    from src.core.tool_context import ToolContext
-
-    if isinstance(context, ToolContext):
-        testing_context = context.testing_context or AdCPTestContext()
-    else:
-        testing_context = get_testing_context(context) if context else AdCPTestContext()
+    testing_context = identity.testing_context if identity else AdCPTestContext()
+    if testing_context is None:
+        testing_context = AdCPTestContext()
 
     # Note: apply_testing_hooks signature is (data, testing_ctx, operation, campaign_info)
     # For list_authorized_properties, we don't modify data, so we can skip this call
     # The testing_context is used later if needed
 
-    # Activity logging imported at module level
-    if context is not None:
-        log_tool_activity(context, "list_authorized_properties", start_time)
+    # Activity logging
+    if identity is not None:
+        log_tool_activity(identity, "list_authorized_properties", start_time)
 
     try:
         with get_db_session() as session:
@@ -208,10 +193,13 @@ def _list_authorized_properties_impl(
             error=str(e),
         )
 
-        raise ToolError("PROPERTIES_ERROR", f"Failed to list authorized properties: {str(e)}")
+        raise AdCPAdapterError(
+            f"Failed to list authorized properties: {str(e)}",
+            details={"error_code": "PROPERTIES_ERROR"},
+        )
 
 
-def list_authorized_properties(
+async def list_authorized_properties(
     req: ListAuthorizedPropertiesRequest | None = None,
     webhook_url: str | None = None,
     ctx: Context | ToolContext | None = None,
@@ -230,73 +218,25 @@ def list_authorized_properties(
     Returns:
         ToolResult with human-readable text and structured data
     """
-    # FIX: Create MinimalContext with headers from FastMCP request (like A2A does)
-    # This ensures tenant detection works the same way for both MCP and A2A
-    import logging
-    import sys
+    # Inject payload-level context into the request object so _impl can echo it back
+    # (follows the same pattern as list_creative_formats and all other MCP wrappers)
+    if context is not None:
+        if req is None:
+            req = ListAuthorizedPropertiesRequest(context=context)
+        else:
+            req = cast(ListAuthorizedPropertiesRequest, req)
+            req.context = context
 
-    logger = logging.getLogger(__name__)
-    tool_context: Context | ToolContext | None = None
-
-    if ctx:
-        try:
-            # Log ALL headers received for debugging virtual host issues
-            logger.debug("🔍 MCP list_authorized_properties called")
-            logger.debug(f"🔍 context type={type(ctx)}")
-
-            # Access raw Starlette request headers via context.request_context.request
-            # ToolContext doesn't have request_context (A2A path doesn't use Starlette)
-            request = None
-            if isinstance(ctx, Context) and hasattr(ctx, "request_context") and ctx.request_context:
-                request = ctx.request_context.request
-            logger.debug(f"🔍 request type={type(request) if request else None}")
-
-            if request and hasattr(request, "headers"):
-                headers = dict(request.headers)
-                logger.debug(f"🔍 Received {len(headers)} headers:")
-                for key, value in headers.items():
-                    logger.debug(f"🔍   {key}: {value}")
-
-                logger.debug(
-                    f"🔍 Key headers: Host={headers.get('host')}, Apx-Incoming-Host={headers.get('apx-incoming-host')}"
-                )
-
-                # Create MinimalContext matching A2A pattern
-                # Note: Using Any type to allow duck-typed context
-                from typing import Any
-
-                class MinimalContext:
-                    def __init__(self, headers: dict[str, str]):
-                        self.meta: dict[str, Any] = {"headers": headers}
-                        self.headers: dict[str, str] = headers
-
-                tool_context_temp: Any = MinimalContext(headers)
-                tool_context = tool_context_temp
-                print("[MCP DEBUG] Created MinimalContext successfully", file=sys.stderr, flush=True)
-                logger.info("MCP list_authorized_properties: Created MinimalContext successfully")
-            else:
-                print("[MCP DEBUG] request has no headers attribute", file=sys.stderr, flush=True)
-                logger.warning("MCP list_authorized_properties: request has no headers attribute")
-                tool_context = ctx
-        except Exception as e:
-            # Fallback to passing context as-is
-            print(f"[MCP DEBUG] Exception extracting headers: {e}", file=sys.stderr, flush=True)
-            logger.error(
-                f"MCP list_authorized_properties: Could not extract headers from FastMCP context: {e}", exc_info=True
-            )
-            tool_context = ctx
-    else:
-        print("[MCP DEBUG] No context provided", file=sys.stderr, flush=True)
-        logger.info("MCP list_authorized_properties: No context provided")
-        tool_context = ctx
-
-    response = _list_authorized_properties_impl(cast(ListAuthorizedPropertiesRequest | None, req), tool_context)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    response = _list_authorized_properties_impl(cast(ListAuthorizedPropertiesRequest | None, req), identity)
 
     return ToolResult(content=str(response), structured_content=response)
 
 
 def list_authorized_properties_raw(
-    req: "ListAuthorizedPropertiesRequest" = None, ctx: Context | ToolContext | None = None
+    req: "ListAuthorizedPropertiesRequest" = None,
+    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> "ListAuthorizedPropertiesResponse":
     """List all properties this agent is authorized to represent (raw function for A2A server use).
 
@@ -304,9 +244,14 @@ def list_authorized_properties_raw(
 
     Args:
         req: Optional request with filter parameters
-        context: FastMCP context
+        ctx: FastMCP context
+        identity: Pre-resolved identity (if available)
 
     Returns:
         ListAuthorizedPropertiesResponse with authorized properties
     """
-    return _list_authorized_properties_impl(req, ctx)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    return _list_authorized_properties_impl(req, identity)

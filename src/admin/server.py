@@ -76,10 +76,10 @@ def main():
     from src.admin.app import create_app
 
     # Create the Flask app
-    app, socketio = create_app()
+    app = create_app()
 
     # Get configuration from environment
-    port = int(os.environ.get("ADMIN_UI_PORT", 8001))
+    port = int(os.environ.get("ADCP_SALES_PORT", 8080))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     server_type = os.environ.get("ADMIN_SERVER_TYPE", "waitress").lower()
 

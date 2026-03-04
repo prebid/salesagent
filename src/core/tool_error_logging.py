@@ -43,13 +43,14 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
     # Try to extract from FastMCP Context
     if isinstance(context, FastMCPContext):
         try:
-            from src.core.auth import get_principal_from_context
+            from src.core.transport_helpers import resolve_identity_from_context
 
-            principal_id_result, tenant = get_principal_from_context(context, require_valid_token=False)
-            if tenant:
-                tenant_id = tenant.get("tenant_id")
-            if principal_id_result:
-                principal_id = principal_id_result
+            identity = resolve_identity_from_context(context, require_valid_token=False, protocol="mcp")
+            if identity:
+                if identity.tenant_id:
+                    tenant_id = identity.tenant_id
+                if identity.principal_id:
+                    principal_id = identity.principal_id
         except Exception:
             pass
 
@@ -59,6 +60,7 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
 def extract_error_info(error: Exception) -> tuple[str, str]:
     """Extract error code and message from an exception.
 
+    For AdCPError, uses the exception's error_code and message attributes.
     For ToolError, attempts to parse structured (code, message) format.
     Falls back to using exception type as code and str(error) as message.
 
@@ -68,7 +70,11 @@ def extract_error_info(error: Exception) -> tuple[str, str]:
     Returns:
         Tuple of (error_code, error_message)
     """
-    if isinstance(error, ToolError):
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        return error.error_code, error.message
+    elif isinstance(error, ToolError):
         # ToolError may be constructed as ToolError("CODE", "message") or ToolError("message")
         # Check if first arg looks like an error code (all caps, no spaces, reasonable length)
         if error.args:
@@ -137,6 +143,29 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
         logger.debug(f"Failed to log error to audit log: {e}")
 
 
+def _translate_to_tool_error(error: Exception) -> None:
+    """Translate typed exceptions to ToolError at the MCP boundary.
+
+    AdCPError, ValueError, and PermissionError are translated to ToolError
+    with appropriate error codes. ToolError and other exceptions are re-raised
+    unchanged.
+
+    This function always raises — it never returns.
+    """
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, ToolError):
+        raise
+    elif isinstance(error, AdCPError):
+        raise ToolError(error.error_code, error.message) from error
+    elif isinstance(error, ValueError):
+        raise ToolError("VALIDATION_ERROR", str(error)) from error
+    elif isinstance(error, PermissionError):
+        raise ToolError("AUTHORIZATION_ERROR", str(error)) from error
+    else:
+        raise
+
+
 def with_error_logging(tool_func: Callable) -> Callable:
     """Decorator to add centralized error logging to an MCP tool.
 
@@ -179,7 +208,8 @@ def with_error_logging(tool_func: Callable) -> Callable:
                 tenant_id, principal_id = _extract_tenant_and_principal(context) if context else (None, None)
                 _log_tool_error(tool_func.__name__, e, tenant_id, principal_id)
 
-                raise
+                # Translate typed exceptions to ToolError at the MCP boundary
+                _translate_to_tool_error(e)
 
         return async_wrapper
     else:
@@ -204,6 +234,7 @@ def with_error_logging(tool_func: Callable) -> Callable:
                 tenant_id, principal_id = _extract_tenant_and_principal(context) if context else (None, None)
                 _log_tool_error(tool_func.__name__, e, tenant_id, principal_id)
 
-                raise
+                # Translate typed exceptions to ToolError at the MCP boundary
+                _translate_to_tool_error(e)
 
         return sync_wrapper

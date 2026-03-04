@@ -42,4 +42,4 @@ class TestMCPToolImports:
         from src.core.main import mcp
 
         assert mcp is not None
-        assert hasattr(mcp, "_tool_manager")  # FastMCP internal attribute
+        assert hasattr(mcp, "tool")  # FastMCP tool registration method

@@ -7,12 +7,10 @@ from adcp import FormatId as LibraryFormatId
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from fastmcp import Context
-
     from src.core.database.models import Product as DBProduct
+    from src.core.resolved_identity import ResolvedIdentity
     from src.core.schemas import Creative, FormatId, PackageRequest, Product
     from src.core.testing_context import TestingContext
-    from src.core.tool_context import ToolContext
 
 from src.core.schemas import Creative
 
@@ -496,7 +494,7 @@ def validate_creative_format_against_product(
 
 def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
-    context: "Context | ToolContext",
+    context: "ResolvedIdentity | None" = None,
     testing_ctx: "TestingContext | None" = None,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
@@ -521,7 +519,7 @@ def process_and_upload_package_creatives(
         - uploaded_ids_by_product: Mapping of product_id -> uploaded creative IDs
 
     Raises:
-        ToolError: If creative upload fails for any package (CREATIVES_UPLOAD_FAILED)
+        AdCPAdapterError: If creative upload fails for any package (CREATIVES_UPLOAD_FAILED)
 
     Example:
         >>> packages = [PackageRequest(product_id="p1", creatives=[creative1, creative2])]
@@ -532,8 +530,7 @@ def process_and_upload_package_creatives(
     import logging
 
     # Lazy import to avoid circular dependency
-    from fastmcp.exceptions import ToolError
-
+    from src.core.exceptions import AdCPAdapterError
     from src.core.tools.creatives import _sync_creatives_impl
 
     logger = logging.getLogger(__name__)
@@ -559,7 +556,7 @@ def process_and_upload_package_creatives(
                 dry_run=testing_ctx.dry_run if testing_ctx else False,
                 validation_mode="strict",
                 push_notification_config=None,
-                ctx=context,  # For principal_id extraction
+                identity=context,  # ResolvedIdentity for principal_id extraction
             )
 
             # Extract creative IDs from response
@@ -588,8 +585,7 @@ def process_and_upload_package_creatives(
         except Exception as e:
             error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"
             logger.error(error_msg)
-            # Re-raise as ToolError for consistent error handling
-            raise ToolError("CREATIVES_UPLOAD_FAILED", error_msg) from e
+            raise AdCPAdapterError(error_msg, details={"error_code": "CREATIVES_UPLOAD_FAILED"}) from e
 
     return updated_packages, uploaded_by_product
 

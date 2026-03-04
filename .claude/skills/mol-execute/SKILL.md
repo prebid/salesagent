@@ -4,8 +4,10 @@ description: >
   Execute beads tasks through the full lifecycle using molecular workflow.
   Auto-selects formula based on task type: bug tasks use bug-triage (reproduce
   → trace similar → review → triage → fix → e2e verify → commit), all other
-  tasks use task-execute (research → review → triage → implement → commit).
-  All findings stored in beads (not filesystem).
+  tasks use task-execute (research → review → triage → write-test → implement
+  → commit). Both formulas enforce test-first: bugs require a failing
+  reproduction test before fix, tasks require a failing regression test before
+  implementation. All findings stored in beads (not filesystem).
 args: <task-id-1> [task-id-2] [task-id-3] ...
 ---
 
@@ -31,7 +33,12 @@ Multiple tasks execute sequentially.
 | Task Type | Formula | Atoms |
 |-----------|---------|-------|
 | `bug` | `bug-triage.yaml` | reproduce → trace-similar → review → triage → fix → e2e-verify → commit |
-| All others | `task-execute.yaml` | research → review → triage → implement → commit |
+| All others | `task-execute.yaml` | research → review → triage → **write-test** → implement → commit |
+
+**Test-first is enforced in both formulas:**
+- Bugs: The `reproduce` atom requires a failing test before the `fix` atom proceeds
+- Tasks: The `write-test` atom requires a failing regression test before `implement` proceeds
+- Refactors: `write-test` guards existing behavior with edge case tests before changes begin
 
 If a batch contains mixed types, cook separate molecules per formula — don't
 mix bug and non-bug tasks in the same epic.
@@ -133,3 +140,13 @@ and rethink. Never adjust tests to fit code without documented justification.
 - Don't mix bug and non-bug tasks in the same epic (use separate cooks)
 - Don't skip the trace-similar atom for bugs — it catches systemic issues
 - Don't refactor surrounding code in the fix atom — fix the bug only
+- Don't skip write-test for tasks — no test = no gate on correctness
+- Don't combine write-test and implement into one step — the test must fail BEFORE implementation starts
+- Don't write tests that pass immediately (unless guarding existing behavior in a refactor)
+
+## See Also
+
+- `/guard` — Create structural guards that prevent architecture violations on `make quality`
+- `/surface` — Create entity test suites with complete obligation mapping (run before remediation)
+- `/remediate` — Fill entity test stubs batch-by-batch with TDD
+- `/audit` — Repeatable code review against #1050/#1066 architecture principles

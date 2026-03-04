@@ -8,28 +8,45 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
-from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig
 from src.core.schemas import Principal
 
 
 def get_adapter(
-    principal: Principal, dry_run: bool = False, testing_context: Any = None
+    principal: Principal, dry_run: bool = False, testing_context: Any = None, tenant: Any = None
 ) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
-    """Get the appropriate adapter instance for the selected adapter type."""
+    """Get the appropriate adapter instance for the selected adapter type.
+
+    Args:
+        principal: The authenticated principal
+        dry_run: Whether to run in dry-run mode
+        testing_context: Optional test context for simulations
+        tenant: Tenant context (from identity.tenant). Falls back to ContextVar if not provided.
+    """
     import logging
 
     logger = logging.getLogger(__name__)
 
-    # Get tenant and adapter config from database
-    tenant = get_current_tenant()
-    selected_adapter = tenant.get("ad_server", "mock")
+    if tenant is None:
+        # Fallback for callers that haven't been updated yet (e.g., async approval handlers)
+        from src.core.config_loader import get_current_tenant
+
+        tenant = get_current_tenant()
+
+    # Extract tenant_id and ad_server from tenant (supports both ORM model and dict)
+    if isinstance(tenant, dict):
+        tenant_id = tenant["tenant_id"]
+        selected_adapter = tenant.get("ad_server", "mock")
+    else:
+        # ORM model (Tenant) — use attribute access
+        tenant_id = tenant.tenant_id
+        selected_adapter = tenant.ad_server or "mock"
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
     # Get adapter config from adapter_config table
     with get_db_session() as session:
-        stmt = select(AdapterConfig).filter_by(tenant_id=tenant["tenant_id"])
+        stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
         config_row = session.scalars(stmt).first()
 
         adapter_config: dict[str, Any] = {"enabled": True}
@@ -100,7 +117,6 @@ def get_adapter(
             adapter_config = {"enabled": True}
 
     # Create the appropriate adapter instance with tenant_id and testing context
-    tenant_id = tenant["tenant_id"]
     logger.info(f"[ADAPTER_SELECT] FINAL selected_adapter: {selected_adapter}")
     if selected_adapter == "mock":
         logger.info("[ADAPTER_SELECT] Instantiating MockAdServerAdapter")

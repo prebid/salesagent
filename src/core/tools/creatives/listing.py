@@ -12,16 +12,16 @@ from adcp.types.generated_poc.media_buy.list_creatives_request import (
     Pagination,
     Sort,
 )
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
-from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
-from src.core.helpers import get_principal_id_from_context, log_tool_activity
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.helpers import log_tool_activity
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
     Creative,
@@ -54,7 +54,7 @@ def _list_creatives_impl(
     sort_by: str = "created_date",
     sort_order: str = "desc",
     context: ContextObject | None = None,  # Application level context per adcp spec
-    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> ListCreativesResponse:
     """List and search creative library (AdCP v2.5 spec endpoint).
 
@@ -82,7 +82,7 @@ def _list_creatives_impl(
         sort_by: Sort field (created_date, name, status) (default: created_date)
         sort_order: Sort order (asc, desc) (default: desc)
         context: Application level context per adcp spec
-        ctx: FastMCP context (automatically provided)
+        identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:
         ListCreativesResponse with filtered creative assets and pagination info
@@ -102,12 +102,12 @@ def _list_creatives_impl(
         try:
             created_after_dt = datetime.fromisoformat(created_after.replace("Z", "+00:00"))
         except ValueError:
-            raise ToolError(f"Invalid created_after date format: {created_after}")
+            raise AdCPValidationError(f"Invalid created_after date format: {created_after}")
     if created_before:
         try:
             created_before_dt = datetime.fromisoformat(created_before.replace("Z", "+00:00"))
         except ValueError:
-            raise ToolError(f"Invalid created_before date format: {created_before}")
+            raise AdCPValidationError(f"Invalid created_before date format: {created_before}")
 
     # Validate sort_order is valid Literal
     from typing import Literal
@@ -183,21 +183,22 @@ def _list_creatives_impl(
             context=context,
         )
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="list_creatives request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="list_creatives request")) from e
 
     start_time = time.time()
 
     # Authentication - REQUIRED (creatives contain sensitive data)
     # Unlike discovery endpoints (list_creative_formats), this returns actual creative assets
     # which are principal-specific and must be access-controlled
-    principal_id = get_principal_id_from_context(ctx)
+    principal_id = identity.principal_id if identity else None
     if not principal_id:
-        raise ToolError("Missing x-adcp-auth header")
+        raise AdCPAuthenticationError("Missing x-adcp-auth header")
 
-    # Get tenant information
-    tenant = get_current_tenant()
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    assert identity is not None, "identity is required for listing creatives"
+    tenant = identity.tenant
     if not tenant:
-        raise ToolError("No tenant context available")
+        raise AdCPAuthenticationError("No tenant context available")
 
     creatives = []
     total_count = 0
@@ -418,8 +419,8 @@ def _list_creatives_impl(
 
     # Log activity
     # Activity logging imported at module level
-    if ctx is not None:
-        log_tool_activity(ctx, "list_creatives", start_time)
+    if identity is not None:
+        log_tool_activity(identity, "list_creatives", start_time)
 
     message = f"Found {len(creatives)} creatives"
     if total_count > len(creatives):
@@ -495,6 +496,8 @@ async def list_creatives(
     Returns:
         ToolResult with ListCreativesResponse data
     """
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+
     # Pass typed Pydantic models directly (no model_dump conversion needed)
     fields_list = [f.value if isinstance(f, FieldModel) else f for f in fields] if fields else None
 
@@ -519,7 +522,7 @@ async def list_creatives(
         sort_by=sort_by,
         sort_order=sort_order,
         context=context,
-        ctx=ctx,
+        identity=identity,
     )
     return ToolResult(content=str(response), structured_content=response)
 
@@ -541,6 +544,7 @@ def list_creatives_raw(
     sort_order: str = "desc",
     context: dict | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ):
     """List creative assets with filtering and pagination (raw function for A2A server use, AdCP v2.5).
 
@@ -563,10 +567,16 @@ def list_creatives_raw(
         sort_order: Sort order (default: desc)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
+        identity: ResolvedIdentity (transport-agnostic, preferred over ctx)
 
     Returns:
         ListCreativesResponse with filtered creative assets and pagination info
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx)
+
     return _list_creatives_impl(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
@@ -583,5 +593,5 @@ def list_creatives_raw(
         sort_by=sort_by,
         sort_order=sort_order,
         context=to_context_object(context),
-        ctx=ctx,
+        identity=identity,
     )

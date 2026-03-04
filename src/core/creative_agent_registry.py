@@ -69,12 +69,13 @@ def _get_mock_formats() -> list[Format]:
     """
     # Create mock formats using our Format class (which includes is_standard field)
     return [
-        _create_mock_format("display_300x250", "Medium Rectangle", FormatType.display, "image"),
-        _create_mock_format("display_728x90", "Leaderboard", FormatType.display, "image"),
-        _create_mock_format("display_300x600", "Half Page", FormatType.display, "image"),
-        _create_mock_format("display_160x600", "Wide Skyscraper", FormatType.display, "image"),
-        _create_mock_format("display_320x50", "Mobile Leaderboard", FormatType.display, "image"),
+        _create_mock_format("display_300x250_image", "Medium Rectangle", FormatType.display, "image"),
+        _create_mock_format("display_728x90_image", "Leaderboard", FormatType.display, "image"),
+        _create_mock_format("display_300x600_image", "Half Page", FormatType.display, "image"),
+        _create_mock_format("display_160x600_image", "Wide Skyscraper", FormatType.display, "image"),
+        _create_mock_format("display_320x50_image", "Mobile Leaderboard", FormatType.display, "image"),
         _create_mock_format("video_standard", "Standard Video", FormatType.video, "video"),
+        _create_mock_format("video_standard_30s", "Standard Video 30s", FormatType.video, "video"),
         _create_mock_format("video_vast", "VAST Video", FormatType.video, "video"),
         _create_mock_format("display_image", "Display Image", FormatType.display, "image"),
         _create_mock_format("display_html", "Display HTML", FormatType.display, "image"),

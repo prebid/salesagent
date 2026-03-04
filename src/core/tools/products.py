@@ -15,7 +15,6 @@ from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
@@ -25,16 +24,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_from_context, get_principal_object
-from src.core.config_loader import set_current_tenant
+from src.core.auth import get_principal_object
 from src.core.database.database_session import get_db_session
-from src.core.product_conversion import add_v2_compat_to_products, needs_v2_compat
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
     GetProductsResponse,
     Product,  # Extends library Product
 )
-from src.core.testing_hooks import get_testing_context
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.validation_helpers import format_validation_error, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
@@ -118,7 +117,7 @@ from src.core.product_conversion import convert_product_model_to_schema
 
 
 async def _get_products_impl(
-    req: GetProductsRequestGenerated, context: Context | ToolContext | None
+    req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
 ) -> GetProductsResponse:
     """Shared implementation for get_products.
 
@@ -127,59 +126,38 @@ async def _get_products_impl(
 
     Args:
         req: GetProductsRequest from generated schemas
-        context: FastMCP Context for tenant/principal resolution
+        identity: Resolved identity from transport boundary
 
     Returns:
         GetProductsResponse containing matching products
     """
-    from src.core.tool_context import ToolContext
-
     start_time = time.time()
 
-    # Handle both old Context and new ToolContext
-    if isinstance(context, ToolContext):
-        # New context management - everything is already extracted
-        from src.core.testing_hooks import AdCPTestContext
+    # Extract identity fields
+    if identity is None:
+        raise AdCPValidationError("Identity is required")
 
-        testing_ctx: AdCPTestContext | None = context.testing_context or AdCPTestContext()
-        principal_id: str | None = context.principal_id
-        tenant: dict[str, Any] = {"tenant_id": context.tenant_id}  # Simplified tenant info
-        # Ensure ContextVar is populated for helpers that require tenant context
-        set_current_tenant(tenant)
+    testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
+    principal_id: str | None = identity.principal_id
+    tenant: dict[str, Any] = identity.tenant if identity.tenant else {}
+
+    if tenant:
+        logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
+    elif principal_id:
+        # If we have principal but no tenant, something went wrong
+        logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
+        raise AdCPValidationError(
+            f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}"
+        )
     else:
-        # Legacy path - extract from FastMCP Context
-        if context is None:
-            raise ToolError("Context is required")
-        testing_ctx = get_testing_context(context)
-        # For discovery endpoints, authentication is optional
-        # require_valid_token=False means invalid tokens are treated like missing tokens (discovery endpoint behavior)
-        logger.info("[GET_PRODUCTS] About to call get_principal_from_context")
-        principal_id_temp, tenant_temp = get_principal_from_context(
-            context, require_valid_token=False
-        )  # Returns (None, tenant) if no/invalid auth
-        principal_id = principal_id_temp
-        tenant = tenant_temp if tenant_temp else {}
-        logger.info(f"[GET_PRODUCTS] principal_id returned: {principal_id}, tenant: {tenant}")
-
-        # Set tenant context explicitly in this async context (ContextVar propagation fix)
-        if tenant:
-            set_current_tenant(tenant)
-            logger.info(f"[GET_PRODUCTS] Set tenant context: {tenant['tenant_id']}")
-        elif principal_id:
-            # If we have principal but no tenant, something went wrong
-            logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
-            raise ToolError(
-                f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}"
-            )
-        else:
-            # No tenant context and no principal - cannot determine which tenant's products to return
-            logger.error("[GET_PRODUCTS] No tenant context available - cannot determine which products to return")
-            raise ToolError(
-                "Cannot determine tenant context. Please provide valid authentication or ensure tenant can be identified from request headers."
-            )
+        # No tenant context and no principal - cannot determine which tenant's products to return
+        logger.error("[GET_PRODUCTS] No tenant context available - cannot determine which products to return")
+        raise AdCPAuthenticationError(
+            "Cannot determine tenant context. Please provide valid authentication or ensure tenant can be identified from request headers."
+        )
 
     # Get the Principal object with ad server mappings
-    principal = get_principal_object(principal_id) if principal_id else None
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
     # Unwrap BrandManifestReference (RootModel[BrandManifest | AnyUrl]) to inner value.
     # After unwrapping, brand_manifest_unwrapped is BrandManifest, AnyUrl, or None.
@@ -204,9 +182,9 @@ async def _get_products_impl(
 
     # Enforce policy-based validation
     if brand_manifest_policy == "require_brand" and not offering:
-        raise ToolError("Brand manifest required by tenant policy")
+        raise AdCPAuthorizationError("Brand manifest required by tenant policy")
     elif brand_manifest_policy == "require_auth" and not principal_id:
-        raise ToolError("Authentication required by tenant policy")
+        raise AdCPAuthenticationError("Authentication required by tenant policy")
     # public policy allows all requests (no brand_manifest or auth required)
 
     # For non-public policies, we need offering for policy checks and product matching
@@ -302,8 +280,9 @@ async def _get_products_impl(
     if policy_result and policy_result.status == PolicyStatus.BLOCKED:
         # Always block if policy says blocked
         logger.warning(f"Brief blocked by policy: {policy_result.reason}")
-        # Raise ToolError to properly signal failure to client
-        raise ToolError("POLICY_VIOLATION", policy_result.reason)
+        raise AdCPAuthorizationError(
+            policy_result.reason or "Blocked by policy", details={"error_code": "POLICY_VIOLATION"}
+        )
 
     # If restricted and manual review is required, create a task
     if (
@@ -335,9 +314,9 @@ async def _get_products_impl(
 
         # Raise error for policy violations - explicit failure, not silent return
         restrictions_list = policy_result.restrictions if policy_result.restrictions else []
-        raise ToolError(
-            "POLICY_VIOLATION",
+        raise AdCPAuthorizationError(
             f"Request violates content policy: {policy_result.reason}. Restrictions: {', '.join(restrictions_list)}",
+            details={"error_code": "POLICY_VIOLATION"},
         )
 
     # Query products directly from database
@@ -699,7 +678,7 @@ async def _get_products_impl(
             from src.core.helpers.adapter_helpers import get_adapter
 
             # Get adapter in dry-run mode (no actual ad server calls)
-            adapter = get_adapter(principal, dry_run=True)
+            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
 
             supported_models = adapter.get_supported_pricing_models()
 
@@ -799,20 +778,23 @@ async def get_products(
         )
 
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="get_products request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
     except ValueError as e:
-        # Convert ValueError from helper to ToolError with clear message
-        raise ToolError(f"Invalid get_products request: {e}") from e
+        raise AdCPValidationError(f"Invalid get_products request: {e}") from e
+
+    # Read identity pre-resolved by MCPAuthMiddleware
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Call shared implementation
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly
-    response = await _get_products_impl(req, ctx)
+    response = await _get_products_impl(req, identity)
 
     # Return ToolResult with human-readable text and structured data
     response_dict = response.model_dump(mode="json")
     # Apply v2.x backward-compat fields only for pre-3.0 clients
-    if needs_v2_compat(adcp_version) and "products" in response_dict:
-        response_dict["products"] = add_v2_compat_to_products(response_dict["products"])
+    from src.core.version_compat import apply_version_compat
+
+    response_dict = apply_version_compat("get_products", response_dict, adcp_version)
     return ToolResult(content=str(response), structured_content=response_dict)
 
 
@@ -824,6 +806,7 @@ async def get_products_raw(
     strategy_id: str | None = None,
     context: dict | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> GetProductsResponse:
     """Get available products matching the brief.
 
@@ -840,10 +823,17 @@ async def get_products_raw(
         strategy_id: Optional strategy ID for linking operations (optional)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
+        identity: Resolved identity from transport boundary (preferred over ctx)
 
     Returns:
         GetProductsResponse containing matching products
     """
+    # Resolve identity from transport context if not provided
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+
     # Create request object - adcp library validates schema
     req = create_get_products_request(
         brief=brief or "",
@@ -853,14 +843,14 @@ async def get_products_raw(
     )
 
     # Call shared implementation
-    return await _get_products_impl(req, ctx)
+    return await _get_products_impl(req, identity)
 
 
-def get_product_catalog() -> list[Product]:
-    """Get products for the current tenant.
+def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
+    """Get products for a tenant.
 
-    Helper function to retrieve all products for the current tenant with their
-    pricing options. Used by other tools that need product data.
+    Args:
+        tenant_id: Tenant ID to load products for. Falls back to ContextVar if not provided.
 
     Returns:
         List of Product objects with full pricing options
@@ -868,15 +858,17 @@ def get_product_catalog() -> list[Product]:
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
-    from src.core.config_loader import get_current_tenant
     from src.core.database.models import Product as ModelProduct
 
-    tenant = get_current_tenant()
+    if tenant_id is None:
+        from src.core.config_loader import get_current_tenant
+
+        tenant_id = get_current_tenant()["tenant_id"]
 
     with get_db_session() as session:
         stmt = (
             select(ModelProduct)
-            .filter_by(tenant_id=tenant["tenant_id"])
+            .filter_by(tenant_id=tenant_id)
             .options(
                 selectinload(ModelProduct.pricing_options),
                 selectinload(ModelProduct.inventory_profile),  # Avoid N+1 query
@@ -888,12 +880,6 @@ def get_product_catalog() -> list[Product]:
         # Use convert_product_model_to_schema for consistency
         loaded_products = []
         for product in products:
-            try:
-                # convert_product_model_to_schema returns library Product
-                # which is compatible with our extended Product at runtime
-                loaded_products.append(convert_product_model_to_schema(product))
-            except ValueError as e:
-                logger.warning(f"Skipping product {product.product_id}: {e}")
-                continue
+            loaded_products.append(convert_product_model_to_schema(product))
 
     return loaded_products

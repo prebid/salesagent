@@ -10,8 +10,9 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPAuthorizationError, AdCPError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.products import _get_products_impl
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 from tests.helpers.adcp_factories import (
@@ -48,9 +49,19 @@ def _make_mock_request(
     return mock_request
 
 
-def _make_mock_context():
-    """Create a mock FastMCP Context."""
-    return MagicMock()
+def _make_identity(
+    principal_id: str | None = "principal_1",
+    tenant: dict | None = None,
+    tenant_id: str = "test_tenant",
+):
+    """Create a ResolvedIdentity for testing _get_products_impl."""
+    if tenant is None:
+        tenant = {"tenant_id": tenant_id, "brand_manifest_policy": "public", "advertising_policy": {}}
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant.get("tenant_id", tenant_id),
+        tenant=tenant,
+    )
 
 
 def _make_tenant(
@@ -133,11 +144,9 @@ def _setup_standard_mocks(
         principal_id: principal ID or None for anonymous
 
     Returns:
-        None -- mutates the patches in place
+        ResolvedIdentity with the given principal_id and tenant
     """
-    patches["get_principal"].return_value = (principal_id, tenant)
     patches["get_principal_obj"].return_value = None
-    patches["get_testing"].return_value = None
     patches["generate_variants"].return_value = []
 
     mock_pricing_inst = MagicMock()
@@ -151,16 +160,15 @@ def _setup_standard_mocks(
 
     patches["audit_logger"].return_value = MagicMock()
 
+    return _make_identity(principal_id=principal_id, tenant=tenant)
+
 
 # Context manager that starts all standard patches
 class _PipelinePatches:
     """Context manager that starts all standard patches and provides access."""
 
     TARGETS = {
-        "get_principal": "src.core.tools.products.get_principal_from_context",
         "get_principal_obj": "src.core.tools.products.get_principal_object",
-        "get_testing": "src.core.tools.products.get_testing_context",
-        "set_tenant": "src.core.tools.products.set_current_tenant",
         "generate_variants": "src.services.dynamic_products.generate_variants_for_brief",
         "pricing_service": "src.services.dynamic_pricing_service.DynamicPricingService",
         "db_session": "src.core.tools.products.get_db_session",
@@ -221,7 +229,7 @@ class TestRankingThresholdBehavior:
         mock_request = _make_mock_request(brief="sports equipment campaign")
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, products)
+            identity = _setup_standard_mocks(mocks, tenant, products)
 
             with (
                 patch(
@@ -237,7 +245,7 @@ class TestRankingThresholdBehavior:
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
-                response = await _get_products_impl(mock_request, _make_mock_context())
+                response = await _get_products_impl(mock_request, identity)
 
         # 3 products above threshold, p_excluded (0.09) filtered out
         assert len(response.products) == 3
@@ -258,7 +266,7 @@ class TestRankingThresholdBehavior:
         )
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
 
             with (
                 patch("src.services.ai.agents.ranking_agent.rank_products_async", new_callable=AsyncMock) as mock_rank,
@@ -271,7 +279,7 @@ class TestRankingThresholdBehavior:
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
-                response = await _get_products_impl(_make_mock_request(brief="campaign"), _make_mock_context())
+                response = await _get_products_impl(_make_mock_request(brief="campaign"), identity)
 
         assert len(response.products) == 1
         assert response.products[0].product_id == "p_boundary"
@@ -289,7 +297,7 @@ class TestRankingThresholdBehavior:
         )
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
 
             with (
                 patch("src.services.ai.agents.ranking_agent.rank_products_async", new_callable=AsyncMock) as mock_rank,
@@ -302,7 +310,7 @@ class TestRankingThresholdBehavior:
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
-                response = await _get_products_impl(_make_mock_request(brief="campaign"), _make_mock_context())
+                response = await _get_products_impl(_make_mock_request(brief="campaign"), identity)
 
         assert len(response.products) == 0
 
@@ -319,7 +327,7 @@ class TestRankingThresholdBehavior:
         )
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
 
             with (
                 patch("src.services.ai.agents.ranking_agent.rank_products_async", new_callable=AsyncMock) as mock_rank,
@@ -332,7 +340,7 @@ class TestRankingThresholdBehavior:
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
-                response = await _get_products_impl(_make_mock_request(brief="campaign"), _make_mock_context())
+                response = await _get_products_impl(_make_mock_request(brief="campaign"), identity)
 
         # brief_relevance is NOT_IMPLEMENTED -- _get_products_impl never assigns it
         for p in response.products:
@@ -355,7 +363,7 @@ class TestRankingFailureFailopen:
         tenant = _make_tenant(product_ranking_prompt="Rank products")
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [p1, p2])
+            identity = _setup_standard_mocks(mocks, tenant, [p1, p2])
 
             # Mock AI ranking to RAISE an exception
             with patch("src.services.ai.factory.get_factory") as mock_factory:
@@ -365,7 +373,7 @@ class TestRankingFailureFailopen:
                 mock_factory.return_value = factory_inst
 
                 # Should NOT raise -- fail-open
-                response = await _get_products_impl(_make_mock_request(brief="campaign"), _make_mock_context())
+                response = await _get_products_impl(_make_mock_request(brief="campaign"), identity)
 
         # Products returned in catalog order (original DB order)
         assert len(response.products) == 2
@@ -395,26 +403,23 @@ class TestPolicyBlockedPipelineRejection:
             reason="Prohibited content: gambling",
         )
 
+        identity = _make_identity(principal_id="principal_1", tenant=tenant)
+
         with (
-            patch("src.core.tools.products.get_principal_from_context") as mock_gp,
             patch("src.core.tools.products.get_principal_object"),
-            patch("src.core.tools.products.get_testing_context") as mock_gt,
-            patch("src.core.tools.products.set_current_tenant"),
             patch("src.core.tools.products.PolicyCheckService") as mock_policy_cls,
             patch("src.core.tools.products.get_audit_logger") as mock_al,
         ):
-            mock_gp.return_value = ("principal_1", tenant)
-            mock_gt.return_value = None
             mock_al.return_value = MagicMock()
 
             mock_policy_inst = MagicMock()
             mock_policy_inst.check_brief_compliance = AsyncMock(return_value=policy_result)
             mock_policy_cls.return_value = mock_policy_inst
 
-            with pytest.raises(ToolError) as exc_info:
-                await _get_products_impl(_make_mock_request(brief="Online gambling"), _make_mock_context())
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
+                await _get_products_impl(_make_mock_request(brief="Online gambling"), identity)
 
-        assert "POLICY_VIOLATION" in str(exc_info.value)
+        assert exc_info.value.details.get("error_code") == "POLICY_VIOLATION"
         assert "gambling" in str(exc_info.value).lower()
 
 
@@ -438,17 +443,14 @@ class TestRestrictedBriefManualReviewRejection:
             restrictions=["alcohol_marketing"],
         )
 
+        identity = _make_identity(principal_id="principal_1", tenant=tenant)
+
         with (
-            patch("src.core.tools.products.get_principal_from_context") as mock_gp,
             patch("src.core.tools.products.get_principal_object"),
-            patch("src.core.tools.products.get_testing_context") as mock_gt,
-            patch("src.core.tools.products.set_current_tenant"),
             patch("src.core.tools.products.PolicyCheckService") as mock_policy_cls,
             patch("src.core.tools.products.get_db_session") as mock_db,
             patch("src.core.tools.products.get_audit_logger") as mock_al,
         ):
-            mock_gp.return_value = ("principal_1", tenant)
-            mock_gt.return_value = None
             mock_al.return_value = MagicMock()
 
             mock_policy_inst = MagicMock()
@@ -458,10 +460,10 @@ class TestRestrictedBriefManualReviewRejection:
             # DB session for audit log in restricted+manual_review branch
             mock_db.return_value.__enter__.return_value = MagicMock()
 
-            with pytest.raises(ToolError) as exc_info:
-                await _get_products_impl(_make_mock_request(brief="Craft beer festival"), _make_mock_context())
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
+                await _get_products_impl(_make_mock_request(brief="Craft beer festival"), identity)
 
-        assert "POLICY_VIOLATION" in str(exc_info.value)
+        assert exc_info.value.details.get("error_code") == "POLICY_VIOLATION"
         assert "alcohol" in str(exc_info.value).lower()
 
 
@@ -484,14 +486,14 @@ class TestPolicyServiceFailopenPipeline:
             _PipelinePatches() as mocks,
             patch("src.core.tools.products.PolicyCheckService") as mock_policy_cls,
         ):
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
 
             # Policy service raises RuntimeError
             mock_policy_inst = MagicMock()
             mock_policy_inst.check_brief_compliance = AsyncMock(side_effect=RuntimeError("Gemini API timeout"))
             mock_policy_cls.return_value = mock_policy_inst
 
-            response = await _get_products_impl(_make_mock_request(brief="Normal campaign"), _make_mock_context())
+            response = await _get_products_impl(_make_mock_request(brief="Normal campaign"), identity)
 
         # Fail-open: products returned despite policy exception
         assert len(response.products) == 1
@@ -520,7 +522,7 @@ class TestAdapterSupportAnnotation:
         mock_principal = MagicMock()
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
             mocks["get_principal_obj"].return_value = mock_principal
 
             with patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter:
@@ -528,7 +530,7 @@ class TestAdapterSupportAnnotation:
                 mock_adapter.get_supported_pricing_models.return_value = {"cpm", "cpc"}
                 mock_get_adapter.return_value = mock_adapter
 
-                response = await _get_products_impl(_make_mock_request(brief="campaign"), _make_mock_context())
+                response = await _get_products_impl(_make_mock_request(brief="campaign"), identity)
 
         # The CPM pricing option should be annotated as supported
         assert len(response.products) == 1
@@ -556,7 +558,7 @@ class TestAdapterSupportAnnotation:
         mock_principal = MagicMock()
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
             mocks["get_principal_obj"].return_value = mock_principal
 
             with patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter:
@@ -565,7 +567,7 @@ class TestAdapterSupportAnnotation:
                 mock_adapter.get_supported_pricing_models.return_value = {"cpm"}
                 mock_get_adapter.return_value = mock_adapter
 
-                response = await _get_products_impl(_make_mock_request(brief="campaign"), _make_mock_context())
+                response = await _get_products_impl(_make_mock_request(brief="campaign"), identity)
 
         inner = response.products[0].pricing_options[0].root
         assert inner.supported is False
@@ -587,9 +589,9 @@ class TestEmptyResultsPipelineStages:
         tenant = _make_tenant()
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, schema_products=[])
+            identity = _setup_standard_mocks(mocks, tenant, schema_products=[])
 
-            response = await _get_products_impl(_make_mock_request(), _make_mock_context())
+            response = await _get_products_impl(_make_mock_request(), identity)
 
         assert response.products == []
 
@@ -601,9 +603,9 @@ class TestEmptyResultsPipelineStages:
         product = _make_real_product(product_id="restricted_p", allowed_principal_ids=["other_principal"])
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product], principal_id=None)
+            identity = _setup_standard_mocks(mocks, tenant, [product], principal_id=None)
 
-            response = await _get_products_impl(_make_mock_request(), _make_mock_context())
+            response = await _get_products_impl(_make_mock_request(), identity)
 
         assert response.products == []
 
@@ -624,9 +626,9 @@ class TestEmptyResultsPipelineStages:
         mock_filters.channels = None
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
 
-            response = await _get_products_impl(_make_mock_request(filters=mock_filters), _make_mock_context())
+            response = await _get_products_impl(_make_mock_request(filters=mock_filters), identity)
 
         assert response.products == []
 
@@ -643,7 +645,7 @@ class TestEmptyResultsPipelineStages:
         )
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
 
             with (
                 patch("src.services.ai.agents.ranking_agent.rank_products_async", new_callable=AsyncMock) as mock_rank,
@@ -656,7 +658,7 @@ class TestEmptyResultsPipelineStages:
                 mock_factory.return_value = factory_inst
                 mock_rank.return_value = ranking_result
 
-                response = await _get_products_impl(_make_mock_request(brief="unrelated brief"), _make_mock_context())
+                response = await _get_products_impl(_make_mock_request(brief="unrelated brief"), identity)
 
         assert response.products == []
 
@@ -740,7 +742,7 @@ class TestBriefPolicyComplianceMatrix:
             _PipelinePatches() as mocks,
             patch("src.core.tools.products.PolicyCheckService") as mock_policy_cls,
         ):
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
 
             mock_policy_inst = MagicMock()
             if policy_side_effect:
@@ -751,11 +753,13 @@ class TestBriefPolicyComplianceMatrix:
             mock_policy_cls.return_value = mock_policy_inst
 
             if expect_error:
-                with pytest.raises(ToolError) as exc_info:
-                    await _get_products_impl(_make_mock_request(brief="test"), _make_mock_context())
-                assert error_substring in str(exc_info.value)
+                with pytest.raises(AdCPError) as exc_info:
+                    await _get_products_impl(_make_mock_request(brief="test"), identity)
+                error_str = str(exc_info.value)
+                details = getattr(exc_info.value, "details", {}) or {}
+                assert error_substring in error_str or details.get("error_code") == error_substring
             else:
-                response = await _get_products_impl(_make_mock_request(brief="test"), _make_mock_context())
+                response = await _get_products_impl(_make_mock_request(brief="test"), identity)
                 assert response is not None
 
 
@@ -776,11 +780,11 @@ class TestNoBriefSkipsRanking:
         tenant = _make_tenant(product_ranking_prompt="Rank products")
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [p1, p2])
+            identity = _setup_standard_mocks(mocks, tenant, [p1, p2])
 
             # AI ranking should NOT be called when brief is empty
             with patch("src.services.ai.factory.get_factory") as mock_factory:
-                response = await _get_products_impl(_make_mock_request(brief=""), _make_mock_context())
+                response = await _get_products_impl(_make_mock_request(brief=""), identity)
                 mock_factory.assert_not_called()
 
         assert len(response.products) == 2
@@ -794,9 +798,9 @@ class TestNoBriefSkipsRanking:
         tenant = _make_tenant()
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product])
+            identity = _setup_standard_mocks(mocks, tenant, [product])
 
-            response = await _get_products_impl(_make_mock_request(brief=""), _make_mock_context())
+            response = await _get_products_impl(_make_mock_request(brief=""), identity)
 
         for p in response.products:
             assert getattr(p, "brief_relevance", None) is None
@@ -819,9 +823,9 @@ class TestPricingSuppressionPipelineLevel:
         tenant = _make_tenant()
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product], principal_id=None)
+            identity = _setup_standard_mocks(mocks, tenant, [product], principal_id=None)
 
-            response = await _get_products_impl(_make_mock_request(), _make_mock_context())
+            response = await _get_products_impl(_make_mock_request(), identity)
 
         assert len(response.products) == 1
         assert response.products[0].pricing_options == []
@@ -833,9 +837,9 @@ class TestPricingSuppressionPipelineLevel:
         tenant = _make_tenant()
 
         with _PipelinePatches() as mocks:
-            _setup_standard_mocks(mocks, tenant, [product], principal_id="principal_1")
+            identity = _setup_standard_mocks(mocks, tenant, [product], principal_id="principal_1")
 
-            response = await _get_products_impl(_make_mock_request(), _make_mock_context())
+            response = await _get_products_impl(_make_mock_request(), identity)
 
         assert len(response.products) == 1
         assert len(response.products[0].pricing_options) == 1

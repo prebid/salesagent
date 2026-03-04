@@ -2,22 +2,20 @@
 """Comprehensive test of all Admin UI pages and submodules."""
 
 import os
-import sys
 from urllib.parse import urljoin
 
 import pytest
 import requests
 
-BASE_URL = f"http://localhost:{os.environ.get('ADMIN_UI_PORT', '8001')}"
 TENANT_ID = "default"
 
 # Track results
 results = {"passed": [], "failed": [], "errors": []}
 
 
-def test_page(session, path, description):
+def _check_page(session, path, description, base_url=""):
     """Test a single page/route."""
-    url = urljoin(BASE_URL, path)
+    url = urljoin(base_url, path)
     print(f"Testing: {description:<50}", end=" ")
 
     try:
@@ -97,6 +95,7 @@ def test_page(session, path, description):
 @pytest.mark.requires_server
 def test_all_admin_pages():
     """Test all pages systematically."""
+    base_url = f"http://localhost:{os.environ.get('ADCP_SALES_PORT', '8080')}"
 
     print(f"\n{'=' * 70}")
     print("COMPREHENSIVE ADMIN UI TEST")
@@ -115,13 +114,15 @@ def test_all_admin_pages():
         "tenant_id": "",
     }
 
-    response = session.post(f"{BASE_URL}/test/auth", json=auth_data)
+    try:
+        response = session.post(f"{base_url}/test/auth", json=auth_data)
+    except (requests.ConnectionError, requests.Timeout):
+        pytest.skip(f"Server not running at {base_url}")
+
     if response.status_code in [200, 302]:
         print("✅ Authentication successful\n")
     else:
-        print(f"❌ Authentication failed: {response.status_code}")
-        print("Make sure ADCP_AUTH_TEST_MODE=true is set")
-        sys.exit(1)
+        pytest.fail(f"Authentication failed: {response.status_code}. Make sure ADCP_AUTH_TEST_MODE=true is set")
 
     # Test main pages
     print("2. MAIN PAGES")
@@ -143,7 +144,7 @@ def test_all_admin_pages():
     ]
 
     for path, description in main_pages:
-        test_page(session, path, description)
+        _check_page(session, path, description, base_url=base_url)
 
     print()
 
@@ -165,7 +166,7 @@ def test_all_admin_pages():
 
     for section in settings_sections:
         path = f"/tenant/{TENANT_ID}/settings/{section}"
-        test_page(session, path, f"Settings: {section.title()}")
+        _check_page(session, path, f"Settings: {section.title()}", base_url=base_url)
 
     print()
 
@@ -185,7 +186,7 @@ def test_all_admin_pages():
     ]
 
     for path, description in api_endpoints:
-        test_page(session, path, description)
+        _check_page(session, path, description, base_url=base_url)
 
     print()
 
@@ -203,7 +204,7 @@ def test_all_admin_pages():
     ]
 
     for path, description in special_routes:
-        test_page(session, path, description)
+        _check_page(session, path, description, base_url=base_url)
 
     print()
 
@@ -217,7 +218,7 @@ def test_all_admin_pages():
     ]
 
     for path, description in adapter_routes:
-        test_page(session, path, description)
+        _check_page(session, path, description, base_url=base_url)
 
     # Print summary
     print(f"\n{'=' * 70}")
@@ -240,13 +241,12 @@ def test_all_admin_pages():
         for item in results["errors"]:
             print(f"  - {item}")
 
-    # Exit code
+    # Assert results
     if results["failed"] or results["errors"]:
-        print("\n❌ TESTS FAILED - Some pages have issues")
-        sys.exit(1)
+        failed_details = "; ".join(results["failed"][:5] + results["errors"][:5])
+        pytest.fail(f"Admin pages have issues: {failed_details}")
     else:
         print("\n✅ ALL TESTS PASSED")
-        sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,5 @@
 """Unit tests for delivery simulator service."""
 
-import time
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -52,9 +51,9 @@ class TestDeliverySimulator:
         assert media_buy_id in simulator._stop_signals
         assert simulator._active_simulations[media_buy_id].is_alive()
 
-        # Cleanup
+        # Cleanup - stop and wait for thread to finish
         simulator.stop_simulation(media_buy_id)
-        time.sleep(0.2)  # Give thread time to stop
+        simulator._active_simulations.get(media_buy_id, MagicMock()).join(timeout=5)
 
     def test_stop_simulation(self, simulator, mock_webhook_service):
         """Test that stopping simulation sets stop signal."""
@@ -73,14 +72,17 @@ class TestDeliverySimulator:
             update_interval_seconds=0.1,
         )
 
+        # Capture thread reference before stopping
+        thread = simulator._active_simulations[media_buy_id]
+
         # Stop simulation
         simulator.stop_simulation(media_buy_id)
 
         # Check stop signal was set
         assert simulator._stop_signals[media_buy_id].is_set()
 
-        # Give thread time to cleanup
-        time.sleep(0.2)
+        # Wait for thread to finish cleanup
+        thread.join(timeout=5)
 
         # Thread should have cleaned up
         assert media_buy_id not in simulator._active_simulations
@@ -122,7 +124,7 @@ class TestDeliverySimulator:
 
         # Cleanup
         simulator.stop_simulation(media_buy_id)
-        time.sleep(0.2)
+        simulator._active_simulations.get(media_buy_id, MagicMock()).join(timeout=5)
 
     def test_webhook_payload_structure(self, simulator, mock_webhook_service):
         """Test that webhook delivery service is called correctly."""
@@ -141,8 +143,10 @@ class TestDeliverySimulator:
             update_interval_seconds=0.5,  # Should fire 2-3 webhooks
         )
 
-        # Wait for simulation to complete
-        time.sleep(2.0)
+        # Wait for simulation to complete (thread finishes when progress >= 1.0)
+        thread = simulator._active_simulations.get(media_buy_id)
+        if thread:
+            thread.join(timeout=5)
 
         # Check webhooks were sent via webhook_delivery_service
         assert mock_webhook_service.send_delivery_webhook.called
@@ -183,7 +187,9 @@ class TestDeliverySimulator:
         )
 
         # Wait for simulation to complete
-        time.sleep(2.0)
+        thread = simulator._active_simulations.get(media_buy_id)
+        if thread:
+            thread.join(timeout=5)
 
         # Should have completed
         assert media_buy_id not in simulator._active_simulations
@@ -212,7 +218,9 @@ class TestDeliverySimulator:
         )
 
         # Wait for simulation to complete
-        time.sleep(2.0)
+        thread = simulator._active_simulations.get(media_buy_id)
+        if thread:
+            thread.join(timeout=5)
 
         # Analyze webhook progression
         calls = mock_webhook_service.send_delivery_webhook.call_args_list
@@ -255,7 +263,9 @@ class TestDeliverySimulator:
         )
 
         # Wait for completion
-        time.sleep(2.0)
+        thread = simulator._active_simulations.get(media_buy_id)
+        if thread:
+            thread.join(timeout=5)
 
         # Should have cleaned up
         assert media_buy_id not in simulator._active_simulations

@@ -1,17 +1,17 @@
 """Unit tests for webhook delivery service with exponential backoff retry logic."""
 
-import time
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import requests
 
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
 
 
+@patch("src.core.webhook_delivery.time.sleep")
 class TestWebhookDelivery:
     """Test cases for webhook delivery with exponential backoff retry."""
 
-    def test_successful_delivery_first_attempt(self):
+    def test_successful_delivery_first_attempt(self, mock_sleep):
         """Test successful delivery on first attempt (200 OK)."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -35,7 +35,7 @@ class TestWebhookDelivery:
             assert "delivery_id" in result
             assert mock_post.call_count == 1
 
-    def test_successful_delivery_after_retry(self):
+    def test_successful_delivery_after_retry(self, mock_sleep):
         """Test successful delivery after 5xx error retry."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -57,9 +57,7 @@ class TestWebhookDelivery:
 
             mock_post.side_effect = [mock_response_503, mock_response_200]
 
-            start_time = time.time()
             success, result = deliver_webhook_with_retry(delivery)
-            duration = time.time() - start_time
 
             assert success is True
             assert result["status"] == "delivered"
@@ -67,11 +65,10 @@ class TestWebhookDelivery:
             assert result["response_code"] == 200
             assert mock_post.call_count == 2
 
-            # Should have backed off ~1 second between attempts
-            assert duration >= 1.0
-            assert duration < 2.0  # Less than 2s total (1s backoff + request time)
+            # Should have backed off 1 second between attempts (2^0 = 1)
+            mock_sleep.assert_called_once_with(1)
 
-    def test_retry_on_500_error(self):
+    def test_retry_on_500_error(self, mock_sleep):
         """Test that 5xx errors trigger retry."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -87,9 +84,7 @@ class TestWebhookDelivery:
             mock_response.text = "Internal Server Error"
             mock_post.return_value = mock_response
 
-            start_time = time.time()
             success, result = deliver_webhook_with_retry(delivery)
-            duration = time.time() - start_time
 
             assert success is False
             assert result["status"] == "failed"
@@ -98,11 +93,11 @@ class TestWebhookDelivery:
             assert "Internal Server Error" in result["error"]
             assert mock_post.call_count == 3
 
-            # Should have exponential backoff: 1s + 2s = 3s minimum
-            assert duration >= 3.0
-            # Note: Upper bound removed - timing can vary based on system load
+            # Should have exponential backoff: 1s + 2s (no sleep after last attempt)
+            assert mock_sleep.call_count == 2
+            mock_sleep.assert_has_calls([call(1), call(2)])
 
-    def test_no_retry_on_400_error(self):
+    def test_no_retry_on_400_error(self, mock_sleep):
         """Test that 4xx client errors do NOT trigger retry."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -128,7 +123,7 @@ class TestWebhookDelivery:
             assert "Bad Request" in result["error"]
             assert mock_post.call_count == 1  # Only 1 attempt
 
-    def test_no_retry_on_404_error(self):
+    def test_no_retry_on_404_error(self, mock_sleep):
         """Test that 404 Not Found does NOT trigger retry."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -150,7 +145,7 @@ class TestWebhookDelivery:
             assert result["attempts"] == 1  # No retries for client error
             assert mock_post.call_count == 1
 
-    def test_retry_on_timeout(self):
+    def test_retry_on_timeout(self, mock_sleep):
         """Test that timeout errors trigger retry."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -163,9 +158,7 @@ class TestWebhookDelivery:
         with patch("requests.post") as mock_post:
             mock_post.side_effect = requests.exceptions.Timeout("Request timed out")
 
-            start_time = time.time()
             success, result = deliver_webhook_with_retry(delivery)
-            duration = time.time() - start_time
 
             assert success is False
             assert result["status"] == "failed"
@@ -173,10 +166,11 @@ class TestWebhookDelivery:
             assert "timeout" in result["error"].lower()
             assert mock_post.call_count == 3
 
-            # Should have exponential backoff
-            assert duration >= 3.0
+            # Should have exponential backoff: 1s + 2s (no sleep after last attempt)
+            assert mock_sleep.call_count == 2
+            mock_sleep.assert_has_calls([call(1), call(2)])
 
-    def test_retry_on_connection_error(self):
+    def test_retry_on_connection_error(self, mock_sleep):
         """Test that connection errors trigger retry."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -196,7 +190,7 @@ class TestWebhookDelivery:
             assert "Connection" in result["error"]
             assert mock_post.call_count == 3
 
-    def test_exponential_backoff_timing(self):
+    def test_exponential_backoff_timing(self, mock_sleep):
         """Test that exponential backoff follows 2^n pattern (1s, 2s, 4s)."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -212,16 +206,13 @@ class TestWebhookDelivery:
             mock_response.text = "Service Unavailable"  # Add text attribute
             mock_post.return_value = mock_response
 
-            start_time = time.time()
             deliver_webhook_with_retry(delivery)
-            duration = time.time() - start_time
 
-            # Total backoff: 1s + 2s = 3s (no backoff after last attempt)
-            # Allow some overhead for test execution
-            assert duration >= 3.0
-            assert duration < 4.5
+            # Backoff: 2^0=1s after attempt 1, 2^1=2s after attempt 2 (no sleep after last)
+            assert mock_sleep.call_count == 2
+            mock_sleep.assert_has_calls([call(1), call(2)])
 
-    def test_max_retries_exceeded(self):
+    def test_max_retries_exceeded(self, mock_sleep):
         """Test behavior when all retries are exhausted."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -243,7 +234,7 @@ class TestWebhookDelivery:
             assert result["attempts"] == 2
             assert mock_post.call_count == 2
 
-    def test_successful_delivery_with_202_accepted(self):
+    def test_successful_delivery_with_202_accepted(self, mock_sleep):
         """Test that 202 Accepted is treated as success."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -261,7 +252,7 @@ class TestWebhookDelivery:
             assert success is True
             assert result["response_code"] == 202
 
-    def test_successful_delivery_with_204_no_content(self):
+    def test_successful_delivery_with_204_no_content(self, mock_sleep):
         """Test that 204 No Content is treated as success."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -279,7 +270,7 @@ class TestWebhookDelivery:
             assert success is True
             assert result["response_code"] == 204
 
-    def test_hmac_signature_added(self):
+    def test_hmac_signature_added(self, mock_sleep):
         """Test that HMAC signature is added when signing_secret provided."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -302,7 +293,7 @@ class TestWebhookDelivery:
             assert "X-Webhook-Signature" in headers or "X-Hub-Signature-256" in headers
             assert success is True
 
-    def test_invalid_webhook_url_validation(self):
+    def test_invalid_webhook_url_validation(self, mock_sleep):
         """Test that invalid webhook URLs are rejected."""
         delivery = WebhookDelivery(
             webhook_url="javascript:alert('xss')",  # Invalid scheme
@@ -317,7 +308,7 @@ class TestWebhookDelivery:
             assert "Invalid webhook URL" in result["error"]
             assert mock_post.call_count == 0  # Should not attempt to call
 
-    def test_localhost_webhook_url_rejected(self):
+    def test_localhost_webhook_url_rejected(self, mock_sleep):
         """Test that localhost URLs are rejected for SSRF protection."""
         delivery = WebhookDelivery(
             webhook_url="http://localhost:8080/webhook",
@@ -334,7 +325,7 @@ class TestWebhookDelivery:
 
     @patch("src.core.webhook_delivery._create_delivery_record")
     @patch("src.core.webhook_delivery._update_delivery_record")
-    def test_database_tracking_on_success(self, mock_update, mock_create):
+    def test_database_tracking_on_success(self, mock_update, mock_create, mock_sleep):
         """Test that successful delivery is tracked in database."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -370,7 +361,7 @@ class TestWebhookDelivery:
 
     @patch("src.core.webhook_delivery._create_delivery_record")
     @patch("src.core.webhook_delivery._update_delivery_record")
-    def test_database_tracking_on_failure(self, mock_update, mock_create):
+    def test_database_tracking_on_failure(self, mock_update, mock_create, mock_sleep):
         """Test that failed delivery is tracked in database."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -397,7 +388,7 @@ class TestWebhookDelivery:
             assert update_args["response_code"] == 400
             assert "Bad Request" in update_args["last_error"]
 
-    def test_custom_timeout(self):
+    def test_custom_timeout(self, mock_sleep):
         """Test that custom timeout value is respected."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -417,7 +408,7 @@ class TestWebhookDelivery:
             call_args = mock_post.call_args
             assert call_args.kwargs["timeout"] == 5
 
-    def test_result_contains_duration(self):
+    def test_result_contains_duration(self, mock_sleep):
         """Test that result includes duration metric."""
         delivery = WebhookDelivery(
             webhook_url="https://example.com/webhook",
@@ -434,4 +425,4 @@ class TestWebhookDelivery:
 
             assert "duration" in result
             assert isinstance(result["duration"], float)
-            assert result["duration"] > 0
+            assert result["duration"] >= 0

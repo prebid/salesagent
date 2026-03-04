@@ -6,21 +6,22 @@ import time
 from fastmcp.server.context import Context
 from sqlalchemy import select
 
-from src.core.auth import get_principal_from_context
 from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as ModelPrincipal
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.transport_helpers import resolve_identity_from_context
 from src.services.activity_feed import activity_feed
 
 logger = logging.getLogger(__name__)
 
 
-def log_tool_activity(context: Context | ToolContext, tool_name: str, start_time: float = None):
+def log_tool_activity(context: Context | ToolContext | ResolvedIdentity, tool_name: str, start_time: float = None):
     """Log tool activity to the activity feed.
 
     Args:
-        context: FastMCP Context or ToolContext with principal/tenant info
+        context: FastMCP Context, ToolContext, or ResolvedIdentity with principal/tenant info
         tool_name: Name of the tool being executed
         start_time: Optional start time for calculating response time
 
@@ -29,13 +30,19 @@ def log_tool_activity(context: Context | ToolContext, tool_name: str, start_time
     - Audit logs (for persistent dashboard activity feed)
     """
     try:
-        # Handle ToolContext directly
-        if isinstance(context, ToolContext):
+        # Handle ResolvedIdentity (transport-agnostic)
+        if isinstance(context, ResolvedIdentity):
             principal_id: str | None = context.principal_id
-            tenant: dict | None = {"tenant_id": context.tenant_id}
+            tenant: dict | None = context.tenant
+        # Handle ToolContext directly
+        elif isinstance(context, ToolContext):
+            principal_id = context.principal_id
+            tenant = {"tenant_id": context.tenant_id}
         else:
-            # Get principal and tenant context from FastMCP Context
-            principal_id, tenant = get_principal_from_context(context)
+            # Get principal and tenant context from FastMCP Context via unified path
+            identity = resolve_identity_from_context(context, require_valid_token=False, protocol="mcp")
+            principal_id = identity.principal_id if identity else None
+            tenant = identity.tenant if identity and isinstance(identity.tenant, dict) else None
 
         # Set tenant context if returned
         if tenant:

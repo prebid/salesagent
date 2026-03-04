@@ -62,7 +62,6 @@ services:
       - ./config/nginx/nginx-development.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - adcp-server
-      - admin-ui
     ports:
       - "${CONDUCTOR_PORT:-8000}:8000"
     healthcheck:
@@ -86,6 +85,8 @@ services:
       # Per-tenant Setup Mode enables test credentials for new tenants
       # Override .env ports to match nginx-development.conf expectations
       ADCP_SALES_PORT: "8080"
+      # Enable test login mode for development
+      ADCP_AUTH_TEST_MODE: "true"
       # Development settings
       PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
       PYTHONUNBUFFERED: "1"
@@ -113,47 +114,6 @@ services:
     command: ["python", "scripts/run_server.py"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  admin-ui:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    entrypoint: [] # Override image entrypoint for local dev
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
-      SKIP_NGINX: "true"
-      # Enable test login mode for development
-      ADCP_AUTH_TEST_MODE: "true"
-      # Development settings
-      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
-      PYTHONUNBUFFERED: "1"
-      FLASK_ENV: development
-      FLASK_DEBUG: "1"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      db-init:
-        condition: service_completed_successfully
-    volumes:
-      # Mount source code for hot reloading
-      - .:/app
-      - /app/.venv
-      # Mount local adcp library directly into venv (replaces installed package)
-      # - ../adcp-client-python/src/adcp:/app/.venv/lib/python3.12/site-packages/adcp:ro - Uncomment this if you want to use locally installed adcp-python-client for e2e testing purposes
-
-      - ./audit_logs:/app/audit_logs
-      # Shared cache volumes for faster builds
-      - adcp_global_pip_cache:/root/.cache/pip
-      - adcp_global_uv_cache:/cache/uv
-    command: ["python", "-m", "src.admin.server"]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 3

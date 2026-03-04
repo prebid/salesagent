@@ -16,7 +16,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
+from src.core.testing_hooks import AdCPTestContext
 from tests.helpers.adcp_factories import create_test_package_request
 
 
@@ -29,39 +31,33 @@ class TestDuplicateProductValidation:
         """Test that duplicate product_ids in packages are rejected."""
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Create a mock context with auth header
-        mock_context = MagicMock()
-        mock_context.headers = {"x-adcp-auth": "test_token"}
-
-        # Mock testing context
-        mock_testing_ctx = MagicMock()
-        mock_testing_ctx.dry_run = False
-        mock_testing_ctx.test_session_id = None
-
         # Mock context manager
         mock_ctx_manager = MagicMock()
         mock_persistent_ctx = MagicMock()
         mock_ctx_manager.get_context.return_value = mock_persistent_ctx
 
-        # Mock tenant for get_principal_from_context return
+        # Mock tenant for get_current_tenant return
         mock_tenant = {"tenant_id": "test_tenant", "subdomain": "test", "ad_server": "mock"}
 
-        # Mock the dependencies
+        # Build identity directly instead of patching removed functions
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_tenant",
+            tenant=mock_tenant,
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test-session"),
+            protocol="mcp",
+        )
+
+        # Mock the dependencies that still exist on the module
         with (
             patch(
-                "src.core.tools.media_buy_create.get_principal_id_from_context",
-                return_value="test_principal",
-            ),
-            patch(
-                "src.core.tools.media_buy_create.get_current_tenant",
+                "src.core.helpers.context_helpers.ensure_tenant_context",
                 return_value=mock_tenant,
             ),
             patch(
                 "src.core.tools.media_buy_create.get_principal_object",
                 return_value=MagicMock(principal_id="test_principal", name="Test Principal"),
             ),
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_testing_context", return_value=mock_testing_ctx),
             patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx_manager),
         ):
             # Create packages with duplicate product_id
@@ -91,7 +87,7 @@ class TestDuplicateProductValidation:
                 start_time=start_time,
                 end_time=end_time,
             )
-            result, _ = await _create_media_buy_impl(req=req, ctx=mock_context)
+            result, _ = await _create_media_buy_impl(req=req, identity=identity)
 
             # Verify response contains error about duplicate products
             assert result.errors is not None and len(result.errors) > 0, f"Expected errors in response, got: {result}"
@@ -107,39 +103,33 @@ class TestDuplicateProductValidation:
         """Test that all duplicate product_ids are listed in error message."""
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Create a mock context with auth header
-        mock_context = MagicMock()
-        mock_context.headers = {"x-adcp-auth": "test_token"}
-
-        # Mock testing context
-        mock_testing_ctx = MagicMock()
-        mock_testing_ctx.dry_run = False
-        mock_testing_ctx.test_session_id = None
-
         # Mock context manager
         mock_ctx_manager = MagicMock()
         mock_persistent_ctx = MagicMock()
         mock_ctx_manager.get_context.return_value = mock_persistent_ctx
 
-        # Mock tenant for get_principal_from_context return
+        # Mock tenant for get_current_tenant return
         mock_tenant = {"tenant_id": "test_tenant", "subdomain": "test", "ad_server": "mock"}
 
-        # Mock the dependencies
+        # Build identity directly instead of patching removed functions
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_tenant",
+            tenant=mock_tenant,
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test-session"),
+            protocol="mcp",
+        )
+
+        # Mock the dependencies that still exist on the module
         with (
             patch(
-                "src.core.tools.media_buy_create.get_principal_id_from_context",
-                return_value="test_principal",
-            ),
-            patch(
-                "src.core.tools.media_buy_create.get_current_tenant",
+                "src.core.helpers.context_helpers.ensure_tenant_context",
                 return_value=mock_tenant,
             ),
             patch(
                 "src.core.tools.media_buy_create.get_principal_object",
                 return_value=MagicMock(principal_id="test_principal", name="Test Principal"),
             ),
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_testing_context", return_value=mock_testing_ctx),
             patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx_manager),
         ):
             # Create packages with multiple duplicates
@@ -181,7 +171,7 @@ class TestDuplicateProductValidation:
                 start_time=start_time,
                 end_time=end_time,
             )
-            result, _ = await _create_media_buy_impl(req=req, ctx=mock_context)
+            result, _ = await _create_media_buy_impl(req=req, identity=identity)
 
             # Verify both duplicate products are mentioned
             assert result.errors is not None and len(result.errors) > 0, f"Expected errors in response, got: {result}"
@@ -198,7 +188,7 @@ class TestDuplicateProductValidation:
         with (
             patch("src.core.database.database_session.get_db_session") as mock_session_context,
             patch(
-                "src.core.tools.media_buy_create.get_current_tenant",
+                "src.core.helpers.context_helpers.ensure_tenant_context",
                 return_value={"tenant_id": "test_tenant", "subdomain": "test", "ad_server": "mock"},
             ),
             patch("src.core.tools.media_buy_create.activity_feed") as mock_activity,

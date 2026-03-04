@@ -8,22 +8,19 @@ import logging
 from typing import Any
 
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
-from rich.console import Console
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
-console = Console()
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
-from src.core.config_loader import get_current_tenant
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.helpers.context_helpers import get_principal_id_from_context as _get_principal_id_from_context
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
 from src.core.tools.media_buy_update import _verify_principal
 from src.core.validation_helpers import format_validation_error
@@ -33,7 +30,7 @@ def _update_performance_index_impl(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
     context: ContextObject | None = None,
-    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> UpdatePerformanceIndexResponse:
     """Shared implementation for update_performance_index (used by both MCP and A2A).
 
@@ -41,7 +38,7 @@ def _update_performance_index_impl(
         media_buy_id: ID of the media buy to update
         performance_data: List of performance data objects
         context: Application level context per adcp spec
-        ctx: FastMCP context (automatically provided)
+        identity: Resolved identity for authentication
 
     Returns:
         UpdatePerformanceIndexResponse with update status
@@ -56,23 +53,28 @@ def _update_performance_index_impl(
             media_buy_id=media_buy_id, performance_data=performance_objects, context=context
         )
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="update_performance_index request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
 
-    if ctx is None:
-        raise ValueError("Context is required for update_performance_index")
+    if identity is None:
+        raise ValueError("Identity is required for update_performance_index")
 
-    _verify_principal(req.media_buy_id, ctx)
-    principal_id = _get_principal_id_from_context(ctx)  # Already verified by _verify_principal
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
+
+    _verify_principal(req.media_buy_id, identity)
+    principal_id = identity.principal_id
     if principal_id is None:
-        raise ToolError("Principal ID not found in context - authentication required")
+        raise AdCPAuthenticationError("Principal ID not found in identity - authentication required")
 
     # Get the Principal object
-    principal = get_principal_object(principal_id)
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
-        raise ToolError(f"Principal {principal_id} not found")
+        raise AdCPNotFoundError(f"Principal {principal_id} not found")
 
     # Get the appropriate adapter (no dry_run support for performance updates)
-    adapter = get_adapter(principal, dry_run=False)
+    adapter = get_adapter(principal, dry_run=False, tenant=tenant)
 
     # Convert ProductPerformance to PackagePerformance for the adapter
     package_performance = [
@@ -84,19 +86,19 @@ def _update_performance_index_impl(
     success = adapter.update_media_buy_performance_index(req.media_buy_id, package_performance)
 
     # Log the performance update
-    console.print(f"[bold green]Performance Index Update for {req.media_buy_id}:[/bold green]")
+    logger.info("Performance Index Update for %s", req.media_buy_id)
     for perf in req.performance_data:
-        status_emoji = "📈" if perf.performance_index > 1.0 else "📉" if perf.performance_index < 1.0 else "➡️"
-        console.print(
-            f"  {status_emoji} {perf.product_id}: {perf.performance_index:.2f} (confidence: {perf.confidence_score or 'N/A'})"
+        logger.info(
+            "  %s: %.2f (confidence: %s)",
+            perf.product_id,
+            perf.performance_index,
+            perf.confidence_score or "N/A",
         )
 
-    # Simulate optimization based on performance
     if any(p.performance_index < 0.8 for p in req.performance_data):
-        console.print("  [yellow]⚠️  Low performance detected - optimization recommended[/yellow]")
+        logger.info("Low performance detected for %s - optimization recommended", req.media_buy_id)
 
     # Log the update_performance_index call
-    tenant = get_current_tenant()
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
     audit_logger.log_operation(
         operation="update_performance_index",
@@ -122,7 +124,7 @@ def _update_performance_index_impl(
     )
 
 
-def update_performance_index(
+async def update_performance_index(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
     webhook_url: str | None = None,
@@ -143,7 +145,8 @@ def update_performance_index(
     Returns:
         ToolResult with UpdatePerformanceIndexResponse data
     """
-    response = _update_performance_index_impl(media_buy_id, performance_data, context, ctx)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    response = _update_performance_index_impl(media_buy_id, performance_data, context, identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -152,6 +155,7 @@ def update_performance_index_raw(
     performance_data: list[dict[str, Any]],
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ):
     """Update performance data for a media buy (raw function for A2A server use).
 
@@ -161,11 +165,16 @@ def update_performance_index_raw(
         media_buy_id: The ID of the media buy to update performance for
         performance_data: List of performance data objects
         ctx: Context for authentication
+        identity: Pre-resolved identity (if available)
 
     Returns:
         UpdatePerformanceIndexResponse
     """
-    return _update_performance_index_impl(media_buy_id, performance_data, context, ctx)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    return _update_performance_index_impl(media_buy_id, performance_data, context, identity)
 
 
 # --- Human-in-the-Loop Task Queue Tools ---

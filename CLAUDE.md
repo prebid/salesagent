@@ -6,7 +6,7 @@ This guide helps you work effectively with the Prebid Sales Agent codebase maint
 
 ### Working with This Codebase
 1. **Always read before writing** - Use Read/Glob to understand existing patterns
-2. **Test your changes** - Run `uv run pytest tests/unit/ -x` before committing
+2. **Test your changes** - Run `make quality` before committing
 3. **Follow the patterns** - 7 critical patterns below are non-negotiable
 4. **When stuck** - Check `/docs` for detailed explanations
 5. **Pre-commit hooks are your friend** - They catch most issues automatically
@@ -79,7 +79,7 @@ When adding routes:
 
 - Use `JSONType` for all JSON columns (not plain `JSON`)
 - Use SQLAlchemy 2.0 patterns: `select()` + `scalars()`, not `query()`
-- All tests require PostgreSQL: `./run_all_tests.sh ci`
+- All tests require PostgreSQL: `./run_all_tests.sh` runs Docker + tox (JSON reports in `test-results/`)
 
 ### 4. Pydantic: Explicit Nested Serialization
 Parent models must override `model_dump()` to serialize nested children:
@@ -219,17 +219,33 @@ uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
 **Note:** `docker compose` builds from local source. For a clean rebuild: `docker compose build --no-cache`
 
 ### Testing
+
+Test orchestration uses **tox** (with tox-uv) for parallel execution and combined coverage.
+Install: `uv tool install tox --with tox-uv`
+
 ```bash
-./run_all_tests.sh ci     # Full suite with PostgreSQL (matches CI)
-./run_all_tests.sh quick  # Fast iteration (skips database tests)
+# ─── Quick checks ───
+make quality              # Format + lint + typecheck + unit tests (before every commit)
+tox -e unit               # Unit tests only (fast, no Docker)
 
-# Manual pytest
-uv run pytest tests/unit/              # Unit tests only
-uv run pytest tests/integration/       # Integration tests
-uv run pytest tests/e2e/               # E2E tests
+# ─── Full suite (Docker + all 5 suites in parallel via tox) ───
+./run_all_tests.sh        # One command: starts Docker, runs tox -p, tears down
+./run_all_tests.sh quick  # No Docker: unit + integration + integration_v2
 
-# AdCP compliance (MANDATORY before commit)
-uv run pytest tests/unit/test_adcp_contract.py -v
+# ─── Manual Docker lifecycle (for iterating) ───
+make test-stack-up        # Start Docker stack, writes .test-stack.env
+source .test-stack.env && tox -p   # Run all suites in parallel
+make test-stack-down      # Tear down Docker
+
+# ─── Coverage ───
+make test-cov             # Open HTML coverage report (htmlcov/index.html)
+
+# ─── Targeted runs ───
+./run_all_tests.sh ci tests/integration/test_file.py -k test_name
+tox -e integration -- -k test_name   # Pass pytest args after --
+
+# Reports: test-results/<ddmmyy_HHmm>/*.json (last 10 runs kept)
+# Coverage: htmlcov/index.html, coverage.json
 ```
 
 ### Database Migrations
@@ -286,14 +302,14 @@ def test_something():
 ### Testing Workflow (Before Commit)
 ```bash
 # ALL changes
-uv run pytest tests/unit/ -x
-python -c "from src.core.tools import your_import"  # Verify imports
+make quality                           # Format + lint + typecheck + unit tests
+uv run python -c "from src.core.tools import your_import"  # Verify imports
 
 # Refactorings (shared impl, moving code, imports)
-uv run pytest tests/integration/ -x
+tox -e integration                     # Real PostgreSQL integration tests
 
 # Critical changes (protocol, schema updates)
-uv run pytest tests/ -x
+./run_all_tests.sh                     # Full suite: Docker + all 5 suites via tox
 ```
 
 **Pre-commit hooks can't catch import errors** - You must run tests for refactorings!
@@ -439,7 +455,7 @@ uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"
 3. Design solution following critical patterns
 4. Write tests first (TDD)
 5. Implement feature
-6. Run tests: `uv run pytest tests/unit/ -x`
+6. Run tests: `make quality`
 7. Commit with clear message
 
 **User reports a bug:**
@@ -460,9 +476,9 @@ uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"
 **User asks to refactor code:**
 1. Verify tests exist and pass
 2. Make small, incremental changes
-3. Run tests after each change: `uv run pytest tests/unit/ -x`
-4. For import changes, verify: `python -c "from module import thing"`
-5. For shared implementations, run integration tests: `uv run pytest tests/integration/ -x`
+3. Run tests after each change: `make quality`
+4. For import changes, verify: `uv run python -c "from module import thing"`
+5. For shared implementations, run integration tests: `tox -e integration`
 
 **User asks about best practices:**
 1. Check this CLAUDE.md for patterns

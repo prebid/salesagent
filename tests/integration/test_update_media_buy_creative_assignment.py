@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -101,9 +102,14 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         session.add_all([creative1, creative2])
         session.commit()
 
-    # Mock context and tenant resolution
-    mock_context = MagicMock()
-    mock_context.headers = {"x-adcp-auth": "test_token"}
+    # Create identity for the new _update_media_buy_impl signature
+    identity = ResolvedIdentity(
+        principal_id="test_principal",
+        tenant_id="test_tenant",
+        tenant={"tenant_id": "test_tenant"},
+        auth_token="test_token",
+        protocol="mcp",
+    )
 
     with (
         patch("src.core.helpers.get_principal_id_from_context", return_value="test_principal"),
@@ -134,7 +140,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, ctx=mock_context)
+        response = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response
     assert isinstance(response, UpdateMediaBuyResponse)
@@ -278,9 +284,14 @@ def test_update_media_buy_replaces_creatives(integration_db):
         session.add(assignment1)
         session.commit()
 
-    # Mock context and tenant resolution
-    mock_context = MagicMock()
-    mock_context.headers = {"x-adcp-auth": "test_token"}
+    # Create identity for the new _update_media_buy_impl signature
+    identity = ResolvedIdentity(
+        principal_id="test_principal",
+        tenant_id="test_tenant",
+        tenant={"tenant_id": "test_tenant"},
+        auth_token="test_token",
+        protocol="mcp",
+    )
 
     with (
         patch("src.core.helpers.get_principal_id_from_context", return_value="test_principal"),
@@ -311,7 +322,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, ctx=mock_context)
+        response = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response
     assert isinstance(response, UpdateMediaBuyResponse)
@@ -405,9 +416,14 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
         session.add(media_buy)
         session.commit()
 
-    # Mock context and tenant resolution
-    mock_context = MagicMock()
-    mock_context.headers = {"x-adcp-auth": "test_token"}
+    # Create identity for the new _update_media_buy_impl signature
+    identity = ResolvedIdentity(
+        principal_id="test_principal",
+        tenant_id="test_tenant",
+        tenant={"tenant_id": "test_tenant"},
+        auth_token="test_token",
+        protocol="mcp",
+    )
 
     with (
         patch("src.core.helpers.get_principal_id_from_context", return_value="test_principal"),
@@ -438,7 +454,7 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, ctx=mock_context)
+        response = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify error response
     assert isinstance(response, UpdateMediaBuyResponse)

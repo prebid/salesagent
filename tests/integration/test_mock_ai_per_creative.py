@@ -15,7 +15,6 @@ from src.core.database.models import Principal, Tenant
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.requires_db,
-    pytest.mark.skip(reason="TODO: Fix mock_adapter fixture - Principal missing get_adapter_id method"),
 ]
 
 
@@ -73,25 +72,26 @@ def test_per_creative_ai_orchestration(mock_adapter, mock_gemini_test_scenarios)
         "end_time": datetime.now(UTC),
     }
 
-    # Sync creatives with different AI instructions in each name
+    # Sync creatives with keyword-based test instructions in each name
+    # Keywords: [APPROVE], [REJECT:reason], [ASK:field needed]
     assets = [
         {
             "id": "creative_1",
-            "name": "approve this banner",
+            "name": "Banner Ad [APPROVE]",
             "format": "display_300x250",
             "media_url": "https://example.com/banner.jpg",
             "click_url": "https://example.com/click",
         },
         {
             "id": "creative_2",
-            "name": "reject this for missing URL",
+            "name": "Banner Ad [REJECT:missing click URL]",
             "format": "display_300x250",
             "media_url": "https://example.com/banner2.jpg",
             "click_url": "https://example.com/click2",
         },
         {
             "id": "creative_3",
-            "name": "ask for brand logo",
+            "name": "Banner Ad [ASK:brand logo]",
             "format": "display_300x250",
             "media_url": "https://example.com/banner3.jpg",
             "click_url": "https://example.com/click3",
@@ -129,7 +129,7 @@ def test_mixed_creative_behaviors(mock_adapter, mock_gemini_test_scenarios):
         "end_time": datetime.now(UTC),
     }
 
-    # Multiple creatives with different outcomes
+    # Multiple creatives with different outcomes using keyword syntax
     assets = [
         {
             "id": "c1",
@@ -140,7 +140,7 @@ def test_mixed_creative_behaviors(mock_adapter, mock_gemini_test_scenarios):
         },
         {
             "id": "c2",
-            "name": "reject - missing captions",
+            "name": "Video Ad [REJECT:missing captions]",
             "format": "video",
             "media_url": "https://ex.com/2.mp4",
             "click_url": "https://ex.com/c2",

@@ -12,11 +12,21 @@ import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.products import _get_products_impl
 
 logger = logging.getLogger(__name__)
+
+
+def _make_identity(principal_id=None, tenant=None):
+    """Create a ResolvedIdentity for testing."""
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant.get("tenant_id") if tenant else None,
+        tenant=tenant,
+    )
 
 
 @pytest.mark.asyncio
@@ -29,28 +39,23 @@ async def test_public_policy_allows_no_brand_manifest():
     mock_request.filters = None
     mock_request.context = None
 
-    # Create mock context with public policy
-    mock_context = MagicMock()
     mock_tenant = {
         "tenant_id": "test_tenant",
         "brand_manifest_policy": "public",
         "advertising_policy": {},
     }
 
+    identity = _make_identity(principal_id=None, tenant=mock_tenant)
+
     # Mock all the dependencies
     with (
-        patch("src.core.tools.products.get_principal_from_context") as mock_get_principal,
         patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
-        patch("src.core.tools.products.get_testing_context") as mock_get_testing,
-        patch("src.core.tools.products.set_current_tenant") as mock_set_tenant,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.tools.products.get_db_session") as mock_db_session,
     ):
         # Setup mocks
-        mock_get_principal.return_value = (None, mock_tenant)  # No auth (anonymous)
         mock_get_principal_obj.return_value = None
-        mock_get_testing.return_value = None
 
         # Mock variants generation
         mock_generate_variants.return_value = []
@@ -68,7 +73,7 @@ async def test_public_policy_allows_no_brand_manifest():
         mock_db_session.return_value.__enter__.return_value = mock_session
 
         # Call implementation - should NOT raise error
-        response = await _get_products_impl(mock_request, mock_context)
+        response = await _get_products_impl(mock_request, identity)
 
         # Verify response is valid (no error)
         assert response is not None
@@ -85,29 +90,21 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
     mock_request.filters = None
     mock_request.context = None
 
-    # Create mock context with require_brand policy
-    mock_context = MagicMock()
     mock_tenant = {
         "tenant_id": "test_tenant",
         "brand_manifest_policy": "require_brand",
         "advertising_policy": {},
     }
 
-    # Mock dependencies
-    with (
-        patch("src.core.tools.products.get_principal_from_context") as mock_get_principal,
-        patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
-        patch("src.core.tools.products.get_testing_context") as mock_get_testing,
-        patch("src.core.tools.products.set_current_tenant") as mock_set_tenant,
-    ):
-        # Setup mocks
-        mock_get_principal.return_value = ("principal_123", mock_tenant)  # Authenticated
-        mock_get_principal_obj.return_value = None
-        mock_get_testing.return_value = None
+    identity = _make_identity(principal_id="principal_123", tenant=mock_tenant)
 
-        # Call implementation - should raise ToolError
-        with pytest.raises(ToolError) as exc_info:
-            await _get_products_impl(mock_request, mock_context)
+    # Mock dependencies - need get_principal_object since it's called before brand_manifest check
+    with (
+        patch("src.core.tools.products.get_principal_object", return_value=None),
+    ):
+        # Call implementation - should raise AdCPAuthorizationError (transport-agnostic)
+        with pytest.raises(AdCPAuthorizationError) as exc_info:
+            await _get_products_impl(mock_request, identity)
 
         # Verify error message
         assert "Brand manifest required by tenant policy" in str(exc_info.value)
@@ -127,28 +124,23 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
     mock_request.filters = None
     mock_request.context = None
 
-    # Create mock context with require_brand policy
-    mock_context = MagicMock()
     mock_tenant = {
         "tenant_id": "test_tenant",
         "brand_manifest_policy": "require_brand",
         "advertising_policy": {},
     }
 
+    identity = _make_identity(principal_id="principal_123", tenant=mock_tenant)
+
     # Mock all dependencies
     with (
-        patch("src.core.tools.products.get_principal_from_context") as mock_get_principal,
         patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
-        patch("src.core.tools.products.get_testing_context") as mock_get_testing,
-        patch("src.core.tools.products.set_current_tenant") as mock_set_tenant,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.tools.products.get_db_session") as mock_db_session,
     ):
         # Setup mocks
-        mock_get_principal.return_value = ("principal_123", mock_tenant)
         mock_get_principal_obj.return_value = None
-        mock_get_testing.return_value = None
 
         # Mock variants
         mock_generate_variants.return_value = []
@@ -166,7 +158,7 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
         mock_db_session.return_value.__enter__.return_value = mock_session
 
         # Call implementation - should NOT raise error
-        response = await _get_products_impl(mock_request, mock_context)
+        response = await _get_products_impl(mock_request, identity)
 
         # Verify response is valid
         assert response is not None
@@ -185,30 +177,20 @@ async def test_require_auth_policy_rejects_no_auth():
     mock_request.filters = None
     mock_request.context = None
 
-    # Create mock context with require_auth policy
-    mock_context = MagicMock()
     mock_tenant = {
         "tenant_id": "test_tenant",
         "brand_manifest_policy": "require_auth",
         "advertising_policy": {},
     }
 
-    # Mock dependencies
-    with (
-        patch("src.core.tools.products.get_principal_from_context") as mock_get_principal,
-        patch("src.core.tools.products.get_testing_context") as mock_get_testing,
-        patch("src.core.tools.products.set_current_tenant") as mock_set_tenant,
-    ):
-        # Setup mocks - NO authentication
-        mock_get_principal.return_value = (None, mock_tenant)  # Anonymous
-        mock_get_testing.return_value = None
+    identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
-        # Call implementation - should raise ToolError
-        with pytest.raises(ToolError) as exc_info:
-            await _get_products_impl(mock_request, mock_context)
+    # Call implementation - should raise AdCPAuthenticationError (transport-agnostic)
+    with pytest.raises(AdCPAuthenticationError) as exc_info:
+        await _get_products_impl(mock_request, identity)
 
-        # Verify error message
-        assert "Authentication required by tenant policy" in str(exc_info.value)
+    # Verify error message
+    assert "Authentication required by tenant policy" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -221,28 +203,23 @@ async def test_require_auth_policy_accepts_with_auth():
     mock_request.filters = None
     mock_request.context = None
 
-    # Create mock context with require_auth policy
-    mock_context = MagicMock()
     mock_tenant = {
         "tenant_id": "test_tenant",
         "brand_manifest_policy": "require_auth",
         "advertising_policy": {},
     }
 
+    identity = _make_identity(principal_id="principal_123", tenant=mock_tenant)
+
     # Mock all dependencies
     with (
-        patch("src.core.tools.products.get_principal_from_context") as mock_get_principal,
         patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
-        patch("src.core.tools.products.get_testing_context") as mock_get_testing,
-        patch("src.core.tools.products.set_current_tenant") as mock_set_tenant,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.tools.products.get_db_session") as mock_db_session,
     ):
         # Setup mocks - WITH authentication
-        mock_get_principal.return_value = ("principal_123", mock_tenant)  # Authenticated
         mock_get_principal_obj.return_value = None
-        mock_get_testing.return_value = None
 
         # Mock variants
         mock_generate_variants.return_value = []
@@ -260,7 +237,7 @@ async def test_require_auth_policy_accepts_with_auth():
         mock_db_session.return_value.__enter__.return_value = mock_session
 
         # Call implementation - should NOT raise error (brand_manifest optional)
-        response = await _get_products_impl(mock_request, mock_context)
+        response = await _get_products_impl(mock_request, identity)
 
         # Verify response is valid
         assert response is not None

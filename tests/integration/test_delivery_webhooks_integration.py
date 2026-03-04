@@ -22,8 +22,8 @@ from src.core.database.models import (
     Product,
     Tenant,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
-from src.core.tool_context import ToolContext
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 
 
@@ -378,14 +378,18 @@ async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
     async def fake_send_notification(*args, **kwargs):
         return True
 
-    # Helper to inject testing_context
-    def create_test_context(*args, **kwargs):
-        ctx = ToolContext(*args, **kwargs)
-        ctx.testing_context = AdCPTestContext(dry_run=True)
-        return ctx
+    # Helper to inject testing_context into ResolvedIdentity
+    _original_resolved_identity = ResolvedIdentity
+
+    def create_test_identity(**kwargs):
+        kwargs["testing_context"] = AdCPTestContext(dry_run=True)
+        return _original_resolved_identity(**kwargs)
 
     with (
-        patch("src.services.delivery_webhook_scheduler.ToolContext", side_effect=create_test_context),
+        patch(
+            "src.core.resolved_identity.ResolvedIdentity",
+            side_effect=create_test_identity,
+        ),
         patch.object(scheduler.webhook_service, "send_notification", new_callable=AsyncMock) as mock_send,
         patch("src.core.tools.media_buy_delivery.DeliverySimulator.calculate_simulated_metrics") as mock_sim,
     ):

@@ -8,11 +8,11 @@ Note: Tenant custom formats (creative_formats table) were removed in favor of
 creative agent-based format discovery per AdCP v2.4.
 """
 
-import asyncio
 import json
 
 from src.core.database.database_session import get_db_session
 from src.core.schemas import Format
+from src.core.validation_helpers import run_async_in_sync_context
 
 
 def get_format(
@@ -45,25 +45,15 @@ def get_format(
 
     # If agent_url provided, get format directly from that agent
     if agent_url:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            fmt = loop.run_until_complete(registry.get_format(agent_url, format_id))
-            if fmt:
-                return fmt
-        finally:
-            loop.close()
+        fmt = run_async_in_sync_context(registry.get_format(agent_url, format_id))
+        if fmt:
+            return fmt
     else:
         # Search all agents for this format
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            all_formats = loop.run_until_complete(registry.list_all_formats(tenant_id=tenant_id))
-            for fmt in all_formats:
-                if fmt.format_id == format_id:
-                    return fmt
-        finally:
-            loop.close()
+        all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant_id))
+        for fmt in all_formats:
+            if fmt.format_id == format_id:
+                return fmt
 
     # Not found anywhere
     error_msg = f"Unknown format_id '{format_id}'"
@@ -207,69 +197,22 @@ def list_available_formats(
         return []
 
     # Get formats from all agents (default + tenant-specific)
-    # Check if we're already in an async context
     try:
-        loop = asyncio.get_running_loop()
-        # We're in an async context, cannot use run_until_complete
-        # Return a coroutine that needs to be awaited
-        import warnings
-
-        logger.debug("[list_available_formats] Running in async context, using thread pool")
-        warnings.warn(
-            "list_available_formats() called from async context. "
-            "Use await registry.list_all_formats() directly instead.",
-            DeprecationWarning,
-            stacklevel=2,
+        formats = run_async_in_sync_context(
+            registry.list_all_formats(
+                tenant_id=tenant_id,
+                max_width=max_width,
+                max_height=max_height,
+                min_width=min_width,
+                min_height=min_height,
+                is_responsive=is_responsive,
+                asset_types=asset_types,
+                name_search=name_search,
+                type_filter=type_filter,
+            )
         )
-        # For backward compatibility, run in thread pool
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(
-                lambda: asyncio.run(
-                    registry.list_all_formats(
-                        tenant_id=tenant_id,
-                        max_width=max_width,
-                        max_height=max_height,
-                        min_width=min_width,
-                        min_height=min_height,
-                        is_responsive=is_responsive,
-                        asset_types=asset_types,
-                        name_search=name_search,
-                        type_filter=type_filter,
-                    )
-                )
-            )
-            formats = future.result(timeout=30)  # 30 second timeout
-    except RuntimeError:
-        # No running loop, we can safely create one
-        logger.debug("[list_available_formats] No async context, creating new event loop")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            formats = loop.run_until_complete(
-                registry.list_all_formats(
-                    tenant_id=tenant_id,
-                    max_width=max_width,
-                    max_height=max_height,
-                    min_width=min_width,
-                    min_height=min_height,
-                    is_responsive=is_responsive,
-                    asset_types=asset_types,
-                    name_search=name_search,
-                    type_filter=type_filter,
-                )
-            )
-        except TimeoutError:
-            logger.error("[list_available_formats] Timeout fetching formats from creative agents")
-            return []
-        except Exception as e:
-            logger.error(f"[list_available_formats] Error in async format fetch: {e}", exc_info=True)
-            return []
-        finally:
-            loop.close()
     except Exception as e:
-        logger.error(f"[list_available_formats] Unexpected error fetching formats: {e}", exc_info=True)
+        logger.error(f"[list_available_formats] Error fetching formats: {e}", exc_info=True)
         return []
 
     logger.info(f"[list_available_formats] Successfully fetched {len(formats)} formats")

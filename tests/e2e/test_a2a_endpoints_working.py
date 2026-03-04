@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 def _a2a_base_url() -> str:
     """Get A2A server base URL from environment (supports dynamic ports)."""
-    port = os.getenv("A2A_PORT", "8091")
+    port = os.getenv("ADCP_SALES_PORT", "8080")
     return f"http://localhost:{port}"
 
 
@@ -119,15 +119,18 @@ class TestA2AEndpointsActual:
     def test_cors_headers_present(self):
         """Test that CORS headers are present for browser compatibility."""
         try:
-            # CORS headers are only returned when an Origin header is present (standard behavior)
+            # CORS headers are only returned when the Origin matches an allowed origin.
+            # Default ALLOWED_ORIGINS is "http://localhost:8000" — use that as Origin.
+            allowed_origin = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")[0].strip()
+
             response = requests.get(
                 f"{_a2a_base_url()}/.well-known/agent.json",
-                headers={"Origin": "http://example.com"},
+                headers={"Origin": allowed_origin},
                 timeout=2,
             )
 
             if response.status_code == 200:
-                # Should have CORS headers
+                # Should have CORS headers for an allowed origin
                 assert "Access-Control-Allow-Origin" in response.headers, "Missing CORS headers"
 
         except (requests.ConnectionError, requests.Timeout):
@@ -315,7 +318,8 @@ class TestA2ARequestHandler:
         """Test that authentication-related methods exist."""
         auth_methods = [
             "_get_auth_token",
-            "_create_tool_context_from_a2a",
+            "_resolve_a2a_identity",
+            "_make_tool_context",
         ]
 
         for method_name in auth_methods:

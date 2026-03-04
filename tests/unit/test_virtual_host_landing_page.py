@@ -10,7 +10,7 @@ from src.landing.landing_page import generate_fallback_landing_page, generate_te
 class TestVirtualHostLandingPage:
     """Test virtual host landing page functionality."""
 
-    @patch("src.core.main.get_tenant_by_virtual_host")
+    @patch("src.core.config_loader.get_tenant_by_virtual_host")
     async def test_landing_page_with_virtual_host(self, mock_get_tenant):
         """Test landing page display for virtual host."""
         # Arrange
@@ -39,7 +39,7 @@ class TestVirtualHostLandingPage:
         assert tenant["virtual_host"] == "landing.test.com"
         mock_get_tenant.assert_called_once_with("landing.test.com")
 
-    @patch("src.core.main.get_tenant_by_virtual_host")
+    @patch("src.core.config_loader.get_tenant_by_virtual_host")
     async def test_landing_page_without_virtual_host(self, mock_get_tenant):
         """Test redirect to admin for regular requests."""
         # Arrange
@@ -176,7 +176,7 @@ class TestVirtualHostLandingPage:
         assert "Media Buy API Reference" in html_content
         assert "Signals API Reference" in html_content
 
-    @patch("src.core.main.get_tenant_by_virtual_host")
+    @patch("src.core.config_loader.get_tenant_by_virtual_host")
     async def test_landing_page_with_nonexistent_tenant(self, mock_get_tenant):
         """Test landing page with virtual host that has no tenant."""
         # Arrange
@@ -257,7 +257,7 @@ class TestVirtualHostLandingPage:
         assert "scribd" in html_content
         assert "https://scribd.sales-agent.example.com" in html_content
 
-    @patch("src.core.main.get_tenant_by_virtual_host")
+    @patch("src.core.config_loader.get_tenant_by_virtual_host")
     async def test_landing_page_header_case_insensitive(self, mock_get_tenant):
         """Test header extraction with different cases."""
         # Arrange

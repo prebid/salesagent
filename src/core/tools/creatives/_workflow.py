@@ -5,13 +5,13 @@ from typing import Any
 
 from adcp import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
-from fastmcp.exceptions import ToolError
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
-from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ def _create_sync_workflow_steps(
     approval_mode: str,
     push_notification_config: PushNotificationConfig | dict | None,
     context: ContextObject | dict | None,
-    ctx: Any,
+    identity: ResolvedIdentity | None = None,
 ) -> None:
     """Create workflow steps for creatives requiring approval.
 
@@ -37,7 +37,7 @@ def _create_sync_workflow_steps(
 
     # Ensure principal_id is available (should always be set by this point)
     if principal_id is None:
-        raise ToolError("Principal ID required for workflow creation")
+        raise AdCPAuthenticationError("Principal ID required for workflow creation")
 
     # Get or create persistent context for this operation
     # is_async=True because we're creating workflow steps that need tracking
@@ -46,7 +46,7 @@ def _create_sync_workflow_steps(
     )
 
     if persistent_ctx is None:
-        raise ToolError("Failed to create workflow context")
+        raise AdCPAdapterError("Failed to create workflow context")
 
     with get_db_session() as session:
         for creative_info in creatives_needing_approval:
@@ -65,9 +65,16 @@ def _create_sync_workflow_steps(
                 comment = f"Creative '{creative_info['name']}' (format: {creative_info['format']}) requires review"
 
             # Create workflow step for creative approval
+            # Serialize format to JSON-compatible form (FormatId is a Pydantic model)
+            from pydantic import BaseModel
+
+            format_value = creative_info["format"]
+            if isinstance(format_value, BaseModel):
+                format_value = format_value.model_dump(mode="json")
+
             request_data_for_workflow = {
                 "creative_id": creative_info["creative_id"],
-                "format": creative_info["format"],
+                "format": format_value,
                 "name": creative_info["name"],
                 "status": status,
                 "approval_mode": approval_mode,
@@ -82,8 +89,7 @@ def _create_sync_workflow_steps(
                 request_data_for_workflow["context"] = context
 
             # Store protocol type for webhook payload creation
-            # ToolContext = A2A, Context (FastMCP) = MCP
-            request_data_for_workflow["protocol"] = "a2a" if isinstance(ctx, ToolContext) else "mcp"
+            request_data_for_workflow["protocol"] = identity.protocol if identity else "mcp"
 
             step = ctx_manager.create_workflow_step(
                 context_id=persistent_ctx.context_id,

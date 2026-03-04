@@ -1,4 +1,5 @@
 .PHONY: quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
+.PHONY: test-stack-up test-stack-down test-all test-cov
 
 quality:
 	uv run ruff format --check .
@@ -29,3 +30,20 @@ test-fast:
 
 test-full:
 	./run_all_tests.sh ci
+
+# ─── tox-based test targets ──────────────────────────────────────
+
+test-stack-up:
+	@echo "Starting Docker test stack..."
+	@./scripts/test-stack.sh up
+
+test-stack-down:
+	@echo "Stopping Docker test stack..."
+	@./scripts/test-stack.sh down
+
+test-all: test-stack-up
+	tox -p; rc=$$?; $(MAKE) test-stack-down; exit $$rc
+
+test-cov:
+	@echo "Opening coverage report..."
+	@open htmlcov/index.html 2>/dev/null || xdg-open htmlcov/index.html 2>/dev/null || echo "Open htmlcov/index.html in your browser"

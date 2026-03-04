@@ -18,7 +18,7 @@ class TestAdminAppIntegration:
             "SECRET_KEY": "test_secret_key",
             "WTF_CSRF_ENABLED": False,  # Disable CSRF for testing
         }
-        app, socketio = create_app(config)
+        app = create_app(config)
         return app
 
     @pytest.fixture
@@ -154,7 +154,7 @@ class TestTenantBlueprintIntegration:
     @pytest.fixture
     def app(self):
         """Create test Flask app."""
-        app, _ = create_app({"TESTING": True})
+        app = create_app({"TESTING": True})
         return app
 
     @pytest.fixture
@@ -195,7 +195,7 @@ class TestProductsBlueprintIntegration:
     @pytest.fixture
     def app(self):
         """Create test Flask app."""
-        app, _ = create_app({"TESTING": True})
+        app = create_app({"TESTING": True})
         return app
 
     @pytest.fixture

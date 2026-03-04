@@ -5,22 +5,31 @@
 ### Core Components
 
 ```
+                     ┌──────────────────┐
+                     │   nginx :8000    │
+                     └────────┬─────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              │               │               │
+       /admin/          /mcp/           /a2a
+              │               │               │
 ┌─────────────────────────────────────────────────────┐
-│                    Admin UI (Flask)                 │
-│                     Port 8001                       │
-└─────────────────────────────────────────────────────┘
-                            │
-┌─────────────────────────────────────────────────────┐
-│                 MCP Server (FastMCP)                │
-│                     Port 8080                       │
-└─────────────────────────────────────────────────────┘
-                            │
-        ┌───────────────────┼───────────────────┐
-        │                   │                   │
-┌───────────────┐  ┌────────────────┐  ┌──────────────┐
-│   PostgreSQL  │  │  Ad Server     │  │   Gemini     │
-│   Database    │  │  Adapters      │  │   AI API     │
-└───────────────┘  └────────────────┘  └──────────────┘
+│           Unified FastAPI App (src/app.py) :8080    │
+│                                                     │
+│  ┌─────────────┐ ┌──────────────┐ ┌──────────────┐ │
+│  │ Admin (Flask │ │ MCP Server   │ │ A2A Server   │ │
+│  │  via WSGI)  │ │  (FastMCP)   │ │ (python-a2a) │ │
+│  └─────────────┘ └──────────────┘ └──────────────┘ │
+│                                                     │
+│  UnifiedAuthMiddleware (ASGI, scope["state"])        │
+└─────────────────────┬───────────────────────────────┘
+                      │
+        ┌─────────────┼─────────────┐
+        │             │             │
+┌───────────────┐ ┌────────────┐ ┌──────────────┐
+│   PostgreSQL  │ │ Ad Server  │ │   Gemini     │
+│   Database    │ │ Adapters   │ │   AI API     │
+└───────────────┘ └────────────┘ └──────────────┘
 ```
 
 ### Multi-Tenant Architecture
@@ -34,8 +43,10 @@ Database-backed tenant isolation with:
 ### Authentication Flow
 
 1. **MCP API** - Token-based via x-adcp-auth header
-2. **Admin UI** - Google OAuth with role-based access
-3. **Principal Resolution** - Token → Principal → Tenant → Adapter
+2. **A2A API** - Token-based via x-adcp-auth or Authorization: Bearer
+3. **Admin UI** - Google OAuth with role-based access
+4. **UnifiedAuthMiddleware** - Single ASGI middleware extracts token into scope["state"]
+5. **Principal Resolution** - Token → Principal → Tenant → Adapter
 
 ## Database Schema
 
@@ -134,14 +145,15 @@ Each adapter handles:
 ### FastMCP Framework
 
 ```python
-from fastmcp import Context, app
+from fastmcp import FastMCP
 
-@app.tool
+mcp = FastMCP("AdCP Sales Agent")
+
+@mcp.tool()
 async def get_products(
-    context: Context,
-    brief: Optional[str] = None
+    brief: str | None = None
 ) -> GetProductsResponse:
-    # Tool implementation
+    return _get_products_impl(brief=brief)
 ```
 
 ### Transport Layer
@@ -273,17 +285,17 @@ services:
     depends_on: [postgres]
     ports: ["8080:8080"]
 
-  admin-ui:
-    build: .
-    command: python admin_ui.py
-    ports: ["8001:8001"]
+  nginx:
+    image: nginx:alpine
+    depends_on: [adcp-server]
+    ports: ["8000:8000"]
 ```
 
-### Fly.io
+### Production Deployment
 
-Single-machine architecture with:
-- Proxy router (port 8000)
-- Internal services (8080, 8001)
+Single-process architecture with:
+- nginx reverse proxy (port 8000)
+- Unified FastAPI app (port 8080) serving Admin, MCP, and A2A
 - Managed PostgreSQL
 - Persistent volume
 

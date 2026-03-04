@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 from fastmcp.server.dependencies import get_http_headers
 from sqlalchemy import select
 
+from src.core.auth_utils import get_principal_from_token
 from src.core.config_loader import (
     get_current_tenant,
     get_tenant_by_id,
@@ -24,7 +25,6 @@ from src.core.config_loader import (
 )
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as ModelPrincipal
-from src.core.database.models import Tenant
 from src.core.schemas import Principal
 
 logger = logging.getLogger(__name__)
@@ -33,98 +33,7 @@ logger = logging.getLogger(__name__)
 _VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
 
 
-def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | None:
-    """Looks up a principal_id from the database using a token.
-
-    If tenant_id is provided, only looks in that specific tenant.
-    If not provided, searches globally by token and sets the tenant context.
-    """
-    if _VERBOSE_AUTH_LOG:
-        logger.info("Looking up principal: tenant_id=%s, token=***%s", tenant_id, token[-6:] if token else "None")
-
-    # Use standardized session management
-    with get_db_session() as session:
-        # Use explicit transaction for consistency
-        with session.begin():
-            if tenant_id:
-                # If tenant_id specified, ONLY look in that tenant
-                logger.debug("Searching for principal in tenant '%s'", tenant_id)
-                stmt = select(ModelPrincipal).filter_by(access_token=token, tenant_id=tenant_id)
-                principal = session.scalars(stmt).first()
-
-                if not principal:
-                    logger.debug("No principal found in tenant '%s', checking admin token", tenant_id)
-                    # Also check if it's the admin token for this specific tenant
-                    tenant_stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
-                    tenant = session.scalars(tenant_stmt).first()
-
-                    if tenant and tenant.admin_token == token:
-                        logger.debug("Token matches admin token for tenant '%s'", tenant_id)
-                        # Return a special admin principal ID
-                        return f"{tenant_id}_admin"
-
-                    logger.debug("Token not found in tenant '%s'", tenant_id)
-                    return None
-                elif _VERBOSE_AUTH_LOG:
-                    logger.info("Found principal '%s' in tenant '%s'", principal.principal_id, tenant_id)
-            else:
-                # No tenant specified - search globally by token
-                logger.debug("No tenant specified - searching globally by token")
-                stmt = select(ModelPrincipal).filter_by(access_token=token)
-                principal = session.scalars(stmt).first()
-
-                if not principal:
-                    logger.debug("No principal found with this token globally")
-                    return None
-
-                if _VERBOSE_AUTH_LOG:
-                    logger.info("Found principal '%s' in tenant '%s'", principal.principal_id, principal.tenant_id)
-
-                # CRITICAL: Validate the tenant exists and is active before proceeding
-                tenant_check_stmt = select(Tenant).filter_by(tenant_id=principal.tenant_id, is_active=True)
-                tenant_check = session.scalars(tenant_check_stmt).first()
-                if not tenant_check:
-                    logger.warning("Tenant '%s' is inactive or deleted", principal.tenant_id)
-                    # Tenant is disabled or deleted - fail securely
-                    return None
-
-            # Only set tenant context if we didn't have one specified (global lookup case)
-            # If tenant_id was provided, context was already set by the caller
-            if not tenant_id:
-                # Get the tenant for this principal and set it as current context
-                tenant_ctx_stmt = select(Tenant).filter_by(tenant_id=principal.tenant_id, is_active=True)
-                tenant = session.scalars(tenant_ctx_stmt).first()
-                if tenant:
-                    from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                    tenant_dict = serialize_tenant_to_dict(tenant)
-                    set_current_tenant(tenant_dict)
-                    logger.debug("Set tenant context to '%s' (from principal)", tenant.tenant_id)
-
-            return principal.principal_id
-
-
-def _get_header_case_insensitive(headers: dict, header_name: str) -> str | None:
-    """Get a header value with case-insensitive lookup.
-
-    HTTP headers are case-insensitive, but Python dicts are case-sensitive.
-    This helper function performs case-insensitive header lookup.
-
-    Args:
-        headers: Dictionary of headers
-        header_name: Header name to look up (will be compared case-insensitively)
-
-    Returns:
-        Header value if found, None otherwise
-    """
-    if not headers:
-        return None
-
-    header_name_lower = header_name.lower()
-    for key, value in headers.items():
-        if key.lower() == header_name_lower:
-            return value
-    return None
+from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:
@@ -333,23 +242,23 @@ def get_principal_from_context(
         # SECURITY NOTE: This is safe because get_principal_from_token() will:
         # 1. Look up the token globally
         # 2. Find which tenant it belongs to
-        # 3. Set that tenant's context
+        # 3. Return (principal_id, tenant_dict) — caller sets context
         # 4. Return principal_id only if token is valid for that tenant
         logger.debug("Using global token lookup (finds tenant from token)")
         detection_method = "global token lookup"
 
-    principal_id = get_principal_from_token(auth_token, requested_tenant_id)
+    principal_id, token_tenant = get_principal_from_token(auth_token, requested_tenant_id)
 
     # If token was provided but invalid, raise an error (unless require_valid_token=False for discovery)
     # This distinguishes between "no auth" (OK) and "bad auth" (error or warning)
     if principal_id is None:
         if require_valid_token:
-            from fastmcp.exceptions import ToolError
+            from src.core.exceptions import AdCPAuthenticationError
 
-            raise ToolError(
-                "INVALID_AUTH_TOKEN",
+            raise AdCPAuthenticationError(
                 f"Authentication token is invalid for tenant '{requested_tenant_id or 'any'}'. "
                 f"The token may be expired, revoked, or associated with a different tenant.",
+                details={"error_code": "INVALID_AUTH_TOKEN"},
             )
         else:
             # For discovery endpoints, treat invalid token like missing token
@@ -359,30 +268,33 @@ def get_principal_from_context(
             )
             return (None, tenant_context)
 
-    # If tenant_context wasn't set by header detection, get it from current tenant
-    # (get_principal_from_token set it as a side effect for global lookup case)
-    if not tenant_context:
-        tenant_context = get_current_tenant()
+    # If tenant_context wasn't set by header detection, use tenant discovered from token
+    if not tenant_context and token_tenant:
+        tenant_context = token_tenant
 
     # Return both principal_id and tenant_context explicitly
     # Caller MUST call set_current_tenant(tenant_context) in their async context
     return (principal_id, tenant_context)
 
 
-def get_principal_adapter_mapping(principal_id: str) -> dict[str, Any]:
+def get_principal_adapter_mapping(principal_id: str, tenant_id: str | None = None) -> dict[str, Any]:
     """Get the platform mappings for a principal."""
-    tenant = get_current_tenant()
+    if tenant_id is None:
+        tenant = get_current_tenant()
+        tenant_id = tenant["tenant_id"]
     with get_db_session() as session:
-        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant["tenant_id"])
+        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant_id)
         principal = session.scalars(stmt).first()
         return principal.platform_mappings if principal else {}
 
 
-def get_principal_object(principal_id: str) -> Principal | None:
+def get_principal_object(principal_id: str, tenant_id: str | None = None) -> Principal | None:
     """Get a Principal object for the given principal_id."""
-    tenant = get_current_tenant()
+    if tenant_id is None:
+        tenant = get_current_tenant()
+        tenant_id = tenant["tenant_id"]
     with get_db_session() as session:
-        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant["tenant_id"])
+        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant_id)
         principal = session.scalars(stmt).first()
 
         if principal:
@@ -394,9 +306,9 @@ def get_principal_object(principal_id: str) -> Principal | None:
     return None
 
 
-def get_adapter_principal_id(principal_id: str, adapter: str) -> str | None:
+def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | None = None) -> str | None:
     """Get the adapter-specific ID for a principal."""
-    mappings = get_principal_adapter_mapping(principal_id)
+    mappings = get_principal_adapter_mapping(principal_id, tenant_id=tenant_id)
 
     # Map adapter names to their specific fields
     adapter_field_map = {

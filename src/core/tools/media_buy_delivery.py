@@ -14,13 +14,13 @@ from datetime import UTC, date, datetime, timedelta
 from math import floor
 from typing import Any, cast
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from rich.console import Console
 from sqlalchemy import select
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -30,11 +30,11 @@ from adcp.types import Error, MediaBuyStatus
 from adcp.types.generated_poc.core.context import ContextObject
 
 from src.core.auth import get_principal_object
-from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, PricingOption
 from src.core.helpers import get_principal_id_from_context
 from src.core.helpers.adapter_helpers import get_adapter
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AggregatedTotals,
     DeliveryTotals,
@@ -45,12 +45,12 @@ from src.core.schemas import (
     PricingModel,
     ReportingPeriod,
 )
-from src.core.testing_hooks import DeliverySimulator, TimeSimulator, apply_testing_hooks, get_testing_context
+from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.validation_helpers import format_validation_error
 
 
 def _get_media_buy_delivery_impl(
-    req: GetMediaBuyDeliveryRequest, ctx: Context | ToolContext | None
+    req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity | None
 ) -> GetMediaBuyDeliveryResponse:
     """Get delivery data for one or more media buys.
 
@@ -58,14 +58,14 @@ def _get_media_buy_delivery_impl(
     and returns spec-compliant response format.
     """
 
-    # Validate context is provided
-    if ctx is None:
-        raise ToolError("Context is required")
+    # Validate identity is provided
+    if identity is None:
+        raise AdCPValidationError("Context is required")
 
     # Extract testing context for time simulation and event jumping
-    testing_ctx = get_testing_context(ctx)
+    testing_ctx = identity.testing_context or AdCPTestContext()
 
-    principal_id = get_principal_id_from_context(ctx)
+    principal_id = identity.principal_id if identity else None
     if not principal_id:
         # Return AdCP-compliant error response
         # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??
@@ -86,7 +86,7 @@ def _get_media_buy_delivery_impl(
         )
 
     # Get the Principal object
-    principal = get_principal_object(principal_id)
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         # Return AdCP-compliant error response
         # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??
@@ -106,9 +106,16 @@ def _get_media_buy_delivery_impl(
             context=context_val,
         )
 
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
+
     # Get the appropriate adapter
     # Use testing_ctx.dry_run if in testing mode, otherwise False
-    adapter = get_adapter(principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx)
+    adapter = get_adapter(
+        principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx, tenant=tenant
+    )
 
     # Determine reporting period
     if req.start_date and req.end_date:
@@ -143,7 +150,6 @@ def _get_media_buy_delivery_impl(
     reference_date = end_dt.date()
 
     # Determine which media buys to fetch from database
-    tenant = get_current_tenant()
 
     target_media_buys = _get_target_media_buys(req, principal_id, tenant, reference_date)
     pricing_option_ids = [
@@ -428,7 +434,7 @@ def _get_media_buy_delivery_impl(
     return response
 
 
-def get_media_buy_delivery(
+async def get_media_buy_delivery(
     media_buy_ids: list[str] | None = None,
     buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -453,6 +459,8 @@ def get_media_buy_delivery(
     Returns:
         ToolResult with GetMediaBuyDeliveryResponse data
     """
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+
     # Create AdCP-compliant request object
     try:
         req = GetMediaBuyDeliveryRequest(
@@ -464,11 +472,11 @@ def get_media_buy_delivery(
             context=cast(ContextObject | None, context),
         )
 
-        response = _get_media_buy_delivery_impl(req, ctx)
+        response = _get_media_buy_delivery_impl(req, identity)
 
         return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="get_media_buy_delivery request"))
+        raise AdCPValidationError(format_validation_error(e, context="get_media_buy_delivery request"))
 
 
 def get_media_buy_delivery_raw(
@@ -479,6 +487,7 @@ def get_media_buy_delivery_raw(
     end_date: str | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ):
     """Get delivery metrics for media buys (raw function for A2A server use).
 
@@ -490,10 +499,16 @@ def get_media_buy_delivery_raw(
         end_date: End date for reporting period in YYYY-MM-DD format (optional)
         context: Application level context (ContextObject)
         ctx: Context for authentication
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         GetMediaBuyDeliveryResponse with delivery metrics
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx)
+
     # Create request object
     req = GetMediaBuyDeliveryRequest(
         media_buy_ids=media_buy_ids,
@@ -505,7 +520,7 @@ def get_media_buy_delivery_raw(
     )
 
     # Call the implementation
-    return _get_media_buy_delivery_impl(req, ctx)
+    return _get_media_buy_delivery_impl(req, identity)
 
 
 # --- Admin Tools ---

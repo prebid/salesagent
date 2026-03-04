@@ -29,10 +29,12 @@ ALL_TOOLS = [
 
 def test_all_tools_registered():
     """Verify all expected AdCP tools are registered with MCP."""
+    import asyncio
+
     from src.core.main import mcp
 
-    # Get registered tool names from ToolManager
-    registered_tools = list(mcp._tool_manager._tools.keys())
+    tools = asyncio.new_event_loop().run_until_complete(mcp.list_tools())
+    registered_tools = [t.name for t in tools]
 
     for tool in ALL_TOOLS:
         assert tool in registered_tools, f"Tool '{tool}' is not registered with MCP server"

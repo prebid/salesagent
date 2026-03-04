@@ -20,10 +20,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.resolved_identity import ResolvedIdentity
 from tests.helpers.a2a_response_validator import assert_valid_skill_response
 from tests.helpers.external_service import is_external_service_exception
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+_MOCK_IDENTITY = ResolvedIdentity(
+    principal_id="test_principal",
+    tenant_id="test_tenant",
+    tenant={"tenant_id": "test_tenant"},
+    protocol="a2a",
+)
 
 
 @pytest.mark.integration
@@ -41,27 +49,27 @@ class TestA2AMessageFieldValidation:
 
     @pytest.fixture
     def mock_auth_context(self, sample_tenant, sample_principal):
-        """Mock authentication context for all tests."""
-        from src.a2a_server import adcp_a2a_server
+        """Set up authentication context and return a ResolvedIdentity for handler calls.
+
+        Returns a context manager + identity tuple. The identity is passed directly
+        to handler methods (identity parameter), matching the refactored A2A pattern
+        where on_message_send resolves identity at the transport boundary.
+        """
+        from src.core.tenant_context import LazyTenantContext
+
+        identity = ResolvedIdentity(
+            principal_id=sample_principal["principal_id"],
+            tenant_id=sample_tenant["tenant_id"],
+            tenant=LazyTenantContext(sample_tenant["tenant_id"]),
+            protocol="a2a",
+        )
 
         def _mock_context(handler):
-            # Set up request context with proper headers for tenant resolution
-            # This will allow _create_tool_context_from_a2a to resolve the tenant from headers
-            # Use ContextVars instead of threading.local()
-            adcp_a2a_server._request_headers.set(
-                {
-                    "x-adcp-tenant": sample_tenant["tenant_id"],
-                    "authorization": f"Bearer {sample_principal['access_token']}",
-                }
-            )
-
             handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
-            # Only mock get_principal_from_token - let real tenant lookups happen
-            # since sample_tenant fixture created the tenant in the database
+            handler._identity = identity  # Store for test access
             return patch(
                 "src.core.auth_utils.get_principal_from_token",
-                return_value=sample_principal["principal_id"],
+                return_value=(sample_principal["principal_id"], None),
             )
 
         return _mock_context
@@ -95,7 +103,7 @@ class TestA2AMessageFieldValidation:
             }
 
             # Call the handler method directly - this is where the bug occurred
-            raw_result = await handler._handle_create_media_buy_skill(params, sample_principal["access_token"])
+            raw_result = await handler._handle_create_media_buy_skill(params, identity=handler._identity)
             result = handler._serialize_for_a2a(raw_result)
 
             # ✅ CRITICAL: Use comprehensive validator to check all fields
@@ -125,7 +133,7 @@ class TestA2AMessageFieldValidation:
 
             # Call handler directly - may fail if external creative agent is unavailable
             try:
-                raw_result = await handler._handle_sync_creatives_skill(params, sample_principal["access_token"])
+                raw_result = await handler._handle_sync_creatives_skill(params, identity=handler._identity)
             except Exception as e:
                 if is_external_service_exception(e):
                     pytest.skip(f"External creative agent unavailable: {e}")
@@ -149,7 +157,7 @@ class TestA2AMessageFieldValidation:
                 "adcp_version": "3.0",
             }
 
-            raw_result = await handler._handle_get_products_skill(params, sample_principal["access_token"])
+            raw_result = await handler._handle_get_products_skill(params, identity=handler._identity)
             result = handler._serialize_for_a2a(raw_result)
 
             # ✅ Validate message field
@@ -166,7 +174,7 @@ class TestA2AMessageFieldValidation:
                 "limit": 10,
             }
 
-            raw_result = await handler._handle_list_creatives_skill(params, sample_principal["access_token"])
+            raw_result = await handler._handle_list_creatives_skill(params, identity=handler._identity)
             result = handler._serialize_for_a2a(raw_result)
 
             # ✅ Validate message field
@@ -185,7 +193,7 @@ class TestA2AMessageFieldValidation:
 
             # Call handler directly - may fail if external creative agent is unavailable
             try:
-                raw_result = await handler._handle_list_creative_formats_skill(params, sample_principal["access_token"])
+                raw_result = await handler._handle_list_creative_formats_skill(params, identity=handler._identity)
             except Exception as e:
                 if is_external_service_exception(e):
                     pytest.skip(f"External creative agent unavailable: {e}")
@@ -310,9 +318,9 @@ class TestA2AResponseDictConstruction:
             # For now, just check the class definition
             has_message_field = "message" in response_cls.model_fields
 
-            assert (
-                has_str_method or has_message_field
-            ), f"{response_cls.__name__} must have either __str__ method or .message field for A2A compatibility"
+            assert has_str_method or has_message_field, (
+                f"{response_cls.__name__} must have either __str__ method or .message field for A2A compatibility"
+            )
 
 
 @pytest.mark.integration
@@ -328,22 +336,20 @@ class TestA2AErrorHandling:
         """Test that skill errors return proper message fields."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-            mock_get_principal.return_value = sample_principal["principal_id"]
-
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Force an error by passing invalid parameters
             params = {
                 # Missing required fields - should cause validation error
             }
 
             try:
-                raw_result = await handler._handle_create_media_buy_skill(params, sample_principal["access_token"])
+                raw_result = await handler._handle_create_media_buy_skill(params, identity=_MOCK_IDENTITY)
                 result = handler._serialize_for_a2a(raw_result)
                 # If it doesn't raise, check the error response structure
                 if not result.get("success", True):
                     assert "message" in result or "error" in result, "Error response must have message or error field"
             except Exception as e:
                 # Errors are expected for invalid params
-                assert "message" not in str(e) or "AttributeError" not in str(
-                    e
-                ), "Should not get AttributeError when handling skill errors"
+                assert "message" not in str(e) or "AttributeError" not in str(e), (
+                    "Should not get AttributeError when handling skill errors"
+                )

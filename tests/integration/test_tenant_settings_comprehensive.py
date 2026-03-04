@@ -14,7 +14,7 @@ import requests
 from psycopg2.extras import DictCursor
 
 # Test configuration
-BASE_URL = f"http://localhost:{os.environ.get('ADMIN_UI_PORT', '8001')}"
+BASE_URL = f"http://localhost:{os.environ.get('ADCP_SALES_PORT', '8080')}"
 TEST_EMAIL = "test_super_admin@example.com"
 TEST_PASSWORD = "test123"
 

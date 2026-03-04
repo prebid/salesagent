@@ -351,10 +351,9 @@ def tenant_settings(tenant_id, section=None):
                 custom_targeting_keys_count = 0
                 custom_targeting_values_count = 0
 
-            # Get admin port
-            admin_port = int(os.environ.get("ADMIN_UI_PORT", 8001))
-            # Get A2A port (for agent cards)
-            a2a_port = int(os.environ.get("A2A_PORT", 8091)) if not is_production else None
+            # All services (MCP, A2A, Admin) run on the same unified port
+            admin_port = int(os.environ.get("ADCP_SALES_PORT", 8080)) if not is_production else None
+            a2a_port = admin_port
 
             # Get currency limits for this tenant
             from src.core.database.models import CurrencyLimit

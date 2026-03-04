@@ -19,10 +19,37 @@ This runs:
 ## Full Check (Before Merge)
 
 ```bash
-make quality-full
+./run_all_tests.sh
 ```
 
-Runs everything above plus `./run_all_tests.sh ci` (integration + e2e with PostgreSQL).
+Starts Docker, runs all 5 test suites in parallel via tox, combines coverage, tears down Docker. JSON reports saved to `test-results/<ddmmyy_HHmm>/` (last 10 runs kept).
+
+Equivalent manual workflow:
+```bash
+make test-stack-up                     # Start Docker, write .test-stack.env
+source .test-stack.env && tox -p       # All 5 suites in parallel + coverage combine
+make test-stack-down                   # Tear down Docker
+make test-cov                          # Open HTML coverage report
+```
+
+## Individual Suite Runs (via tox)
+
+```bash
+tox -e unit                            # Unit tests only (no Docker needed)
+tox -e integration                     # Integration tests (needs Docker)
+tox -e integration_v2                  # Integration V2 (needs Docker)
+tox -e e2e                             # End-to-end (needs full Docker stack)
+tox -e ui                              # UI tests (needs full Docker stack)
+tox -e coverage                        # Combine coverage + generate reports
+tox -e integration -- -k test_name     # Pass pytest args after --
+```
+
+## Coverage
+
+Coverage is collected per-suite and combined automatically:
+- **HTML report**: `htmlcov/index.html` (open with `make test-cov`)
+- **JSON report**: `coverage.json`
+- **Config**: `pyproject.toml` `[tool.coverage.*]` sections + `tox.ini` per-env `COVERAGE_FILE`
 
 ## Common Violations
 
@@ -43,7 +70,7 @@ The project has 11 pre-commit hooks that catch:
 
 Run manually: `pre-commit run --all-files`
 
-**Important**: Pre-commit hooks can't catch import errors. After refactoring or moving code, always run `uv run pytest tests/unit/ -x` to verify.
+**Important**: Pre-commit hooks can't catch import errors. After refactoring or moving code, always run `make quality` to verify.
 
 ## AdCP Contract Compliance
 

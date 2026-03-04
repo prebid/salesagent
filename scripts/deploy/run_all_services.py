@@ -243,60 +243,6 @@ def run_mcp_server():
     print("MCP server stopped")
 
 
-def run_admin_ui():
-    """Run the Admin UI."""
-    admin_port = os.environ.get("ADMIN_UI_PORT", "8001")
-    print(f"Starting Admin UI on port {admin_port}...")
-    env = os.environ.copy()
-    env["PYTHONPATH"] = "/app"
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "src.admin.server"],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    processes.append(proc)
-
-    # Monitor the process output
-    for line in iter(proc.stdout.readline, b""):
-        if line:
-            print(f"[Admin] {line.decode().rstrip()}")
-    print("Admin UI stopped")
-
-
-def run_a2a_server():
-    """Run the A2A server for agent-to-agent interactions."""
-    try:
-        print("Starting A2A server on port 8091...")
-        print("[A2A] Waiting 10 seconds for MCP server to be ready...")
-        time.sleep(10)  # Wait for MCP server to be ready
-
-        env = os.environ.copy()
-        env["A2A_MOCK_MODE"] = "true"  # Use mock mode in production for now
-
-        print("[A2A] Launching official a2a-sdk server...")
-        # Use official a2a-sdk implementation with JSON-RPC 2.0 support
-        proc = subprocess.Popen(
-            [sys.executable, "src/a2a_server/adcp_a2a_server.py"],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        processes.append(proc)
-
-        print("[A2A] Process started, monitoring output...")
-        # Monitor the process output
-        for line in iter(proc.stdout.readline, b""):
-            if line:
-                print(f"[A2A] {line.decode().rstrip()}")
-        print("A2A server stopped")
-    except Exception as e:
-        print(f"[A2A] ERROR: Failed to start A2A server: {e}")
-        import traceback
-
-        traceback.print_exc()
-
-
 def run_nginx():
     """Run nginx as reverse proxy."""
     print("Starting nginx reverse proxy on port 8000...")
@@ -411,20 +357,12 @@ def main():
     # Start services in threads
     threads = []
 
-    # MCP Server thread
+    # MCP Server thread (serves MCP, A2A, and Admin in a single FastAPI process)
     mcp_thread = threading.Thread(target=run_mcp_server, daemon=True)
     mcp_thread.start()
     threads.append(mcp_thread)
 
-    # Admin UI thread
-    admin_thread = threading.Thread(target=run_admin_ui, daemon=True)
-    admin_thread.start()
-    threads.append(admin_thread)
-
-    # A2A Server thread for agent-to-agent communication
-    a2a_thread = threading.Thread(target=run_a2a_server, daemon=True)
-    a2a_thread.start()
-    threads.append(a2a_thread)
+    # A2A and Admin UI are now integrated into the MCP server process (src/app.py)
 
     # Cron thread for scheduled tasks (syncing GAM tenants, etc.)
     skip_cron = os.environ.get("SKIP_CRON", "false").lower() == "true"
@@ -452,11 +390,11 @@ def main():
         print("  - A2A Server: http://localhost:8000/a2a")
         print("\nPress Ctrl+C to stop all services")
     else:
-        admin_port = os.environ.get("ADMIN_UI_PORT", "8001")
         print("\n✅ Services started (nginx skipped):")
-        print("  - MCP Server: http://localhost:8080")
-        print(f"  - Admin UI: http://localhost:{admin_port}")
-        print("  - A2A Server: http://localhost:8091")
+        print("  - Unified server: http://localhost:8080")
+        print("    - MCP: http://localhost:8080/mcp")
+        print("    - A2A: http://localhost:8080/a2a")
+        print("    - Admin: http://localhost:8080/admin")
         print("\nℹ️  Nginx reverse proxy skipped (SKIP_NGINX=true)")
         print("Press Ctrl+C to stop all services")
 

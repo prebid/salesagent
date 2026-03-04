@@ -55,14 +55,19 @@ class TestSyncCreativesCreativeIdsFilter:
         # ValidationError will mention 'extra' fields are forbidden or 'patch' specifically
         assert "patch" in str(exc_info.value).lower() or "extra" in str(exc_info.value).lower()
 
-    @patch("src.core.tools.creatives._sync.get_principal_id_from_context")
-    @patch("src.core.tools.creatives._sync.get_current_tenant")
+    @patch("src.core.helpers.context_helpers.ensure_tenant_context")
     @patch("src.core.tools.creatives._sync.get_db_session")
-    def test_sync_creatives_filters_by_creative_ids(self, mock_db_session, mock_tenant, mock_principal):
+    def test_sync_creatives_filters_by_creative_ids(self, mock_db_session, mock_tenant):
         """Test _sync_creatives_impl filters creatives by creative_ids."""
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.creatives import _sync_creatives_impl
 
-        mock_principal.return_value = "principal_1"
+        identity = ResolvedIdentity(
+            principal_id="principal_1",
+            tenant_id="tenant_1",
+            tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
+            protocol="mcp",
+        )
         mock_tenant.return_value = {"tenant_id": "tenant_1", "adapter_type": "mock"}
 
         # Mock database session
@@ -95,6 +100,7 @@ class TestSyncCreativesCreativeIdsFilter:
             creatives=creatives,
             creative_ids=["creative_1", "creative_3"],  # Filter
             dry_run=True,  # Don't actually persist
+            identity=identity,
         )
 
         # Should only have 2 creatives in response (filtered)

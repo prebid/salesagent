@@ -32,7 +32,7 @@ class TestRawFunctionParameterValidation:
         raw_sig = inspect.signature(get_products_raw)
         helper_sig = inspect.signature(create_get_products_request)
 
-        raw_params = set(raw_sig.parameters.keys()) - {"ctx"}
+        raw_params = set(raw_sig.parameters.keys()) - {"ctx", "identity"}
         helper_params = set(helper_sig.parameters.keys())
 
         # Check: All non-context params in raw should either:

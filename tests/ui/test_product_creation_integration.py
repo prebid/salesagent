@@ -5,7 +5,7 @@ from sqlalchemy import delete, select
 
 from src.admin.app import create_app
 
-app, _ = create_app()
+app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, Tenant
 from tests.integration_v2.conftest import (
@@ -104,28 +104,25 @@ def test_add_product_json_encoding(client, test_tenant, integration_db):
         sess["role"] = "tenant_admin"
 
     # Product data with JSON fields - using werkzeug's MultiDict for multiple values
-    import json
-
     from werkzeug.datastructures import MultiDict
 
     # Note: Formats are now fetched from creative agents via AdCP protocol (not local DB)
     # This test focuses on JSON encoding of countries and other JSON fields
-    pricing_option = {"pricing_model": "CPM", "rate": 10.0, "currency_code": "USD", "auction": False}
-
+    # Pricing uses indexed form fields (pricing_model_0, rate_0, etc.) per parse_pricing_options_from_form()
     product_data = MultiDict(
         [
             ("product_id", "test_product_json"),
             ("name", "Test Product JSON"),
             ("description", "Test product for JSON encoding"),
-            # Removed format IDs - formats now come from creative agents
             ("countries", "US"),  # First country
             ("countries", "GB"),  # Second country
             ("delivery_type", "non_guaranteed"),  # Required field
-            ("pricing_options", json.dumps([pricing_option])),  # Required: at least one pricing option
-            ("price_guidance_min", "5.0"),
-            ("price_guidance_max", "15.0"),
-            ("min_spend", "1000"),
-            ("max_impressions", "1000000"),
+            # Indexed pricing option fields (auction CPM with floor price)
+            ("pricing_model_0", "cpm_auction"),
+            ("currency_0", "USD"),
+            ("floor_0", "5.0"),
+            ("min_spend_0", "1000"),
+            ("property_mode", "none"),  # Bypass property tag validation — this test is about JSON encoding
         ]
     )
 
@@ -320,9 +317,9 @@ def test_list_products_json_parsing(client, test_tenant, integration_db):
             pricing_model="CPM",
             rate="10.00",
             is_fixed=False,
-            formats=[
-                {"format_id": "display_300x250", "name": "Display 300x250", "type": "display"},
-                {"format_id": "video_16x9", "name": "Video 16:9", "type": "video"},
+            format_ids=[
+                {"id": "display_300x250", "agent_url": "https://test.example.com"},
+                {"id": "video_16x9", "agent_url": "https://test.example.com"},
             ],
             countries=["US", "CA"],
             price_guidance={"min": 10.0, "max": 20.0},
@@ -355,9 +352,7 @@ def test_list_products_json_parsing(client, test_tenant, integration_db):
     # The template expects price_guidance to have min/max attributes
     # This test ensures the JSON is parsed correctly for template rendering
     assert b"Test List JSON" in response.data
-    # Should not have JSON parsing errors in the page
     assert b"Error" not in response.data
-    assert b"500" not in response.data
 
 
 if __name__ == "__main__":

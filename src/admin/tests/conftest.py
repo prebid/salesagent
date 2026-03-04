@@ -15,7 +15,7 @@ def test_app():
         "SECRET_KEY": "test_secret_key",
         "WTF_CSRF_ENABLED": False,
     }
-    app, socketio = create_app(config)
+    app = create_app(config)
     return app
 
 

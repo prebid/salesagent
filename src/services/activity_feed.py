@@ -49,28 +49,21 @@ class ActivityFeed:
             if not self.connections[tenant_id]:
                 del self.connections[tenant_id]
 
-    async def broadcast_activity(self, tenant_id: str, activity: dict):
-        """Broadcast an activity to all connections for a tenant."""
-        # Add timestamp if not present
+    def _store_activity(self, tenant_id: str, activity: dict) -> dict:
+        """Synchronously store activity and return enriched activity dict.
+
+        This ensures data is never lost regardless of event loop state.
+        """
         if "timestamp" not in activity:
             activity["timestamp"] = datetime.now(UTC).isoformat()
-
-        # Calculate relative time
         activity["time_relative"] = self._get_relative_time(activity["timestamp"])
-
-        # Store in recent activities
         if tenant_id not in self.recent_activities:
             self.recent_activities[tenant_id] = deque(maxlen=self.max_recent)
         self.recent_activities[tenant_id].append(activity)
+        return activity
 
-        # If we have a Flask-SocketIO callback, use it
-        if hasattr(self, "broadcast_to_websocket"):
-            try:
-                self.broadcast_to_websocket(tenant_id, activity)
-            except Exception as e:
-                logger.debug(f"Failed to broadcast via Socket.IO: {e}")
-
-        # Also broadcast to any raw WebSocket connections (backward compatibility)
+    async def broadcast_activity(self, tenant_id: str, activity: dict):
+        """Broadcast a stored activity to WebSocket connections for a tenant."""
         if tenant_id in self.connections:
             dead_refs = []
             for ref in self.connections[tenant_id]:
@@ -109,13 +102,8 @@ class ActivityFeed:
         if response_time_ms:
             activity["details"]["secondary"] = f"{response_time_ms}ms"
 
-        # Try to create task if event loop is running, otherwise skip
-        try:
-            asyncio.create_task(self.broadcast_activity(tenant_id, activity))
-        except RuntimeError:
-            # No event loop running - skip broadcast (not in async context)
-            logger.debug(f"Skipping activity broadcast - no event loop available for {method}")
-            pass
+        stored = self._store_activity(tenant_id, activity)
+        self._try_broadcast(tenant_id, stored)
 
     def log_media_buy(
         self,
@@ -139,13 +127,8 @@ class ActivityFeed:
         if duration_days:
             activity["details"]["secondary"] = f"{duration_days} days"
 
-        # Try to create task if event loop is running, otherwise skip
-        try:
-            asyncio.create_task(self.broadcast_activity(tenant_id, activity))
-        except RuntimeError:
-            # No event loop running - skip broadcast (not in async context)
-            logger.debug(f"Skipping activity broadcast - no event loop available for media buy {media_buy_id}")
-            pass
+        stored = self._store_activity(tenant_id, activity)
+        self._try_broadcast(tenant_id, stored)
 
     def log_creative(
         self,
@@ -168,13 +151,8 @@ class ActivityFeed:
         if status:
             activity["details"]["secondary"] = status
 
-        # Try to create task if event loop is running, otherwise skip
-        try:
-            asyncio.create_task(self.broadcast_activity(tenant_id, activity))
-        except RuntimeError:
-            # No event loop running - skip broadcast (not in async context)
-            logger.debug(f"Skipping activity broadcast - no event loop available for creative {creative_id}")
-            pass
+        stored = self._store_activity(tenant_id, activity)
+        self._try_broadcast(tenant_id, stored)
 
     def log_error(self, tenant_id: str, principal_name: str, error_message: str, error_code: str | None = None):
         """Log an error activity."""
@@ -188,13 +166,20 @@ class ActivityFeed:
         if error_code:
             activity["details"]["primary"] = f"Error {error_code}"
 
-        # Try to create task if event loop is running, otherwise skip
+        stored = self._store_activity(tenant_id, activity)
+        self._try_broadcast(tenant_id, stored)
+
+    def _try_broadcast(self, tenant_id: str, activity: dict):
+        """Attempt async WebSocket broadcast as best-effort.
+
+        Checks for a running event loop BEFORE creating the coroutine to avoid
+        leaking unawaited coroutine objects when called from sync contexts.
+        """
         try:
-            asyncio.create_task(self.broadcast_activity(tenant_id, activity))
+            asyncio.get_running_loop()
         except RuntimeError:
-            # No event loop running - skip broadcast (not in async context)
-            logger.debug(f"Skipping activity broadcast - no event loop available for error: {error_message}")
-            pass
+            return  # No event loop — data already stored, just no live push
+        asyncio.create_task(self.broadcast_activity(tenant_id, activity))
 
     def _get_relative_time(self, timestamp: str) -> str:
         """Convert timestamp to relative time string."""

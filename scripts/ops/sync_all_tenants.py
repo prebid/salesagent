@@ -56,7 +56,7 @@ def sync_all_gam_tenants():
         try:
             # Call sync API
             response = requests.post(
-                f"http://localhost:{os.environ.get('ADMIN_UI_PORT', 8001)}/api/v1/sync/trigger/{tenant_id}",
+                f"http://localhost:{os.environ.get('ADCP_SALES_PORT', 8080)}/api/v1/sync/trigger/{tenant_id}",
                 headers={"X-API-Key": api_key},
                 json={"sync_type": "full"},
                 timeout=300,  # 5 minute timeout per tenant

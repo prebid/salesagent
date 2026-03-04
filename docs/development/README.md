@@ -40,8 +40,9 @@ See [Contributing](contributing.md) for detailed development workflows.
 ### Running Tests
 
 ```bash
-./run_all_tests.sh ci     # Full suite with PostgreSQL
-./run_all_tests.sh quick  # Fast iteration
+./run_all_tests.sh ci     # Full suite: Docker + all 5 suites (DEFAULT)
+./run_all_tests.sh quick  # No Docker: unit + integration + integration_v2
+# Both modes produce JSON reports in test-results/<ddmmyy_HHmm>/
 
 # Manual pytest
 uv run pytest tests/unit/ -x

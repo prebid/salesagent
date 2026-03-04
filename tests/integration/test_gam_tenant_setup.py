@@ -162,58 +162,69 @@ class TestGAMTenantSetup:
         finally:
             sys.argv = old_argv
 
-    @pytest.mark.xfail(reason="Endpoint not yet implemented")
     def test_admin_ui_network_detection_endpoint(self):
         """
         Test the Admin UI endpoint for detecting network code from refresh token.
 
-        This tests the OAuth → network code detection flow.
+        This tests the OAuth → network code detection flow through the
+        POST /tenant/<tenant_id>/gam/detect-network endpoint.
         """
         from src.admin.app import create_app
 
-        app, _ = create_app()
+        app = create_app()
         app.config["TESTING"] = True
         app.config["SECRET_KEY"] = "test_secret"
 
         with app.test_client() as client:
-            # Mock authentication
+            # require_tenant_access checks session["user"] (helpers.py:318)
             with client.session_transaction() as sess:
-                sess["authenticated"] = True
-                sess["role"] = "super_admin"
-                sess["email"] = "test@example.com"
+                sess["user"] = {"email": "test@example.com"}
 
-            # Mock the GAM client and network detection
-            with patch("googleads.ad_manager.AdManagerClient") as MockClient:
-                mock_client_instance = MagicMock()
-                mock_network_service = MagicMock()
-                mock_network_service.getCurrentNetwork.return_value = {
-                    "id": "123456",
-                    "networkCode": "78901234",
-                    "displayName": "Test Publisher Network",
-                    "currencyCode": "USD",
-                    "timeZone": "America/New_York",
-                }
-                mock_client_instance.GetService.return_value = mock_network_service
-                MockClient.LoadFromDict.return_value = mock_client_instance
+            # Mock the full GAM chain: oauth config → oauth2 client → ad_manager client
+            mock_network = {
+                "id": "123456",
+                "networkCode": "78901234",
+                "displayName": "Test Publisher Network",
+                "currencyCode": "USD",
+                "timeZone": "America/New_York",
+            }
+            mock_user = {"id": 99999, "name": "Test User"}
 
-                # Test the network detection endpoint
+            mock_network_service = MagicMock()
+            mock_network_service.getAllNetworks.return_value = [mock_network]
+            mock_network_service.getCurrentNetwork.return_value = mock_network
+            mock_user_service = MagicMock()
+            mock_user_service.getCurrentUser.return_value = mock_user
+
+            mock_client = MagicMock()
+            mock_client.GetService.side_effect = lambda svc, **kw: (
+                mock_network_service if svc == "NetworkService" else mock_user_service
+            )
+
+            with (
+                patch("src.admin.utils.helpers.is_super_admin", return_value=True),
+                patch("src.core.config.get_gam_oauth_config") as mock_config,
+                patch("googleads.oauth2.GoogleRefreshTokenClient") as mock_oauth,
+                patch("googleads.ad_manager.AdManagerClient", return_value=mock_client),
+            ):
+                mock_config.return_value = MagicMock(client_id="fake-id", client_secret="fake-secret")
+                mock_oauth_instance = MagicMock()
+                mock_oauth.return_value = mock_oauth_instance
+
                 response = client.post(
                     "/tenant/test_tenant/gam/detect-network",
                     json={"refresh_token": "test_refresh_token"},
                     content_type="application/json",
                 )
 
-                assert response.status_code == 200
+                assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.get_json()}"
                 data = response.get_json()
                 assert data["success"] is True
                 assert data["network_code"] == "78901234"
                 assert data["network_name"] == "Test Publisher Network"
 
-                # Verify the GAM client was called with correct config
-                MockClient.LoadFromDict.assert_called_once()
-                config = MockClient.LoadFromDict.call_args[0][0]
-                assert "ad_manager" in config
-                assert config["ad_manager"]["refresh_token"] == "test_refresh_token"
+                # Verify OAuth2 client was refreshed to validate the token
+                mock_oauth_instance.Refresh.assert_called_once()
 
     def test_gam_adapter_initialization_without_network_code(self):
         """

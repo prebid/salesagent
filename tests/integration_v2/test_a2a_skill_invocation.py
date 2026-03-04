@@ -179,7 +179,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_natural_language_get_products(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test natural language invocation for get_products with AdCP schema validation."""
         # Mock authentication token
@@ -187,20 +187,20 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create natural language message
             message = create_a2a_text_message("What video products do you have available?")
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result
             assert isinstance(result, Task)
@@ -229,7 +229,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test explicit skill invocation for get_products with AdCP schema validation."""
         # Mock authentication token
@@ -237,13 +237,13 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create explicit skill invocation message
             skill_params = {
@@ -254,7 +254,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result
             assert isinstance(result, Task)
@@ -284,7 +284,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products_a2a_spec(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test explicit skill invocation using A2A spec 'input' field instead of 'parameters'."""
         # Mock authentication token
@@ -292,13 +292,13 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create explicit skill invocation message using A2A spec 'input' field
             skill_params = {
@@ -309,7 +309,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result
             assert isinstance(result, Task)
@@ -339,7 +339,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test explicit skill invocation for create_media_buy.
 
@@ -351,13 +351,13 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create explicit skill invocation message using AdCP spec format
             from datetime import UTC, datetime, timedelta
@@ -382,7 +382,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes REAL _create_media_buy_impl with mock adapter
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result
             assert isinstance(result, Task)
@@ -405,7 +405,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy_manual_approval(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test create_media_buy returns status=submitted when manual approval required."""
         # Update tenant to require manual approval
@@ -420,12 +420,13 @@ class TestA2ASkillInvocation:
         # Mock authentication token
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        # Mock tenant detection
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            from src.a2a_server import adcp_a2a_server
+        # Mock identity resolution
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create explicit skill invocation message
             from datetime import UTC, datetime, timedelta
@@ -450,7 +451,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result has status=submitted (manual approval required)
             assert isinstance(result, Task)
@@ -459,20 +460,22 @@ class TestA2ASkillInvocation:
             assert result.artifacts is None
 
     @pytest.mark.asyncio
-    async def test_hybrid_invocation(self, handler, sample_tenant, sample_principal, sample_products, validator):
+    async def test_hybrid_invocation(
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator
+    ):
         """Test hybrid invocation with both text and skill."""
         # Mock authentication token
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create hybrid message (text + explicit skill)
             skill_params = {"brief": "Sports video advertising", "brand_manifest": {"name": "Sports brand"}}
@@ -482,7 +485,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify explicit skill took precedence
             assert isinstance(result, Task)
@@ -502,20 +505,22 @@ class TestA2ASkillInvocation:
     # TODO: Needs investigation of proper error handling approach (ServerError not in current a2a library)
 
     @pytest.mark.asyncio
-    async def test_multiple_skill_invocations(self, handler, sample_tenant, sample_principal, sample_products):
+    async def test_multiple_skill_invocations(
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products
+    ):
         """Test multiple skill invocations in a single message."""
         # Mock authentication token
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create message with multiple skill invocations
             # Note: get_signals removed - should come from dedicated signals agents
@@ -547,7 +552,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify both skills were processed
             assert isinstance(result, Task)
@@ -674,7 +679,9 @@ class TestA2ASkillInvocation:
     # Phase 2: Tests for previously untested skills
 
     @pytest.mark.asyncio
-    async def test_update_media_buy_skill(self, handler, sample_tenant, sample_principal, sample_products, validator):
+    async def test_update_media_buy_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator
+    ):
         """Test update_media_buy skill invocation."""
         # Create a media buy in database first
         from datetime import UTC, datetime, timedelta
@@ -707,16 +714,15 @@ class TestA2ASkillInvocation:
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
+        # Mock identity resolution and adapter
         with (
-            patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
             patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         ):
-            mock_get_principal.return_value = sample_principal["principal_id"]
             # Mock request headers to provide Host header for subdomain detection
-            from src.a2a_server import adcp_a2a_server
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Mock adapter - must return UpdateMediaBuySuccessResponse, not dict
             from adcp.types.aliases import UpdateMediaBuySuccessResponse
@@ -740,7 +746,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the skill was invoked
             assert isinstance(result, Task)
@@ -749,20 +755,20 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_list_creative_formats_skill(
-        self, handler, sample_tenant, sample_principal, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test list_creative_formats skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {"brief": "display formats"}
@@ -770,7 +776,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -784,7 +790,9 @@ class TestA2ASkillInvocation:
             assert "formats" in artifact_data
 
     @pytest.mark.asyncio
-    async def test_list_authorized_properties_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_list_authorized_properties_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, validator
+    ):
         """Test list_authorized_properties skill invocation."""
         # Create verified publisher partner for the tenant
         import uuid
@@ -819,13 +827,13 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {}
@@ -833,7 +841,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -847,19 +855,21 @@ class TestA2ASkillInvocation:
             assert len(artifact_data["publisher_domains"]) > 0
 
     @pytest.mark.asyncio
-    async def test_sync_creatives_skill(self, handler, sample_tenant, sample_principal, sample_products, validator):
+    async def test_sync_creatives_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator
+    ):
         """Test sync_creatives skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation with creatives
             skill_params = {
@@ -876,7 +886,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -889,19 +899,19 @@ class TestA2ASkillInvocation:
             assert "creatives" in artifact_data or "failed_creatives" in artifact_data
 
     @pytest.mark.asyncio
-    async def test_list_creatives_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_list_creatives_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test list_creatives skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {}
@@ -909,7 +919,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -922,19 +932,21 @@ class TestA2ASkillInvocation:
             assert "creatives" in artifact_data
 
     @pytest.mark.asyncio
-    async def test_update_performance_index_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_update_performance_index_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, validator
+    ):
         """Test update_performance_index skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {
@@ -945,7 +957,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # This will likely fail because media_buy doesn't exist, but tests the code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify the skill was invoked
             assert isinstance(result, Task)
@@ -953,19 +965,21 @@ class TestA2ASkillInvocation:
             assert "update_performance_index" in result.metadata["skills_requested"]
 
     @pytest.mark.asyncio
-    async def test_get_media_buy_delivery_skill(self, handler, sample_tenant, sample_principal, validator):
+    async def test_get_media_buy_delivery_skill(
+        self, handler, sample_tenant, sample_principal, mock_identity, validator
+    ):
         """Test get_media_buy_delivery skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            # Build ServerCallContext with Host header for subdomain detection
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create skill invocation
             skill_params = {
@@ -975,7 +989,7 @@ class TestA2ASkillInvocation:
             params = MessageSendParams(message=message)
 
             # Process the message - executes real code path
-            result = await handler.on_message_send(params)
+            result = await handler.on_message_send(params, context=ctx)
 
             # Verify result
             assert isinstance(result, Task)
@@ -984,94 +998,61 @@ class TestA2ASkillInvocation:
             assert result.artifacts is not None
 
     @pytest.mark.asyncio
-    async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, validator):
-        """Test approve_creative skill invocation."""
+    async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
+        """Test approve_creative skill raises UnsupportedOperationError."""
+        from a2a.utils.errors import ServerError
+
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
-            # Create skill invocation
-            skill_params = {
-                "creative_id": "creative_test_123",
-            }
+            skill_params = {"creative_id": "creative_test_123"}
             message = create_a2a_message_with_skill("approve_creative", skill_params)
             params = MessageSendParams(message=message)
 
-            # Process the message - executes real code path
-            result = await handler.on_message_send(params)
-
-            # Verify result
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "approve_creative" in result.metadata["skills_requested"]
+            with pytest.raises(ServerError):
+                await handler.on_message_send(params, context=ctx)
 
     @pytest.mark.asyncio
-    async def test_get_media_buy_status_skill(self, handler, sample_tenant, sample_principal, validator):
-        """Test get_media_buy_status skill invocation."""
+    async def test_get_media_buy_status_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
+        """Test get_media_buy_status skill raises UnsupportedOperationError."""
+        from a2a.utils.errors import ServerError
+
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
-            # Create skill invocation
-            skill_params = {
-                "media_buy_id": "mb_test_123",
-            }
+            skill_params = {"media_buy_id": "mb_test_123"}
             message = create_a2a_message_with_skill("get_media_buy_status", skill_params)
             params = MessageSendParams(message=message)
 
-            # Process the message - executes real code path
-            result = await handler.on_message_send(params)
-
-            # Verify result
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "get_media_buy_status" in result.metadata["skills_requested"]
+            with pytest.raises(ServerError):
+                await handler.on_message_send(params, context=ctx)
 
     @pytest.mark.asyncio
-    async def test_optimize_media_buy_skill(self, handler, sample_tenant, sample_principal, validator):
-        """Test optimize_media_buy skill invocation."""
+    async def test_optimize_media_buy_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
+        """Test optimize_media_buy skill raises UnsupportedOperationError."""
+        from a2a.utils.errors import ServerError
+
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with (patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal,):
-            mock_get_principal.return_value = sample_principal["principal_id"]
-            # Mock request headers to provide Host header for subdomain detection
-            # Use actual subdomain from sample_tenant so get_tenant_by_subdomain() can find it in DB
-            from src.a2a_server import adcp_a2a_server
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+            from tests.a2a_helpers import make_a2a_context
 
-            adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
-            # Create skill invocation
-            skill_params = {
-                "media_buy_id": "mb_test_123",
-            }
+            skill_params = {"media_buy_id": "mb_test_123"}
             message = create_a2a_message_with_skill("optimize_media_buy", skill_params)
             params = MessageSendParams(message=message)
 
-            # Process the message - executes real code path
-            result = await handler.on_message_send(params)
-
-            # Verify result
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "optimize_media_buy" in result.metadata["skills_requested"]
+            with pytest.raises(ServerError):
+                await handler.on_message_send(params, context=ctx)
 
 
 if __name__ == "__main__":

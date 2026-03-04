@@ -6,9 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
+    "a2wsgi>=1.10.0",
     "adcp>=3.2.0",
-    "fastmcp>=2.14.0", # Minimum for MCP 2025-11-25 spec and all security patches
-    "google-generativeai>=0.5.4",
+    "fastmcp>=3.0.2", # v3 for combine_lifespans, better FastAPI integration
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
     "google-ads>=24.1.0",
@@ -94,6 +94,7 @@ dev = [
     "types-requests>=2.32.4.20250913",
     "types-pytz>=2025.2.0.20250809",
     "types-waitress>=3.0.1.20250801",
+    "pytest-json-report>=1.5.0",
 ]
 
 [tool.black]
@@ -174,3 +175,36 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E722", "F821"]
 "admin_ui.py" = ["E402", "E722"]
+
+# ─── Coverage configuration ──────────────────────────────────────
+[tool.coverage.run]
+source = ["src"]
+branch = true
+relative_files = true
+
+[tool.coverage.paths]
+source = [
+    "src/",
+    ".tox/**/site-packages/",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+    "@abstract",
+    "@abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.json]
+output = "coverage.json"
+pretty_print = true

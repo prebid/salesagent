@@ -11,8 +11,8 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastmcp.server.context import Context
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
 
 
@@ -74,29 +74,29 @@ class TestUpdateMediaBuyDryRunNoPersistence:
     """Verify update_media_buy in dry_run mode doesn't write to database."""
 
     @pytest.fixture
-    def mock_context(self):
-        """Create a mock FastMCP context."""
-        ctx = MagicMock(spec=Context)
-        ctx.headers = {"x-adcp-auth": "test-token"}
-        return ctx
+    def mock_identity(self):
+        """Create a ResolvedIdentity with dry_run testing context."""
+        return ResolvedIdentity(
+            principal_id="principal_123",
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant", "name": "Test Tenant"},
+            testing_context=AdCPTestContext(dry_run=True),
+        )
 
-    def test_dry_run_returns_simulated_response(self, mock_context):
+    def test_dry_run_returns_simulated_response(self, mock_identity):
         """Dry run should return a simulated response without database writes."""
         from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         with (
-            patch("src.core.tools.media_buy_update.get_principal_id_from_context") as mock_principal_id,
-            patch("src.core.tools.media_buy_update.get_current_tenant") as mock_tenant,
+            patch("src.core.helpers.context_helpers.ensure_tenant_context") as mock_tenant,
             patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
-            patch("src.core.tools.media_buy_update.get_testing_context") as mock_testing_ctx,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_manager,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
             patch("src.core.database.database_session.get_db_session") as mock_db,
         ):
             # Setup mocks
-            mock_principal_id.return_value = "principal_123"
             mock_tenant.return_value = {
                 "tenant_id": "test_tenant",
                 "name": "Test Tenant",
@@ -106,9 +106,6 @@ class TestUpdateMediaBuyDryRunNoPersistence:
                 name="Test Principal",
                 platform_mappings={},
             )
-
-            # Key: Return dry_run=True testing context
-            mock_testing_ctx.return_value = AdCPTestContext(dry_run=True)
 
             # Mock adapter
             mock_adapter.return_value = MagicMock(
@@ -123,14 +120,14 @@ class TestUpdateMediaBuyDryRunNoPersistence:
             mock_media_buy.media_buy_id = "mb_existing_123"
             mock_session.scalars.return_value.first.return_value = mock_media_buy
 
-            # Execute — impl now accepts a typed request object
+            # Execute — impl now accepts identity instead of ctx
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_existing_123",
                 buyer_ref="test-buyer",
                 paused=True,
                 packages=[{"package_id": "pkg_1", "paused": True}],
             )
-            response = _update_media_buy_impl(req=req, ctx=mock_context)
+            response = _update_media_buy_impl(req=req, identity=mock_identity)
 
             # Verify response
             assert response.media_buy_id == "mb_existing_123"

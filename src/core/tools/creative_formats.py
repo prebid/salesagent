@@ -18,11 +18,11 @@ from adcp.utils.format_assets import get_format_assets
 
 # TypeVar for Format to preserve subclass type through backward compatibility function
 FormatT = TypeVar("FormatT", bound=AdcpFormat)
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -45,8 +45,7 @@ def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
 
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_from_context
-from src.core.config_loader import get_current_tenant, set_current_tenant
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
 from src.core.validation_helpers import format_validation_error
 
@@ -74,7 +73,7 @@ def _infer_asset_type(asset_id: str) -> str:
 
 
 def _list_creative_formats_impl(
-    req: ListCreativeFormatsRequest | None, context: Context | ToolContext | None
+    req: ListCreativeFormatsRequest | None, identity: ResolvedIdentity | None
 ) -> ListCreativeFormatsResponse:
     """List all available creative formats (AdCP spec endpoint).
 
@@ -89,19 +88,11 @@ def _list_creative_formats_impl(
     if req is None:
         req = ListCreativeFormatsRequest()
 
-    # For discovery endpoints, authentication is optional
-    # require_valid_token=False means invalid tokens are treated like missing tokens (discovery endpoint behavior)
-    principal_id, tenant = get_principal_from_context(
-        context, require_valid_token=False
-    )  # Returns (None, tenant) if no/invalid auth
-
-    # Set tenant context if returned
-    if tenant:
-        set_current_tenant(tenant)
-    else:
-        tenant = get_current_tenant()
+    # Extract principal and tenant from resolved identity
+    principal_id = identity.principal_id if identity else None
+    tenant = identity.tenant if identity else None
     if not tenant:
-        raise ToolError("No tenant context available")
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Get formats from all registered creative agents via registry
     import asyncio
@@ -329,7 +320,7 @@ def _list_creative_formats_impl(
     return response
 
 
-def list_creative_formats(
+async def list_creative_formats(
     type: FormatCategory | None = None,
     format_ids: list[FormatId] | None = None,
     is_responsive: bool | None = None,
@@ -381,15 +372,17 @@ def list_creative_formats(
             context=context,
         )
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="list_creative_formats request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="list_creative_formats request")) from e
 
-    response = _list_creative_formats_impl(req, ctx)
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    response = _list_creative_formats_impl(req, identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
 def list_creative_formats_raw(
     req: ListCreativeFormatsRequest | None = None,
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> ListCreativeFormatsResponse:
     """List all available creative formats (raw function for A2A server use).
 
@@ -398,8 +391,13 @@ def list_creative_formats_raw(
     Args:
         req: Optional request with filter parameters
         ctx: FastMCP context
+        identity: Pre-resolved identity (if available)
 
     Returns:
         ListCreativeFormatsResponse with all available formats
     """
-    return _list_creative_formats_impl(req, ctx)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    return _list_creative_formats_impl(req, identity)

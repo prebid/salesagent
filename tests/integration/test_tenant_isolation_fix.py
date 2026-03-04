@@ -14,8 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.auth import get_principal_from_context
 from src.core.config_loader import get_current_tenant, set_current_tenant
-from src.core.main import get_principal_from_context
 
 
 @pytest.mark.requires_db
@@ -32,6 +32,7 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal as ModelPrincipal
     from src.core.database.models import Tenant
+    from src.core.exceptions import AdCPAuthenticationError
 
     # Create two tenants
     with get_db_session() as session:
@@ -83,12 +84,12 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
         mock_get_headers.return_value = mock_context.meta["headers"]
 
         # Verify cross-tenant token is REJECTED
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(mock_context)
 
         # Verify the error message mentions the tenant
-        assert "INVALID_AUTH_TOKEN" in str(exc_info.value)
-        assert "tenant_wonderstruck" in str(exc_info.value)
+        error_str = str(exc_info.value)
+        assert "tenant_wonderstruck" in error_str
 
 
 @pytest.mark.requires_db
@@ -140,11 +141,16 @@ def test_global_token_lookup_sets_tenant_from_principal(integration_db):
         # Verify principal was found
         assert principal_id == "principal_global"
 
-        # Verify tenant context was set from principal's tenant
+        # Verify tenant context was returned (caller sets it at transport boundary)
+        assert tenant_ctx is not None
+        assert tenant_ctx["tenant_id"] == "tenant_global"
+        assert tenant_ctx["subdomain"] == "global"
+
+        # Simulate transport boundary: caller sets ContextVar
+        set_current_tenant(tenant_ctx)
         current_tenant = get_current_tenant()
         assert current_tenant is not None
         assert current_tenant["tenant_id"] == "tenant_global"
-        assert current_tenant["subdomain"] == "global"
 
 
 @pytest.mark.requires_db

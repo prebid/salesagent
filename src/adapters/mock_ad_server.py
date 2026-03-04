@@ -224,15 +224,15 @@ class MockAdServer(AdServerAdapter):
 
     def _create_workflow_step(self, step_type: str, status: str, request_data: dict) -> dict[str, Any]:
         """Create a workflow step for async HITL operations."""
-        from src.core.config_loader import get_current_tenant
         from src.core.context_manager import get_context_manager
 
         # Get context manager and tenant info
         ctx_manager = get_context_manager()
-        tenant = get_current_tenant()
 
         # Create a context for async operations if needed
-        context = ctx_manager.create_context(tenant_id=tenant["tenant_id"], principal_id=self.principal.principal_id)
+        context = ctx_manager.create_context(
+            tenant_id=self.tenant_id or "unknown", principal_id=self.principal.principal_id
+        )
 
         # Add protocol field for webhook payload creation (mock adapter defaults to MCP)
         request_data_with_protocol = {**request_data, "protocol": "mcp"}
@@ -670,11 +670,8 @@ class MockAdServer(AdServerAdapter):
 
         media_buy_id = f"buy_{request.po_number}" if request.po_number else f"buy_{uuid.uuid4().hex[:8]}"
 
-        # Get tenant_id from config loader (will be used for delivery simulation)
-        from src.core.config_loader import get_current_tenant
-
-        tenant = get_current_tenant()
-        tenant_id = tenant.get("tenant_id", "unknown") if tenant else "unknown"
+        # Use tenant_id from adapter instance (set during construction)
+        tenant_id = self.tenant_id or "unknown"
 
         # Generate order name using naming template
         from sqlalchemy import select
@@ -1134,13 +1131,13 @@ class MockAdServer(AdServerAdapter):
             end_time = buy["end_time"]
 
             # Load test scenario if present (stored as dict from creation)
-            from src.adapters.test_scenario_parser import TestScenario
+            from src.adapters.test_scenario_parser import ScenarioSpec
 
             test_scenario_data = buy.get("test_scenario")
             test_scenario = None
             if test_scenario_data:
-                # Reconstruct TestScenario from stored dict
-                test_scenario = TestScenario(**test_scenario_data)
+                # Reconstruct ScenarioSpec from stored dict
+                test_scenario = ScenarioSpec(**test_scenario_data)
 
             # Ensure consistent timezone handling for arithmetic operations
             # Convert today to match timezone of stored dates or vice versa

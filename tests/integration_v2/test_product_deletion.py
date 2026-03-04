@@ -12,7 +12,7 @@ from sqlalchemy import delete, select
 
 from src.admin.app import create_app
 
-app, _ = create_app()
+app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PricingOption, Principal, Product, Tenant, TenantManagementConfig
 from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing

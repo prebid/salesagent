@@ -4,12 +4,11 @@ Tests that list_authorized_properties correctly reads from PublisherPartner tabl
 (single source of truth) and returns AdCP-compliant responses.
 """
 
-from unittest.mock import patch
-
 import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.properties import _list_authorized_properties_impl
 
 
@@ -55,11 +54,13 @@ def test_list_authorized_properties_reads_from_publisher_partner(integration_db)
         session.add_all(partners)
         session.commit()
 
-        # Mock get_principal_from_context to return tenant
-        tenant_dict = {"tenant_id": "test_tenant"}
-        with patch("src.core.tools.properties.get_principal_from_context", return_value=(None, tenant_dict)):
-            # Call list_authorized_properties
-            response = _list_authorized_properties_impl(req=None, context=None)
+        # Pass identity directly to the impl function
+        identity = ResolvedIdentity(
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
+            protocol="mcp",
+        )
+        response = _list_authorized_properties_impl(req=None, identity=identity)
 
         # Verify all registered publishers are returned (regardless of verification status)
         assert len(response.publisher_domains) == 3
@@ -116,10 +117,13 @@ def test_list_authorized_properties_returns_all_registered_publishers(integratio
         session.add_all(partners)
         session.commit()
 
-        # Mock get_principal_from_context
-        tenant_dict = {"tenant_id": "test_tenant2"}
-        with patch("src.core.tools.properties.get_principal_from_context", return_value=(None, tenant_dict)):
-            response = _list_authorized_properties_impl(req=None, context=None)
+        # Pass identity directly to the impl function
+        identity = ResolvedIdentity(
+            tenant_id="test_tenant2",
+            tenant={"tenant_id": "test_tenant2"},
+            protocol="mcp",
+        )
+        response = _list_authorized_properties_impl(req=None, identity=identity)
 
         # Verify all registered publishers are returned (regardless of verification status)
         # This allows buyers to see the full portfolio during publisher setup
@@ -144,11 +148,13 @@ def test_list_authorized_properties_returns_empty_when_no_publishers(integration
         session.add(tenant)
         session.commit()
 
-        # Mock get_principal_from_context
-        tenant_dict = {"tenant_id": "test_tenant3"}
-        with patch("src.core.tools.properties.get_principal_from_context", return_value=(None, tenant_dict)):
-            # Call list_authorized_properties - should return empty list, not error
-            response = _list_authorized_properties_impl(req=None, context=None)
+        # Pass identity directly - should return empty list, not error
+        identity = ResolvedIdentity(
+            tenant_id="test_tenant3",
+            tenant={"tenant_id": "test_tenant3"},
+            protocol="mcp",
+        )
+        response = _list_authorized_properties_impl(req=None, identity=identity)
 
         # Verify empty response with helpful description
         assert response.publisher_domains == []
@@ -197,10 +203,13 @@ def test_list_authorized_properties_returns_sorted_domains(integration_db):
         session.add_all(partners)
         session.commit()
 
-        # Mock get_principal_from_context
-        tenant_dict = {"tenant_id": "test_tenant4"}
-        with patch("src.core.tools.properties.get_principal_from_context", return_value=(None, tenant_dict)):
-            response = _list_authorized_properties_impl(req=None, context=None)
+        # Pass identity directly to the impl function
+        identity = ResolvedIdentity(
+            tenant_id="test_tenant4",
+            tenant={"tenant_id": "test_tenant4"},
+            protocol="mcp",
+        )
+        response = _list_authorized_properties_impl(req=None, identity=identity)
 
         # Verify domains are sorted
         assert response.publisher_domains == ["alpha.com", "beta.com", "zebra.com"]
@@ -256,9 +265,12 @@ def test_list_authorized_properties_tenant_isolation(integration_db):
         session.commit()
 
         # Query tenant A
-        tenant_dict_a = {"tenant_id": "tenant_a"}
-        with patch("src.core.tools.properties.get_principal_from_context", return_value=(None, tenant_dict_a)):
-            response_a = _list_authorized_properties_impl(req=None, context=None)
+        identity_a = ResolvedIdentity(
+            tenant_id="tenant_a",
+            tenant={"tenant_id": "tenant_a"},
+            protocol="mcp",
+        )
+        response_a = _list_authorized_properties_impl(req=None, identity=identity_a)
 
         # Verify only Tenant A publishers returned
         assert len(response_a.publisher_domains) == 2
@@ -267,9 +279,12 @@ def test_list_authorized_properties_tenant_isolation(integration_db):
         assert "tenantb-pub1.com" not in response_a.publisher_domains
 
         # Query tenant B
-        tenant_dict_b = {"tenant_id": "tenant_b"}
-        with patch("src.core.tools.properties.get_principal_from_context", return_value=(None, tenant_dict_b)):
-            response_b = _list_authorized_properties_impl(req=None, context=None)
+        identity_b = ResolvedIdentity(
+            tenant_id="tenant_b",
+            tenant={"tenant_id": "tenant_b"},
+            protocol="mcp",
+        )
+        response_b = _list_authorized_properties_impl(req=None, identity=identity_b)
 
         # Verify only Tenant B publishers returned
         assert len(response_b.publisher_domains) == 1

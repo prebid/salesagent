@@ -21,15 +21,17 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
+from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     PricingOption,
 )
+from src.core.testing_hooks import AdCPTestContext
 
 # ---------------------------------------------------------------------------
 # Shared helpers for building mocks/fixtures
@@ -99,9 +101,7 @@ def _mock_currency_limit(
 def _standard_patches():
     """Return a dict of common patch targets for _create_media_buy_impl."""
     return {
-        "src.core.tools.media_buy_create.get_testing_context": "_testing_ctx",
-        "src.core.tools.media_buy_create.get_principal_id_from_context": "_principal_id",
-        "src.core.tools.media_buy_create.get_current_tenant": "_tenant",
+        "src.core.helpers.context_helpers.ensure_tenant_context": "_tenant",
         "src.core.tools.media_buy_create.validate_setup_complete": "_setup",
         "src.core.tools.media_buy_create.get_principal_object": "_principal_obj",
         "src.core.tools.media_buy_create.get_context_manager": "_ctx_manager",
@@ -116,7 +116,7 @@ class _PatchContext:
         with _PatchContext() as pc:
             # Customise mocks via pc attributes
             pc.db_session.scalars.return_value.all.return_value = [product]
-            result = await _create_media_buy_impl(req=req, ctx=pc.ctx)
+            result = await _create_media_buy_impl(req=req, identity=pc.identity)
     """
 
     def __init__(
@@ -131,22 +131,18 @@ class _PatchContext:
         self._adapter_config = adapter_config
 
     def __enter__(self):
-        # Build a mock context
-        self.ctx = MagicMock()
-        self.ctx.headers = {"x-adcp-auth": "test-token"}
-
-        # testing_ctx
-        self._p_testing = patch("src.core.tools.media_buy_create.get_testing_context")
-        m = self._p_testing.start()
-        self.testing_ctx = MagicMock(dry_run=False, test_session_id="test-session")
-        m.return_value = self.testing_ctx
-
-        # principal_id
-        self._p_pid = patch("src.core.tools.media_buy_create.get_principal_id_from_context")
-        self._p_pid.start().return_value = "principal_1"
+        # Build a ResolvedIdentity instead of mock context
+        self.identity = ResolvedIdentity(
+            principal_id="principal_1",
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
+            auth_token="test-token",
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
+        )
 
         # tenant
-        self._p_tenant = patch("src.core.tools.media_buy_create.get_current_tenant")
+        self._p_tenant = patch("src.core.helpers.context_helpers.ensure_tenant_context")
         self._p_tenant.start().return_value = {
             "tenant_id": "test_tenant",
             "human_review_required": False,
@@ -198,8 +194,6 @@ class _PatchContext:
         return self
 
     def __exit__(self, *args):
-        self._p_testing.stop()
-        self._p_pid.stop()
         self._p_tenant.stop()
         self._p_setup.stop()
         self._p_principal.stop()
@@ -245,7 +239,7 @@ class TestProductNotFound:
         existing_product = _mock_product("prod_exists")
 
         with _PatchContext(products=[existing_product]) as pc:
-            result = await _create_media_buy_impl(req=req, ctx=pc.ctx)
+            result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result.response, CreateMediaBuyError)
@@ -285,7 +279,7 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            result = await _create_media_buy_impl(req=req, ctx=pc.ctx)
+            result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result.response, CreateMediaBuyError)
@@ -331,7 +325,7 @@ class TestMaxDailySpendExceeded:
                     manual_approval_operations=["create_media_buy"],
                 )
                 try:
-                    result = await _create_media_buy_impl(req=req, ctx=pc.ctx)
+                    result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except Exception:
                     # Downstream failures are fine — we only care that daily spend
                     # validation did NOT produce a validation_error
@@ -372,7 +366,7 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            result = await _create_media_buy_impl(req=req, ctx=pc.ctx)
+            result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result.response, CreateMediaBuyError)
@@ -409,7 +403,7 @@ class TestMaxDailySpendExceeded:
                     manual_approval_operations=["create_media_buy"],
                 )
                 try:
-                    result = await _create_media_buy_impl(req=req, ctx=pc.ctx)
+                    result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except Exception:
                     result = None
 
@@ -462,10 +456,10 @@ class TestCreativeMissingUrl:
             # URL extraction returns None (missing)
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(ToolError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant")
 
-            assert "INVALID_CREATIVES" in str(exc_info.value)
+            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
         """When creative has URL but missing dimensions, raise INVALID_CREATIVES.
@@ -501,10 +495,10 @@ class TestCreativeMissingUrl:
             # Has URL but no dimensions
             mock_extract.return_value = ("https://example.com/ad.jpg", None, None)
 
-            with pytest.raises(ToolError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant")
 
-            assert "INVALID_CREATIVES" in str(exc_info.value)
+            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
 
 class TestCreativeUploadFailure:
@@ -600,8 +594,7 @@ class TestCreativeUploadFailure:
                     "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
                 ),
                 patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.main.media_buys", {}),
-                patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
                 patch("src.core.helpers.validate_creative_format_against_product", return_value=(True, None)),
                 patch(
                     "src.core.tools.media_buy_create._get_format_spec_sync",
@@ -618,10 +611,10 @@ class TestCreativeUploadFailure:
             ):
                 mock_upload.return_value = (req.packages, {})
 
-                with pytest.raises(ToolError) as exc_info:
-                    await _create_media_buy_impl(req=req, ctx=pc.ctx)
+                with pytest.raises(AdCPAdapterError) as exc_info:
+                    await _create_media_buy_impl(req=req, identity=pc.identity)
 
-                assert "CREATIVE_UPLOAD_FAILED" in str(exc_info.value)
+                assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
                 assert "creative_no_platform" in str(exc_info.value)
                 assert "Network timeout" in str(exc_info.value)
 
@@ -638,16 +631,16 @@ class TestCreativeUploadFailure:
         upload_error = ConnectionError("Network timeout during GAM upload")
         creative_id = "creative_abc"
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(AdCPAdapterError) as exc_info:
             try:
                 raise upload_error
             except Exception as e:
-                raise ToolError(
-                    "CREATIVE_UPLOAD_FAILED",
+                raise AdCPAdapterError(
                     f"Failed to upload creative {creative_id} to GAM: {e!s}",
+                    details={"error_code": "CREATIVE_UPLOAD_FAILED"},
                 ) from e
 
-        assert "CREATIVE_UPLOAD_FAILED" in str(exc_info.value)
+        assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
         assert creative_id in str(exc_info.value)
         assert "Network timeout" in str(exc_info.value)
 
@@ -718,7 +711,7 @@ class TestInlineCreativesProcessedBeforeApproval:
                 mock_adapter_fn.side_effect = record_adapter_check
 
                 try:
-                    await _create_media_buy_impl(req=req, ctx=pc.ctx)
+                    await _create_media_buy_impl(req=req, identity=pc.identity)
                 except Exception:
                     pass  # Expected — downstream failures are fine
 
@@ -770,11 +763,11 @@ class TestMultipleInvalidCreativesAccumulated:
             # All creatives missing URL and dimensions
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(ToolError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant")
 
             error_message = str(exc_info.value)
-            assert "INVALID_CREATIVES" in error_message
+            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
             # All three creative IDs should appear in the accumulated error
             assert "creative_1" in error_message
             assert "creative_2" in error_message
@@ -927,17 +920,16 @@ class TestCreativeIdsNotFound:
                     "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
                 ),
                 patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.main.media_buys", {}),
-                patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
                 patch("src.core.tools.media_buy_create.get_slack_notifier"),
                 patch("src.core.tools.media_buy_create.activity_feed"),
             ):
                 mock_upload.return_value = (req.packages, {})
 
-                with pytest.raises(ToolError) as exc_info:
-                    await _create_media_buy_impl(req=req, ctx=pc.ctx)
+                with pytest.raises(AdCPNotFoundError) as exc_info:
+                    await _create_media_buy_impl(req=req, identity=pc.identity)
 
-                assert "CREATIVES_NOT_FOUND" in str(exc_info.value)
+                assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
                 assert "creative_missing_1" in str(exc_info.value)
                 assert "creative_missing_2" in str(exc_info.value)
 
@@ -959,13 +951,13 @@ class TestCreativeIdsNotFound:
 
         assert missing_ids == {"creative_missing_1", "creative_missing_2"}
 
-        # Verify the ToolError would be raised with the correct error code
+        # Verify the AdCPNotFoundError would be raised with the correct error code
         if missing_ids:
             error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
-            with pytest.raises(ToolError) as exc_info:
-                raise ToolError("CREATIVES_NOT_FOUND", error_msg)
+            with pytest.raises(AdCPNotFoundError) as exc_info:
+                raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVES_NOT_FOUND"})
 
-            assert "CREATIVES_NOT_FOUND" in str(exc_info.value)
+            assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
 

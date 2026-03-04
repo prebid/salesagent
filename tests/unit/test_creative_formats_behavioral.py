@@ -20,6 +20,7 @@ from adcp.types.generated_poc.core.format import (
 )
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -50,25 +51,24 @@ def _call_impl(
 ) -> list[Format]:
     """Call _list_creative_formats_impl with mocked dependencies.
 
-    Returns the list of formats from the response. Mocks auth, tenant,
+    Returns the list of formats from the response. Mocks tenant,
     creative agent registry, DB session (for broadstreet check), and
     audit logger so the test exercises only the filtering/sorting logic.
+    Identity is passed directly as a ResolvedIdentity.
     """
     from src.core.tools.creative_formats import _list_creative_formats_impl
 
     if req is None:
         req = ListCreativeFormatsRequest()
 
+    identity = ResolvedIdentity(
+        principal_id=None,
+        tenant_id=MOCK_TENANT["tenant_id"],
+        tenant=MOCK_TENANT,
+        protocol="mcp",
+    )
+
     with (
-        patch(
-            "src.core.tools.creative_formats.get_principal_from_context",
-            return_value=(None, MOCK_TENANT),
-        ),
-        patch("src.core.tools.creative_formats.set_current_tenant"),
-        patch(
-            "src.core.tools.creative_formats.get_current_tenant",
-            return_value=MOCK_TENANT,
-        ),
         patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
         patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit,
     ):
@@ -83,7 +83,7 @@ def _call_impl(
         # Mock audit logger to avoid any side effects
         mock_audit.return_value = MagicMock()
 
-        response = _list_creative_formats_impl(req, None)
+        response = _list_creative_formats_impl(req, identity)
         return response.formats
 
 

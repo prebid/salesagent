@@ -24,9 +24,8 @@ def find_free_port(start_port: int = 10000, end_port: int = 60000) -> int:
     """Find an available port in the given range."""
     for port in range(start_port, end_port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
             try:
-                s.bind(("0.0.0.0", port))  # Match Docker's binding interface
+                s.bind(("127.0.0.1", port))
                 return port
             except OSError:
                 continue
@@ -68,21 +67,30 @@ def docker_services_e2e(request):
     if use_existing_services:
         print("Using existing Docker services (ADCP_TESTING=true or --skip-docker)")
         # Get ports from environment (set by run_all_tests.sh)
+        # All services (MCP, A2A, Admin) run on a single port in the unified FastAPI process
         mcp_port = int(os.getenv("ADCP_SALES_PORT", "8092"))
-        a2a_port = int(os.getenv("A2A_PORT", "8094"))
-        admin_port = int(os.getenv("ADMIN_UI_PORT", "8093"))
+        a2a_port = mcp_port  # A2A is on same port as MCP (unified FastAPI process)
+        admin_port = mcp_port  # Admin is on same port as MCP (unified FastAPI process)
         postgres_port = int(os.getenv("POSTGRES_PORT", "5435"))
 
-        print(f"✓ Using ports: MCP={mcp_port}, A2A={a2a_port}, Admin={admin_port}, Postgres={postgres_port}")
+        print(f"✓ Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 
-        # Quick health check
-        try:
-            response = requests.get(f"http://localhost:{a2a_port}/.well-known/agent.json", timeout=2)
-            if response.status_code == 200:
-                print("✓ A2A server is healthy")
-        except Exception as e:
-            print(f"⚠️  Warning: Could not verify A2A server: {e}")
-            print("   Services may still be starting up")
+        # Wait for server to be ready. /health is proxied to the upstream
+        # (not returned by nginx directly), so this confirms the app is serving.
+        max_wait = 60
+        start_time = time.time()
+        for _ in range(max_wait // 2):
+            try:
+                response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
+                if response.status_code == 200:
+                    elapsed = int(time.time() - start_time)
+                    print(f"✓ Server is healthy ({elapsed}s)")
+                    break
+            except requests.RequestException:
+                pass
+            time.sleep(2)
+        else:
+            pytest.fail(f"Server not ready after {max_wait}s (port {mcp_port})")
 
     else:
         # Check if Docker is available
@@ -109,20 +117,19 @@ def docker_services_e2e(request):
             env_file.touch()
 
         # Use environment variable ports if set, otherwise allocate dynamic ports
+        # All services run on a single port (unified FastAPI process)
         mcp_port = int(os.getenv("ADCP_SALES_PORT")) if os.getenv("ADCP_SALES_PORT") else find_free_port(10000, 20000)
-        a2a_port = int(os.getenv("A2A_PORT")) if os.getenv("A2A_PORT") else find_free_port(20000, 30000)
-        admin_port = int(os.getenv("ADMIN_UI_PORT")) if os.getenv("ADMIN_UI_PORT") else find_free_port(30000, 40000)
+        a2a_port = mcp_port  # A2A is on same port as MCP (unified FastAPI process)
+        admin_port = mcp_port  # Admin is on same port as MCP (unified FastAPI process)
         postgres_port = int(os.getenv("POSTGRES_PORT")) if os.getenv("POSTGRES_PORT") else find_free_port(40000, 50000)
 
-        print(f"Using ports: MCP={mcp_port}, A2A={a2a_port}, Admin={admin_port}, Postgres={postgres_port}")
+        print(f"Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 
         # Set port env vars in os.environ so that:
         # 1. docker-compose subprocess inherits them via os.environ.copy()
         # 2. Tests that read ports via os.getenv() (e.g., test_a2a_endpoints_working.py,
         #    test_landing_pages.py) pick up the correct dynamic ports
         os.environ["ADCP_SALES_PORT"] = str(mcp_port)
-        os.environ["A2A_PORT"] = str(a2a_port)
-        os.environ["ADMIN_UI_PORT"] = str(admin_port)
         os.environ["POSTGRES_PORT"] = str(postgres_port)
 
         env = os.environ.copy()
@@ -155,22 +162,20 @@ def docker_services_e2e(request):
         print("Step 2/2: Starting services...")
         subprocess.run(["docker-compose", "-f", "docker-compose.e2e.yml", "up", "-d"], check=True, env=env)
 
-        # Wait for services to be healthy
+        # Wait for unified server to be healthy (MCP + A2A + Admin all on same port)
         max_wait = 120  # Increased from 60 to 120 seconds for CI
         start_time = time.time()
 
-        mcp_ready = False
-        a2a_ready = False
+        server_ready = False
 
-        print(f"Waiting for services (max {max_wait}s)...")
-        print(f"  MCP: http://localhost:{mcp_port}/health")
-        print(f"  A2A: http://localhost:{a2a_port}/")
+        print(f"Waiting for server (max {max_wait}s)...")
+        print(f"  Health: http://localhost:{mcp_port}/health")
 
         while time.time() - start_time < max_wait:
             elapsed = int(time.time() - start_time)
 
             # Show progress every 5 seconds
-            if elapsed > 0 and elapsed % 5 == 0 and not (mcp_ready and a2a_ready):
+            if elapsed > 0 and elapsed % 5 == 0 and not server_ready:
                 print(f"  ⏱️  Still waiting... ({elapsed}s / {max_wait}s)")
                 # Show container status for debugging
                 try:
@@ -185,30 +190,19 @@ def docker_services_e2e(request):
                 except:
                     pass
 
-            # Check MCP server health
-            if not mcp_ready:
+            # Check server health. /health is proxied to upstream, so it
+            # confirms the FastAPI app is actually serving (not just nginx).
+            if not server_ready:
                 try:
                     response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
                     if response.status_code == 200:
-                        print(f"✓ MCP server is ready (after {elapsed}s)")
-                        mcp_ready = True
+                        print(f"✓ Server is ready (after {elapsed}s)")
+                        server_ready = True
                 except requests.RequestException as e:
                     if elapsed % 10 == 0:  # Log every 10 seconds
-                        print(f"  MCP not ready yet ({elapsed}s): {type(e).__name__}")
+                        print(f"  Server not ready yet ({elapsed}s): {type(e).__name__}")
 
-            # Check A2A server health
-            if not a2a_ready:
-                try:
-                    response = requests.get(f"http://localhost:{a2a_port}/", timeout=2)
-                    if response.status_code in [200, 404, 405]:  # Any response means it's up
-                        print(f"✓ A2A server is ready (after {elapsed}s)")
-                        a2a_ready = True
-                except requests.RequestException as e:
-                    if elapsed % 10 == 0:  # Log every 10 seconds
-                        print(f"  A2A not ready yet ({elapsed}s): {type(e).__name__}")
-
-            # Both services ready
-            if mcp_ready and a2a_ready:
+            if server_ready:
                 break
 
             time.sleep(2)
@@ -217,7 +211,7 @@ def docker_services_e2e(request):
             print("\n❌ Health check timeout. Attempting to get container logs...")
 
             # Get logs from all services
-            for service in ["adcp-server", "postgres", "admin-ui"]:
+            for service in ["proxy", "adcp-server", "postgres"]:
                 try:
                     print(f"\n📋 {service} logs (last 100 lines):")
                     result = subprocess.run(
@@ -243,10 +237,8 @@ def docker_services_e2e(request):
             except Exception as e:
                 print(f"Could not get container status: {e}")
 
-            if not mcp_ready:
-                pytest.fail(f"MCP server did not become healthy in time (waited {max_wait}s, port {mcp_port})")
-            if not a2a_ready:
-                pytest.fail(f"A2A server did not become healthy in time (waited {max_wait}s, port {a2a_port})")
+            if not server_ready:
+                pytest.fail(f"Server did not become healthy in time (waited {max_wait}s, port {mcp_port})")
 
     # Initialize CI test data now that services are healthy
     print("📦 Initializing CI test data (products, principals, etc.)...")
@@ -255,7 +247,6 @@ def docker_services_e2e(request):
     init_env = os.environ.copy()
     init_env["ADCP_SALES_PORT"] = str(mcp_port)
     init_env["POSTGRES_PORT"] = str(postgres_port)
-    init_env["ADMIN_UI_PORT"] = str(admin_port)
 
     # Use docker-compose exec to run the script inside the container
     # This works for both self-managed (else block) and existing services (if block)
@@ -299,7 +290,7 @@ def docker_services_e2e(request):
     # After init_database_ci.py populates data, we need to flush those connections.
     print("🔄 Resetting MCP server database connection pool...")
     try:
-        reset_response = requests.post(f"http://localhost:{mcp_port}/admin/reset-db-pool", timeout=5)
+        reset_response = requests.post(f"http://localhost:{mcp_port}/_internal/reset-db-pool", timeout=5)
         if reset_response.status_code == 200:
             print("✓ Database connection pool reset successfully")
             print(f"  Response: {reset_response.json()}")

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
 
 
@@ -16,11 +17,14 @@ class TestSyncCreativesFormatValidation:
     """Test format validation in sync_creatives operation."""
 
     @pytest.fixture
-    def mock_context(self):
-        """Mock FastMCP context with authentication."""
-        ctx = Mock()
-        ctx.headers = {"x-adcp-auth": "test_principal_token"}
-        return ctx
+    def identity(self):
+        """ResolvedIdentity for tests."""
+        return ResolvedIdentity(
+            principal_id="principal_123",
+            tenant_id="tenant_123",
+            tenant={"tenant_id": "tenant_123", "approval_mode": "auto-approve", "slack_webhook_url": None},
+            protocol="mcp",
+        )
 
     @pytest.fixture
     def mock_tenant(self):
@@ -50,11 +54,10 @@ class TestSyncCreativesFormatValidation:
         format_spec.name = "Medium Rectangle - Image"
         return format_spec
 
-    def test_format_validation_success(self, mock_context, mock_tenant, valid_creative_dict, mock_format_spec):
+    def test_format_validation_success(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation succeeds when format exists."""
         with (
-            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -81,18 +84,17 @@ class TestSyncCreativesFormatValidation:
             mock_session.scalars.return_value.first.return_value = None
 
             # Execute
-            response = _sync_creatives_impl(creatives=[valid_creative_dict], ctx=mock_context)
+            response = _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
 
             # Verify format was validated
             assert len(response.creatives) == 1
             assert response.creatives[0].action == CreativeAction.created
             assert response.creatives[0].creative_id == "creative_123"
 
-    def test_format_validation_unknown_format(self, mock_context, mock_tenant, valid_creative_dict):
+    def test_format_validation_unknown_format(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when format doesn't exist."""
         with (
-            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -115,7 +117,7 @@ class TestSyncCreativesFormatValidation:
             mock_db.return_value.__enter__.return_value = mock_session
 
             # Execute
-            response = _sync_creatives_impl(creatives=[valid_creative_dict], ctx=mock_context)
+            response = _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
 
             # Verify creative failed with appropriate error
             assert len(response.creatives) == 1
@@ -128,11 +130,10 @@ class TestSyncCreativesFormatValidation:
             assert "https://creative.adcontextprotocol.org" in error_msg
             assert "list_creative_formats" in error_msg  # Helpful suggestion
 
-    def test_format_validation_agent_unreachable(self, mock_context, mock_tenant, valid_creative_dict):
+    def test_format_validation_agent_unreachable(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when agent is unreachable."""
         with (
-            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -155,7 +156,7 @@ class TestSyncCreativesFormatValidation:
             mock_db.return_value.__enter__.return_value = mock_session
 
             # Execute
-            response = _sync_creatives_impl(creatives=[valid_creative_dict], ctx=mock_context)
+            response = _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
 
             # Verify creative failed with network error message
             assert len(response.creatives) == 1
@@ -167,7 +168,7 @@ class TestSyncCreativesFormatValidation:
             assert "unreachable or returned an error" in error_msg
             assert "Connection refused" in error_msg  # Original error included
 
-    def test_format_validation_with_string_format_id(self, mock_context, mock_tenant, mock_format_spec):
+    def test_format_validation_with_string_format_id(self, identity, mock_tenant, mock_format_spec):
         """Test that string format_ids are rejected (FormatId object required)."""
         # Creative with string format_id (legacy format - no longer supported)
         creative_dict = {
@@ -178,8 +179,7 @@ class TestSyncCreativesFormatValidation:
         }
 
         with (
-            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -204,7 +204,7 @@ class TestSyncCreativesFormatValidation:
             mock_session.scalars.return_value.first.return_value = None
 
             # Execute
-            response = _sync_creatives_impl(creatives=[creative_dict], ctx=mock_context)
+            response = _sync_creatives_impl(creatives=[creative_dict], identity=identity)
 
             # Verify creative failed validation (string format_id rejected by schema)
             # AdCP spec requires format_id to be a FormatId object with agent_url and id
@@ -213,7 +213,7 @@ class TestSyncCreativesFormatValidation:
             assert response.creatives[0].creative_id == "creative_456"
             # Error message will be from Pydantic validation, not our format validation
 
-    def test_format_validation_multiple_creatives(self, mock_context, mock_tenant, mock_format_spec):
+    def test_format_validation_multiple_creatives(self, identity, mock_tenant, mock_format_spec):
         """Test that format validation works correctly with multiple creatives."""
         creatives = [
             {
@@ -237,8 +237,7 @@ class TestSyncCreativesFormatValidation:
         ]
 
         with (
-            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -265,7 +264,7 @@ class TestSyncCreativesFormatValidation:
             mock_session.scalars.return_value.first.return_value = None
 
             # Execute
-            response = _sync_creatives_impl(creatives=creatives, ctx=mock_context)
+            response = _sync_creatives_impl(creatives=creatives, identity=identity)
 
             # Verify results
             assert len(response.creatives) == 3
@@ -283,7 +282,7 @@ class TestSyncCreativesFormatValidation:
             assert response.creatives[2].creative_id == "creative_3"
             assert response.creatives[2].action == CreativeAction.created
 
-    def test_format_validation_caching(self, mock_context, mock_tenant, valid_creative_dict, mock_format_spec):
+    def test_format_validation_caching(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation uses in-memory cache (doesn't call agent twice for same format)."""
         # Create two creatives with same format
         creative1 = valid_creative_dict.copy()
@@ -293,8 +292,7 @@ class TestSyncCreativesFormatValidation:
         creative2["creative_id"] = "creative_2"
 
         with (
-            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -319,7 +317,7 @@ class TestSyncCreativesFormatValidation:
             mock_session.scalars.return_value.first.return_value = None
 
             # Execute
-            response = _sync_creatives_impl(creatives=[creative1, creative2], ctx=mock_context)
+            response = _sync_creatives_impl(creatives=[creative1, creative2], identity=identity)
 
             # Verify both creatives succeeded
             assert len(response.creatives) == 2
@@ -330,7 +328,7 @@ class TestSyncCreativesFormatValidation:
             # This test verifies that multiple creatives with same format both succeed
             # Actual cache hit measurement would require integration tests with real registry
 
-    def test_format_validation_missing_format_id(self, mock_context, mock_tenant):
+    def test_format_validation_missing_format_id(self, identity, mock_tenant):
         """Test that validation fails when format_id is missing."""
         creative_dict = {
             "creative_id": "creative_no_format",
@@ -340,8 +338,7 @@ class TestSyncCreativesFormatValidation:
         }
 
         with (
-            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -360,7 +357,7 @@ class TestSyncCreativesFormatValidation:
             mock_db.return_value.__enter__.return_value = mock_session
 
             # Execute
-            response = _sync_creatives_impl(creatives=[creative_dict], ctx=mock_context)
+            response = _sync_creatives_impl(creatives=[creative_dict], identity=identity)
 
             # Verify creative failed with format validation error
             assert len(response.creatives) == 1
@@ -368,7 +365,7 @@ class TestSyncCreativesFormatValidation:
             # Error message comes from Pydantic schema validation
             assert "format_id" in response.creatives[0].errors[0]
 
-    def test_error_messages_distinguish_scenarios(self, mock_context, mock_tenant):
+    def test_error_messages_distinguish_scenarios(self, identity, mock_tenant):
         """Test that error messages clearly distinguish between different failure scenarios."""
         # Test 1: Format unknown (agent reachable, format doesn't exist)
         creative_unknown_format = {
@@ -387,8 +384,7 @@ class TestSyncCreativesFormatValidation:
         }
 
         with (
-            patch("src.core.tools.creatives._sync.get_principal_id_from_context", return_value="principal_123"),
-            patch("src.core.tools.creatives._sync.get_current_tenant", return_value=mock_tenant),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -412,7 +408,7 @@ class TestSyncCreativesFormatValidation:
             mock_db.return_value.__enter__.return_value = mock_session
 
             # Test unknown format error
-            response1 = _sync_creatives_impl(creatives=[creative_unknown_format], ctx=mock_context)
+            response1 = _sync_creatives_impl(creatives=[creative_unknown_format], identity=identity)
 
             error1 = response1.creatives[0].errors[0]
             assert "Unknown format" in error1
@@ -420,7 +416,7 @@ class TestSyncCreativesFormatValidation:
             assert "unreachable" not in error1  # Should NOT mention unreachability
 
             # Test agent unreachable error
-            response2 = _sync_creatives_impl(creatives=[creative_unreachable], ctx=mock_context)
+            response2 = _sync_creatives_impl(creatives=[creative_unreachable], identity=identity)
 
             error2 = response2.creatives[0].errors[0]
             assert "Cannot validate format" in error2

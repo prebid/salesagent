@@ -1,29 +1,29 @@
 """Authentication utilities for MCP server."""
 
+import hmac
 import logging
 
-from fastmcp.server import Context
 from sqlalchemy import select
 
-from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import execute_with_retry
 from src.core.database.models import Principal, Tenant
 
 logger = logging.getLogger(__name__)
 
 
-def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | None:
+def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[str | None, dict | None]:
     """Looks up a principal_id from the database using a token with retry logic.
 
     If tenant_id is provided, only looks in that specific tenant.
-    If not provided, searches globally by token and sets the tenant context.
+    If not provided, searches globally by token and returns the discovered tenant.
 
     Args:
         token: Authentication token
         tenant_id: Optional tenant ID to restrict search
 
     Returns:
-        Principal ID if found, None otherwise
+        (principal_id, tenant_dict) tuple. tenant_dict is only populated when
+        the tenant was discovered from a global token lookup (no tenant_id provided).
     """
 
     def _lookup_principal(session):
@@ -32,7 +32,16 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
             stmt = select(Principal).filter_by(access_token=token, tenant_id=tenant_id)
             principal = session.scalars(stmt).first()
             if principal:
-                return principal.principal_id
+                return principal.principal_id, None
+
+            # Check if it's the admin token for this specific tenant
+            tenant_stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
+            tenant_obj = session.scalars(tenant_stmt).first()
+            if tenant_obj and tenant_obj.admin_token and hmac.compare_digest(tenant_obj.admin_token, token):
+                logger.debug("Token matches admin token for tenant '%s'", tenant_id)
+                return f"{tenant_id}_admin", None
+
+            return None, None
         else:
             # No tenant specified - search globally
             stmt = select(Principal).filter_by(access_token=token)
@@ -40,7 +49,7 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
             logger.debug(f"[AUTH] Looking up principal with token: {token[:20]}...")
             if principal:
                 logger.info(f"[AUTH] Principal found: {principal.principal_id}, tenant_id={principal.tenant_id}")
-                # Found principal - set tenant context
+                # Found principal - look up tenant to return
                 stmt = select(Tenant).filter_by(tenant_id=principal.tenant_id, is_active=True)
                 tenant = session.scalars(stmt).first()
                 if tenant:
@@ -48,8 +57,7 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
                     from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
                     tenant_dict = serialize_tenant_to_dict(tenant)
-                    set_current_tenant(tenant_dict)
-                    return principal.principal_id
+                    return principal.principal_id, tenant_dict
                 else:
                     logger.error(
                         f"[AUTH] ERROR: Tenant NOT FOUND for tenant_id={principal.tenant_id} with is_active=True"
@@ -64,74 +72,13 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> str | 
             else:
                 logger.error(f"[AUTH] ERROR: Principal NOT FOUND for token {token[:20]}...")
 
-        return None
+        return None, None
 
     try:
         return execute_with_retry(_lookup_principal)
     except Exception as e:
         logger.error(f"[AUTH] Database error during principal lookup: {e}", exc_info=True)
-        return None
-
-
-def get_principal_from_context(context: Context | None) -> str | None:
-    """Extract principal ID from the FastMCP context using authentication headers.
-
-    Accepts authentication via either:
-    - x-adcp-auth: <token> (AdCP convention, preferred for MCP)
-    - Authorization: Bearer <token> (standard HTTP, for compatibility with A2A clients)
-
-    Args:
-        context: FastMCP context object
-
-    Returns:
-        Principal ID if authenticated, None otherwise
-    """
-    if not context:
-        return None
-
-    try:
-        # Extract token from headers
-        token = None
-        auth_source = None
-        headers_found = {}
-
-        if hasattr(context, "meta") and isinstance(context.meta, dict):
-            headers_found = context.meta.get("headers", {})
-            logger.debug(f"[AUTH] Headers from context.meta: {list(headers_found.keys())}")
-        elif hasattr(context, "headers"):
-            headers_found = context.headers
-            logger.debug(f"[AUTH] Headers from context.headers: {list(headers_found.keys())}")
-        else:
-            logger.warning("[AUTH] No headers found in context!")
-            return None
-
-        # Try both authentication headers (prefer x-adcp-auth for MCP)
-        for key, value in headers_found.items():
-            if key.lower() == "x-adcp-auth":
-                token = value
-                auth_source = "x-adcp-auth"
-                break  # Prefer x-adcp-auth
-            elif key.lower() == "authorization":
-                auth_header = value.strip()
-                if auth_header.startswith("Bearer "):
-                    token = auth_header[7:]  # Remove "Bearer " prefix
-                    auth_source = "Authorization"
-                    # Don't break - prefer x-adcp-auth if both present
-
-        if not token:
-            logger.debug(
-                f"[AUTH] No authentication token found (checked x-adcp-auth and Authorization). Available headers: {list(headers_found.keys())}"
-            )
-            return None
-
-        logger.debug(f"[AUTH] Found token from {auth_source}: {token[:20]}...")
-
-        # Validate token and get principal ID
-        return get_principal_from_token(token)
-
-    except Exception as e:
-        logger.error(f"[AUTH] Error extracting principal from context: {e}", exc_info=True)
-        return None
+        return None, None
 
 
 def get_principal_object(principal_id: str) -> Principal | None:

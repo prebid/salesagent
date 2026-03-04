@@ -102,7 +102,7 @@ class TestMockAdapterPublisherSync:
         mock_config = AppConfig()
         mock_config.environment = "development"
 
-        app, _ = create_app()
+        app = create_app()
 
         with app.test_request_context():
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
@@ -136,7 +136,7 @@ class TestMockAdapterPublisherSync:
         mock_config = AppConfig()
         mock_config.environment = "development"
 
-        app, _ = create_app()
+        app = create_app()
 
         with app.test_request_context():
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
@@ -178,7 +178,7 @@ class TestMockAdapterPublisherSync:
         mock_config = AppConfig()
         mock_config.environment = "development"
 
-        app, _ = create_app()
+        app = create_app()
 
         with app.test_request_context():
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
@@ -209,7 +209,7 @@ class TestMockAdapterPublisherSync:
         mock_config = AppConfig()
         mock_config.environment = "development"
 
-        app, _ = create_app()
+        app = create_app()
 
         # Run sync twice
         with app.test_request_context():

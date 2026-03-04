@@ -28,12 +28,12 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from sqlalchemy import select
 
-from src.core.auth import get_principal_from_context, get_principal_object
-from src.core.config_loader import get_current_tenant, set_current_tenant
+from src.core.auth import get_principal_object
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
 
 
 def _get_adcp_capabilities_impl(
-    req: GetAdcpCapabilitiesRequest | None = None, context: Context | ToolContext | None = None
+    req: GetAdcpCapabilitiesRequest | None = None, identity: ResolvedIdentity | None = None
 ) -> GetAdcpCapabilitiesResponse:
     """Shared implementation for get_adcp_capabilities.
 
@@ -74,27 +74,14 @@ def _get_adcp_capabilities_impl(
 
     Args:
         req: GetAdcpCapabilitiesRequest (optional, currently unused)
-        context: FastMCP Context for tenant/principal resolution
+        identity: Resolved identity from transport boundary
 
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
-    # Get tenant and principal from context
-    # Authentication is OPTIONAL for capabilities endpoint (returns public info)
-    principal_id, tenant = get_principal_from_context(
-        context,
-        require_valid_token=False,
-    )
-
-    # Set tenant context if returned, or try to get existing context
-    if tenant:
-        set_current_tenant(tenant)
-    else:
-        try:
-            tenant = get_current_tenant()
-        except RuntimeError:
-            # No tenant context available - return minimal capabilities
-            tenant = None
+    # Extract principal and tenant from resolved identity
+    principal_id = identity.principal_id if identity else None
+    tenant = identity.tenant if identity else None
 
     if not tenant:
         # Return minimal capabilities if no tenant context
@@ -103,22 +90,25 @@ def _get_adcp_capabilities_impl(
             supported_protocols=[SupportedProtocol.media_buy],
         )
 
+    # If we got here, tenant is truthy, which means identity was not None on line 84
+    assert identity is not None
+
     tenant_id = tenant["tenant_id"]
     tenant_name = tenant.get("name", "Unknown")
 
     # Log activity
-    if context:
-        log_tool_activity(context, "get_adcp_capabilities")
+    if identity:
+        log_tool_activity(identity, "get_adcp_capabilities")
 
     # Get adapter to determine channels and capabilities
     primary_channels: list[MediaChannel] = []
     adapter = None
     try:
         # Get the Principal object to pass to adapter
-        principal = get_principal_object(principal_id) if principal_id else None
+        principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
         if principal:
-            adapter = get_adapter(principal, dry_run=True)
+            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
             if adapter and hasattr(adapter, "default_channels"):
                 for channel_name in adapter.default_channels:
                     if channel_name.lower() in CHANNEL_MAPPING:
@@ -254,7 +244,7 @@ def _get_adcp_capabilities_impl(
 
 async def get_adcp_capabilities(
     protocols: list[str] | None = None,
-    ctx: Context | ToolContext | None = None,
+    ctx: Context | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
 
@@ -267,11 +257,13 @@ async def get_adcp_capabilities(
     Returns:
         ToolResult with human-readable text and structured data
     """
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+
     # Build request object (currently minimal)
     req = GetAdcpCapabilitiesRequest()
 
     # Call shared implementation
-    response = _get_adcp_capabilities_impl(req, ctx)
+    response = _get_adcp_capabilities_impl(req, identity)
 
     # Build human-readable summary
     protocols = [p.value if hasattr(p, "value") else str(p) for p in response.supported_protocols]
@@ -297,6 +289,7 @@ async def get_adcp_capabilities(
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> GetAdcpCapabilitiesResponse:
     """Get the capabilities of this AdCP sales agent.
 
@@ -305,9 +298,14 @@ async def get_adcp_capabilities_raw(
     Args:
         protocols: Specific protocols to query (optional, currently ignored)
         ctx: FastMCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=False)
     req = GetAdcpCapabilitiesRequest()
-    return _get_adcp_capabilities_impl(req, ctx)
+    return _get_adcp_capabilities_impl(req, identity)

@@ -13,7 +13,7 @@ import pytest
 
 from src.admin.app import create_app
 
-admin_app, _ = create_app()
+admin_app = create_app()
 
 
 @pytest.fixture(scope="function")
@@ -344,6 +344,29 @@ def sample_principal(integration_db, sample_tenant):
         session.commit()
 
     return principal_data
+
+
+@pytest.fixture
+def mock_identity(sample_tenant, sample_principal):
+    """Build a ResolvedIdentity from real test DB fixtures.
+
+    Use this with: patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity)
+
+    Uses LazyTenantContext so the tenant dict is always read from the DB,
+    matching production behavior (where resolve_identity → LazyTenantContext
+    defers DB load until a field is accessed). This is important for tests
+    that mutate tenant settings (e.g. human_review_required) between setup
+    and assertion.
+    """
+    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.tenant_context import LazyTenantContext
+
+    return ResolvedIdentity(
+        principal_id=sample_principal["principal_id"],
+        tenant_id=sample_tenant["tenant_id"],
+        tenant=LazyTenantContext(sample_tenant["tenant_id"]),
+        protocol="a2a",
+    )
 
 
 # ============================================================================

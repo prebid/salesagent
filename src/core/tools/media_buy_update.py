@@ -18,12 +18,12 @@ from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.targeting import TargetingOverlay
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from adcp.types.generated_poc.media_buy.package_update import PackageUpdate as UpdatePackage
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -32,50 +32,48 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     get_principal_object,
 )
-from src.core.config_loader import get_current_tenant
 from src.core.context_manager import get_context_manager
 from src.core.database.database_session import get_db_session
-from src.core.helpers import get_principal_id_from_context
 from src.core.helpers.adapter_helpers import get_adapter
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuySuccess,
 )
-from src.core.testing_hooks import get_testing_context
+from src.core.testing_hooks import AdCPTestContext
 from src.core.validation_helpers import format_validation_error
 
 
-def _verify_principal(media_buy_id: str, context: Context | ToolContext):
+def _verify_principal(media_buy_id: str, context: "ResolvedIdentity"):
     """Verify that the principal from context owns the media buy.
 
     Checks database for media buy ownership, not in-memory dictionary.
 
     Args:
         media_buy_id: Media buy ID to verify
-        context: FastMCP Context or ToolContext with principal info
+        context: ResolvedIdentity with principal info
 
     Raises:
+        AdCPAuthenticationError: Missing principal
         ValueError: Media buy not found
         PermissionError: Principal doesn't own media buy
     """
-
     from src.core.database.models import MediaBuy as MediaBuyModel
 
-    # Get principal_id from context
-    if isinstance(context, ToolContext):
-        principal_id: str | None = context.principal_id
-    else:
-        principal_id = get_principal_id_from_context(context)
+    principal_id: str | None = context.principal_id
 
     # CRITICAL: principal_id is required for media buy updates
     if not principal_id:
-        raise ToolError(
+        raise AdCPAuthenticationError(
             "Authentication required: Missing or invalid x-adcp-auth header. Media buy updates require authentication."
         )
 
-    tenant = get_current_tenant()
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = context.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Query database for media buy (try media_buy_id first, then buyer_ref)
     with get_db_session() as session:
@@ -98,7 +96,7 @@ def _verify_principal(media_buy_id: str, context: Context | ToolContext):
             # CRITICAL: Verify principal_id is set (security check, not assertion)
             # Using explicit check instead of assert because asserts are removed with python -O
             if not principal_id:
-                raise ToolError("Authentication required: principal_id not found in context")
+                raise AdCPAuthenticationError("Authentication required: principal_id not found in context")
 
             # Log security violation
             security_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -113,7 +111,8 @@ def _verify_principal(media_buy_id: str, context: Context | ToolContext):
 
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
-    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
+    context_id: str | None = None,
 ) -> UpdateMediaBuySuccess | UpdateMediaBuyError:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
@@ -122,7 +121,7 @@ def _update_media_buy_impl(
 
     Args:
         req: Validated UpdateMediaBuyRequest with all protocol fields
-        ctx: FastMCP/ToolContext context for authentication
+        identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:
         UpdateMediaBuyResponse with updated media buy details
@@ -130,17 +129,18 @@ def _update_media_buy_impl(
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
 
-    if ctx is None:
-        raise ValueError("Context is required for update_media_buy")
+    if identity is None:
+        raise ValueError("Identity is required for update_media_buy")
 
-    # CRITICAL: Establish tenant context FIRST by extracting principal from auth token
-    # This must happen before any database queries that need tenant_id
-    principal_id = get_principal_id_from_context(ctx)
+    # CRITICAL: Extract principal from identity
+    principal_id = identity.principal_id
     if principal_id is None:
         raise ValueError("principal_id is required but was None - authentication required")
 
-    # Now tenant context is set, we can safely call get_current_tenant()
-    tenant = get_current_tenant()
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Resolve media_buy_id from buyer_ref if needed (AdCP oneOf constraint)
     media_buy_id_to_use = req.media_buy_id
@@ -168,15 +168,15 @@ def _update_media_buy_impl(
     req.media_buy_id = media_buy_id_to_use
 
     # Verify principal owns this media buy
-    _verify_principal(media_buy_id_to_use, ctx)
+    _verify_principal(media_buy_id_to_use, identity)
 
     # Extract testing context early (needed for dry_run check)
-    testing_ctx = get_testing_context(ctx)
+    testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
     # Create or get persistent context and workflow step
     # Skip for dry_run mode (no side effects, no database writes)
     ctx_manager = get_context_manager()
-    ctx_id = ctx.headers.get("x-context-id") if hasattr(ctx, "headers") else None
+    ctx_id = context_id  # Extracted at transport boundary, passed in
     persistent_ctx = None
     step = None
 
@@ -196,8 +196,7 @@ def _update_media_buy_impl(
         request_data_for_workflow = req.model_dump(mode="json")  # Convert dates to strings
 
         # Store protocol type for webhook payload creation
-        # ToolContext = A2A, Context (FastMCP) = MCP
-        request_data_for_workflow["protocol"] = "a2a" if isinstance(ctx, ToolContext) else "mcp"
+        request_data_for_workflow["protocol"] = identity.protocol
 
         # Create workflow step for this tool call
         step = ctx_manager.create_workflow_step(
@@ -209,7 +208,7 @@ def _update_media_buy_impl(
             request_data=request_data_for_workflow,
         )
 
-    principal = get_principal_object(principal_id)  # Now guaranteed to be str
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)  # Now guaranteed to be str
     if not principal:
         error_msg = f"Principal {principal_id} not found"
         response_data = UpdateMediaBuyError(
@@ -225,7 +224,7 @@ def _update_media_buy_impl(
             )
         return response_data
 
-    adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx)
+    adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
     today = req.today or date.today()
 
     # Dry-run mode: Return simulated response without any database writes
@@ -266,18 +265,21 @@ def _update_media_buy_impl(
     manual_approval_operations = adapter.manual_approval_operations
 
     if manual_approval_required and "update_media_buy" in manual_approval_operations:
-        # Build response first, then persist on workflow step, then return
-        # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields (workflow_step_id, affected_packages)
+        # Store the original request alongside the response so the approval
+        # execution path can re-execute the update after human approval.
+        # This mirrors create_media_buy's raw_request pattern.
         approval_response = UpdateMediaBuySuccess(
             media_buy_id=req.media_buy_id or "",
             buyer_ref=req.buyer_ref or "",
-            affected_packages=[],  # Internal field for tracking changes
+            affected_packages=[],  # Not yet applied — pending approval
             context=req.context,
         )
+        approval_data = approval_response.model_dump(mode="json")
+        approval_data["request_data"] = req.model_dump(mode="json")
         ctx_manager.update_workflow_step(
             step.step_id,
             status="requires_approval",
-            response_data=approval_response.model_dump(mode="json"),
+            response_data=approval_data,
             add_comment={"user": "system", "comment": "Publisher requires manual approval for all media buy updates"},
         )
         return approval_response
@@ -411,7 +413,14 @@ def _update_media_buy_impl(
         # Manual approval case - convert adapter result to appropriate Success/Error
         # adcp v1.2.1 oneOf pattern: Check if result is Error variant (has errors field)
         if isinstance(result, UpdateMediaBuyError) and result.errors:
-            return UpdateMediaBuyError(errors=result.errors)
+            error_response = UpdateMediaBuyError(errors=result.errors)
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="failed",
+                response_data=error_response.model_dump(mode="json"),
+                error_message=result.errors[0].message if result.errors else "Pause/resume failed",
+            )
+            return error_response
         else:
             # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields
             # Use getattr to safely access discriminated union fields
@@ -438,6 +447,11 @@ def _update_media_buy_impl(
                     "action": action,
                     "affected_packages_count": len(affected_pkgs),
                 },
+            )
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="completed",
+                response_data=success_response.model_dump(mode="json"),
             )
             return success_response
 
@@ -704,7 +718,9 @@ def _update_media_buy_impl(
                             + "\n".join(f"  • {err}" for err in validation_errors)
                         )
                         logger.error(f"[UPDATE] {error_msg}")
-                        raise ToolError("INVALID_CREATIVES", error_msg, {"creative_errors": validation_errors})
+                        raise AdCPValidationError(
+                            error_msg, details={"error_code": "INVALID_CREATIVES", "creative_errors": validation_errors}
+                        )
 
                     # Get existing assignments for this package
                     assignment_stmt = select(DBAssignment).where(
@@ -795,7 +811,7 @@ def _update_media_buy_impl(
                 sync_response = _sync_creatives_impl(
                     creatives=pkg_update.creatives,
                     assignments={c.creative_id: [pkg_update.package_id] for c in pkg_update.creatives if c.creative_id},
-                    ctx=ctx,
+                    identity=identity,
                 )
 
                 # Check for sync errors
@@ -1367,10 +1383,10 @@ def _build_update_request(
     try:
         return UpdateMediaBuyRequest(**request_params)
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="update_media_buy request")) from e
+        raise AdCPValidationError(format_validation_error(e, context="update_media_buy request")) from e
 
 
-def update_media_buy(
+async def update_media_buy(
     media_buy_id: str | None = None,
     buyer_ref: str | None = None,
     paused: bool = None,
@@ -1434,7 +1450,10 @@ def update_media_buy(
         push_notification_config=push_notification_config,
         context=context,
     )
-    response = _update_media_buy_impl(req=req, ctx=ctx)
+    # Read identity and context_id pre-resolved by MCPAuthMiddleware
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
+    response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -1456,6 +1475,7 @@ def update_media_buy_raw(
     push_notification_config: dict = None,
     context: dict | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ):
     """Update an existing media buy (raw function for A2A server use).
 
@@ -1478,7 +1498,8 @@ def update_media_buy_raw(
         creatives: Creative updates
         push_notification_config: Push notification config for status updates
         context: Application level context per adcp spec
-        ctx: Context for authentication
+        ctx: Context for authentication (deprecated, use identity)
+        identity: Pre-resolved identity (if available)
 
     Returns:
         UpdateMediaBuyResponse
@@ -1499,4 +1520,8 @@ def update_media_buy_raw(
         push_notification_config=push_notification_config,
         context=context,
     )
-    return _update_media_buy_impl(req=req, ctx=ctx)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    return _update_media_buy_impl(req=req, identity=identity)

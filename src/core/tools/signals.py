@@ -8,16 +8,16 @@ import logging
 import time
 import uuid
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
-from src.core.auth import get_principal_from_context, get_principal_object
-from src.core.config_loader import get_current_tenant
+from src.core.auth import get_principal_object
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ActivateSignalResponse,
     GetSignalsRequest,
@@ -26,37 +26,27 @@ from src.core.schemas import (
     SignalDeployment,
     SignalPricing,
 )
-from src.core.testing_hooks import get_testing_context
+from src.core.testing_hooks import AdCPTestContext
 
 
-def _get_principal_id_from_context(context: Context | ToolContext | None) -> str | None:
-    """Extract principal ID from the FastMCP Context or ToolContext."""
-    if not context:
-        return None
-    # ToolContext has principal_id directly
-    if isinstance(context, ToolContext):
-        return context.principal_id
-    # FastMCP Context needs extraction
-    principal_id, _ = get_principal_from_context(context, require_valid_token=False)
-    return principal_id
-
-
-async def _get_signals_impl(req: GetSignalsRequest, context: Context | ToolContext | None = None) -> GetSignalsResponse:
+async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
     """Shared implementation for get_signals (used by both MCP and A2A).
 
     Args:
         req: Request containing query parameters for signal discovery
-        context: FastMCP context (automatically provided)
+        identity: Resolved identity from transport boundary
 
     Returns:
         GetSignalsResponse with matching signals
     """
-    _get_principal_id_from_context(context)
+    # Principal ID available via identity.principal_id if needed
+    _ = identity.principal_id if identity else None
 
-    # Get tenant information
-    tenant = get_current_tenant()
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    assert identity is not None, "identity is required for signals"
+    tenant = identity.tenant
     if not tenant:
-        raise ToolError("No tenant context available")
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Mock implementation - in production, this would query from a signal provider
     # or the ad server's available audience segments
@@ -182,7 +172,10 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
     Returns:
         ToolResult with GetSignalsResponse data
     """
-    response = await _get_signals_impl(req, context)
+    from src.core.transport_helpers import resolve_identity_from_context
+
+    identity = resolve_identity_from_context(context, require_valid_token=False)
+    response = await _get_signals_impl(req, identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -191,7 +184,7 @@ async def _activate_signal_impl(
     campaign_id: str = None,
     media_buy_id: str = None,
     context: dict | None = None,  # payload-level context
-    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:
     """Shared implementation for activate_signal (used by both MCP and A2A).
 
@@ -200,7 +193,7 @@ async def _activate_signal_impl(
         campaign_id: Optional campaign ID to activate signal for
         media_buy_id: Optional media buy ID to activate signal for
         context: Application level context per adcp spec
-        ctx: FastMCP context (automatically provided)
+        identity: Resolved identity from transport boundary
 
     Returns:
         ActivateSignalResponse with activation status
@@ -208,22 +201,21 @@ async def _activate_signal_impl(
     start_time = time.time()
 
     # Authentication required for signal activation
-    principal_id = _get_principal_id_from_context(ctx)
+    principal_id = identity.principal_id if identity else None
 
-    # Get tenant information
-    tenant = get_current_tenant()
-    if not tenant:
-        raise ToolError("No tenant context available")
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    if not identity or not identity.tenant:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Get the Principal object with ad server mappings
     if not principal_id:
-        raise ToolError("Authentication required for signal activation")
-    principal = get_principal_object(principal_id)
+        raise AdCPAuthenticationError("Authentication required for signal activation")
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
 
     # Apply testing hooks
-    if not ctx:
-        raise ToolError("Context required for signal activation")
-    testing_ctx = get_testing_context(ctx)
+    if not identity:
+        raise AdCPValidationError("Context required for signal activation")
+    testing_ctx = identity.testing_context if identity else AdCPTestContext()
     campaign_info = {"endpoint": "activate_signal", "signal_id": signal_agent_segment_id}
     # Note: apply_testing_hooks modifies response data dict, not called here as no response yet
 
@@ -310,23 +302,35 @@ async def activate_signal(
     Returns:
         ToolResult with ActivateSignalResponse data
     """
-    response = await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, ctx)
+    from src.core.transport_helpers import resolve_identity_from_context
+
+    identity = resolve_identity_from_context(ctx)
+    response = await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
-async def get_signals_raw(req: GetSignalsRequest, ctx: Context | ToolContext | None = None) -> GetSignalsResponse:
+async def get_signals_raw(
+    req: GetSignalsRequest,
+    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
+) -> GetSignalsResponse:
     """Optional endpoint for discovering available signals (raw function for A2A server use).
 
     Delegates to the shared implementation.
 
     Args:
         req: Request containing query parameters for signal discovery
-        context: FastMCP context (automatically provided)
+        ctx: FastMCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         GetSignalsResponse containing matching signals
     """
-    return await _get_signals_impl(req, ctx)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    return await _get_signals_impl(req, identity)
 
 
 async def activate_signal_raw(
@@ -335,6 +339,7 @@ async def activate_signal_raw(
     media_buy_id: str = None,
     context: dict | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:
     """Activate a signal for use in campaigns (raw function for A2A server use).
 
@@ -346,8 +351,13 @@ async def activate_signal_raw(
         media_buy_id: Optional media buy ID to activate signal for
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         ActivateSignalResponse with activation status
     """
-    return await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, ctx)
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx)
+    return await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)

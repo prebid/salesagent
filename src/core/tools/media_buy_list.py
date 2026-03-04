@@ -4,6 +4,8 @@ Returns media buy status, creative approval state, and optional delivery snapsho
 for monitoring and reporting workflows.
 """
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -17,6 +19,8 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import RootModel, ValidationError
 from sqlalchemy import select
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -57,7 +61,6 @@ from src.core.auth import get_principal_object
 from src.core.config_loader import get_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, MediaPackage
-from src.core.helpers import get_principal_id_from_context
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -69,20 +72,25 @@ from src.core.schemas import (
     Snapshot,
     SnapshotUnavailableReason,
 )
-from src.core.testing_hooks import get_testing_context
 from src.core.validation_helpers import format_validation_error
 
 
-def _get_media_buys_impl(req: GetMediaBuysRequest, ctx: Context | ToolContext | None) -> GetMediaBuysResponse:
+def _get_media_buys_impl(
+    req: GetMediaBuysRequest,
+    identity: ResolvedIdentity | None = None,
+) -> GetMediaBuysResponse:
     """Get media buys with status, creative approval state, and optional delivery snapshots."""
-    if ctx is None:
-        raise ToolError("Context is required")
+    from src.core.helpers.context_helpers import ensure_tenant_context
+
+    if identity is None:
+        raise AdCPAuthenticationError("Identity is required")
 
     if req.account_id is not None:
-        raise ToolError("account_id filtering is not yet supported")
+        raise AdCPValidationError("account_id filtering is not yet supported")
 
-    testing_ctx = get_testing_context(ctx)
-    principal_id = get_principal_id_from_context(ctx)
+    testing_ctx = identity.testing_context
+    ensure_tenant_context(identity)
+    principal_id = identity.principal_id
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
@@ -193,7 +201,7 @@ def _get_media_buys_impl(req: GetMediaBuysRequest, ctx: Context | ToolContext | 
     )
 
 
-def get_media_buys(
+async def get_media_buys(
     media_buy_ids: list[str] | None = None,
     buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -228,7 +236,8 @@ def get_media_buys(
             account_id=account_id,
             context=cast(ContextObject | None, context),
         )
-        response = _get_media_buys_impl(req, ctx)
+        identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+        response = _get_media_buys_impl(req, identity)
         return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:
         raise ToolError(format_validation_error(e, context="get_media_buys request"))
@@ -242,6 +251,7 @@ def get_media_buys_raw(
     account_id: str | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
 ):
     """Get media buys (raw function for A2A server use).
 
@@ -253,10 +263,16 @@ def get_media_buys_raw(
         account_id: Filter to a specific account (optional)
         context: Application level context (optional)
         ctx: Context for authentication
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         GetMediaBuysResponse
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx)
+
     req = GetMediaBuysRequest(
         media_buy_ids=media_buy_ids,
         buyer_refs=buyer_refs,
@@ -265,7 +281,7 @@ def get_media_buys_raw(
         account_id=account_id,
         context=cast(ContextObject | None, context),
     )
-    return _get_media_buys_impl(req, ctx)
+    return _get_media_buys_impl(req, identity)
 
 
 # --- Helper functions ---

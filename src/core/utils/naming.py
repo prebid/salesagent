@@ -15,7 +15,6 @@ Supports variable substitution with fallback syntax:
 - {package_index} - Package position number (1, 2, 3...)
 """
 
-import asyncio
 import logging
 from datetime import datetime
 
@@ -143,8 +142,10 @@ def generate_auto_name(
             if hasattr(manifest, "campaign_objectives") and manifest.campaign_objectives:
                 objectives = manifest.campaign_objectives
 
-        # Run async agent synchronously
-        generated_name = asyncio.run(
+        # Run async agent — handle both sync and async calling contexts
+        from src.core.validation_helpers import run_async_in_sync_context
+
+        generated_name = run_async_in_sync_context(
             generate_name_async(
                 agent=agent,
                 buyer_ref=request.buyer_ref,

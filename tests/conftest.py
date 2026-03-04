@@ -14,6 +14,24 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+def pytest_configure(config):
+    """Prevent fastmcp from overriding pytest's warning filters.
+
+    FastMCP's __init__.py calls ``warnings.simplefilter("default",
+    DeprecationWarning)`` at import time, which prepends a catch-all
+    ``default`` filter to the front of the warnings filter list.  This
+    causes the ``ignore`` entries in pytest.ini's ``filterwarnings`` to
+    be shadowed, so third-party deprecation warnings (a2a HTTP_413,
+    starlette WSGI) leak through despite being explicitly suppressed.
+
+    Setting FASTMCP_DEPRECATION_WARNINGS=false before fastmcp is
+    imported disables this behaviour and lets pytest.ini filters work
+    as intended.
+    """
+    os.environ.setdefault("FASTMCP_DEPRECATION_WARNINGS", "false")
+
+
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -29,7 +47,6 @@ from tests.fixtures import (
     MediaBuyFactory,
     MockAdapter,
     MockDatabase,
-    MockGeminiService,
     MockOAuthProvider,
     PrincipalFactory,
     ProductFactory,
@@ -92,8 +109,9 @@ def test_environment(monkeypatch, request):
     monkeypatch.setenv("ADCP_TESTING", "true")
     monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")  # Enable test mode for auth
 
-    # Check if this is an integration test that needs the database
+    # Check if this is a test that needs the database
     is_integration_test = "integration" in str(request.fspath)
+    has_requires_db_marker = request.node.get_closest_marker("requires_db") is not None
     database_url = os.environ.get("DATABASE_URL")
 
     # Check if this is a unittest.TestCase (which manages its own DATABASE_URL)
@@ -105,8 +123,9 @@ def test_environment(monkeypatch, request):
     # IMPORTANT: Unit tests should NEVER use real database connections
     # Remove database-related env vars UNLESS:
     # 1. This is an integration test with DATABASE_URL set (for integration_db fixture), OR
-    # 2. This is a unittest.TestCase class (manages its own DATABASE_URL in setUpClass)
-    should_preserve_db = is_integration_test and (database_url or is_unittest_class)
+    # 2. This is a unittest.TestCase class (manages its own DATABASE_URL in setUpClass), OR
+    # 3. This test has @pytest.mark.requires_db marker (e.g. UI integration tests)
+    should_preserve_db = (is_integration_test or has_requires_db_marker) and (database_url or is_unittest_class)
 
     if not should_preserve_db:
         if "DATABASE_URL" in os.environ:
@@ -208,55 +227,9 @@ def mock_adapter():
 
 
 @pytest.fixture
-def mock_gemini():
-    """Provide a mock Gemini AI service."""
-    return MockGeminiService()
-
-
-@pytest.fixture
 def mock_oauth():
     """Provide a mock OAuth provider."""
     return MockOAuthProvider()
-
-
-@pytest.fixture
-def mock_gemini_env(mock_gemini):
-    """Mock Gemini environment."""
-    with patch("google.generativeai.configure"):
-        with patch("google.generativeai.GenerativeModel") as mock_model:
-            mock_model.return_value = mock_gemini
-            yield mock_gemini
-
-
-@pytest.fixture
-def mock_gemini_client():
-    """Mock google.generativeai client for AI-powered tests.
-
-    This fixture patches the Gemini API to return deterministic responses
-    without requiring GEMINI_API_KEY. Use this for testing AI orchestration logic.
-    """
-    with patch("google.generativeai.configure") as mock_configure:
-        with patch("google.generativeai.GenerativeModel") as MockModel:
-            # Create mock model instance
-            mock_model = MagicMock()
-
-            # Default response for test scenarios
-            mock_response = MagicMock()
-            mock_response.text = json.dumps(
-                {"delay_seconds": None, "should_accept": True, "should_reject": False, "creative_actions": []}
-            )
-
-            # Sync and async versions
-            mock_model.generate_content.return_value = mock_response
-
-            async def async_generate(*args, **kwargs):
-                return mock_response
-
-            mock_model.generate_content_async = async_generate
-
-            MockModel.return_value = mock_model
-
-            yield mock_model
 
 
 @pytest.fixture
@@ -280,137 +253,53 @@ def mock_gemini_test_scenarios():
         ),
     }
 
-    with patch("google.generativeai.configure"):
-        with patch("google.generativeai.GenerativeModel") as MockModel:
-            mock_model = MagicMock()
+    mock_model = MagicMock()
 
-            def generate_content(prompt, **kwargs):
-                # Parse prompt to determine which scenario to return
-                response = MagicMock()
-                prompt_str = str(prompt)
+    def generate_content(prompt, **kwargs):
+        # Parse prompt to determine which scenario to return
+        response = MagicMock()
+        prompt_str = str(prompt)
 
-                # Extract just the message part (between quotes after "Their message:")
-                message = ""
-                if 'Their message: "' in prompt_str:
-                    start = prompt_str.find('Their message: "') + len('Their message: "')
-                    end = prompt_str.find('"', start)
-                    message = prompt_str[start:end].lower()
-                else:
-                    message = prompt_str.lower()
+        # Extract just the message part (between quotes after "Their message:")
+        message = ""
+        if 'Their message: "' in prompt_str:
+            start = prompt_str.find('Their message: "') + len('Their message: "')
+            end = prompt_str.find('"', start)
+            message = prompt_str[start:end].lower()
+        else:
+            message = prompt_str.lower()
 
-                # Priority order matters - check most specific patterns first
-                if "wait" in message and "seconds" in message:
-                    response.text = scenarios["delay_10s"]
-                elif "human in the loop" in message or "hitl" in message or "simulate human" in message:
-                    response.text = scenarios["hitl_approve"]
-                elif "ask for" in message or ("request" in message and "field" in message):
-                    response.text = scenarios["creative_ask_field"]
-                elif "reject" in message:
-                    # Check if it's creative rejection or budget rejection
-                    if "url" in message or "missing" in message:
-                        response.text = scenarios["creative_reject"]
-                    elif "budget" in message:
-                        response.text = scenarios["reject_budget"]
-                    else:
-                        response.text = scenarios["creative_reject"]
-                elif "approve" in message:
-                    response.text = scenarios["creative_approve"]
-                else:
-                    # Default: accept without special instructions
-                    response.text = json.dumps({"should_accept": True, "should_reject": False})
+        # Priority order matters - check most specific patterns first
+        if "wait" in message and "seconds" in message:
+            response.text = scenarios["delay_10s"]
+        elif "human in the loop" in message or "hitl" in message or "simulate human" in message:
+            response.text = scenarios["hitl_approve"]
+        elif "ask for" in message or ("request" in message and "field" in message):
+            response.text = scenarios["creative_ask_field"]
+        elif "reject" in message:
+            # Check if it's creative rejection or budget rejection
+            if "url" in message or "missing" in message:
+                response.text = scenarios["creative_reject"]
+            elif "budget" in message:
+                response.text = scenarios["reject_budget"]
+            else:
+                response.text = scenarios["creative_reject"]
+        elif "approve" in message:
+            response.text = scenarios["creative_approve"]
+        else:
+            # Default: accept without special instructions
+            response.text = json.dumps({"should_accept": True, "should_reject": False})
 
-                return response
+        return response
 
-            mock_model.generate_content = generate_content
+    mock_model.generate_content = generate_content
 
-            async def async_generate(prompt, **kwargs):
-                return generate_content(prompt, **kwargs)
+    async def async_generate(prompt, **kwargs):
+        return generate_content(prompt, **kwargs)
 
-            mock_model.generate_content_async = async_generate
+    mock_model.generate_content_async = async_generate
 
-            MockModel.return_value = mock_model
-
-            yield mock_model
-
-
-@pytest.fixture
-def mock_gemini_product_recommendations():
-    """Mock Gemini for product recommendation testing."""
-    with patch("google.generativeai.configure"):
-        with patch("google.generativeai.GenerativeModel") as MockModel:
-            mock_model = MagicMock()
-            mock_response = MagicMock()
-            mock_response.text = json.dumps(
-                {
-                    "product_id": "ai_generated_product",
-                    "name": "AI-Optimized Display Package",
-                    "formats": ["display_300x250", "display_728x90"],
-                    "delivery_type": "guaranteed",
-                    "cpm": 12.50,
-                    "countries": ["US", "CA"],
-                    "targeting_template": {"device_targets": {"device_types": ["desktop", "mobile"]}},
-                    "implementation_config": {},
-                }
-            )
-
-            mock_model.generate_content.return_value = mock_response
-
-            async def async_generate(*args, **kwargs):
-                return mock_response
-
-            mock_model.generate_content_async = async_generate
-
-            MockModel.return_value = mock_model
-
-            yield mock_model
-
-
-@pytest.fixture
-def mock_gemini_policy_checker():
-    """Mock Gemini for policy checking tests."""
-    with patch("google.generativeai.configure"):
-        with patch("google.generativeai.GenerativeModel") as MockModel:
-            mock_model = MagicMock()
-
-            def generate_policy_response(prompt, **kwargs):
-                response = MagicMock()
-
-                # Parse prompt to determine policy status
-                prompt_lower = prompt.lower() if isinstance(prompt, str) else ""
-
-                if any(word in prompt_lower for word in ["alcohol", "tobacco", "gambling", "predatory"]):
-                    response.text = json.dumps(
-                        {
-                            "status": "restricted",
-                            "reason": "Contains age-restricted content",
-                            "restrictions": ["Requires age verification"],
-                            "warnings": [],
-                        }
-                    )
-                elif any(word in prompt_lower for word in ["prohibited", "illegal", "dangerous"]):
-                    response.text = json.dumps(
-                        {
-                            "status": "blocked",
-                            "reason": "Contains prohibited content",
-                            "restrictions": [],
-                            "warnings": [],
-                        }
-                    )
-                else:
-                    response.text = json.dumps(
-                        {"status": "allowed", "reason": None, "restrictions": [], "warnings": []}
-                    )
-
-                return response
-
-            async def async_policy_response(prompt, **kwargs):
-                return generate_policy_response(prompt, **kwargs)
-
-            mock_model.generate_content_async = async_policy_response
-
-            MockModel.return_value = mock_model
-
-            yield mock_model
+    yield mock_model
 
 
 # ============================================================================
@@ -500,7 +389,7 @@ def flask_app():
 
             from src.admin.app import create_app
 
-            app, _ = create_app()
+            app = create_app()
             app.config["TESTING"] = True
             app.config["SECRET_KEY"] = "test-secret-key"
             return app

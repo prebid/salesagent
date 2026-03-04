@@ -6,13 +6,12 @@ These fixtures are for tests that require database and service integration.
 
 import os
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.admin.app import create_app
 
-admin_app, _ = create_app()
+admin_app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from tests.fixtures import TenantFactory
@@ -632,22 +631,6 @@ def sample_products(integration_db, sample_tenant):
         return [p.product_id for p in products]
 
 
-@pytest.fixture
-def mock_external_apis():
-    """Mock external APIs but allow database access."""
-    with patch("requests.post") as mock_post:
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"status": "ok"}
-
-        with patch("google.generativeai.configure"):
-            with patch("google.generativeai.GenerativeModel") as mock_model:
-                mock_instance = MagicMock()
-                mock_instance.generate_content.return_value.text = "AI generated content"
-                mock_model.return_value = mock_instance
-
-                yield {"requests": mock_post, "gemini": mock_instance}
-
-
 @pytest.fixture(scope="function")
 def mcp_server(integration_db):
     """Start a real MCP server for integration testing using the test database."""
@@ -770,6 +753,10 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+    if process.stdout:
+        process.stdout.close()
+    if process.stderr:
+        process.stderr.close()
 
     # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
 
@@ -780,7 +767,7 @@ def test_admin_app(integration_db):
     # integration_db ensures database tables are created
     from src.admin.app import create_app
 
-    app, _ = create_app()
+    app = create_app()
     app.config["TESTING"] = True
     app.config["SECRET_KEY"] = "test-secret-key"
     app.config["WTF_CSRF_ENABLED"] = False

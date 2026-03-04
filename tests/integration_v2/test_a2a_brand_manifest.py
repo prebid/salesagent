@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_get_products_with_brand_manifest_dict(sample_tenant, sample_principal, sample_products):
+async def test_get_products_with_brand_manifest_dict(sample_tenant, sample_principal, sample_products, mock_identity):
     """Test get_products skill invocation with brand_manifest as dict.
 
     KNOWN ISSUE: A2A server loses brand_manifest dict data during parameter extraction.
@@ -33,14 +33,12 @@ async def test_get_products_with_brand_manifest_dict(sample_tenant, sample_princ
     # Mock auth token
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    # Mock tenant detection using real tenant from database
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
+    # Mock identity resolution
+    with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+        # Build ServerCallContext with Host header for tenant detection
+        from tests.a2a_helpers import make_a2a_context
 
-        # Set request headers for tenant detection
-        from src.a2a_server import adcp_a2a_server
-
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         # Create A2A message with brand_manifest as dict
         message = create_a2a_message_with_skill(
@@ -53,7 +51,7 @@ async def test_get_products_with_brand_manifest_dict(sample_tenant, sample_princ
         params = MessageSendParams(message=message)
 
         # Call handler using correct A2A SDK API
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         # Verify we got a Task with artifacts
         assert isinstance(result, Task)
@@ -83,7 +81,9 @@ async def test_get_products_with_brand_manifest_dict(sample_tenant, sample_princ
 
 
 @pytest.mark.asyncio
-async def test_get_products_with_brand_manifest_url_only(sample_tenant, sample_principal, sample_products):
+async def test_get_products_with_brand_manifest_url_only(
+    sample_tenant, sample_principal, sample_products, mock_identity
+):
     """Test get_products skill invocation with brand_manifest as URL string.
 
     KNOWN ISSUE: A2A server rejects brand_manifest as plain string (URL-only format).
@@ -93,11 +93,10 @@ async def test_get_products_with_brand_manifest_url_only(sample_tenant, sample_p
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
-        from src.a2a_server import adcp_a2a_server
+    with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+        from tests.a2a_helpers import make_a2a_context
 
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -108,7 +107,7 @@ async def test_get_products_with_brand_manifest_url_only(sample_tenant, sample_p
         )
         params = MessageSendParams(message=message)
 
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         assert isinstance(result, Task)
         assert result.artifacts is not None
@@ -116,16 +115,17 @@ async def test_get_products_with_brand_manifest_url_only(sample_tenant, sample_p
 
 
 @pytest.mark.asyncio
-async def test_get_products_with_brand_manifest_name_only(sample_tenant, sample_principal, sample_products):
+async def test_get_products_with_brand_manifest_name_only(
+    sample_tenant, sample_principal, sample_products, mock_identity
+):
     """Test get_products skill invocation with brand_manifest containing only name."""
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
-        from src.a2a_server import adcp_a2a_server
+    with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+        from tests.a2a_helpers import make_a2a_context
 
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -136,23 +136,24 @@ async def test_get_products_with_brand_manifest_name_only(sample_tenant, sample_
         )
         params = MessageSendParams(message=message)
 
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         assert isinstance(result, Task)
         assert result.artifacts is not None
 
 
 @pytest.mark.asyncio
-async def test_get_products_backward_compat_promoted_offering(sample_tenant, sample_principal, sample_products):
+async def test_get_products_backward_compat_promoted_offering(
+    sample_tenant, sample_principal, sample_products, mock_identity
+):
     """Test get_products still works with deprecated promoted_offering parameter."""
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
-        from src.a2a_server import adcp_a2a_server
+    with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+        from tests.a2a_helpers import make_a2a_context
 
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -163,23 +164,24 @@ async def test_get_products_backward_compat_promoted_offering(sample_tenant, sam
         )
         params = MessageSendParams(message=message)
 
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         assert isinstance(result, Task)
         assert result.artifacts is not None
 
 
 @pytest.mark.asyncio
-async def test_get_products_missing_brand_info_uses_brief_fallback(sample_tenant, sample_principal, sample_products):
+async def test_get_products_missing_brand_info_uses_brief_fallback(
+    sample_tenant, sample_principal, sample_products, mock_identity
+):
     """Test get_products uses brief as fallback when brand information is missing."""
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-    with patch("src.a2a_server.adcp_a2a_server.get_principal_from_token") as mock_get_principal:
-        mock_get_principal.return_value = sample_principal["principal_id"]
-        from src.a2a_server import adcp_a2a_server
+    with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+        from tests.a2a_helpers import make_a2a_context
 
-        adcp_a2a_server._request_headers.set({"host": f"{sample_tenant['subdomain']}.example.com"})
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         message = create_a2a_message_with_skill(
             skill_name="get_products",
@@ -189,7 +191,7 @@ async def test_get_products_missing_brand_info_uses_brief_fallback(sample_tenant
         )
         params = MessageSendParams(message=message)
 
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, context=ctx)
 
         # Should complete (uses brief as fallback for promoted_offering)
         assert isinstance(result, Task)

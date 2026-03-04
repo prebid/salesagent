@@ -54,7 +54,7 @@ class TestAuthRemovalChanges:
                         "name": "Test Tenant",
                     }
                     with patch("src.core.auth.set_current_tenant"):
-                        with patch("src.core.auth.get_principal_from_token", return_value="test_principal"):
+                        with patch("src.core.auth.get_principal_from_token", return_value=("test_principal", None)):
                             principal_id, tenant = get_principal_from_context(context)
                             assert principal_id == "test_principal"
                             assert tenant == {

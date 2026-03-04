@@ -8,7 +8,6 @@ This runs as a background task and sends reports when GAM data is fresh (after 4
 import asyncio
 import logging
 import os
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -22,7 +21,6 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WebhookDeliveryLog
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
-from src.core.tool_context import ToolContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -206,14 +204,14 @@ class DeliveryWebhookScheduler:
                     return
 
             # Fetch delivery metrics
-            # Create a minimal context object for the delivery call
+            # Create a ResolvedIdentity for the delivery call
+            from src.core.resolved_identity import ResolvedIdentity
 
-            context = ToolContext(
-                context_id=str(uuid.uuid4()),
-                tenant_id=media_buy.tenant_id,
+            identity = ResolvedIdentity(
                 principal_id=media_buy.principal_id,
-                tool_name="get_media_buy_delivery",
-                request_timestamp=datetime.now(UTC),
+                tenant_id=media_buy.tenant_id,
+                tenant={"tenant_id": media_buy.tenant_id},
+                protocol="rest",
             )
 
             req = GetMediaBuyDeliveryRequest(
@@ -225,7 +223,7 @@ class DeliveryWebhookScheduler:
                 context=None,
             )
 
-            delivery_response = _get_media_buy_delivery_impl(req, context)
+            delivery_response = _get_media_buy_delivery_impl(req, identity)
 
             if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
                 logger.warning(

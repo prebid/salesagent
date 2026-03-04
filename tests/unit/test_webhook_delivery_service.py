@@ -214,7 +214,8 @@ def test_reset_sequence(webhook_service, mock_db_session):
         assert media_buy_id not in webhook_service._sequence_numbers
 
 
-def test_failure_tracking(webhook_service, mock_db_session):
+@patch("src.services.webhook_delivery_service.time.sleep")
+def test_failure_tracking(mock_sleep, webhook_service, mock_db_session):
     """Test that failures are tracked correctly with circuit breaker (PR #86)."""
     media_buy_id = "buy_fail"
     start_time = datetime.now(UTC)

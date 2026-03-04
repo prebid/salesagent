@@ -20,8 +20,8 @@ from decimal import Decimal
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-from fastmcp.server.context import Context
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     Budget,
     UpdateMediaBuyError,
@@ -39,12 +39,19 @@ MODULE = "src.core.tools.media_buy_update"
 DB_MODULE = "src.core.database.database_session"
 
 
-@pytest.fixture
-def mock_ctx():
-    """Create a mock FastMCP Context."""
-    ctx = MagicMock(spec=Context)
-    ctx.headers = {"x-adcp-auth": "test-token"}
-    return ctx
+def _make_identity(
+    principal_id: str | None = "principal_test",
+    tenant_id: str = "tenant_test",
+    dry_run: bool = False,
+) -> ResolvedIdentity:
+    """Create a ResolvedIdentity for tests."""
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant={"tenant_id": tenant_id, "name": "Test"},
+        protocol="mcp",
+        testing_context=AdCPTestContext(dry_run=dry_run),
+    )
 
 
 def _make_mock_db_session():
@@ -85,10 +92,8 @@ def standard_mocks():
     mock_session, mock_cm = _make_mock_db_session()
 
     with (
-        patch(f"{MODULE}.get_principal_id_from_context") as m_principal_id,
-        patch(f"{MODULE}.get_current_tenant") as m_tenant,
+        patch("src.core.helpers.context_helpers.ensure_tenant_context") as m_tenant,
         patch(f"{MODULE}.get_principal_object") as m_principal_obj,
-        patch(f"{MODULE}.get_testing_context") as m_testing_ctx,
         patch(f"{MODULE}._verify_principal") as m_verify,
         patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
         patch(f"{MODULE}.get_adapter") as m_adapter,
@@ -96,14 +101,12 @@ def standard_mocks():
         patch(f"{DB_MODULE}.get_db_session") as m_db,
     ):
         # Standard setup: authenticated principal, test tenant, no dry_run
-        m_principal_id.return_value = "principal_test"
         m_tenant.return_value = {"tenant_id": "tenant_test", "name": "Test"}
         m_principal_obj.return_value = MagicMock(
             principal_id="principal_test",
             name="Test Principal",
             platform_mappings={},
         )
-        m_testing_ctx.return_value = AdCPTestContext(dry_run=False)
 
         # Context manager with workflow step
         mock_step = MagicMock()
@@ -126,10 +129,8 @@ def standard_mocks():
         m_db.return_value = mock_cm
 
         yield {
-            "principal_id": m_principal_id,
             "tenant": m_tenant,
             "principal_obj": m_principal_obj,
-            "testing_ctx": m_testing_ctx,
             "verify_principal": m_verify,
             "ctx_mgr": m_ctx_mgr,
             "ctx_mgr_instance": mock_ctx_mgr_instance,
@@ -159,14 +160,15 @@ def _setup_db_session(standard_mocks):
 # ---------------------------------------------------------------------------
 
 
-def test_principal_not_found_returns_error(mock_ctx, standard_mocks):
+def test_principal_not_found_returns_error(standard_mocks):
     """When auth resolves to a non-existent principal, impl returns
     UpdateMediaBuyError with code='principal_not_found'."""
     # Principal ID resolves but the object doesn't exist in DB
     standard_mocks["principal_obj"].return_value = None
 
+    identity = _make_identity()
     req = UpdateMediaBuyRequest(media_buy_id="mb_001")
-    result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+    result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuyError)
     assert len(result.errors) == 1
@@ -185,7 +187,7 @@ def test_principal_not_found_returns_error(mock_ctx, standard_mocks):
 # ---------------------------------------------------------------------------
 
 
-def test_combined_campaign_and_package_update(mock_ctx, standard_mocks):
+def test_combined_campaign_and_package_update(standard_mocks):
     """When both total_budget and packages with budget provided,
     both are applied; response has affected_packages for all packages."""
     # Adapter returns success for package budget update
@@ -216,12 +218,13 @@ def test_combined_campaign_and_package_update(mock_ctx, standard_mocks):
     mock_scalars.all.return_value = [mock_pkg_a, mock_pkg_b]
     mock_session.scalars.return_value = mock_scalars
 
+    identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_combined",
         budget=Budget(total=5000.0, currency="USD", pacing="even"),
         packages=[{"package_id": "pkg_A", "budget": 2500.0}],
     )
-    result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+    result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
     assert result.media_buy_id == "mb_combined"
@@ -242,7 +245,7 @@ def test_combined_campaign_and_package_update(mock_ctx, standard_mocks):
 # ---------------------------------------------------------------------------
 
 
-def test_multi_package_update_processes_all_packages(mock_ctx, standard_mocks):
+def test_multi_package_update_processes_all_packages(standard_mocks):
     """When packages contains 3 items with budget updates,
     all 3 are processed and appear in affected_packages."""
     # Adapter returns success for each update_package_budget call
@@ -261,6 +264,7 @@ def test_multi_package_update_processes_all_packages(mock_ctx, standard_mocks):
     mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
     mock_session.scalars.return_value = mock_scalars
 
+    identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_multi",
         packages=[
@@ -269,7 +273,7 @@ def test_multi_package_update_processes_all_packages(mock_ctx, standard_mocks):
             {"package_id": "pkg_3", "budget": 3000.0},
         ],
     )
-    result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+    result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
     # All 3 packages should appear in affected_packages
@@ -287,7 +291,7 @@ def test_multi_package_update_processes_all_packages(mock_ctx, standard_mocks):
 # ---------------------------------------------------------------------------
 
 
-def test_buyer_ref_positive_resolution(mock_ctx, standard_mocks):
+def test_buyer_ref_positive_resolution(standard_mocks):
     """When buyer_ref provided, DB lookup resolves to correct media_buy_id,
     and update proceeds successfully."""
     mock_session = _setup_db_session(standard_mocks)
@@ -297,16 +301,17 @@ def test_buyer_ref_positive_resolution(mock_ctx, standard_mocks):
     mock_media_buy.media_buy_id = "mb_resolved_123"
     mock_session.scalars.return_value.first.return_value = mock_media_buy
 
+    identity = _make_identity()
     # Use buyer_ref instead of media_buy_id (no packages, no budget = empty update)
     req = UpdateMediaBuyRequest(buyer_ref="buyer_ref_abc")
-    result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+    result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
     # The resolved media_buy_id should be used in the response
     assert result.media_buy_id == "mb_resolved_123"
 
-    # _verify_principal should have been called with the resolved ID
-    standard_mocks["verify_principal"].assert_called_once_with("mb_resolved_123", mock_ctx)
+    # _verify_principal should have been called with the resolved ID and identity
+    standard_mocks["verify_principal"].assert_called_once_with("mb_resolved_123", identity)
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +320,7 @@ def test_buyer_ref_positive_resolution(mock_ctx, standard_mocks):
 # ---------------------------------------------------------------------------
 
 
-def test_main_flow_package_budget_update(mock_ctx, standard_mocks):
+def test_main_flow_package_budget_update(standard_mocks):
     """When package budget change through impl, returns UpdateMediaBuySuccess
     with media_buy_id and affected_packages."""
     # Adapter returns success
@@ -334,11 +339,12 @@ def test_main_flow_package_budget_update(mock_ctx, standard_mocks):
     mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
     mock_session.scalars.return_value = mock_scalars
 
+    identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_main",
         packages=[{"package_id": "pkg_main_1", "budget": 15000.0}],
     )
-    result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+    result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
     assert result.media_buy_id == "mb_main"
@@ -361,7 +367,7 @@ def test_main_flow_package_budget_update(mock_ctx, standard_mocks):
 class TestFlightDateValidationAndPersistence:
     """Covers both positive (dates persisted) and negative (invalid range rejected)."""
 
-    def test_valid_date_range_persists_to_db(self, mock_ctx, standard_mocks):
+    def test_valid_date_range_persists_to_db(self, standard_mocks):
         """When start_time/end_time provided with valid range, persisted to DB."""
         mock_session = _setup_db_session(standard_mocks)
 
@@ -384,12 +390,13 @@ class TestFlightDateValidationAndPersistence:
         start = datetime(2025, 6, 1, tzinfo=UTC)
         end = datetime(2025, 12, 1, tzinfo=UTC)
 
+        identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_dates",
             start_time=start,
             end_time=end,
         )
-        result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
         assert result.media_buy_id == "mb_dates"
@@ -397,7 +404,7 @@ class TestFlightDateValidationAndPersistence:
         mock_session.execute.assert_called()
         mock_session.commit.assert_called()
 
-    def test_invalid_date_range_returns_error(self, mock_ctx, standard_mocks):
+    def test_invalid_date_range_returns_error(self, standard_mocks):
         """When end_time <= start_time, returns code='invalid_date_range'."""
         mock_session = _setup_db_session(standard_mocks)
 
@@ -418,18 +425,19 @@ class TestFlightDateValidationAndPersistence:
         start = datetime(2025, 6, 1, tzinfo=UTC)
         end = datetime(2025, 3, 1, tzinfo=UTC)
 
+        identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_dates_bad",
             start_time=start,
             end_time=end,
         )
-        result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
         assert len(result.errors) == 1
         assert result.errors[0].code == "invalid_date_range"
 
-    def test_end_equals_start_returns_error(self, mock_ctx, standard_mocks):
+    def test_end_equals_start_returns_error(self, standard_mocks):
         """When end_time == start_time, returns code='invalid_date_range'."""
         mock_session = _setup_db_session(standard_mocks)
 
@@ -447,12 +455,13 @@ class TestFlightDateValidationAndPersistence:
         ]
         mock_session.scalars.return_value = mock_scalars
 
+        identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_dates_equal",
             start_time=same_time,
             end_time=same_time,
         )
-        result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
         assert result.errors[0].code == "invalid_date_range"
@@ -467,7 +476,7 @@ class TestFlightDateValidationAndPersistence:
 class TestCampaignBudgetValidationAndPersistence:
     """Covers both positive (budget persisted) and negative (invalid budget rejected)."""
 
-    def test_positive_budget_persists_to_db(self, mock_ctx, standard_mocks):
+    def test_positive_budget_persists_to_db(self, standard_mocks):
         """When total_budget > 0, persisted to DB, all packages affected."""
         mock_session = _setup_db_session(standard_mocks)
 
@@ -484,11 +493,12 @@ class TestCampaignBudgetValidationAndPersistence:
         mock_scalars.all.return_value = [mock_pkg]
         mock_session.scalars.return_value = mock_scalars
 
+        identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_budget",
             budget=Budget(total=10000.0, currency="USD", pacing="even"),
         )
-        result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
         assert result.media_buy_id == "mb_budget"
@@ -500,7 +510,7 @@ class TestCampaignBudgetValidationAndPersistence:
         mock_session.execute.assert_called()
         mock_session.commit.assert_called()
 
-    def test_zero_budget_returns_error(self, mock_ctx, standard_mocks):
+    def test_zero_budget_returns_error(self, standard_mocks):
         """When total_budget == 0, returns code='invalid_budget'.
 
         Note: Budget validation (total <= 0) happens AFTER currency validation.
@@ -514,17 +524,18 @@ class TestCampaignBudgetValidationAndPersistence:
         mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
         mock_session.scalars.return_value = mock_scalars
 
+        identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_budget_zero",
             budget=Budget(total=0.0, currency="USD", pacing="even"),
         )
-        result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
         assert len(result.errors) == 1
         assert result.errors[0].code == "invalid_budget"
 
-    def test_negative_budget_returns_error(self, mock_ctx, standard_mocks):
+    def test_negative_budget_returns_error(self, standard_mocks):
         """When total_budget < 0, returns code='invalid_budget'."""
         mock_session = _setup_db_session(standard_mocks)
         mock_media_buy = _make_mock_media_buy("mb_budget_neg")
@@ -533,11 +544,12 @@ class TestCampaignBudgetValidationAndPersistence:
         mock_scalars.first.side_effect = [mock_media_buy, mock_currency_limit]
         mock_session.scalars.return_value = mock_scalars
 
+        identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_budget_neg",
             budget=Budget(total=-500.0, currency="USD", pacing="even"),
         )
-        result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
         assert len(result.errors) == 1
@@ -550,7 +562,7 @@ class TestCampaignBudgetValidationAndPersistence:
 # ---------------------------------------------------------------------------
 
 
-def test_manual_approval_path_through_impl(mock_ctx, standard_mocks):
+def test_manual_approval_path_through_impl(standard_mocks):
     """When adapter.manual_approval_required=True and 'update_media_buy'
     in manual_approval_operations, workflow step created and response
     indicates pending status."""
@@ -558,11 +570,12 @@ def test_manual_approval_path_through_impl(mock_ctx, standard_mocks):
     standard_mocks["adapter_instance"].manual_approval_required = True
     standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
 
+    identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_manual",
         buyer_ref="buyer_manual",
     )
-    result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+    result = _update_media_buy_impl(req=req, identity=identity)
 
     # Should return UpdateMediaBuySuccess (not error)
     assert isinstance(result, UpdateMediaBuySuccess)
@@ -585,7 +598,7 @@ def test_manual_approval_path_through_impl(mock_ctx, standard_mocks):
 # ---------------------------------------------------------------------------
 
 
-def test_package_not_found_returns_error(mock_ctx, standard_mocks):
+def test_package_not_found_returns_error(standard_mocks):
     """When package_id references non-existent package in targeting_overlay
     update path, returns code='package_not_found'."""
     mock_session = _setup_db_session(standard_mocks)
@@ -593,6 +606,7 @@ def test_package_not_found_returns_error(mock_ctx, standard_mocks):
     # Package lookup returns None
     mock_session.scalars.return_value.first.return_value = None
 
+    identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_pkg_nf",
         packages=[
@@ -602,9 +616,102 @@ def test_package_not_found_returns_error(mock_ctx, standard_mocks):
             }
         ],
     )
-    result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+    result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuyError)
     assert len(result.errors) == 1
     assert result.errors[0].code == "package_not_found"
     assert "pkg_nonexistent" in result.errors[0].message
+
+
+# ---------------------------------------------------------------------------
+# BUG: Campaign-level pause skips workflow step completion (#1041 Bug 2)
+# ---------------------------------------------------------------------------
+
+
+def test_pause_completes_workflow_step(standard_mocks):
+    """Campaign-level pause must call update_workflow_step(status='completed').
+
+    Bug #1041: The pause early-return path (line 441) returns
+    UpdateMediaBuySuccess without updating the workflow step, leaving it
+    in 'in_progress' forever.
+    """
+    # Configure adapter to return success for pause
+    mock_result = UpdateMediaBuySuccess(
+        media_buy_id="mb_pause",
+        buyer_ref="buyer_pause",
+        affected_packages=[],
+    )
+    standard_mocks["adapter_instance"].update_media_buy.return_value = mock_result
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        media_buy_id="mb_pause",
+        buyer_ref="buyer_pause",
+        paused=True,
+    )
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    # Should succeed
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert result.media_buy_id == "mb_pause"
+
+    # BUG: Workflow step must be marked 'completed' after successful pause
+    update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
+    assert len(update_calls) >= 1, (
+        "update_workflow_step never called — workflow step left in 'in_progress' state. "
+        "The pause early-return path must complete the workflow step."
+    )
+    final_call_kwargs = update_calls[-1][1]
+    assert final_call_kwargs["status"] == "completed", (
+        f"Workflow step status is '{final_call_kwargs['status']}', expected 'completed'. "
+        "The pause path returns without completing the workflow step."
+    )
+
+
+# ---------------------------------------------------------------------------
+# BUG: Manual approval gate stores no request data (#1041 Bug 1)
+# ---------------------------------------------------------------------------
+
+
+def test_manual_approval_stores_raw_request(standard_mocks):
+    """When manual approval is required, the workflow step must store the
+    original request data so approval can execute the update later.
+
+    Bug #1041: The approval gate returns UpdateMediaBuySuccess with
+    affected_packages=[] and never stores the request. After approval,
+    there is nothing to execute.
+    """
+    standard_mocks["adapter_instance"].manual_approval_required = True
+    standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        media_buy_id="mb_approval",
+        buyer_ref="buyer_approval",
+        paused=True,
+    )
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+
+    # The workflow step's response_data must contain enough information
+    # to execute the update after approval. At minimum, the request data
+    # should be stored (similar to create_media_buy's raw_request pattern).
+    update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
+    assert len(update_calls) >= 1
+    call_kwargs = update_calls[-1][1]
+
+    # The response_data stored in the workflow step
+    response_data = call_kwargs.get("response_data", {})
+
+    # BUG: response_data contains affected_packages=[] and nothing about
+    # the actual update request. After approval, there's nothing to execute.
+    # It should contain the original request (paused=True, etc.)
+    assert (
+        "request_data" in response_data or "raw_request" in response_data or response_data.get("paused") is not None
+    ), (
+        f"Workflow step response_data contains no request information: {response_data}. "
+        "After approval, the system has no data to execute the update. "
+        "The approval gate must store the original request (like create_media_buy stores raw_request)."
+    )

@@ -110,8 +110,7 @@ class TestPlacementIdsValidation:
         _update_media_buy_impl returns UpdateMediaBuyError with code='invalid_placement_ids'."""
         from unittest.mock import MagicMock, Mock, patch
 
-        from fastmcp.server.context import Context
-
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -119,8 +118,12 @@ class TestPlacementIdsValidation:
         MODULE = "src.core.tools.media_buy_update"
         DB_MODULE = "src.core.database.database_session"
 
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.headers = {"x-adcp-auth": "test-token"}
+        identity = ResolvedIdentity(
+            principal_id="principal_test",
+            tenant_id="t1",
+            tenant={"tenant_id": "t1", "name": "Test"},
+            testing_context=AdCPTestContext(dry_run=False),
+        )
 
         # Build mock DB session
         mock_session = MagicMock()
@@ -129,10 +132,11 @@ class TestPlacementIdsValidation:
         mock_cm.__exit__ = Mock(return_value=False)
 
         with (
-            patch(f"{MODULE}.get_principal_id_from_context", return_value="principal_test"),
-            patch(f"{MODULE}.get_current_tenant", return_value={"tenant_id": "t1", "name": "Test"}),
+            patch(
+                "src.core.helpers.context_helpers.ensure_tenant_context",
+                return_value={"tenant_id": "t1", "name": "Test"},
+            ),
             patch(f"{MODULE}.get_principal_object") as m_principal_obj,
-            patch(f"{MODULE}.get_testing_context", return_value=AdCPTestContext(dry_run=False)),
             patch(f"{MODULE}._verify_principal"),
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
             patch(f"{MODULE}.get_adapter") as m_adapter,
@@ -190,7 +194,7 @@ class TestPlacementIdsValidation:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+            result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result, UpdateMediaBuyError)
             assert len(result.errors) == 1
@@ -202,8 +206,7 @@ class TestPlacementIdsValidation:
         _update_media_buy_impl returns UpdateMediaBuyError with code='placement_targeting_not_supported'."""
         from unittest.mock import MagicMock, Mock, patch
 
-        from fastmcp.server.context import Context
-
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -211,8 +214,12 @@ class TestPlacementIdsValidation:
         MODULE = "src.core.tools.media_buy_update"
         DB_MODULE = "src.core.database.database_session"
 
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.headers = {"x-adcp-auth": "test-token"}
+        identity = ResolvedIdentity(
+            principal_id="principal_test",
+            tenant_id="t1",
+            tenant={"tenant_id": "t1", "name": "Test"},
+            testing_context=AdCPTestContext(dry_run=False),
+        )
 
         mock_session = MagicMock()
         mock_cm = MagicMock()
@@ -220,10 +227,11 @@ class TestPlacementIdsValidation:
         mock_cm.__exit__ = Mock(return_value=False)
 
         with (
-            patch(f"{MODULE}.get_principal_id_from_context", return_value="principal_test"),
-            patch(f"{MODULE}.get_current_tenant", return_value={"tenant_id": "t1", "name": "Test"}),
+            patch(
+                "src.core.helpers.context_helpers.ensure_tenant_context",
+                return_value={"tenant_id": "t1", "name": "Test"},
+            ),
             patch(f"{MODULE}.get_principal_object") as m_principal_obj,
-            patch(f"{MODULE}.get_testing_context", return_value=AdCPTestContext(dry_run=False)),
             patch(f"{MODULE}._verify_principal"),
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
             patch(f"{MODULE}.get_adapter") as m_adapter,
@@ -272,7 +280,7 @@ class TestPlacementIdsValidation:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, ctx=mock_ctx)
+            result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result, UpdateMediaBuyError)
             assert len(result.errors) == 1

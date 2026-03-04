@@ -187,7 +187,7 @@ class TestAuthIntegration:
         """Create test Flask app with auth blueprint."""
         from src.admin.app import create_app
 
-        app, _ = create_app({"TESTING": True})
+        app = create_app({"TESTING": True})
         app.config["SECRET_KEY"] = "test_secret"
         return app
 

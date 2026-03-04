@@ -133,19 +133,26 @@ class TestSchemaMatchesLibrary:
             "account",
             "buyer_campaign_ref",
         }
-        assert (
-            lib_fields == local_fields - local_extensions
-        ), f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
+        assert lib_fields == local_fields - local_extensions, (
+            f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
         # GetMediaBuyDeliveryRequest - local extends library with spec fields not yet in library
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
         # TODO(adcp-lib): Remove allowlist when adcp library adds these fields
-        # account_id, account, reporting_dimensions — spec fields not yet in adcp library v3.2.0
-        local_extensions = {"account_id", "account", "reporting_dimensions"}
-        assert (
-            lib_fields == local_fields - local_extensions
-        ), f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
+        # account_id, account, reporting_dimensions, include_package_daily_breakdown,
+        # attribution_window — spec fields not yet in adcp library v3.2.0
+        local_extensions = {
+            "account_id",
+            "account",
+            "reporting_dimensions",
+            "include_package_daily_breakdown",
+            "attribution_window",
+        }
+        assert lib_fields == local_fields - local_extensions, (
+            f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
         # Document known drift for other schemas (to be fixed)
         # These assertions document the current state and will fail when fixed
@@ -175,18 +182,18 @@ class TestSchemaMatchesLibrary:
         # TODO(adcp-lib): Remove allowlist when adcp library adds signal_ids and pagination
         # signal_ids, pagination — AdCP spec fields not yet in adcp library v3.2.0
         local_extensions = {"signal_ids", "pagination"}
-        assert (
-            lib_fields == local_fields - local_extensions
-        ), f"GetSignalsRequest drift: lib={lib_fields}, local={local_fields}"
+        assert lib_fields == local_fields - local_extensions, (
+            f"GetSignalsRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
         # SyncCreativesRequest - local extends library with spec fields not yet in library
         lib_fields = set(LibSyncCreativesRequest.model_fields.keys())
         local_fields = set(LocalSyncCreativesRequest.model_fields.keys())
         # TODO(adcp-lib): Remove allowlist when adcp library adds account
         local_extensions = {"account"}
-        assert (
-            lib_fields == local_fields - local_extensions
-        ), f"SyncCreativesRequest drift: lib={lib_fields}, local={local_fields}"
+        assert lib_fields == local_fields - local_extensions, (
+            f"SyncCreativesRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
     def test_get_products_request_field_optionality(self):
         """Verify GetProductsRequest fields match library optionality.
@@ -250,9 +257,9 @@ class TestSchemaMatchesLibrary:
 
             # Basic field values should match
             assert (lib_req.brief is None) == (our_req.brief is None), f"brief mismatch for {case}"
-            assert (lib_req.brand_manifest is None) == (
-                our_req.brand_manifest is None
-            ), f"brand_manifest mismatch for {case}"
+            assert (lib_req.brand_manifest is None) == (our_req.brand_manifest is None), (
+                f"brand_manifest mismatch for {case}"
+            )
 
 
 class TestAdCPContract:
@@ -1018,15 +1025,15 @@ class TestAdCPContract:
 
         # Verify field count expectations (flexible to allow AdCP spec evolution)
         assert len(adcp_response) >= 8, f"AdCP response should have at least 8 core fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(
-            adcp_response
-        ), "Internal response should have at least as many fields as external response"
+        assert len(internal_response) >= len(adcp_response), (
+            "Internal response should have at least as many fields as external response"
+        )
 
         # Verify internal response has more fields than external (due to internal fields)
         internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert (
-            len(internal_only_fields) >= 3
-        ), f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
+        assert len(internal_only_fields) >= 3, (
+            f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
+        )
 
     def test_package_adcp_compliance(self):
         """Test that Package model complies with AdCP package schema."""
@@ -1104,15 +1111,15 @@ class TestAdCPContract:
         # Package has 1 required field (package_id) + any optional fields that are set
         # We set several optional fields above, so expect at least 1 field
         assert len(adcp_response) >= 1, f"AdCP response should have at least required fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(
-            adcp_response
-        ), "Internal response should have at least as many fields as external response"
+        assert len(internal_response) >= len(adcp_response), (
+            "Internal response should have at least as many fields as external response"
+        )
 
         # Verify internal response has more fields than external (due to internal fields)
         internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert (
-            len(internal_only_fields) >= 3
-        ), f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
+        assert len(internal_only_fields) >= 3, (
+            f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
+        )
 
     def test_package_ignores_invalid_fields(self):
         """Test that Package schema ignores fields that don't exist in AdCP spec.
@@ -1224,21 +1231,21 @@ class TestAdCPContract:
             assert field in internal_response, f"Managed/internal field '{field}' missing from internal response"
 
         # Test managed fields are accessible internally
-        assert (
-            internal_response["key_value_pairs"]["aee_segment"] == "high_value"
-        ), "Managed field should be in internal response"
+        assert internal_response["key_value_pairs"]["aee_segment"] == "high_value", (
+            "Managed field should be in internal response"
+        )
 
         # Verify field count expectations (flexible - targeting has many optional fields)
         assert len(adcp_response) >= 9, f"AdCP response should have at least 9 fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(
-            adcp_response
-        ), "Internal response should have at least as many fields as external response"
+        assert len(internal_response) >= len(adcp_response), (
+            "Internal response should have at least as many fields as external response"
+        )
 
         # Verify internal response has more fields than external (due to managed/internal fields)
         internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert (
-            len(internal_only_fields) >= 4
-        ), f"Expected at least 4 internal/managed-only fields, got {len(internal_only_fields)}"
+        assert len(internal_only_fields) >= 4, (
+            f"Expected at least 4 internal/managed-only fields, got {len(internal_only_fields)}"
+        )
 
     def test_budget_adcp_compliance(self):
         """Test that Budget model complies with AdCP budget schema."""
@@ -1312,9 +1319,9 @@ class TestAdCPContract:
         assert isinstance(adcp_response["templates_available"], bool), "templates_available must be boolean"
 
         # Verify field count (CreativePolicy is simple, count should be stable)
-        assert (
-            len(adcp_response) == 3
-        ), f"CreativePolicy response should have exactly 3 fields, got {len(adcp_response)}"
+        assert len(adcp_response) == 3, (
+            f"CreativePolicy response should have exactly 3 fields, got {len(adcp_response)}"
+        )
 
     def test_creative_status_adcp_compliance(self):
         """Test that CreativeApprovalStatus model complies with AdCP creative-status schema."""
@@ -1344,9 +1351,9 @@ class TestAdCPContract:
         assert adcp_response["status"] in valid_statuses, f"Invalid status value: {adcp_response['status']}"
 
         # Verify field count (flexible - optional fields vary)
-        assert (
-            len(adcp_response) >= 3
-        ), f"CreativeStatus response should have at least 3 core fields, got {len(adcp_response)}"
+        assert len(adcp_response) >= 3, (
+            f"CreativeStatus response should have at least 3 core fields, got {len(adcp_response)}"
+        )
 
     def test_creative_assignment_adcp_compliance(self):
         """Test that CreativeAssignment model complies with AdCP creative-assignment schema."""
@@ -1389,9 +1396,9 @@ class TestAdCPContract:
         # Verify AdCP-specific requirements
         if adcp_response.get("rotation_type"):
             valid_rotations = ["weighted", "sequential", "even"]
-            assert (
-                adcp_response["rotation_type"] in valid_rotations
-            ), f"Invalid rotation_type: {adcp_response['rotation_type']}"
+            assert adcp_response["rotation_type"] in valid_rotations, (
+                f"Invalid rotation_type: {adcp_response['rotation_type']}"
+            )
 
         if adcp_response.get("weight") is not None:
             assert adcp_response["weight"] >= 0, "Weight must be non-negative"
@@ -1400,9 +1407,9 @@ class TestAdCPContract:
             assert 0 <= adcp_response["percentage_goal"] <= 100, "Percentage goal must be 0-100"
 
         # Verify field count (flexible - optional fields vary)
-        assert (
-            len(adcp_response) >= 4
-        ), f"CreativeAssignment response should have at least 4 core fields, got {len(adcp_response)}"
+        assert len(adcp_response) >= 4, (
+            f"CreativeAssignment response should have at least 4 core fields, got {len(adcp_response)}"
+        )
 
     def test_sync_creatives_request_adcp_compliance(self):
         """Test that SyncCreativesRequest model complies with AdCP v2.4 sync-creatives schema."""
@@ -1726,9 +1733,9 @@ class TestAdCPContract:
             assert field in adcp_response, f"Required field '{field}' missing from response"
 
         # Verify we have at least the required fields (and possibly some optional ones)
-        assert len(adcp_response) >= len(
-            required_fields
-        ), f"Response should have at least {len(required_fields)} required fields, got {len(adcp_response)}"
+        assert len(adcp_response) >= len(required_fields), (
+            f"Response should have at least {len(required_fields)} required fields, got {len(adcp_response)}"
+        )
 
     def test_create_media_buy_response_adcp_compliance(self):
         """Test that CreateMediaBuyResponse complies with AdCP create-media-buy-response schema.
@@ -1801,9 +1808,9 @@ class TestAdCPContract:
         assert isinstance(error_via_union, CreateMediaBuyError)
 
         # Verify field count for success response
-        assert (
-            len(adcp_response) >= 3
-        ), f"CreateMediaBuySuccess should have at least 3 required fields, got {len(adcp_response)}"
+        assert len(adcp_response) >= 3, (
+            f"CreateMediaBuySuccess should have at least 3 required fields, got {len(adcp_response)}"
+        )
 
     def test_get_products_response_adcp_compliance(self):
         """Test that GetProductsResponse complies with AdCP get-products-response schema."""
@@ -1888,9 +1895,9 @@ class TestAdCPContract:
         # Verify __str__() provides appropriate empty message
         assert str(empty_response) == "No products matched your requirements."
         # Allow 2 or 3 fields (status is optional and may not be present, message removed)
-        assert (
-            len(empty_adcp_response) >= 2 and len(empty_adcp_response) <= 3
-        ), f"GetProductsResponse should have 2-3 fields (status optional), got {len(empty_adcp_response)}"
+        assert len(empty_adcp_response) >= 2 and len(empty_adcp_response) <= 3, (
+            f"GetProductsResponse should have 2-3 fields (status optional), got {len(empty_adcp_response)}"
+        )
 
     def test_list_creative_formats_response_adcp_compliance(self):
         """Test that ListCreativeFormatsResponse complies with AdCP list-creative-formats-response schema."""
@@ -1942,9 +1949,9 @@ class TestAdCPContract:
 
         # Verify field count - only required fields + non-None optional fields
         # formats is required; errors and creative_agents are omitted (None values)
-        assert (
-            len(adcp_response) >= 1
-        ), f"ListCreativeFormatsResponse should have at least required fields, got {len(adcp_response)}"
+        assert len(adcp_response) >= 1, (
+            f"ListCreativeFormatsResponse should have at least required fields, got {len(adcp_response)}"
+        )
 
     def test_update_media_buy_response_adcp_compliance(self):
         """Test that UpdateMediaBuyResponse complies with AdCP update-media-buy-response schema.
@@ -1997,9 +2004,9 @@ class TestAdCPContract:
         assert "buyer_ref" not in adcp_error, "Error response cannot have buyer_ref"
 
         # Verify field count for success response (media_buy_id, buyer_ref are required)
-        assert (
-            len(adcp_response) >= 2
-        ), f"UpdateMediaBuySuccess should have at least 2 required fields, got {len(adcp_response)}"
+        assert len(adcp_response) >= 2, (
+            f"UpdateMediaBuySuccess should have at least 2 required fields, got {len(adcp_response)}"
+        )
 
     def test_get_media_buy_delivery_request_adcp_compliance(self):
         """Test that GetMediaBuyDeliveryRequest complies with AdCP get-media-buy-delivery-request schema."""
@@ -2033,9 +2040,9 @@ class TestAdCPContract:
             # AdCP MediaBuyStatus enum: pending_activation, active, paused, completed
             valid_statuses = ["pending_activation", "active", "paused", "completed"]
             if isinstance(adcp_request["status_filter"], str):
-                assert (
-                    adcp_request["status_filter"] in valid_statuses
-                ), f"Invalid status: {adcp_request['status_filter']}"
+                assert adcp_request["status_filter"] in valid_statuses, (
+                    f"Invalid status: {adcp_request['status_filter']}"
+                )
             elif isinstance(adcp_request["status_filter"], list):
                 for status in adcp_request["status_filter"]:
                     assert status in valid_statuses, f"Invalid status in array: {status}"
@@ -2198,15 +2205,15 @@ class TestAdCPContract:
         )
 
         empty_adcp_response = empty_response.model_dump()
-        assert (
-            empty_adcp_response["media_buy_deliveries"] == []
-        ), "Empty media_buy_deliveries list should be empty array"
+        assert empty_adcp_response["media_buy_deliveries"] == [], (
+            "Empty media_buy_deliveries list should be empty array"
+        )
 
         # Verify field count - required fields + non-None optional fields
         # reporting_period, currency, media_buy_deliveries are required; aggregated_totals set; errors=None omitted
-        assert (
-            len(adcp_response) >= 3
-        ), f"GetMediaBuyDeliveryResponse should have at least 3 required fields, got {len(adcp_response)}"
+        assert len(adcp_response) >= 3, (
+            f"GetMediaBuyDeliveryResponse should have at least 3 required fields, got {len(adcp_response)}"
+        )
 
     def test_property_identifier_adcp_compliance(self):
         """Test that PropertyIdentifier complies with AdCP property identifier schema."""
@@ -2470,9 +2477,9 @@ class TestAdCPContract:
         # ✅ VERIFY ADCP COMPLIANCE: OneOf constraint satisfied
         assert "media_buy_id" in adcp_response_id, "media_buy_id must be present"
         assert adcp_response_id["media_buy_id"] is not None, "media_buy_id must not be None"
-        assert (
-            "buyer_ref" not in adcp_response_id or adcp_response_id["buyer_ref"] is None
-        ), "buyer_ref must be None when media_buy_id is provided"
+        assert "buyer_ref" not in adcp_response_id or adcp_response_id["buyer_ref"] is None, (
+            "buyer_ref must be None when media_buy_id is provided"
+        )
 
         # Test AdCP-compliant request with buyer_ref (oneOf option 2)
         adcp_request_ref = UpdateMediaBuyRequest(
@@ -2486,9 +2493,9 @@ class TestAdCPContract:
         # ✅ VERIFY ADCP COMPLIANCE: OneOf constraint satisfied
         assert "buyer_ref" in adcp_response_ref, "buyer_ref must be present"
         assert adcp_response_ref["buyer_ref"] is not None, "buyer_ref must not be None"
-        assert (
-            "media_buy_id" not in adcp_response_ref or adcp_response_ref["media_buy_id"] is None
-        ), "media_buy_id must be None when buyer_ref is provided"
+        assert "media_buy_id" not in adcp_response_ref or adcp_response_ref["media_buy_id"] is None, (
+            "media_buy_id must be None when buyer_ref is provided"
+        )
 
         # ✅ VERIFY ADCP COMPLIANCE: Optional fields present when provided
         optional_fields = ["paused", "start_time", "end_time", "budget", "packages"]  # adcp 2.12.0+
@@ -2853,9 +2860,9 @@ class TestAdCPContract:
 
         # Verify field count (signals is required, errors is optional)
         # Per AdCP PR #113, protocol fields removed from domain responses
-        assert (
-            len(adcp_response) >= 1
-        ), f"GetSignalsResponse should have at least 1 core field (signals), got {len(adcp_response)}"
+        assert len(adcp_response) >= 1, (
+            f"GetSignalsResponse should have at least 1 core field (signals), got {len(adcp_response)}"
+        )
 
         # Test with all fields
         signal_data = {
@@ -2887,9 +2894,9 @@ class TestAdCPContract:
         assert "signal_id" in adcp_response
 
         # Verify field count (domain fields only: signal_id, activation_details, errors)
-        assert (
-            len(adcp_response) >= 1
-        ), f"ActivateSignalResponse should have at least 1 core field, got {len(adcp_response)}"
+        assert len(adcp_response) >= 1, (
+            f"ActivateSignalResponse should have at least 1 core field, got {len(adcp_response)}"
+        )
 
         # Test with activation details (domain data)
         full_response = ActivateSignalResponse(

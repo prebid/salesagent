@@ -13,45 +13,45 @@ These are unit tests that mock database/adapter calls to isolate error formattin
 from unittest.mock import MagicMock, patch
 
 import pytest
-from a2a.types import InvalidRequestError
 from a2a.utils.errors import ServerError
 from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 
 
 class TestMCPErrorShapes:
     """Test that MCP tool errors have consistent structure."""
 
     @pytest.mark.asyncio
-    async def test_missing_required_field_raises_tool_error(self):
-        """MCP create_media_buy raises ToolError when required fields are missing."""
+    async def test_missing_required_field_raises_error(self):
+        """MCP create_media_buy raises AdCPValidationError when context is missing."""
         from src.core.tools.media_buy_create import create_media_buy
 
-        # Call with missing required fields (no packages, start_time, end_time)
-        with pytest.raises(ToolError) as exc_info:
+        # Call with missing context triggers AdCPValidationError (transport-agnostic)
+        with pytest.raises((AdCPValidationError, ToolError)) as exc_info:
             await create_media_buy(
                 buyer_ref="test_buyer",
                 brand_manifest={"name": "Test"},
                 packages=[],  # Empty but present; validation will catch the issue
                 start_time="2026-01-01T00:00:00Z",
                 end_time="2026-02-01T00:00:00Z",
-                ctx=None,  # Missing context triggers ToolError
+                ctx=None,  # Missing context triggers AdCPValidationError
             )
 
-        # ToolError should have a meaningful message string
+        # Error should have a meaningful message string
         error = exc_info.value
-        assert isinstance(error, ToolError)
-        assert len(str(error)) > 0, "ToolError message must not be empty"
+        assert len(str(error)) > 0, "Error message must not be empty"
 
     @pytest.mark.asyncio
-    async def test_validation_error_raises_tool_error_with_details(self):
-        """MCP create_media_buy raises ToolError for Pydantic validation failures."""
+    async def test_validation_error_raises_error_with_details(self):
+        """MCP create_media_buy raises error for Pydantic validation failures."""
         from src.core.tools.media_buy_create import create_media_buy
 
         # Provide invalid types that fail Pydantic validation
-        with pytest.raises((ToolError, ValidationError)):
+        with pytest.raises((AdCPValidationError, ToolError, ValidationError)):
             await create_media_buy(
                 buyer_ref="test_buyer",
                 brand_manifest=12345,  # Wrong type: should be dict or str
@@ -62,8 +62,8 @@ class TestMCPErrorShapes:
             )
 
     @pytest.mark.asyncio
-    async def test_auth_error_raises_tool_error(self):
-        """MCP _create_media_buy_impl raises ToolError when context is None."""
+    async def test_auth_error_raises_validation_error(self):
+        """MCP _create_media_buy_impl raises AdCPValidationError when identity is None."""
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -76,16 +76,18 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        # _create_media_buy_impl requires context; passing None triggers ToolError
-        with pytest.raises(ToolError) as exc_info:
-            await _create_media_buy_impl(req=req, ctx=None)
+        # _create_media_buy_impl requires identity; passing None triggers AdCPValidationError
+        with pytest.raises(AdCPValidationError) as exc_info:
+            await _create_media_buy_impl(req=req, identity=None)
 
-        assert "Context is required" in str(exc_info.value)
+        assert "Identity is required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_not_found_principal_returns_error_response(self):
         """MCP _create_media_buy_impl returns error response for non-existent principal."""
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
+        from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = CreateMediaBuyRequest(
@@ -96,19 +98,19 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        mock_ctx = MagicMock()
-        mock_ctx.headers = {}
+        identity = ResolvedIdentity(
+            principal_id="nonexistent",
+            tenant_id="test",
+            tenant={"tenant_id": "test"},
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="test"),
+        )
 
         with (
-            patch("src.core.tools.media_buy_create.get_testing_context") as mock_testing,
-            patch("src.core.tools.media_buy_create.get_principal_id_from_context", return_value="nonexistent"),
-            patch("src.core.tools.media_buy_create.get_current_tenant", return_value={"tenant_id": "test"}),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
-            mock_testing.return_value = MagicMock(dry_run=False, test_session_id="test")
-
-            result = await _create_media_buy_impl(req=req, ctx=mock_ctx)
+            result = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should return a CreateMediaBuyResult with error response
         assert hasattr(result, "response")
@@ -128,26 +130,31 @@ class TestA2AErrorShapes:
 
     @pytest.mark.asyncio
     async def test_auth_required_error_is_server_error(self):
-        """A2A non-discovery skills raise ServerError when auth is missing."""
+        """A2A non-discovery skills raise ServerError when identity is None."""
         with pytest.raises(ServerError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
                 parameters={"brand_manifest": {"name": "Test"}},
-                auth_token=None,
+                identity=None,
             )
 
         error = exc_info.value
         assert isinstance(error, ServerError)
-        assert "Authentication token required" in str(error)
+        assert "Authentication required" in str(error)
 
     @pytest.mark.asyncio
     async def test_unknown_skill_raises_server_error(self):
         """A2A raises ServerError for unknown skill names."""
+        from src.core.resolved_identity import ResolvedIdentity
+
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
         with pytest.raises(ServerError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="nonexistent_skill",
                 parameters={},
-                auth_token="some_token",
+                identity=mock_identity,
             )
 
         error = exc_info.value
@@ -155,34 +162,33 @@ class TestA2AErrorShapes:
         assert "Unknown skill" in str(error)
 
     @pytest.mark.asyncio
-    async def test_invalid_auth_token_raises_server_error(self):
-        """A2A raises ServerError when auth token is invalid."""
-        with patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create:
-            mock_create.side_effect = ServerError(InvalidRequestError(message="Invalid authentication token"))
+    async def test_invalid_auth_identity_raises_server_error(self):
+        """A2A raises ServerError when identity has no principal (auth required skill)."""
+        # Identity with no principal_id simulates invalid auth
+        invalid_identity = ResolvedIdentity(
+            principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
 
-            with pytest.raises(ServerError) as exc_info:
-                await self.handler._handle_explicit_skill(
-                    skill_name="create_media_buy",
-                    parameters={"brand_manifest": {"name": "Test"}},
-                    auth_token="invalid_token",
-                )
+        with pytest.raises(ServerError) as exc_info:
+            await self.handler._handle_explicit_skill(
+                skill_name="create_media_buy",
+                parameters={"brand_manifest": {"name": "Test"}},
+                identity=invalid_identity,
+            )
 
-            assert "Invalid authentication token" in str(exc_info.value)
+        assert "Authentication required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_missing_params_returns_error_dict(self):
         """A2A create_media_buy returns error dict for missing required params."""
-        with (
-            patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create,
-        ):
-            mock_ctx = MagicMock()
-            mock_ctx.principal_id = "test_principal"
-            mock_create.return_value = mock_ctx
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
 
-            result = await self.handler._handle_create_media_buy_skill(
-                parameters={"brand_manifest": {"name": "Test"}},
-                auth_token="test_token",
-            )
+        result = await self.handler._handle_create_media_buy_skill(
+            parameters={"brand_manifest": {"name": "Test"}},
+            identity=mock_identity,
+        )
 
         # A2A handler returns dict with consistent error structure
         assert isinstance(result, dict)
@@ -196,23 +202,20 @@ class TestA2AErrorShapes:
     @pytest.mark.asyncio
     async def test_validation_error_returns_error_dict(self):
         """A2A create_media_buy returns error dict for invalid parameter types."""
-        with (
-            patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create,
-        ):
-            mock_ctx = MagicMock()
-            mock_ctx.principal_id = "test_principal"
-            mock_create.return_value = mock_ctx
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
 
-            # Provide all required params but with invalid types
-            result = await self.handler._handle_create_media_buy_skill(
-                parameters={
-                    "brand_manifest": {"name": "Test"},
-                    "packages": "not_a_list",  # Invalid type
-                    "start_time": "2026-01-01T00:00:00Z",
-                    "end_time": "2026-02-01T00:00:00Z",
-                },
-                auth_token="test_token",
-            )
+        # Provide all required params but with invalid types
+        result = await self.handler._handle_create_media_buy_skill(
+            parameters={
+                "brand_manifest": {"name": "Test"},
+                "packages": "not_a_list",  # Invalid type
+                "start_time": "2026-01-01T00:00:00Z",
+                "end_time": "2026-02-01T00:00:00Z",
+            },
+            identity=mock_identity,
+        )
 
         # Should return error dict (not raise)
         assert isinstance(result, dict)
@@ -226,17 +229,18 @@ class TestA2AErrorShapes:
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_tool:
             mock_tool.return_value = {"products": []}
 
-            # Should NOT raise "Authentication token required"
+            # Should NOT raise "Authentication required"
+            anon_identity = ResolvedIdentity(
+                principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+            )
             try:
                 await self.handler._handle_explicit_skill(
                     skill_name="get_products",
                     parameters={"brief": "test"},
-                    auth_token=None,
+                    identity=anon_identity,
                 )
             except ServerError as e:
-                assert "Authentication token required" not in str(e), (
-                    "Discovery skills should not require authentication"
-                )
+                assert "Authentication required" not in str(e), "Discovery skills should not require authentication"
 
 
 class TestUpdateMediaBuyErrorShapes:
@@ -244,7 +248,7 @@ class TestUpdateMediaBuyErrorShapes:
 
     @pytest.mark.asyncio
     async def test_missing_context_raises_value_error(self):
-        """update_media_buy _impl raises ValueError when context is None."""
+        """update_media_buy _impl raises ValueError when identity is None."""
         from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -253,9 +257,9 @@ class TestUpdateMediaBuyErrorShapes:
         )
 
         with pytest.raises(ValueError) as exc_info:
-            _update_media_buy_impl(req=req, ctx=None)
+            _update_media_buy_impl(req=req, identity=None)
 
-        assert "Context is required" in str(exc_info.value)
+        assert "Identity is required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_a2a_missing_auth_raises_server_error(self):
@@ -266,24 +270,24 @@ class TestUpdateMediaBuyErrorShapes:
             await handler._handle_explicit_skill(
                 skill_name="update_media_buy",
                 parameters={"media_buy_id": "buy_001"},
-                auth_token=None,
+                identity=None,
             )
 
         error = exc_info.value
         assert isinstance(error, ServerError)
-        assert "Authentication token required" in str(error)
+        assert "Authentication required" in str(error)
 
 
 class TestListCreativesErrorShapes:
     """Test that list_creatives error paths produce consistent errors."""
 
     @pytest.mark.asyncio
-    async def test_missing_auth_raises_tool_error(self):
-        """list_creatives _impl raises ToolError when auth header is missing."""
+    async def test_missing_auth_raises_authentication_error(self):
+        """list_creatives _impl raises AdCPAuthenticationError when identity is None."""
         from src.core.tools.creatives.listing import _list_creatives_impl
 
-        with pytest.raises(ToolError) as exc_info:
-            _list_creatives_impl(ctx=None)
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
+            _list_creatives_impl(identity=None)
 
         assert "x-adcp-auth" in str(exc_info.value).lower() or "Missing" in str(exc_info.value)
 
@@ -296,12 +300,12 @@ class TestListCreativesErrorShapes:
             await handler._handle_explicit_skill(
                 skill_name="list_creatives",
                 parameters={},
-                auth_token=None,
+                identity=None,
             )
 
         error = exc_info.value
         assert isinstance(error, ServerError)
-        assert "Authentication token required" in str(error)
+        assert "Authentication required" in str(error)
 
 
 class TestCrossTransportErrorConsistency:
@@ -318,10 +322,10 @@ class TestCrossTransportErrorConsistency:
 
     @pytest.mark.asyncio
     async def test_missing_context_error_consistent(self):
-        """Both transports produce consistent errors when context/auth is missing.
+        """Both transports produce consistent errors when identity/auth is missing.
 
-        MCP path: _create_media_buy_impl(ctx=None) -> ToolError("Context is required")
-        A2A path: _handle_explicit_skill(auth_token=None) -> ServerError("Authentication token required")
+        MCP path: _create_media_buy_impl(identity=None) -> AdCPValidationError("Identity is required")
+        A2A path: _handle_explicit_skill(identity=None) -> ServerError("Authentication required")
 
         Both paths reject the request before reaching business logic.
         """
@@ -336,31 +340,31 @@ class TestCrossTransportErrorConsistency:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        # MCP path: missing context
+        # MCP path: missing identity — raises AdCPValidationError (transport-agnostic)
         mcp_error = None
         try:
-            await _create_media_buy_impl(req=req, ctx=None)
-        except ToolError as e:
+            await _create_media_buy_impl(req=req, identity=None)
+        except (ToolError, AdCPError) as e:
             mcp_error = e
 
-        # A2A path: missing auth token
+        # A2A path: missing identity (None = no auth)
         a2a_error = None
         try:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
                 parameters={"brand_manifest": {"name": "Test"}},
-                auth_token=None,
+                identity=None,
             )
         except ServerError as e:
             a2a_error = e
 
         # Both must reject the request
-        assert mcp_error is not None, "MCP path must raise ToolError for missing context"
+        assert mcp_error is not None, "MCP path must raise error for missing identity"
         assert a2a_error is not None, "A2A path must raise ServerError for missing auth"
 
         # Both errors indicate authentication/authorization failure
-        assert "Context is required" in str(mcp_error) or "required" in str(mcp_error).lower()
-        assert "Authentication token required" in str(a2a_error) or "required" in str(a2a_error).lower()
+        assert "Identity is required" in str(mcp_error) or "required" in str(mcp_error).lower()
+        assert "Authentication required" in str(a2a_error) or "required" in str(a2a_error).lower()
 
     @pytest.mark.asyncio
     async def test_missing_required_params_error_consistent(self):
@@ -386,16 +390,15 @@ class TestCrossTransportErrorConsistency:
         except ValidationError as e:
             mcp_error_message = str(e)
 
-        # A2A path: missing required params
-        with patch.object(self.handler, "_create_tool_context_from_a2a") as mock_create:
-            mock_ctx = MagicMock()
-            mock_ctx.principal_id = "test_principal"
-            mock_create.return_value = mock_ctx
+        # A2A path: missing required params — identity resolved at transport boundary
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
 
-            a2a_result = await self.handler._handle_create_media_buy_skill(
-                parameters={"brand_manifest": {"name": "Test"}},
-                auth_token="test_token",
-            )
+        a2a_result = await self.handler._handle_create_media_buy_skill(
+            parameters={"brand_manifest": {"name": "Test"}},
+            identity=mock_identity,
+        )
 
         # A2A should return error dict
         assert isinstance(a2a_result, dict)
@@ -418,7 +421,9 @@ class TestCrossTransportErrorConsistency:
         The _create_media_buy_impl function returns a CreateMediaBuyError when
         principal is not found. This result flows through both transports.
         """
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
+        from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = CreateMediaBuyRequest(
@@ -429,20 +434,20 @@ class TestCrossTransportErrorConsistency:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        mock_ctx = MagicMock()
-        mock_ctx.headers = {}
+        identity = ResolvedIdentity(
+            principal_id="ghost_principal",
+            tenant_id="test",
+            tenant={"tenant_id": "test"},
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="test"),
+        )
 
         with (
-            patch("src.core.tools.media_buy_create.get_testing_context") as mock_testing,
-            patch("src.core.tools.media_buy_create.get_principal_id_from_context", return_value="ghost_principal"),
-            patch("src.core.tools.media_buy_create.get_current_tenant", return_value={"tenant_id": "test"}),
+            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
-            mock_testing.return_value = MagicMock(dry_run=False, test_session_id="test")
-
             # Shared impl returns the same result regardless of transport
-            result = await _create_media_buy_impl(req=req, ctx=mock_ctx)
+            result = await _create_media_buy_impl(req=req, identity=identity)
 
         # The result contains an error response with authentication_error code
         response = result.response
@@ -470,11 +475,16 @@ class TestCrossTransportErrorConsistency:
         """
         handler = AdCPRequestHandler()
 
+        from src.core.resolved_identity import ResolvedIdentity
+
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        )
         with pytest.raises(ServerError) as exc_info:
             await handler._handle_explicit_skill(
                 skill_name="totally_fake_skill",
                 parameters={},
-                auth_token="some_token",
+                identity=mock_identity,
             )
 
         error_str = str(exc_info.value)

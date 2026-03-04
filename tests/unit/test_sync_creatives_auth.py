@@ -1,13 +1,13 @@
 """Test authentication requirement for sync_creatives."""
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.tools.creatives import _sync_creatives_impl
 
 
 def test_sync_creatives_requires_authentication():
-    """sync_creatives should raise ToolError when principal_id is None (no auth)."""
+    """sync_creatives should raise AdCPAuthenticationError when principal_id is None (no auth)."""
     # Prepare minimal creative data
     creatives = [
         {
@@ -26,7 +26,7 @@ def test_sync_creatives_requires_authentication():
     ]
 
     # Call without context (simulates missing auth header)
-    with pytest.raises(ToolError) as exc_info:
+    with pytest.raises(AdCPAuthenticationError) as exc_info:
         _sync_creatives_impl(creatives=creatives, context=None)
 
     # Verify error message mentions authentication
@@ -36,7 +36,7 @@ def test_sync_creatives_requires_authentication():
 
 
 def test_sync_creatives_with_invalid_auth():
-    """sync_creatives should raise ToolError when auth token is invalid."""
+    """sync_creatives should raise AdCPAuthenticationError when auth token is invalid."""
     from unittest.mock import Mock
 
     from src.core.tool_context import ToolContext
@@ -64,7 +64,7 @@ def test_sync_creatives_with_invalid_auth():
     ]
 
     # Call with invalid auth context
-    with pytest.raises(ToolError) as exc_info:
+    with pytest.raises(AdCPAuthenticationError) as exc_info:
         _sync_creatives_impl(creatives=creatives, context=invalid_context)
 
     # Verify error message

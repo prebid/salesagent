@@ -7,7 +7,6 @@ import secrets
 
 import markdown
 from flask import Flask, request
-from flask_socketio import SocketIO, join_room
 from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix as WerkzeugProxyFix
 
@@ -219,10 +218,6 @@ def create_app(config=None):
     cache = Cache(app)
     app.cache = cache  # Make cache available to blueprints
 
-    # Initialize SocketIO
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
-    app.socketio = socketio
-
     # Redirect external domain /admin requests to tenant subdomain
     @app.before_request
     def redirect_external_domain_admin():
@@ -277,8 +272,8 @@ def create_app(config=None):
         if os.environ.get("PRODUCTION") == "true":
             redirect_url = f"{get_tenant_url(tenant_subdomain)}{path_with_admin}"
         else:
-            # Local dev: Use localhost with port
-            port = os.environ.get("ADMIN_UI_PORT", "8001")
+            # Local dev: Use localhost with port (unified FastAPI port)
+            port = os.environ.get("ADCP_SALES_PORT", "8080")
             redirect_url = f"http://{tenant_subdomain}.localhost:{port}{path_with_admin}"
 
         logger.info(f"Redirecting external domain {apx_host}/admin to subdomain: {redirect_url}")
@@ -434,26 +429,7 @@ def create_app(config=None):
     except ImportError:
         logger.warning("gam_inventory_service not found")
 
-    # WebSocket handlers
-    @socketio.on("connect")
-    def handle_connect():
-        """Handle WebSocket connection."""
-        logger.info(f"Client connected: {request.sid}")
-
-    @socketio.on("disconnect")
-    def handle_disconnect():
-        """Handle WebSocket disconnection."""
-        logger.info(f"Client disconnected: {request.sid}")
-
-    @socketio.on("subscribe")
-    def handle_subscribe(data):
-        """Handle subscription to tenant events."""
-        tenant_id = data.get("tenant_id")
-        if tenant_id:
-            join_room(f"tenant_{tenant_id}")
-            logger.info(f"Client {request.sid} subscribed to tenant {tenant_id}")
-
-    return app, socketio
+    return app
 
 
 def register_adapter_routes(app):
@@ -483,19 +459,3 @@ def register_adapter_routes(app):
 
     except Exception as e:
         logger.warning(f"Error importing adapter modules: {e}")
-
-
-def broadcast_activity_to_websocket(tenant_id: str, activity: dict):
-    """Broadcast activity to WebSocket clients."""
-    try:
-        from flask import current_app
-
-        if hasattr(current_app, "socketio"):
-            current_app.socketio.emit(
-                "activity",
-                activity,
-                room=f"tenant_{tenant_id}",
-                namespace="/",
-            )
-    except Exception as e:
-        logger.error(f"Error broadcasting to WebSocket: {e}")
