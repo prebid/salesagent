@@ -5,6 +5,7 @@ Issue #782: Support creative format templates with dynamic width/height/duration
 
 import pytest
 from adcp.types import FormatId
+from adcp.types.generated_poc.core.format import Dimensions, Renders
 
 from src.core.helpers import _extract_format_info, _extract_format_namespace
 from src.core.helpers.creative_helpers import (
@@ -490,6 +491,67 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
             type="display",
         )
         assert fmt.get_primary_dimensions() is None
+
+    def test_works_with_library_format_id(self):
+        """get_primary_dimensions works with adcp library FormatId (not just SchemasFormatId).
+
+        Regression test for PR #1079: the old code called format_id.get_dimensions()
+        which only exists on the custom FormatId subclass, not on adcp.types.FormatId.
+        """
+        fmt = Format(
+            format_id=FormatId(
+                agent_url="https://creative.example.com",
+                id="display_static",
+                width=300,
+                height=250,
+            ),
+            name="Static Display",
+            type="display",
+        )
+        assert fmt.get_primary_dimensions() == (300, 250)
+
+    def test_falls_back_to_renders(self):
+        """Falls back to renders when format_id has no dimensions."""
+        fmt = Format(
+            format_id=FormatId(
+                agent_url="https://creative.example.com",
+                id="display_static",
+            ),
+            name="Static Display",
+            type="display",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
+        )
+        assert fmt.get_primary_dimensions() == (728, 90)
+
+    def test_partial_format_id_dimensions_falls_through(self):
+        """Partial format_id dimensions (width only) fall through to next source."""
+        fmt = Format(
+            format_id=FormatId(
+                agent_url="https://creative.example.com",
+                id="display_static",
+                width=300,
+            ),
+            name="Static Display",
+            type="display",
+            requirements={"width": 728, "height": 90},
+        )
+        assert fmt.get_primary_dimensions() == (728, 90)
+
+    def test_format_id_takes_priority_over_renders_and_requirements(self):
+        """format_id dimensions take priority over both renders and requirements."""
+        fmt = Format(
+            format_id=FormatId(
+                agent_url="https://creative.example.com",
+                id="display_static",
+                width=300,
+                height=250,
+            ),
+            name="Static Display",
+            type="display",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=480))],
+            requirements={"width": 728, "height": 90},
+        )
+        assert fmt.get_primary_dimensions() == (300, 250)
 
 
 class TestFormatTemplatesAPI:
