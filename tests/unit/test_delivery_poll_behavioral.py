@@ -190,7 +190,8 @@ class TestStatusFilterPaused:
     @pytest.mark.xfail(
         reason="Production code derives status from dates only (ready/active/completed). "
         "'paused' is accepted as a filter value but never produced by date logic. "
-        "Needs model-level paused flag."
+        "Needs model-level paused flag.",
+        strict=True,
     )
     def test_paused_buys_returned(self):
         """status_filter='paused' includes only paused media buys.
@@ -380,7 +381,8 @@ class TestWebhookExcludesAggregatedTotals:
 
     @pytest.mark.xfail(
         reason="No webhook-specific payload assembly exists. GetMediaBuyDeliveryResponse.model_dump() "
-        "always includes aggregated_totals (required field). Webhook payload filtering not implemented."
+        "always includes aggregated_totals (required field). Webhook payload filtering not implemented.",
+        strict=True,
     )
     def test_aggregated_totals_excluded_from_webhook_payload(self):
         """Webhook delivery payload should NOT contain aggregated_totals (polling only).
@@ -440,7 +442,8 @@ class TestWebhookRequestedMetricsFiltering:
 
     @pytest.mark.xfail(
         reason="requested_metrics field does not exist on GetMediaBuyDeliveryResponse or request schemas. "
-        "Metric filtering for webhook payloads not yet implemented."
+        "Metric filtering for webhook payloads not yet implemented.",
+        strict=True,
     )
     def test_only_requested_metrics_in_payload(self):
         """Webhook payload should only include metrics specified in requested_metrics.

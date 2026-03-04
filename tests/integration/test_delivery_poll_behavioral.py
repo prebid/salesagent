@@ -35,7 +35,8 @@ class TestWebhookNotificationTypeScheduled:
 
     @pytest.mark.xfail(
         reason="Production code does not auto-set notification_type based on delivery trigger. "
-        "_get_media_buy_delivery_impl constructs response without notification_type (defaults to None)."
+        "_get_media_buy_delivery_impl constructs response without notification_type (defaults to None).",
+        strict=True,
     )
     def test_periodic_delivery_sets_scheduled_type(self, integration_db):
         """Normal periodic delivery should auto-set notification_type to 'scheduled'.
@@ -76,7 +77,8 @@ class TestWebhookNotificationTypeFinal:
 
     @pytest.mark.xfail(
         reason="Production code does not auto-set notification_type or manage next_expected_at "
-        "based on campaign completion. _get_media_buy_delivery_impl leaves both as None."
+        "based on campaign completion. _get_media_buy_delivery_impl leaves both as None.",
+        strict=True,
     )
     def test_completed_campaign_sets_final_type(self, integration_db):
         """Completed campaign should set notification_type='final' and omit next_expected_at.
@@ -118,7 +120,8 @@ class TestWebhookSequenceNumber:
 
     @pytest.mark.xfail(
         reason="Production code does not auto-assign or persist sequence_number. "
-        "_get_media_buy_delivery_impl leaves sequence_number as None (no auto-increment logic)."
+        "_get_media_buy_delivery_impl leaves sequence_number as None (no auto-increment logic).",
+        strict=True,
     )
     def test_sequence_number_auto_assigned(self, integration_db):
         """Delivery response should auto-assign sequence_number starting from 1.
@@ -159,7 +162,8 @@ class TestWebhookNextExpectedAt:
 
     @pytest.mark.xfail(
         reason="Production code does not compute next_expected_at based on reporting frequency. "
-        "_get_media_buy_delivery_impl leaves next_expected_at as None."
+        "_get_media_buy_delivery_impl leaves next_expected_at as None.",
+        strict=True,
     )
     def test_next_expected_at_set_for_active_delivery(self, integration_db):
         """Scheduled delivery for active buy should compute next_expected_at.
@@ -1935,6 +1939,7 @@ class TestPricingOptionStringToIntComparisonRejected:
             "'cpm_usd_fixed' are silently discarded. Should use string "
             "pricing_option_id field for lookup instead."
         ),
+        strict=True,
     )
     def test_pricing_options_keyed_by_string_id_not_integer_pk(self, integration_db):
         """_get_pricing_options maps by string pricing_option_id, not integer PK.
@@ -1966,6 +1971,7 @@ class TestPricingOptionStringToIntComparisonRejected:
             "silently discards non-numeric strings. The function never "
             "queries by string pricing_option_id, so the result dict is empty."
         ),
+        strict=True,
     )
     def test_integer_pk_lookup_returns_none(self, integration_db):
         """Looking up pricing option by integer PK returns None (type mismatch caught).
@@ -2072,6 +2078,7 @@ class TestEndToEndDeliveryMetricsCpmPricing:
             "which pricing option was used. PackageDelivery has pricing_model/rate/currency "
             "from package_config, but no pricing_option_id back-reference."
         ),
+        strict=True,
     )
     def test_cpm_pricing_option_identified_in_response(self, integration_db):
         """CPM pricing option should be identifiable in the delivery response.
@@ -2137,6 +2144,7 @@ class TestEndToEndDeliveryMetricsCpcPricing:
             "Adapter returns clicks=None and production passes it through "
             "without deriving clicks = floor(spend / rate)."
         ),
+        strict=True,
     )
     def test_cpc_clicks_calculated_from_spend_and_rate(self, integration_db):
         """CPC: $250.00 spend at $0.50 CPC -> 500 clicks (floor(spend/rate)).
@@ -2204,6 +2212,7 @@ class TestEndToEndDeliveryMetricsCpcPricing:
             "MediaBuyDeliveryData has no pricing_options field. PackageDelivery has "
             "pricing_model/rate/currency but no pricing_option_id back-reference."
         ),
+        strict=True,
     )
     def test_cpc_pricing_option_identified_in_response(self, integration_db):
         """CPC pricing option should be identifiable in the delivery response.
@@ -2334,6 +2343,7 @@ class TestDeliveryMetricsFlatRatePricing:
             "pricing option is not identifiable as a distinct entity in the "
             "response. MediaBuyDeliveryData has no pricing_options field."
         ),
+        strict=True,
     )
     def test_flat_rate_pricing_option_identified_in_response(self, integration_db):
         """FLAT_RATE pricing option should be identifiable in the delivery response.
@@ -2398,6 +2408,7 @@ class TestDeliveryResponsePreservesExtFields:
             "MediaBuyDeliveryData does not have an ext field. Production code "
             "does not propagate ext from adapter response to per-buy delivery data."
         ),
+        strict=True,
     )
     def test_ext_fields_preserved_in_delivery_data(self, integration_db):
         """ext fields from adapter response should flow through to MediaBuyDeliveryData.
@@ -2433,6 +2444,7 @@ class TestDeliveryResponsePreservesExtFields:
             "so model_dump() does not include an 'ext' key. Ext propagation "
             "from adapter to delivery data is not implemented."
         ),
+        strict=True,
     )
     def test_ext_fields_preserved_in_model_dump(self, integration_db):
         """ext fields should survive model_dump() serialization.
