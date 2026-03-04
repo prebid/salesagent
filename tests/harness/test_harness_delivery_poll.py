@@ -123,6 +123,39 @@ class TestDeliveryPollEnvContract:
             assert len(response.errors) >= 1
             assert any("mb_unregistered" in e.message for e in response.errors)
 
+    def test_multi_package_adapter_response(self):
+        """set_adapter_response with packages= builds multi-package response."""
+        with DeliveryPollEnv() as env:
+            env.add_buy(
+                media_buy_id="mb_multi",
+                raw_request={
+                    "buyer_ref": "ref_multi",
+                    "packages": [
+                        {"package_id": "pkg_A", "product_id": "prod_001"},
+                        {"package_id": "pkg_B", "product_id": "prod_002"},
+                    ],
+                },
+            )
+            env.set_adapter_response(
+                "mb_multi",
+                packages=[
+                    {"package_id": "pkg_A", "impressions": 10000, "spend": 500.0},
+                    {"package_id": "pkg_B", "impressions": 5000, "spend": 250.0},
+                ],
+            )
+
+            response = env.call_impl(media_buy_ids=["mb_multi"])
+
+            assert len(response.media_buy_deliveries) == 1
+            delivery = response.media_buy_deliveries[0]
+            # Totals should be sum of packages
+            assert delivery.totals.impressions == 15000.0
+            assert delivery.totals.spend == 750.0
+            # by_package should have 2 entries
+            assert len(delivery.by_package) == 2
+            pkg_ids = {p.package_id for p in delivery.by_package}
+            assert pkg_ids == {"pkg_A", "pkg_B"}
+
     def test_custom_date_range(self):
         """start_date/end_date parameters flow through to the request."""
         with DeliveryPollEnv() as env:

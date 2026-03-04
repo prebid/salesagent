@@ -15,7 +15,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 
 from __future__ import annotations
 
-from datetime import UTC, date
+from datetime import date
 
 import pytest
 
@@ -790,14 +790,7 @@ class TestPackageLevelBreakdowns:
 
         Covers: UC-004-MAIN-09
         """
-        from datetime import UTC, datetime
-
-        from src.core.schemas import (
-            AdapterGetMediaBuyDeliveryResponse,
-            AdapterPackageDelivery,
-            DeliveryTotals,
-            ReportingPeriod,
-        )
+        from src.core.schemas import GetMediaBuyDeliveryResponse
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
@@ -820,22 +813,13 @@ class TestPackageLevelBreakdowns:
                 },
             )
 
-            # Configure adapter with multi-package response
-            adapter_response = AdapterGetMediaBuyDeliveryResponse(
-                media_buy_id="mb_two_pkg",
-                reporting_period=ReportingPeriod(
-                    start=datetime(2025, 3, 1, tzinfo=UTC),
-                    end=datetime(2025, 3, 31, tzinfo=UTC),
-                ),
-                totals=DeliveryTotals(impressions=15000.0, spend=750.0),
-                by_package=[
-                    AdapterPackageDelivery(package_id="pkg_A", impressions=10000, spend=500.0),
-                    AdapterPackageDelivery(package_id="pkg_B", impressions=5000, spend=250.0),
+            env.set_adapter_response(
+                "mb_two_pkg",
+                packages=[
+                    {"package_id": "pkg_A", "impressions": 10000, "spend": 500.0},
+                    {"package_id": "pkg_B", "impressions": 5000, "spend": 250.0},
                 ],
-                currency="USD",
             )
-            env.mock["adapter"].return_value.get_media_buy_delivery.side_effect = None
-            env.mock["adapter"].return_value.get_media_buy_delivery.return_value = adapter_response
 
             result = env.call_impl(
                 media_buy_ids=["mb_two_pkg"],
@@ -863,14 +847,6 @@ class TestPackageLevelBreakdowns:
 
         Covers: UC-004-MAIN-09
         """
-        from datetime import UTC, datetime
-
-        from src.core.schemas import (
-            AdapterGetMediaBuyDeliveryResponse,
-            AdapterPackageDelivery,
-            DeliveryTotals,
-            ReportingPeriod,
-        )
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
@@ -893,21 +869,13 @@ class TestPackageLevelBreakdowns:
                 },
             )
 
-            adapter_response = AdapterGetMediaBuyDeliveryResponse(
-                media_buy_id="mb_active",
-                reporting_period=ReportingPeriod(
-                    start=datetime(2025, 1, 1, tzinfo=UTC),
-                    end=datetime(2025, 12, 31, tzinfo=UTC),
-                ),
-                totals=DeliveryTotals(impressions=8000.0, spend=400.0),
-                by_package=[
-                    AdapterPackageDelivery(package_id="pkg_X", impressions=5000, spend=250.0),
-                    AdapterPackageDelivery(package_id="pkg_Y", impressions=3000, spend=150.0),
+            env.set_adapter_response(
+                "mb_active",
+                packages=[
+                    {"package_id": "pkg_X", "impressions": 5000, "spend": 250.0},
+                    {"package_id": "pkg_Y", "impressions": 3000, "spend": 150.0},
                 ],
-                currency="USD",
             )
-            env.mock["adapter"].return_value.get_media_buy_delivery.side_effect = None
-            env.mock["adapter"].return_value.get_media_buy_delivery.return_value = adapter_response
 
             result = env.call_impl(
                 media_buy_ids=["mb_active"],
@@ -926,14 +894,6 @@ class TestPackageLevelBreakdowns:
 
         Covers: UC-004-MAIN-09
         """
-        from datetime import UTC, datetime
-
-        from src.core.schemas import (
-            AdapterGetMediaBuyDeliveryResponse,
-            AdapterPackageDelivery,
-            DeliveryTotals,
-            ReportingPeriod,
-        )
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
@@ -956,21 +916,13 @@ class TestPackageLevelBreakdowns:
                 },
             )
 
-            adapter_response = AdapterGetMediaBuyDeliveryResponse(
-                media_buy_id="mb_sum",
-                reporting_period=ReportingPeriod(
-                    start=datetime(2025, 4, 1, tzinfo=UTC),
-                    end=datetime(2025, 4, 30, tzinfo=UTC),
-                ),
-                totals=DeliveryTotals(impressions=12000.0, spend=600.0),
-                by_package=[
-                    AdapterPackageDelivery(package_id="pkg_1", impressions=7000, spend=350.0),
-                    AdapterPackageDelivery(package_id="pkg_2", impressions=5000, spend=250.0),
+            env.set_adapter_response(
+                "mb_sum",
+                packages=[
+                    {"package_id": "pkg_1", "impressions": 7000, "spend": 350.0},
+                    {"package_id": "pkg_2", "impressions": 5000, "spend": 250.0},
                 ],
-                currency="USD",
             )
-            env.mock["adapter"].return_value.get_media_buy_delivery.side_effect = None
-            env.mock["adapter"].return_value.get_media_buy_delivery.return_value = adapter_response
 
             result = env.call_impl(
                 media_buy_ids=["mb_sum"],
@@ -1397,14 +1349,6 @@ class TestDeliverySpendComputation:
 
         Covers: UC-004-MAIN-15
         """
-        from datetime import datetime
-
-        from src.core.schemas.delivery import (
-            AdapterGetMediaBuyDeliveryResponse,
-            AdapterPackageDelivery,
-            DeliveryTotals,
-            ReportingPeriod,
-        )
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
@@ -1424,26 +1368,8 @@ class TestDeliverySpendComputation:
                 budget=500.0,
             )
 
-            # Custom adapter response with specific CPM data
-
-            adapter_response = AdapterGetMediaBuyDeliveryResponse(
-                media_buy_id="mb_cpm",
-                reporting_period=ReportingPeriod(
-                    start=datetime(2025, 6, 1, tzinfo=UTC),
-                    end=datetime(2025, 6, 30, tzinfo=UTC),
-                ),
-                totals=DeliveryTotals(impressions=float(impressions), spend=expected_spend),
-                by_package=[
-                    AdapterPackageDelivery(
-                        package_id="pkg_001",
-                        impressions=impressions,
-                        spend=expected_spend,
-                    )
-                ],
-                currency="USD",
-            )
-            env.mock["adapter"].return_value.get_media_buy_delivery.side_effect = None
-            env.mock["adapter"].return_value.get_media_buy_delivery.return_value = adapter_response
+            # Configure adapter with CPM delivery data
+            env.set_adapter_response("mb_cpm", impressions=impressions, spend=expected_spend)
 
             response = env.call_impl(
                 media_buy_ids=["mb_cpm"],

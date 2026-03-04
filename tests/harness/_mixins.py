@@ -68,22 +68,39 @@ class DeliveryPollMixin:
         spend: float = 250.0,
         package_id: str = "pkg_001",
         clicks: int | None = None,
+        packages: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Configure adapter to return specific delivery data for a media buy."""
-        totals = DeliveryTotals(
-            impressions=float(impressions),
-            spend=spend,
-        )
+        """Configure adapter to return specific delivery data for a media buy.
+
+        For single-package responses, use the scalar parameters (backward compatible).
+        For multi-package responses, pass ``packages`` — a list of dicts with
+        ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
+        as the sum of per-package values.
+        """
+        if packages is not None:
+            by_package = [
+                AdapterPackageDelivery(
+                    package_id=p["package_id"],
+                    impressions=p.get("impressions", 0),
+                    spend=p.get("spend", 0.0),
+                )
+                for p in packages
+            ]
+            total_impressions = float(sum(p.get("impressions", 0) for p in packages))
+            total_spend = float(sum(p.get("spend", 0.0) for p in packages))
+            totals = DeliveryTotals(impressions=total_impressions, spend=total_spend)
+        else:
+            by_package = [
+                AdapterPackageDelivery(
+                    package_id=package_id,
+                    impressions=impressions,
+                    spend=spend,
+                )
+            ]
+            totals = DeliveryTotals(impressions=float(impressions), spend=spend)
+
         if clicks is not None:
             totals.clicks = float(clicks)
-
-        by_package = [
-            AdapterPackageDelivery(
-                package_id=package_id,
-                impressions=impressions,
-                spend=spend,
-            )
-        ]
 
         self._adapter_responses[media_buy_id] = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id=media_buy_id,
