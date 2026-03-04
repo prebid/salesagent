@@ -79,6 +79,16 @@ class TestWebhookEnvContract:
             assert success is False
             assert "Connection" in result.get("error", "")
 
+    def test_empty_payload_is_not_replaced_with_default(self):
+        """call_deliver(payload={}) should use empty dict, not the default payload."""
+        with WebhookEnv() as env:
+            success, result = env.call_deliver(payload={})
+
+            assert success is True
+            # Verify POST was called with the empty dict, not the default
+            call_kwargs = env.mock["post"].call_args.kwargs
+            assert call_kwargs["json"] == {}
+
     def test_signing_secret_flows_through(self):
         """Signing secret parameter reaches the delivery function."""
         with WebhookEnv() as env:

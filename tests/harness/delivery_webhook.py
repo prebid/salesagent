@@ -2,7 +2,7 @@
 
 Patches: requests.post, WebhookURLValidator.validate_webhook_url, time.sleep
          (all external/timing concerns).
-Real: get_db_session for delivery record tracking (fails silently if no table).
+Real: get_db_session for delivery record tracking (requires integration_db fixture).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 

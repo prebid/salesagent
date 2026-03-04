@@ -206,10 +206,14 @@ class WebhookMixin:
     ) -> tuple[bool, dict[str, Any]]:
         """Call deliver_webhook_with_retry with the given parameters."""
         self._commit_factory_data()  # type: ignore[attr-defined]
+        if payload is None:
+            payload = {"event": "delivery.update", "media_buy_id": "mb_001"}
+        if headers is None:
+            headers = {"Content-Type": "application/json"}
         delivery = WebhookDelivery(
             webhook_url=webhook_url,
-            payload=payload or {"event": "delivery.update", "media_buy_id": "mb_001"},
-            headers=headers or {"Content-Type": "application/json"},
+            payload=payload,
+            headers=headers,
             signing_secret=signing_secret,
             max_retries=max_retries,
             timeout=timeout,

@@ -13,7 +13,7 @@ Eliminates the 7-line boilerplate repeated 49 times in test_delivery_behavioral.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock
 
 
 def make_mock_uow() -> tuple[MagicMock, MagicMock]:
@@ -41,8 +41,8 @@ def make_mock_uow() -> tuple[MagicMock, MagicMock]:
 
     mock_uow = MagicMock()
     mock_uow.media_buys = mock_repo
-    mock_uow.__enter__ = Mock(return_value=mock_uow)
-    mock_uow.__exit__ = Mock(return_value=False)
+    mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+    mock_uow.__exit__ = MagicMock(return_value=False)
 
     mock_uow_cls = MagicMock(return_value=mock_uow)
 

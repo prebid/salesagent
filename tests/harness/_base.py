@@ -110,12 +110,12 @@ class BaseTestEnv:
         raise NotImplementedError
 
     def _commit_factory_data(self) -> None:
-        """Ensure all factory-created data is committed before production code reads it.
+        """Flush pending session state before calling production code.
 
-        Safety net: factories use ``sqlalchemy_session_persistence = "commit"``
-        which auto-commits each creation. This explicit commit guards against
-        any edge cases where data might not be visible to production code's
-        separate session.
+        Factories use ``sqlalchemy_session_persistence = "commit"`` and auto-commit
+        each model creation. This explicit commit ensures any cascading saves or
+        deferred flushes are visible to production code's separate database session.
+        Called automatically by call_impl() before each test execution.
         """
         if self._session:
             self._session.commit()
