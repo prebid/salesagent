@@ -138,31 +138,6 @@ class TestWebhookFailureNoSyncError:
     Covers: UC-004-EXT-G-08
     """
 
-    def test_send_webhook_enhanced_catches_db_errors(self, integration_db):
-        """_send_webhook_enhanced catches database errors when looking up
-        webhook configs, returning False instead of raising.
-
-        Covers: UC-004-EXT-G-08
-        """
-        from unittest.mock import patch
-
-        from src.services.webhook_delivery_service import WebhookDeliveryService
-
-        service = WebhookDeliveryService()
-
-        with patch(
-            "src.core.database.database_session.get_db_session",
-            side_effect=Exception("DB connection refused"),
-        ):
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"test": "data"},
-            )
-
-        assert result is False
-
     def test_webhook_failure_does_not_affect_poll_response(self, integration_db):
         """Poll endpoint and webhook delivery are separate code paths.
         A webhook failure cannot propagate to the poll response.

@@ -645,5 +645,38 @@ class TestWebhookFailureNoSyncError:
 
 
 # ---------------------------------------------------------------------------
+# UC-004-EXT-G-08 (DB error handling)
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookEnhancedDBErrorHandling:
+    """_send_webhook_enhanced catches database errors gracefully.
+
+    Covers: UC-004-EXT-G-08
+    """
+
+    def test_send_webhook_enhanced_catches_db_errors(self):
+        """DB errors when looking up webhook configs return False, not raise.
+
+        Covers: UC-004-EXT-G-08
+        """
+        from tests.harness.delivery_circuit_breaker_unit import CircuitBreakerEnv
+
+        with CircuitBreakerEnv() as env:
+            # Make get_db_session raise to simulate DB outage
+            env.mock["db"].side_effect = Exception("DB connection refused")
+
+            service = env.get_service()
+            result = service._send_webhook_enhanced(
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_001",
+                delivery_payload={"test": "data"},
+            )
+
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
 # UC-004-MAIN-02
 # ---------------------------------------------------------------------------
