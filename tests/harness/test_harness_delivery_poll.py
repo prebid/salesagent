@@ -104,6 +104,25 @@ class TestDeliveryPollEnvContract:
             # Pricing mock was called
             env.mock["pricing"].assert_called()
 
+    def test_unregistered_media_buy_id_produces_error(self):
+        """Adapter mock must fail for unregistered media_buy_ids, not silently succeed.
+
+        Previously the mock would return the first registered response for any ID,
+        masking bugs. Now it raises KeyError which production code catches and
+        reports as an error entry.
+        """
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_registered")
+            env.set_adapter_response("mb_registered", impressions=5000)
+
+            # Query for a DIFFERENT ID that was never registered
+            env.add_buy(media_buy_id="mb_unregistered")
+            response = env.call_impl(media_buy_ids=["mb_unregistered"])
+
+            # The unregistered ID should produce an error, not a delivery
+            assert len(response.errors) >= 1
+            assert any("mb_unregistered" in e.message for e in response.errors)
+
     def test_custom_date_range(self):
         """start_date/end_date parameters flow through to the request."""
         with DeliveryPollEnv() as env:

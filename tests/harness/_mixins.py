@@ -45,12 +45,20 @@ class DeliveryPollMixin:
         self.mock["adapter"].return_value = mock_adapter  # type: ignore[attr-defined]
 
     def _adapter_lookup(self, *args: Any, **kwargs: Any) -> AdapterGetMediaBuyDeliveryResponse:
-        """Look up configured adapter response by media_buy_id."""
+        """Look up configured adapter response by media_buy_id.
+
+        Raises KeyError for unregistered IDs when other IDs are registered,
+        preventing tests from silently succeeding with wrong data.
+        """
         mb_id = kwargs.get("media_buy_id") or (args[0] if args else None)
         if mb_id and mb_id in self._adapter_responses:
             return self._adapter_responses[mb_id]
         if self._adapter_responses:
-            return next(iter(self._adapter_responses.values()))
+            raise KeyError(
+                f"No adapter response registered for media_buy_id={mb_id!r}. "
+                f"Registered: {list(self._adapter_responses.keys())}. "
+                f"Call env.set_adapter_response({mb_id!r}, ...) first."
+            )
         return self._make_default_adapter_response()
 
     def set_adapter_response(
