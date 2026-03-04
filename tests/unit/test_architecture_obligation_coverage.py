@@ -92,6 +92,8 @@ def _get_covered_obligations() -> set[str]:
     # Integration tests
     for tf in INTEGRATION_DIR.glob("test_*_v3.py"):
         _scan_file(tf)
+    for tf in INTEGRATION_DIR.glob("test_*_behavioral.py"):
+        _scan_file(tf)
 
     # Unit entity tests
     for name in _UNIT_ENTITY_FILES:

@@ -29,7 +29,6 @@ from src.core.schemas import (
     AdapterPackageDelivery,
     DeliveryTotals,
     GetMediaBuyDeliveryRequest,
-    GetMediaBuyDeliveryResponse,
     ReportingPeriod,
 )
 from src.core.testing_hooks import AdCPTestContext
@@ -157,68 +156,6 @@ class TestCircuitBreakerOpensAfterRetriesExhausted:
         assert cb.can_attempt() is False
         assert cb.can_attempt() is False
         assert cb.can_attempt() is False
-
-    @patch("src.services.webhook_delivery_service.time.sleep")
-    @patch("src.services.webhook_delivery_service.random.uniform", return_value=0.0)
-    @patch("src.services.webhook_delivery_service.httpx.Client")
-    @patch("src.core.database.database_session.get_db_session")
-    def test_service_skips_delivery_when_circuit_open(self, mock_get_db, mock_client, mock_random, mock_sleep):
-        """WebhookDeliveryService skips webhook send when circuit breaker is OPEN.
-
-        Covers: UC-004-EXT-G-03
-        """
-        service = WebhookDeliveryService()
-
-        endpoint_key = "test_tenant:https://example.com/webhook"
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = None
-        mock_config.authentication_token = None
-        mock_config.webhook_secret = None
-
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
-        mock_session = MagicMock()
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = [mock_config]
-        mock_session.scalars.return_value = mock_scalars
-        mock_ctx = MagicMock()
-        mock_ctx.__enter__.return_value = mock_session
-        mock_ctx.__exit__.return_value = None
-        mock_get_db.return_value = mock_ctx
-
-        start_time = datetime(2025, 6, 1, tzinfo=UTC)
-
-        for i in range(5):
-            service.send_delivery_webhook(
-                media_buy_id=f"mb_{i}",
-                tenant_id="test_tenant",
-                principal_id="p1",
-                reporting_period_start=start_time,
-                reporting_period_end=start_time,
-                impressions=1000,
-                spend=100.0,
-            )
-
-        state, failures = service.get_circuit_breaker_state(endpoint_key)
-        assert state == CircuitState.OPEN
-
-        mock_client.return_value.__enter__.return_value.post.reset_mock()
-
-        result = service.send_delivery_webhook(
-            media_buy_id="mb_suppressed",
-            tenant_id="test_tenant",
-            principal_id="p1",
-            reporting_period_start=start_time,
-            reporting_period_end=start_time,
-            impressions=1000,
-            spend=100.0,
-        )
-
-        assert result is False
-        mock_client.return_value.__enter__.return_value.post.assert_not_called()
 
     @pytest.mark.xfail(
         reason="reporting_delayed status is not set by _get_media_buy_delivery_impl "
@@ -352,25 +289,6 @@ class TestCircuitBreakerHalfOpenProbe:
         # Probe fails
         cb.record_failure()
         assert cb.state == CircuitState.OPEN
-
-    def test_service_allows_probe_after_circuit_breaker_timeout(self):
-        """Integration test: WebhookDeliveryService uses circuit breaker
-        can_attempt() to allow half-open probe after timeout expires.
-
-        This verifies the service-level integration at _send_webhook_enhanced
-        where can_attempt() gates webhook delivery."""
-        service = WebhookDeliveryService()
-
-        endpoint_key = "test_tenant:https://example.com/webhook"
-        cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
-        cb.state = CircuitState.OPEN
-        cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
-
-        service._circuit_breakers[endpoint_key] = cb
-
-        # Verify the circuit breaker transitions when checked
-        assert cb.can_attempt() is True
-        assert cb.state == CircuitState.HALF_OPEN
 
     def test_full_open_to_halfopen_via_failures_then_timeout(self):
         """End-to-end: circuit starts CLOSED, accumulates failures to go OPEN,
@@ -724,86 +642,6 @@ class TestWebhookFailureNoSyncError:
             )
 
         assert service._sequence_numbers["mb_seq"] == 2
-
-    def test_webhook_failure_does_not_affect_poll_response(self):
-        """The poll endpoint (_get_media_buy_delivery_impl) and webhook delivery
-        are completely separate code paths. A webhook failure in a background
-        process cannot propagate to the poll response.
-
-        Covers: UC-004-EXT-G-08
-        """
-        identity = _make_identity()
-        buy = _make_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
-        adapter_resp = _make_adapter_response()
-
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_001"],
-            start_date="2025-01-01",
-            end_date="2025-06-30",
-        )
-
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = adapter_resp
-
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [buy]
-        mock_repo.get_packages.return_value = []
-
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = Mock(return_value=mock_uow)
-        mock_uow.__exit__ = Mock(return_value=False)
-        mock_uow.media_buys = mock_repo
-
-        webhook_service = WebhookDeliveryService()
-        with patch.object(webhook_service, "_send_webhook_enhanced", side_effect=Exception("timeout")):
-            webhook_result = webhook_service.send_delivery_webhook(
-                media_buy_id="mb_001",
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
-                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
-                impressions=5000,
-                spend=250.0,
-            )
-
-        assert webhook_result is False
-
-        with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=mock_adapter),
-            patch(f"{_PATCH}.MediaBuyUoW", return_value=mock_uow),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
-        ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
-
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        assert isinstance(response, GetMediaBuyDeliveryResponse)
-        assert len(response.media_buy_deliveries) == 1
-        assert response.media_buy_deliveries[0].media_buy_id == "mb_001"
-        assert response.aggregated_totals.impressions == 5000
-        assert response.errors is None
-
-    def test_send_webhook_enhanced_catches_db_errors(self):
-        """_send_webhook_enhanced catches database errors when looking up
-        webhook configs, returning False instead of raising.
-
-        Covers: UC-004-EXT-G-08
-        """
-        service = WebhookDeliveryService()
-
-        with patch(
-            "src.core.database.database_session.get_db_session",
-            side_effect=Exception("DB connection refused"),
-        ):
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"test": "data"},
-            )
-
-        assert result is False
 
 
 # ---------------------------------------------------------------------------
