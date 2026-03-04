@@ -164,6 +164,40 @@ class TestBaseClassContract:
         assert env._patchers == []
         assert env.mock == {}
 
+    def test_exception_in_test_body_still_cleans_up(self):
+        """If test body raises, __exit__ still cleans up patches and mock dict."""
+        from tests.harness._base import BaseTestEnv
+
+        class _TestEnv(BaseTestEnv):
+            EXTERNAL_PATCHES = {"a": "os.getcwd", "b": "os.getpid"}
+
+        env = _TestEnv()
+        try:
+            with env:
+                assert len(env.mock) == 2
+                raise ValueError("simulated test failure")
+        except ValueError:
+            pass
+
+        # Cleanup must have happened despite the exception
+        assert env.mock == {}
+        assert env._patchers == []
+
+    def test_call_impl_without_enter_fails(self):
+        """Calling call_impl without __enter__ fails because patches aren't started."""
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
+
+        env = DeliveryPollEnv()
+        env.add_buy(media_buy_id="mb_001")
+        env.set_adapter_response("mb_001")
+
+        # Without __enter__, patches aren't started. Production code tries
+        # to access real DB and hits the unit-test engine guard.
+        import pytest
+
+        with pytest.raises(RuntimeError, match="should not create real database"):
+            env.call_impl(media_buy_ids=["mb_001"])
+
     def test_nested_integration_env_raises(self):
         """Nesting two IntegrationEnvs must raise to prevent session corruption."""
         import pytest

@@ -156,6 +156,16 @@ class TestDeliveryPollEnvContract:
             pkg_ids = {p.package_id for p in delivery.by_package}
             assert pkg_ids == {"pkg_A", "pkg_B"}
 
+    def test_set_adapter_response_rejects_negative_impressions(self):
+        """set_adapter_response should reject negative impressions via Pydantic."""
+        from pydantic import ValidationError
+
+        with DeliveryPollEnv() as env:
+            import pytest
+
+            with pytest.raises(ValidationError):
+                env.set_adapter_response("mb_001", impressions=-100)
+
     def test_custom_date_range(self):
         """start_date/end_date parameters flow through to the request."""
         with DeliveryPollEnv() as env:
