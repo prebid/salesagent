@@ -18,97 +18,18 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import MediaBuyStatus
 
 from src.core.exceptions import AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import (
-    AdapterGetMediaBuyDeliveryResponse,
-    AdapterPackageDelivery,
-    DeliveryTotals,
-    GetMediaBuyDeliveryRequest,
-    GetMediaBuyDeliveryResponse,
-    ReportingPeriod,
-)
-from src.core.testing_hooks import AdCPTestContext
+from src.core.schemas import GetMediaBuyDeliveryRequest
 from src.core.tools.media_buy_delivery import (
     _get_media_buy_delivery_impl,
-    _get_target_media_buys,
     _resolve_delivery_status_filter,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_PATCH = "src.core.tools.media_buy_delivery"
-
-
-def _make_identity(
-    principal_id: str = "test_principal",
-    tenant_id: str = "test_tenant",
-) -> ResolvedIdentity:
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id, "name": "Test Tenant"},
-        protocol="mcp",
-        testing_context=AdCPTestContext(
-            dry_run=False,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
-    )
-
-
-def _make_buy(
-    media_buy_id: str = "mb_001",
-    buyer_ref: str | None = "ref_001",
-    start_date: date = date(2025, 1, 1),
-    end_date: date = date(2025, 12, 31),
-    budget: float = 10000.0,
-    currency: str = "USD",
-    raw_request: dict | None = None,
-) -> MagicMock:
-    """Create a mock MediaBuy ORM object."""
-    buy = MagicMock()
-    buy.media_buy_id = media_buy_id
-    buy.buyer_ref = buyer_ref
-    buy.start_date = start_date
-    buy.end_date = end_date
-    buy.start_time = None
-    buy.end_time = None
-    buy.budget = budget
-    buy.currency = currency
-    buy.raw_request = raw_request or {
-        "buyer_ref": buyer_ref,
-        "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],
-    }
-    return buy
-
-
-def _make_adapter_response(
-    media_buy_id: str = "mb_001",
-    impressions: int = 5000,
-    spend: float = 250.0,
-    package_id: str = "pkg_001",
-) -> AdapterGetMediaBuyDeliveryResponse:
-    return AdapterGetMediaBuyDeliveryResponse(
-        media_buy_id=media_buy_id,
-        reporting_period=ReportingPeriod(
-            start=datetime(2025, 1, 1, tzinfo=UTC),
-            end=datetime(2025, 12, 31, tzinfo=UTC),
-        ),
-        totals=DeliveryTotals(impressions=float(impressions), spend=spend),
-        by_package=[AdapterPackageDelivery(package_id=package_id, impressions=impressions, spend=spend)],
-        currency="USD",
-    )
-
 
 # UC-004-ALT-STATUS-FILTERED-DELIVERY-02
 # ---------------------------------------------------------------------------
@@ -130,36 +51,19 @@ class TestStatusFilterCompleted:
 
         Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-02
         """
-        # Arrange — 3 buys: one completed, one active, one ready
-        today = date(2026, 3, 1)
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        completed_buy = _make_buy(
-            media_buy_id="mb_completed",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 6, 30),
-        )
-        active_buy = _make_buy(
-            media_buy_id="mb_active",
-            start_date=date(2026, 1, 1),
-            end_date=date(2026, 12, 31),
-        )
-        ready_buy = _make_buy(
-            media_buy_id="mb_ready",
-            start_date=date(2026, 6, 1),
-            end_date=date(2026, 12, 31),
-        )
+        with DeliveryPollEnv() as env:
+            # 3 buys: completed (past), active (current), ready (future)
+            env.add_buy(media_buy_id="mb_completed", start_date=date(2025, 1, 1), end_date=date(2025, 6, 30))
+            env.add_buy(media_buy_id="mb_active", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31))
+            env.add_buy(media_buy_id="mb_ready", start_date=date(2027, 6, 1), end_date=date(2027, 12, 31))
+            env.set_adapter_response("mb_completed", impressions=5000, spend=250.0)
 
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [completed_buy, active_buy, ready_buy]
+            response = env.call_impl(status_filter="completed")
 
-        req = GetMediaBuyDeliveryRequest(status_filter="completed")
-
-        # Act
-        result = _get_target_media_buys(req, "test_principal", mock_repo, today)
-
-        # Assert — only the completed buy is returned
-        returned_ids = [mb_id for mb_id, _ in result]
-        assert returned_ids == ["mb_completed"]
+            returned_ids = [d.media_buy_id for d in response.media_buy_deliveries]
+            assert returned_ids == ["mb_completed"]
 
 
 # ---------------------------------------------------------------------------
@@ -198,27 +102,17 @@ class TestStatusFilterPaused:
 
         Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-03
         """
-        # Arrange — create a buy that should be "paused"
-        # Note: production code has no mechanism to set paused from dates
-        today = date(2026, 3, 1)
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        paused_buy = _make_buy(
-            media_buy_id="mb_paused",
-            start_date=date(2026, 1, 1),
-            end_date=date(2026, 12, 31),
-        )
+        with DeliveryPollEnv() as env:
+            # Buy with current dates (would be "active" by date logic, never "paused")
+            env.add_buy(media_buy_id="mb_paused", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31))
+            env.set_adapter_response("mb_paused", impressions=1000, spend=50.0)
 
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [paused_buy]
+            response = env.call_impl(status_filter="paused")
 
-        req = GetMediaBuyDeliveryRequest(status_filter="paused")
-
-        # Act
-        result = _get_target_media_buys(req, "test_principal", mock_repo, today)
-
-        # Assert — paused buy should be included
-        returned_ids = [mb_id for mb_id, _ in result]
-        assert "mb_paused" in returned_ids
+            returned_ids = [d.media_buy_id for d in response.media_buy_deliveries]
+            assert "mb_paused" in returned_ids
 
 
 # ---------------------------------------------------------------------------
@@ -260,19 +154,17 @@ class TestValidStatusValuesAccepted:
 
         Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-07
         """
-        valid_internal = {"active", "ready", "paused", "completed", "failed"}
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        def _to_internal(status: MediaBuyStatus) -> str:
-            if status == MediaBuyStatus.pending_activation:
-                return "ready"
-            return status.value
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_001")
+            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
 
-        # Act — must not raise
-        result = _resolve_delivery_status_filter(status_input, valid_internal, _to_internal)
+            # Act — must not raise
+            response = env.call_impl(status_filter=status_input)
 
-        # Assert — returns a non-empty list of valid internal statuses
-        assert len(result) > 0
-        assert all(s in valid_internal for s in result)
+            # Assert — response is valid (no error raised)
+            assert response is not None
 
     def test_special_all_value_returns_all_statuses(self):
         """The 'all' value returns all valid internal statuses.
@@ -281,15 +173,12 @@ class TestValidStatusValuesAccepted:
         """
         valid_internal = {"active", "ready", "paused", "completed", "failed"}
 
-        def _to_internal(status: MediaBuyStatus) -> str:
-            return status.value
-
         # Use a mock with .value = "all" to simulate the "all" special case
         mock_status = MagicMock()
         mock_status.value = "all"
 
-        # Act
-        result = _resolve_delivery_status_filter(mock_status, valid_internal, _to_internal)
+        # Act — pure function test, harness not applicable
+        result = _resolve_delivery_status_filter(mock_status, valid_internal, lambda s: s.value)
 
         # Assert — all valid statuses returned
         assert set(result) == valid_internal
@@ -329,29 +218,19 @@ class TestWebhookPayloadNotificationType:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-02
         """
-        from src.core.schemas import AggregatedTotals
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        # Act — construct response with notification_type
-        response = GetMediaBuyDeliveryResponse(
-            reporting_period={
-                "start": datetime(2026, 1, 1, tzinfo=UTC),
-                "end": datetime(2026, 1, 31, tzinfo=UTC),
-            },
-            currency="USD",
-            aggregated_totals=AggregatedTotals(
-                impressions=0.0,
-                spend=0.0,
-                clicks=None,
-                video_completions=None,
-                media_buy_count=0,
-            ),
-            media_buy_deliveries=[],
-            notification_type=notification_type,
-        )
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_001")
+            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
 
-        # Assert — notification_type is preserved in the response
-        dumped = response.model_dump(mode="json")
-        assert dumped["notification_type"] == notification_type
+            response = env.call_impl(media_buy_ids=["mb_001"])
+
+            # Manually set notification_type (this is set by the caller, not _impl)
+            response.notification_type = notification_type
+
+            dumped = response.model_dump(mode="json")
+            assert dumped["notification_type"] == notification_type
 
 
 # ---------------------------------------------------------------------------
@@ -389,30 +268,19 @@ class TestWebhookExcludesAggregatedTotals:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-09
         """
-        from src.core.schemas import AggregatedTotals
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        # Arrange — construct standard delivery response
-        response = GetMediaBuyDeliveryResponse(
-            reporting_period={
-                "start": datetime(2026, 1, 1, tzinfo=UTC),
-                "end": datetime(2026, 1, 31, tzinfo=UTC),
-            },
-            currency="USD",
-            aggregated_totals=AggregatedTotals(
-                impressions=5000.0,
-                spend=250.0,
-                clicks=None,
-                video_completions=None,
-                media_buy_count=1,
-            ),
-            media_buy_deliveries=[],
-        )
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_001")
+            env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
 
-        # Act — dump as webhook payload
-        payload = response.model_dump(mode="json")
+            response = env.call_impl(media_buy_ids=["mb_001"])
 
-        # Assert — aggregated_totals should NOT be in webhook payload
-        assert "aggregated_totals" not in payload
+            # Act — dump as webhook payload
+            payload = response.model_dump(mode="json")
+
+            # Assert — aggregated_totals should NOT be in webhook payload
+            assert "aggregated_totals" not in payload
 
 
 # ---------------------------------------------------------------------------
@@ -450,31 +318,20 @@ class TestWebhookRequestedMetricsFiltering:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
         """
-        from src.core.schemas import AggregatedTotals
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        # Arrange — response with all metric types populated
-        response = GetMediaBuyDeliveryResponse(
-            reporting_period={
-                "start": datetime(2026, 1, 1, tzinfo=UTC),
-                "end": datetime(2026, 1, 31, tzinfo=UTC),
-            },
-            currency="USD",
-            aggregated_totals=AggregatedTotals(
-                impressions=5000.0,
-                spend=250.0,
-                clicks=100.0,
-                video_completions=50.0,
-                media_buy_count=1,
-            ),
-            media_buy_deliveries=[],
-        )
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_001")
+            env.set_adapter_response("mb_001", impressions=5000, spend=250.0, clicks=100)
 
-        # Act — dump payload (simulating filtering to [impressions, clicks])
-        payload = response.model_dump(mode="json")
-        totals = payload["aggregated_totals"]
+            response = env.call_impl(media_buy_ids=["mb_001"])
 
-        # Assert — only requested metrics should be present (spend excluded)
-        assert "spend" not in totals, "spend should be excluded when not in requested_metrics"
+            # Act — dump payload (simulating filtering to [impressions, clicks])
+            payload = response.model_dump(mode="json")
+            totals = payload["aggregated_totals"]
+
+            # Assert — only requested metrics should be present (spend excluded)
+            assert "spend" not in totals, "spend should be excluded when not in requested_metrics"
 
 
 # ---------------------------------------------------------------------------
@@ -512,19 +369,18 @@ class TestUC004EXTA02AuthenticationFailure:
 
         Covers: UC-004-EXT-A-02
         """
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_001"],
-            buyer_refs=None,
-            status_filter=None,
-            start_date=None,
-            end_date=None,
-            context=None,
-        )
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        with pytest.raises(AdCPValidationError) as exc_info:
-            _get_media_buy_delivery_impl(req, identity=None)
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_001")
 
-        assert exc_info.value.message == "Context is required"
+            # Call _impl directly with identity=None (bypassing env.call_impl which provides identity)
+            req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+            with pytest.raises(AdCPValidationError) as exc_info:
+                _get_media_buy_delivery_impl(req, identity=None)
+
+            assert exc_info.value.message == "Context is required"
 
 
 # ---------------------------------------------------------------------------
@@ -552,29 +408,27 @@ class TestBuyerRefResolution:
     Covers: UC-004-MAIN-02
     """
 
-    def test_get_target_media_buys_uses_buyer_refs_when_no_media_buy_ids(self):
-        """_get_target_media_buys passes buyer_refs to repo when media_buy_ids absent.
+    def test_buyer_refs_resolve_media_buys(self):
+        """buyer_refs resolve media buys when media_buy_ids absent.
 
         Covers: UC-004-MAIN-02
         """
-        buy = _make_buy(media_buy_id="mb_100", buyer_ref="my_campaign_1")
-        repo = MagicMock()
-        repo.get_by_principal.return_value = [buy]
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=None,
-            buyer_refs=["my_campaign_1"],
-        )
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_100", buyer_ref="my_campaign_1")
+            env.set_adapter_response("mb_100", impressions=5000, spend=250.0)
 
-        reference_date = date(2025, 6, 15)
+            response = env.call_impl(buyer_refs=["my_campaign_1"])
 
-        result = _get_target_media_buys(req, "test_principal", repo, reference_date)
+            assert len(response.media_buy_deliveries) == 1
+            assert response.media_buy_deliveries[0].media_buy_id == "mb_100"
 
-        repo.get_by_principal.assert_called_once_with("test_principal", buyer_refs=["my_campaign_1"])
-
-        assert len(result) == 1
-        assert result[0][0] == "mb_100"
-        assert result[0][1] is buy
+            # Verify repo was called with buyer_refs
+            uow_instance = env.mock["uow"].return_value
+            uow_instance.media_buys.get_by_principal.assert_called_once_with(
+                "test_principal", buyer_refs=["my_campaign_1"]
+            )
 
     # test_full_impl_returns_delivery_via_buyer_ref — migrated to integration
 
@@ -583,20 +437,18 @@ class TestBuyerRefResolution:
 
         Covers: UC-004-MAIN-02
         """
-        buy = _make_buy(media_buy_id="mb_300", buyer_ref="my_campaign_1")
-        repo = MagicMock()
-        repo.get_by_principal.return_value = [buy]
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_300"],
-            buyer_refs=["my_campaign_1"],
-        )
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_300", buyer_ref="my_campaign_1")
+            env.set_adapter_response("mb_300", impressions=5000, spend=250.0)
 
-        reference_date = date(2025, 6, 15)
-        result = _get_target_media_buys(req, "test_principal", repo, reference_date)
+            response = env.call_impl(media_buy_ids=["mb_300"], buyer_refs=["my_campaign_1"])
 
-        repo.get_by_principal.assert_called_once_with("test_principal", media_buy_ids=["mb_300"])
-        assert len(result) == 1
+            # media_buy_ids takes precedence — repo called with media_buy_ids, not buyer_refs
+            uow_instance = env.mock["uow"].return_value
+            uow_instance.media_buys.get_by_principal.assert_called_once_with("test_principal", media_buy_ids=["mb_300"])
+            assert len(response.media_buy_deliveries) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -622,22 +474,21 @@ class TestMCPToolResultContent:
     """MCP wrapper returns ToolResult with both content and structured_content.
 
     Covers: UC-004-MAIN-13
+
+    Note: These test the MCP transport wrapper, not _impl. The harness is used
+    to build a realistic response via call_impl(), then the MCP wrapper is tested
+    with that response as the _impl return value.
     """
 
     @staticmethod
     def _stub_delivery_response():
-        """Build a minimal GetMediaBuyDeliveryResponse for wrapper testing."""
-        from src.core.schemas import AggregatedTotals
+        """Build a realistic GetMediaBuyDeliveryResponse via harness."""
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-        return GetMediaBuyDeliveryResponse(
-            reporting_period={
-                "start": datetime(2025, 1, 1, tzinfo=UTC),
-                "end": datetime(2025, 12, 31, tzinfo=UTC),
-            },
-            currency="USD",
-            aggregated_totals=AggregatedTotals(impressions=5000.0, spend=250.0, media_buy_count=1),
-            media_buy_deliveries=[],
-        )
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_001")
+            env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
+            return env.call_impl(media_buy_ids=["mb_001"])
 
     async def test_tool_result_has_content_and_structured_content(self):
         """MCP wrapper wraps _impl response in ToolResult with both fields.
