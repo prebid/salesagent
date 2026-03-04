@@ -128,12 +128,17 @@ class BaseTestEnv:
             from sqlalchemy.orm import Session as SASession
 
             from src.core.database.database_session import get_engine
+            from tests.factories import ALL_FACTORIES
+
+            # Guard against nested envs — session binding is global
+            for f in ALL_FACTORIES:
+                assert f._meta.sqlalchemy_session is None, (
+                    f"Factory {getattr(f, '__name__', type(f).__name__)} session already bound — "
+                    "nested IntegrationEnv contexts are not supported"
+                )
 
             engine = get_engine()
             self._session = SASession(bind=engine)
-
-            # Bind all factory_boy factories to this session
-            from tests.factories import ALL_FACTORIES
 
             for f in ALL_FACTORIES:
                 f._meta.sqlalchemy_session = self._session
@@ -148,23 +153,36 @@ class BaseTestEnv:
         return self
 
     def __exit__(self, *exc: object) -> bool:
+        errors: list[Exception] = []
+
         # 1. Unbind factories (integration mode only)
         if self.use_real_db:
-            from tests.factories import ALL_FACTORIES
+            try:
+                from tests.factories import ALL_FACTORIES
 
-            for f in ALL_FACTORIES:
-                f._meta.sqlalchemy_session = None
+                for f in ALL_FACTORIES:
+                    f._meta.sqlalchemy_session = None
+            except Exception as e:
+                errors.append(e)
 
-            # Close factory session
-            if self._session:
-                self._session.close()
-                self._session = None
+            try:
+                if self._session:
+                    self._session.close()
+                    self._session = None
+            except Exception as e:
+                errors.append(e)
 
-        # 2. Stop patches
+        # 2. Stop patches — each in its own try block
         for patcher in reversed(self._patchers):
-            patcher.stop()
+            try:
+                patcher.stop()
+            except Exception as e:
+                errors.append(e)
         self._patchers.clear()
         self.mock.clear()
+
+        if errors:
+            raise errors[0]
         return False
 
 

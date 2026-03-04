@@ -135,3 +135,51 @@ class TestBaseClassContract:
 
         assert BaseTestEnv.use_real_db is False
         assert IntegrationEnv.use_real_db is True
+
+    def test_exit_cleans_up_even_when_patcher_raises(self):
+        """__exit__ must stop all patchers even if one raises during stop."""
+        from tests.harness._base import BaseTestEnv
+
+        class _TestEnv(BaseTestEnv):
+            EXTERNAL_PATCHES = {
+                "a": "os.getcwd",
+                "b": "os.getpid",
+            }
+
+        env = _TestEnv()
+        env.__enter__()
+
+        # Sabotage patcher "b" (last started, first stopped) to raise on stop
+        original_stop = env._patchers[-1].stop
+        env._patchers[-1].stop = MagicMock(side_effect=RuntimeError("stop failed"))
+
+        # __exit__ should still clean up patcher "a" and clear state
+        # even though patcher "b" raises
+        try:
+            env.__exit__(None, None, None)
+        except RuntimeError:
+            pass  # Expected from the sabotaged patcher
+
+        # Key assertion: mock dict and patchers list must be cleared
+        assert env._patchers == []
+        assert env.mock == {}
+
+    def test_nested_integration_env_raises(self):
+        """Nesting two IntegrationEnvs must raise to prevent session corruption."""
+        import pytest
+
+        from tests.harness._base import IntegrationEnv
+
+        class _TestEnv(IntegrationEnv):
+            EXTERNAL_PATCHES = {"dep": "os.getcwd"}
+
+        with patch("src.core.database.database_session.get_engine") as mock_engine:
+            mock_engine.return_value = MagicMock()
+            # First env binds factories
+            with patch(
+                "tests.factories.ALL_FACTORIES", [MagicMock(_meta=MagicMock(sqlalchemy_session=None))]
+            ) as factories:
+                with _TestEnv():
+                    # Second env should fail because factories are already bound
+                    with pytest.raises(AssertionError, match="already bound"):
+                        _TestEnv().__enter__()
