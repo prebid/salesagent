@@ -230,7 +230,7 @@ class CircuitBreakerMixin:
         impressions: float = 1000.0,
         spend: float = 100.0,
         **extra: Any,
-    ) -> Any:
+    ) -> bool:
         """Call service.send_delivery_webhook with sensible defaults."""
         self._commit_factory_data()  # type: ignore[attr-defined]
         service = self.get_service()
@@ -245,6 +245,6 @@ class CircuitBreakerMixin:
             **extra,
         )
 
-    def call_impl(self, **kwargs: Any) -> Any:
+    def call_impl(self, **kwargs: Any) -> bool:
         """Alias for call_send to satisfy BaseTestEnv interface."""
         return self.call_send(**kwargs)

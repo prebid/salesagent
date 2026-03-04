@@ -16,8 +16,13 @@ Subclasses override:
 
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import MagicMock, patch
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from src.core.resolved_identity import ResolvedIdentity
 
 
 class BaseTestEnv:
@@ -65,11 +70,11 @@ class BaseTestEnv:
         self._dry_run = dry_run
         self.mock: dict[str, MagicMock] = {}
         self._patchers: list[Any] = []
-        self._session: Any = None
-        self._identity: Any = None
+        self._session: Session | None = None
+        self._identity: ResolvedIdentity | None = None
 
     @property
-    def identity(self) -> Any:
+    def identity(self) -> ResolvedIdentity:
         """ResolvedIdentity with sane defaults. Built lazily to avoid import at class level."""
         if self._identity is None:
             from src.core.resolved_identity import ResolvedIdentity
