@@ -48,20 +48,19 @@ class CircuitBreakerEnv(ImplTestEnv):
     """
 
     MODULE = "src.services.webhook_delivery_service"
+    EXTERNAL_PATCHES = {
+        "client": f"{MODULE}.httpx.Client",
+        "sleep": f"{MODULE}.time.sleep",
+        "random": f"{MODULE}.random.uniform",
+        "db": "src.core.database.database_session.get_db_session",
+    }
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._service: WebhookDeliveryService | None = None
+        self._db_session: MagicMock | None = None
 
-    def _patch_targets(self) -> dict[str, str]:
-        return {
-            "client": f"{self.MODULE}.httpx.Client",
-            "sleep": f"{self.MODULE}.time.sleep",
-            "random": f"{self.MODULE}.random.uniform",
-            "db": "src.core.database.database_session.get_db_session",
-        }
-
-    def _configure_defaults(self) -> None:
+    def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
 
@@ -148,5 +147,5 @@ class CircuitBreakerEnv(ImplTestEnv):
         )
 
     def call_impl(self, **kwargs: Any) -> Any:
-        """Alias for call_send to satisfy ImplTestEnv interface."""
+        """Alias for call_send to satisfy BaseTestEnv interface."""
         return self.call_send(**kwargs)

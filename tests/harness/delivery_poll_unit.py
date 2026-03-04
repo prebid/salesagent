@@ -48,6 +48,12 @@ class DeliveryPollEnv(ImplTestEnv):
     """
 
     MODULE = "src.core.tools.media_buy_delivery"
+    EXTERNAL_PATCHES = {
+        "uow": f"{MODULE}.MediaBuyUoW",
+        "principal": f"{MODULE}.get_principal_object",
+        "adapter": f"{MODULE}.get_adapter",
+        "pricing": f"{MODULE}._get_pricing_options",
+    }
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -56,15 +62,7 @@ class DeliveryPollEnv(ImplTestEnv):
         self._adapter_error: Exception | None = None
         self._uow_instance: MagicMock | None = None
 
-    def _patch_targets(self) -> dict[str, str]:
-        return {
-            "uow": f"{self.MODULE}.MediaBuyUoW",
-            "principal": f"{self.MODULE}.get_principal_object",
-            "adapter": f"{self.MODULE}.get_adapter",
-            "pricing": f"{self.MODULE}._get_pricing_options",
-        }
-
-    def _configure_defaults(self) -> None:
+    def _configure_mocks(self) -> None:
         # Principal: return a valid mock principal
         self.mock["principal"].return_value = MagicMock(
             principal_id=self._principal_id,

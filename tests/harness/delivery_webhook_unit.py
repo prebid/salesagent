@@ -42,16 +42,14 @@ class WebhookEnv(ImplTestEnv):
     """
 
     MODULE = "src.core.webhook_delivery"
+    EXTERNAL_PATCHES = {
+        "post": f"{MODULE}.requests.post",
+        "validate": f"{MODULE}.WebhookURLValidator.validate_webhook_url",
+        "sleep": f"{MODULE}.time.sleep",
+        "db": f"{MODULE}.get_db_session",
+    }
 
-    def _patch_targets(self) -> dict[str, str]:
-        return {
-            "post": f"{self.MODULE}.requests.post",
-            "validate": f"{self.MODULE}.WebhookURLValidator.validate_webhook_url",
-            "sleep": f"{self.MODULE}.time.sleep",
-            "db": f"{self.MODULE}.get_db_session",
-        }
-
-    def _configure_defaults(self) -> None:
+    def _configure_mocks(self) -> None:
         # URL validation: valid by default
         self.mock["validate"].return_value = (True, None)
 
@@ -129,5 +127,5 @@ class WebhookEnv(ImplTestEnv):
         return deliver_webhook_with_retry(delivery)
 
     def call_impl(self, **kwargs: Any) -> Any:
-        """Alias for call_deliver to satisfy ImplTestEnv interface."""
+        """Alias for call_deliver to satisfy BaseTestEnv interface."""
         return self.call_deliver(**kwargs)
