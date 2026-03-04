@@ -170,7 +170,3 @@ class IntegrationEnv(BaseTestEnv):
     """
 
     use_real_db = True
-
-
-# Backward compatibility alias
-ImplTestEnv = BaseTestEnv

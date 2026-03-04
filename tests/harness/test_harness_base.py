@@ -1,4 +1,4 @@
-"""Meta-tests for BaseTestEnv / IntegrationEnv / ImplTestEnv base contracts.
+"""Meta-tests for BaseTestEnv / IntegrationEnv base contracts.
 
 Guards the DRY-01 refactor: merging IntegrationEnv + ImplTestEnv into
 a single BaseTestEnv. These tests verify that both integration and unit
@@ -37,10 +37,10 @@ class TestBaseClassContract:
         assert env.mock == {}
 
     def test_unit_env_has_mock_dict(self):
-        """ImplTestEnv.__enter__ populates self.mock from EXTERNAL_PATCHES."""
-        from tests.harness._base_unit import ImplTestEnv
+        """BaseTestEnv.__enter__ populates self.mock from EXTERNAL_PATCHES."""
+        from tests.harness._base import BaseTestEnv
 
-        class _TestEnv(ImplTestEnv):
+        class _TestEnv(BaseTestEnv):
             EXTERNAL_PATCHES = {"some_dep": "os.getcwd"}
 
         env = _TestEnv()
@@ -64,9 +64,9 @@ class TestBaseClassContract:
 
     def test_unit_env_identity_is_lazy(self):
         """Identity is built on first access, not in __init__."""
-        from tests.harness._base_unit import ImplTestEnv
+        from tests.harness._base import BaseTestEnv
 
-        env = ImplTestEnv(principal_id="p1", tenant_id="t1")
+        env = BaseTestEnv(principal_id="p1", tenant_id="t1")
         assert env._identity is None
         identity = env.identity
         assert identity.principal_id == "p1"
@@ -93,9 +93,9 @@ class TestBaseClassContract:
 
     def test_unit_env_patches_are_reversed_on_exit(self):
         """Patches are stopped in reverse order on exit."""
-        from tests.harness._base_unit import ImplTestEnv
+        from tests.harness._base import BaseTestEnv
 
-        class _TestEnv(ImplTestEnv):
+        class _TestEnv(BaseTestEnv):
             EXTERNAL_PATCHES = {"a": "os.getcwd", "b": "os.getpid"}
 
         env = _TestEnv()
@@ -128,13 +128,6 @@ class TestBaseClassContract:
             pass
 
         assert configure_called == [["dep"]]
-
-    def test_base_test_env_is_impl_test_env(self):
-        """ImplTestEnv is an alias for BaseTestEnv (backward compat)."""
-        from tests.harness._base import BaseTestEnv
-        from tests.harness._base_unit import ImplTestEnv
-
-        assert ImplTestEnv is BaseTestEnv
 
     def test_integration_env_has_use_real_db(self):
         """IntegrationEnv has use_real_db=True, BaseTestEnv has False."""

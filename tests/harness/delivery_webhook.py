@@ -26,20 +26,19 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock
 
-from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
 from tests.harness._base import IntegrationEnv
+from tests.harness._mixins import WebhookMixin
 
 
-class WebhookEnv(IntegrationEnv):
+class WebhookEnv(WebhookMixin, IntegrationEnv):
     """Integration test environment for deliver_webhook_with_retry.
 
     Only mocks external HTTP calls, URL validation, and time.sleep.
     DB operations for delivery tracking go through the real database.
 
-    Fluent API:
+    Fluent API (from WebhookMixin):
         set_http_status(code, text)       -- configure single HTTP response
         set_http_sequence(responses)      -- configure sequence of responses
         set_http_error(exception)         -- make requests.post raise
@@ -64,64 +63,3 @@ class WebhookEnv(IntegrationEnv):
         mock_response.status_code = 200
         mock_response.text = "OK"
         self.mock["post"].return_value = mock_response
-
-    def set_http_status(self, code: int, text: str = "") -> None:
-        """Configure requests.post to return a single response with the given status."""
-        mock_response = MagicMock()
-        mock_response.status_code = code
-        mock_response.text = text or f"Status {code}"
-        self.mock["post"].return_value = mock_response
-        self.mock["post"].side_effect = None  # Clear any sequence
-
-    def set_http_sequence(self, responses: list[tuple[int, str]]) -> None:
-        """Configure requests.post to return a sequence of responses.
-
-        Args:
-            responses: List of (status_code, text) tuples.
-        """
-        mocks = []
-        for code, text in responses:
-            r = MagicMock()
-            r.status_code = code
-            r.text = text
-            mocks.append(r)
-        self.mock["post"].side_effect = mocks
-
-    def set_http_error(self, exception: Exception) -> None:
-        """Make requests.post raise the given exception."""
-        self.mock["post"].side_effect = exception
-
-    def set_url_invalid(self, error_msg: str = "Invalid URL") -> None:
-        """Make URL validation fail, short-circuiting delivery."""
-        self.mock["validate"].return_value = (False, error_msg)
-
-    def call_deliver(
-        self,
-        webhook_url: str = "https://example.com/webhook",
-        payload: dict[str, Any] | None = None,
-        headers: dict[str, str] | None = None,
-        signing_secret: str | None = None,
-        max_retries: int = 3,
-        timeout: int = 10,
-        event_type: str | None = None,
-        tenant_id: str | None = None,
-        object_id: str | None = None,
-    ) -> tuple[bool, dict[str, Any]]:
-        """Call deliver_webhook_with_retry with the given parameters."""
-        self._commit_factory_data()
-        delivery = WebhookDelivery(
-            webhook_url=webhook_url,
-            payload=payload or {"event": "delivery.update", "media_buy_id": "mb_001"},
-            headers=headers or {"Content-Type": "application/json"},
-            signing_secret=signing_secret,
-            max_retries=max_retries,
-            timeout=timeout,
-            event_type=event_type,
-            tenant_id=tenant_id,
-            object_id=object_id,
-        )
-        return deliver_webhook_with_retry(delivery)
-
-    def call_impl(self, **kwargs: Any) -> Any:
-        """Alias for call_deliver to satisfy IntegrationEnv interface."""
-        return self.call_deliver(**kwargs)

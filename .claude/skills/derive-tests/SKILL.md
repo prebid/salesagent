@@ -381,8 +381,8 @@ Use `/obligation-test` when:
 
 ## See Also
 
-- `tests/harness/_base.py` — IntegrationEnv base class (real DB, integration-first)
-- `tests/harness/_base_unit.py` — ImplTestEnv base class (full mocking, backward compat)
+- `tests/harness/_base.py` — BaseTestEnv + IntegrationEnv base classes
+- `tests/harness/_mixins.py` — Domain mixins (DeliveryPollMixin, WebhookMixin, CircuitBreakerMixin)
 - `tests/factories/` — factory_boy model factories (auto-bound by IntegrationEnv)
 - `tests/harness/test_harness_*.py` — Gold standard usage examples
 - `/obligation-test` — Fallback for domains without harness
