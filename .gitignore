@@ -54,6 +54,7 @@ Thumbs.db
 # BUT: Allow pre-commit hooks and scripts/ directory
 check_*.py
 !.pre-commit-hooks/check_*.py
+!scripts/check_*.py
 diagnose_*.py
 fix_*.py
 sync_*.py
