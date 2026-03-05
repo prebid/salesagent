@@ -28,7 +28,7 @@ def test_get_current_tenant_raises_if_not_set():
 
     error_msg = str(exc_info.value)
     assert "No tenant context set" in error_msg
-    assert "get_principal_id_from_context(ctx)" in error_msg
+    assert "resolve_identity()" in error_msg
     assert "BEFORE get_current_tenant()" in error_msg
 
 
@@ -108,8 +108,7 @@ def test_create_media_buy_has_correct_pattern_in_source():
     """Verify create_media_buy source code follows correct pattern.
 
     With the ResolvedIdentity migration, _impl functions now access
-    identity.principal_id instead of calling get_principal_id_from_context(),
-    and use ensure_tenant_context() instead of get_current_tenant().
+    identity.principal_id and use ensure_tenant_context() instead of get_current_tenant().
     """
     from pathlib import Path
 
@@ -151,8 +150,7 @@ def test_all_tools_have_auth_before_tenant_pattern():
     """Verify all tool _impl functions use identity for auth, not raw context calls.
 
     With the ResolvedIdentity migration, _impl functions receive identity as a parameter
-    and access identity.principal_id / identity.tenant instead of calling
-    get_principal_id_from_context() or get_principal_from_context().
+    and access identity.principal_id / identity.tenant.
 
     This test verifies that all tool files with tenant usage also have identity-based
     auth patterns (identity.principal_id, identity.tenant, or identity parameter).
@@ -191,14 +189,8 @@ def test_all_tools_have_auth_before_tenant_pattern():
             ]
         )
 
-        # Also accept legacy patterns if still present in helper functions
-        has_legacy_auth = any(
-            pattern in content
-            for pattern in [
-                "get_principal_id_from_context",
-                "get_principal_from_context",
-            ]
-        )
+        # Also accept legacy pattern if still present in helper functions
+        has_legacy_auth = "get_principal_from_context" in content
 
         has_auth = has_identity_auth or has_legacy_auth
 
@@ -211,33 +203,3 @@ def test_all_tools_have_auth_before_tenant_pattern():
 
     if issues:
         pytest.fail("Tool files with tenant context issues:\n" + "\n".join(f"  - {issue}" for issue in issues))
-
-
-def test_helper_function_sets_tenant_context():
-    """Test that get_principal_id_from_context() actually sets tenant context."""
-    from datetime import UTC, datetime
-
-    # Clear tenant context
-    from src.core.config_loader import current_tenant
-    from src.core.helpers.context_helpers import get_principal_id_from_context
-    from src.core.tool_context import ToolContext
-
-    current_tenant.set(None)
-
-    # Create context with tenant
-    ctx = ToolContext(
-        context_id="test_ctx",
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tool_name="test",
-        request_timestamp=datetime.now(UTC),
-    )
-
-    # Call helper
-    principal_id = get_principal_id_from_context(ctx)
-
-    assert principal_id == "test_principal"
-
-    # Verify tenant context was set
-    tenant = get_current_tenant()
-    assert tenant["tenant_id"] == "test_tenant"
