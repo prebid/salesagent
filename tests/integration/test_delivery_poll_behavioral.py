@@ -33,11 +33,6 @@ class TestWebhookNotificationTypeScheduled:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
     """
 
-    @pytest.mark.xfail(
-        reason="Production code does not auto-set notification_type based on delivery trigger. "
-        "_get_media_buy_delivery_impl constructs response without notification_type (defaults to None).",
-        strict=True,
-    )
     def test_periodic_delivery_sets_scheduled_type(self, integration_db):
         """Normal periodic delivery should auto-set notification_type to 'scheduled'.
 
@@ -75,11 +70,6 @@ class TestWebhookNotificationTypeFinal:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
 
-    @pytest.mark.xfail(
-        reason="Production code does not auto-set notification_type or manage next_expected_at "
-        "based on campaign completion. _get_media_buy_delivery_impl leaves both as None.",
-        strict=True,
-    )
     def test_completed_campaign_sets_final_type(self, integration_db):
         """Completed campaign should set notification_type='final' and omit next_expected_at.
 
@@ -118,11 +108,6 @@ class TestWebhookSequenceNumber:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
     """
 
-    @pytest.mark.xfail(
-        reason="Production code does not auto-assign or persist sequence_number. "
-        "_get_media_buy_delivery_impl leaves sequence_number as None (no auto-increment logic).",
-        strict=True,
-    )
     def test_sequence_number_auto_assigned(self, integration_db):
         """Delivery response should auto-assign sequence_number starting from 1.
 
@@ -160,11 +145,6 @@ class TestWebhookNextExpectedAt:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
     """
 
-    @pytest.mark.xfail(
-        reason="Production code does not compute next_expected_at based on reporting frequency. "
-        "_get_media_buy_delivery_impl leaves next_expected_at as None.",
-        strict=True,
-    )
     def test_next_expected_at_set_for_active_delivery(self, integration_db):
         """Scheduled delivery for active buy should compute next_expected_at.
 

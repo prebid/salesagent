@@ -35,6 +35,7 @@ from src.core.auth import get_principal_object
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.helpers import get_principal_id_from_context
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -454,6 +455,44 @@ def _get_media_buy_delivery_impl(
                 logger.error(f"Error getting delivery for {media_buy_id}: {e}")
                 # Skip this media buy and continue with others
 
+        # --- Compute response-level webhook metadata (u5hf, uelj, 8g9e) ---
+
+        # notification_type: "final" when all deliveries are completed, "scheduled" otherwise
+        if deliveries and all(d.status == "completed" for d in deliveries):
+            notification_type = "final"
+        elif deliveries:
+            notification_type = "scheduled"
+        else:
+            notification_type = None
+
+        # next_expected_at: set for non-final deliveries (default 24h interval)
+        if notification_type and notification_type != "final":
+            next_expected_at = datetime.now(UTC) + timedelta(hours=24)
+        else:
+            next_expected_at = None
+
+        # sequence_number: persistent auto-increment per media buy via WebhookDeliveryLog
+        sequence_number = None
+        if deliveries and uow.session is not None:
+            delivery_repo = DeliveryRepository(uow.session, tenant["tenant_id"])
+            # Use the first media buy's sequence as the response-level sequence
+            first_mb_id = deliveries[0].media_buy_id
+            max_seq = delivery_repo.get_max_sequence_number(first_mb_id, task_type="delivery_poll")
+            sequence_number = max_seq + 1
+            # Persist the new sequence number
+            from uuid import uuid4
+
+            delivery_repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_id,
+                media_buy_id=first_mb_id,
+                webhook_url="delivery_poll://internal",
+                task_type="delivery_poll",
+                status="success",
+                sequence_number=sequence_number,
+                notification_type=notification_type,
+            )
+
         # Create AdCP-compliant response
         context_val = req.context
         response = GetMediaBuyDeliveryResponse(
@@ -469,6 +508,9 @@ def _get_media_buy_delivery_impl(
             media_buy_deliveries=deliveries,
             errors=not_found_errors or None,
             context=context_val,
+            notification_type=notification_type,
+            sequence_number=sequence_number,
+            next_expected_at=next_expected_at,
         )
 
         # Apply testing hooks if needed
@@ -660,7 +702,14 @@ def _get_target_media_buys(
             return "ready"
         return status.value
 
-    filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses, _to_internal)
+    # When specific IDs/refs are provided without an explicit status_filter,
+    # return all matching buys regardless of status. The "active" default only
+    # applies when browsing (no specific IDs).
+    has_explicit_ids = bool(req.media_buy_ids or req.buyer_refs)
+    if has_explicit_ids and not req.status_filter:
+        filter_statuses = list(valid_internal_statuses)
+    else:
+        filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses, _to_internal)
 
     # Preserve if/elif/else precedence: media_buy_ids takes priority over buyer_refs
     if req.media_buy_ids:
