@@ -41,8 +41,6 @@ IMPL_FILES = [
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
 # FIXME(salesagent-qo8a): all _impl functions should use repositories instead of get_db_session()
 IMPL_SESSION_ALLOWLIST = {
-    # media_buy_delivery.py — 1 function with get_db_session()
-    ("src/core/tools/media_buy_delivery.py", "_get_pricing_options"),
     # products.py — 2 functions with get_db_session()
     ("src/core/tools/products.py", "_get_products_impl"),
     ("src/core/tools/products.py", "get_product_catalog"),

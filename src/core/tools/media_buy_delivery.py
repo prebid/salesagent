@@ -18,6 +18,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import RootModel, ValidationError
 from rich.console import Console
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
@@ -32,7 +33,6 @@ from adcp.types.generated_poc.core.context import ContextObject
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 from src.core.auth import get_principal_object
-from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.helpers import get_principal_id_from_context
@@ -188,7 +188,7 @@ def _get_media_buy_delivery_impl(
             and isinstance(buy.raw_request, dict)
             and buy.raw_request.get("pricing_option_id") is not None
         ]
-        pricing_options = _get_pricing_options(pricing_option_ids, tenant_id=tenant["tenant_id"])
+        pricing_options = _get_pricing_options(pricing_option_ids, tenant_id=tenant["tenant_id"], session=uow.session)
 
         # Collect delivery data for each media buy
         deliveries = []
@@ -665,7 +665,9 @@ def _get_target_media_buys(
 
 
 def _get_pricing_options(
-    pricing_option_ids: list[Any | None], tenant_id: str | None = None
+    pricing_option_ids: list[Any | None],
+    tenant_id: str | None = None,
+    session: Session | None = None,
 ) -> dict[str, PricingOption]:
     # Cast string IDs from JSON to int for Integer PK column (Pattern #3: cast at boundary)
     int_ids = []
@@ -677,10 +679,11 @@ def _get_pricing_options(
                 logger.warning(f"Skipping non-numeric pricing_option_id: {pid}")
     if not int_ids:
         return {}
-    with get_db_session() as session:
-        statement = select(PricingOption).where(
-            PricingOption.id.in_(int_ids),
-            PricingOption.tenant_id == tenant_id,
-        )
-        pricing_options = session.scalars(statement).all()
-        return {str(pricing_option.id): pricing_option for pricing_option in pricing_options}
+    if session is None:
+        raise ValueError("session is required for _get_pricing_options")
+    statement = select(PricingOption).where(
+        PricingOption.id.in_(int_ids),
+        PricingOption.tenant_id == tenant_id,
+    )
+    pricing_options = session.scalars(statement).all()
+    return {str(pricing_option.id): pricing_option for pricing_option in pricing_options}

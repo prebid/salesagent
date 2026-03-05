@@ -186,9 +186,6 @@ def _standard_patches(
             f"{_PATCH_PREFIX}._get_pricing_options",
             return_value=pricing_options or {},
         ),
-        "db_session": patch(
-            f"{_PATCH_PREFIX}.get_db_session",
-        ),
         "uow": patch(
             f"{_PATCH_PREFIX}.MediaBuyUoW",
             return_value=mock_uow,
@@ -216,19 +213,14 @@ def _run_impl_with_patches(
         principal_obj=principal_obj,
     )
 
-    mock_inner_session = MagicMock()
-    mock_inner_session.scalars.return_value.all.return_value = []
-
     with (
         patches["principal_obj"],
         patches["adapter"],
         patches["tenant"],
         patches["target_buys"],
         patches["pricing_options"],
-        patches["db_session"] as mock_db,
         patches["uow"],
     ):
-        mock_db.return_value.__enter__.return_value = mock_inner_session
         return _get_media_buy_delivery_impl(req, identity)
 
 
@@ -428,19 +420,14 @@ class TestDeliveryIdentificationModes:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_id1"])
         identity = _make_identity()
 
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert len(response.media_buy_deliveries) == 1
@@ -468,19 +455,14 @@ class TestDeliveryIdentificationModes:
         req = GetMediaBuyDeliveryRequest(buyer_refs=["buyer_A"])
         identity = _make_identity()
 
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert len(response.media_buy_deliveries) == 1
@@ -510,19 +492,14 @@ class TestDeliveryIdentificationModes:
         )
         identity = _make_identity()
 
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         call_req = mock_target.call_args[0][0]
@@ -549,19 +526,14 @@ class TestDeliveryIdentificationModes:
         req = GetMediaBuyDeliveryRequest()
         identity = _make_identity()
 
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         call_req = mock_target.call_args[0][0]
@@ -720,7 +692,6 @@ class TestDeliveryStatusFilter:
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             _get_media_buy_delivery_impl(req, identity)
@@ -1010,9 +981,7 @@ class TestDeliveryPricingOptionLookup:
         mock_session = MagicMock()
         mock_session.scalars.return_value.all.return_value = [mock_po1]
 
-        with patch(f"{_PATCH_PREFIX}.get_db_session") as mock_db:
-            mock_db.return_value.__enter__.return_value = mock_session
-            result = _get_pricing_options(["42"])
+        result = _get_pricing_options(["42"], session=mock_session)
 
         # Must find the pricing option keyed by string "42"
         assert "42" in result
@@ -1629,7 +1598,6 @@ class TestDeliveryInvalidDateRange:
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             response = _get_media_buy_delivery_impl(req, identity)
