@@ -5,6 +5,8 @@ adapter behavior, and response assembly with PostgreSQL.
 
 Each test docstring includes ``Covers: <obligation-id>`` so the obligation
 coverage guard can track coverage.
+
+MIGRATED: Uses factory-based setup via IntegrationEnv session binding.
 """
 
 from __future__ import annotations
@@ -14,19 +16,15 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from sqlalchemy import select
 
-from src.core.database.database_session import get_db_session
-from src.core.database.models import Principal
+from src.core.database.models import Tenant as TenantModel
 from src.core.database.repositories.uow import ProductUoW
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.resolved_identity import ResolvedIdentity
-from tests.integration_v2.conftest import (
-    add_required_setup_data,
-    create_auction_product,
-    create_test_product_with_pricing,
-)
-from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
+from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -98,127 +96,88 @@ async def _call_get_products(
 @pytest.fixture
 def uc001_tenant(integration_db):
     """Create a fully configured tenant for UC-001 tests."""
-    tenant_id = "uc001_tenant"
-    with get_db_session() as session:
-        tenant = create_tenant_with_timestamps(
-            tenant_id=tenant_id,
-            name="UC-001 Test Publisher",
-            subdomain="uc001-test",
-            is_active=True,
-            ad_server="mock",
-        )
-        session.add(tenant)
-        session.flush()
-        add_required_setup_data(session, tenant_id)
-
-        # Create principal with access token
-        principal = Principal(
-            tenant_id=tenant_id,
+    with IntegrationEnv() as _env:
+        tenant = TenantFactory(tenant_id="uc001_tenant", subdomain="uc001-test", name="UC-001 Test Publisher")
+        PrincipalFactory(
+            tenant=tenant,
             principal_id="test_principal",
             name="Test Advertiser",
             access_token="test_token",
-            platform_mappings={"mock": {"advertiser_id": "mock_adv_1"}},
-            created_at=get_utc_now(),
         )
-        session.add(principal)
-
-        # Create second principal for access control tests
-        principal2 = Principal(
-            tenant_id=tenant_id,
+        PrincipalFactory(
+            tenant=tenant,
             principal_id="other_principal",
             name="Other Advertiser",
             access_token="other_token",
-            platform_mappings={"mock": {"advertiser_id": "mock_adv_2"}},
-            created_at=get_utc_now(),
         )
-        session.add(principal2)
-
-        session.commit()
-    return tenant_id
+    return "uc001_tenant"
 
 
 @pytest.fixture
 def uc001_products(uc001_tenant):
     """Create diverse products for UC-001 tests."""
-    tenant_id = uc001_tenant
-    with get_db_session() as session:
+    with IntegrationEnv() as _env:
+        tenant = _env._session.scalars(select(TenantModel).filter_by(tenant_id=uc001_tenant)).first()
+
         # Product 1: Guaranteed display, fixed CPM, US only
-        create_test_product_with_pricing(
-            session=session,
-            tenant_id=tenant_id,
+        p1 = ProductFactory(
+            tenant=tenant,
             product_id="guaranteed_display",
             name="Premium Display Ads",
             description="Guaranteed display inventory",
-            format_ids=[
-                {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-            ],
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             delivery_type="guaranteed",
-            pricing_model="CPM",
-            rate=Decimal("15.00"),
-            is_fixed=True,
-            currency="USD",
             countries=["US"],
             channels=["display"],
         )
+        PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("15.00"), is_fixed=True)
 
         # Product 2: Non-guaranteed video, auction CPM, US+CA
-        create_auction_product(
-            session=session,
-            tenant_id=tenant_id,
+        p2 = ProductFactory(
+            tenant=tenant,
             product_id="auction_video",
             name="Programmatic Video",
             description="RTB video inventory",
-            format_ids=[
-                {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_15s"},
-            ],
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_15s"}],
             delivery_type="non_guaranteed",
-            pricing_model="CPM",
-            floor_cpm=Decimal("10.00"),
-            currency="USD",
             countries=["US", "CA"],
             channels=["olv"],
         )
+        PricingOptionFactory(
+            product=p2,
+            pricing_model="cpm",
+            rate=Decimal("10.00"),
+            is_fixed=False,
+            price_guidance={"floor": 10.0, "p50": 15.0, "p75": 20.0, "p90": 25.0},
+        )
 
         # Product 3: Restricted product (only for test_principal)
-        create_test_product_with_pricing(
-            session=session,
-            tenant_id=tenant_id,
+        p3 = ProductFactory(
+            tenant=tenant,
             product_id="restricted_product",
             name="Restricted Display",
             description="Only for specific principals",
-            format_ids=[
-                {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
-            ],
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"}],
             delivery_type="guaranteed",
-            pricing_model="CPM",
-            rate=Decimal("20.00"),
-            is_fixed=True,
-            currency="USD",
             countries=["US"],
             allowed_principal_ids=["test_principal"],
         )
+        PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("20.00"), is_fixed=True)
 
         # Product 4: Global audio, no country restriction
-        create_test_product_with_pricing(
-            session=session,
-            tenant_id=tenant_id,
+        p4 = ProductFactory(
+            tenant=tenant,
             product_id="global_audio",
             name="Global Audio Ads",
             description="Worldwide audio advertising",
-            format_ids=[
-                {"agent_url": "https://creative.adcontextprotocol.org", "id": "audio_30s"},
-            ],
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "audio_30s"}],
             delivery_type="guaranteed",
-            pricing_model="CPM",
-            rate=Decimal("18.00"),
-            is_fixed=True,
-            currency="USD",
             countries=None,
             channels=["streaming_audio"],
         )
+        PricingOptionFactory(product=p4, pricing_model="cpm", rate=Decimal("18.00"), is_fixed=True)
 
-        session.commit()
-    return tenant_id
+    return uc001_tenant
 
 
 # ===========================================================================
@@ -1051,24 +1010,18 @@ class TestFilteredDiscovery:
         Covers: UC-001-ALT-FILTERED-DISCOVERY-13
         """
         # Create a product without channels defined
-        with get_db_session() as session:
-            create_test_product_with_pricing(
-                session=session,
-                tenant_id="uc001_tenant",
+        with IntegrationEnv() as _env:
+            tenant = _env._session.scalars(select(TenantModel).filter_by(tenant_id="uc001_tenant")).first()
+            p = ProductFactory(
+                tenant=tenant,
                 product_id="no_channel_product",
                 name="No Channel Product",
                 description="Product without explicit channels",
-                format_ids=[
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-                ],
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
                 delivery_type="guaranteed",
-                pricing_model="CPM",
-                rate=Decimal("12.00"),
-                is_fixed=True,
-                currency="USD",
                 channels=None,
             )
-            session.commit()
+            PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("12.00"), is_fixed=True)
 
         result = await _call_get_products(
             brief="display ads",
@@ -1106,26 +1059,24 @@ class TestPaginatedDiscovery:
     @pytest.fixture
     def many_products(self, uc001_tenant):
         """Create 12 products for pagination tests."""
-        tenant_id = uc001_tenant
-        with get_db_session() as session:
+        with IntegrationEnv() as _env:
+            tenant = _env._session.scalars(select(TenantModel).filter_by(tenant_id=uc001_tenant)).first()
             for i in range(12):
-                create_test_product_with_pricing(
-                    session=session,
-                    tenant_id=tenant_id,
+                p = ProductFactory(
+                    tenant=tenant,
                     product_id=f"paginated_product_{i:03d}",
                     name=f"Paginated Product {i}",
                     description=f"Product {i} for pagination testing",
-                    format_ids=[
-                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-                    ],
+                    format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
                     delivery_type="guaranteed",
-                    pricing_model="CPM",
+                )
+                PricingOptionFactory(
+                    product=p,
+                    pricing_model="cpm",
                     rate=Decimal("10.00") + Decimal(str(i)),
                     is_fixed=True,
-                    currency="USD",
                 )
-            session.commit()
-        return tenant_id
+        return uc001_tenant
 
     @pytest.mark.asyncio
     async def test_first_page_with_max_results(self, many_products):
@@ -1385,33 +1336,16 @@ class TestProductRepository:
         Covers: UC-001-POST-04
         """
         # Create a product in a different tenant
-        with get_db_session() as session:
-            other_tenant = create_tenant_with_timestamps(
-                tenant_id="other_tenant_isolation",
-                name="Other Tenant",
-                subdomain="other-isolation",
-                is_active=True,
-                ad_server="mock",
-            )
-            session.add(other_tenant)
-            session.flush()
-            add_required_setup_data(session, "other_tenant_isolation")
-
-            create_test_product_with_pricing(
-                session=session,
-                tenant_id="other_tenant_isolation",
+        with IntegrationEnv() as _env:
+            other_tenant = TenantFactory(tenant_id="other-tenant-isolation", subdomain="other-isolation")
+            p = ProductFactory(
+                tenant=other_tenant,
                 product_id="other_tenant_product",
                 name="Other Tenant Product",
-                format_ids=[
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-                ],
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
                 delivery_type="guaranteed",
-                pricing_model="CPM",
-                rate=Decimal("10.00"),
-                is_fixed=True,
-                currency="USD",
             )
-            session.commit()
+            PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("10.00"), is_fixed=True)
 
         # Verify uc001_tenant doesn't see other_tenant's products
         with ProductUoW("uc001_tenant") as uow:

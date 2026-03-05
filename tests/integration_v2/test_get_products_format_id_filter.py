@@ -5,110 +5,69 @@ FormatId objects with .id attribute (not .format_id).
 
 Regression test for: "unhashable type: 'FormatReference'" bug.
 
-MIGRATED: Uses new pricing_options model instead of legacy Product pricing fields.
+MIGRATED: Uses ProductEnv harness + factory-based setup.
 """
 
 import pytest
 
-from src.core.database.database_session import get_db_session
-from src.core.database.models import Principal
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import FormatId, GetProductsRequest, ProductFilters
-from tests.integration_v2.conftest import create_test_product_with_pricing
-from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
+from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
-def identity():
-    """Create ResolvedIdentity for testing."""
-    return ResolvedIdentity(
-        principal_id="test_principal",
-        tenant_id="format_id_filter_test",
-        tenant={"tenant_id": "format_id_filter_test"},
-        protocol="mcp",
-    )
-
-
-@pytest.fixture(autouse=True)
-def setup_products_with_formatid_objects(integration_db):
-    """Create products with FormatId-style format storage."""
-    with get_db_session() as session:
-        tenant = create_tenant_with_timestamps(
-            tenant_id="format_id_filter_test",
-            name="FormatId Filter Test",
-            subdomain="format-filter",
-            is_active=True,
-            ad_server="mock",
-        )
-        session.add(tenant)
-
-        principal = Principal(
-            tenant_id="format_id_filter_test",
+def product_env(integration_db):
+    """ProductEnv with two products: display and video formats."""
+    with ProductEnv(tenant_id="fmt-filter-test", principal_id="test_principal") as env:
+        tenant = TenantFactory(tenant_id="fmt-filter-test")
+        PrincipalFactory(
+            tenant=tenant,
             principal_id="test_principal",
-            name="Test Advertiser",
-            access_token="format_id_filter_token",
-            platform_mappings={"mock": {"id": "test"}},
-            created_at=get_utc_now(),
         )
-        session.add(principal)
-        session.flush()
 
-        # Create products with FormatId-style dicts and proper pricing
-        display_product = create_test_product_with_pricing(
-            session=session,
-            tenant_id="format_id_filter_test",
+        display_product = ProductFactory(
+            tenant=tenant,
             product_id="display_product",
             name="Display Product",
             description="Has display formats",
-            pricing_model="CPM",
-            rate="15.00",
-            is_fixed=True,
-            currency="USD",
+            delivery_type="guaranteed",
             format_ids=[
                 {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
                 {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
             ],
-            targeting_template={},
-            delivery_type="guaranteed",
-            is_custom=False,
-            countries=["US"],
-            property_tags=["all_inventory"],
+        )
+        PricingOptionFactory(
+            product=display_product,
+            pricing_model="cpm",
+            rate="15.00",
+            is_fixed=True,
+            currency="USD",
         )
 
-        video_product = create_test_product_with_pricing(
-            session=session,
-            tenant_id="format_id_filter_test",
+        video_product = ProductFactory(
+            tenant=tenant,
             product_id="video_product",
             name="Video Product",
             description="Has video formats",
-            pricing_model="CPM",
-            rate="20.00",
-            is_fixed=True,
-            currency="USD",
+            delivery_type="guaranteed",
             format_ids=[
                 {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_1280x720"},
             ],
-            targeting_template={},
-            delivery_type="guaranteed",
-            is_custom=False,
-            countries=["US"],
-            property_tags=["all_inventory"],
+        )
+        PricingOptionFactory(
+            product=video_product,
+            pricing_model="cpm",
+            rate="20.00",
+            is_fixed=True,
+            currency="USD",
         )
 
-        session.commit()
-
-
-def _import_get_products_impl():
-    """Import the actual implementation function."""
-    from src.core.tools.products import _get_products_impl
-
-    return _get_products_impl
+        yield env
 
 
 @pytest.mark.asyncio
-async def test_filter_by_format_ids_with_formatid_objects(identity):
+async def test_filter_by_format_ids_with_formatid_objects(product_env):
     """Test that filtering by format_ids works with FormatId objects.
 
     This is the actual code path that was broken - when a client sends:
@@ -120,20 +79,11 @@ async def test_filter_by_format_ids_with_formatid_objects(identity):
 
     The server was checking for .format_id attribute instead of .id attribute.
     """
-    get_products_impl = _import_get_products_impl()
-
-    # Create request with FormatId filter (how the client sends it)
-    request = GetProductsRequest(
-        brand={"domain": "testbrand.com"},
-        filters=ProductFilters(
-            format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")]
-        ),
+    result = await product_env.call_impl(
+        brief="display ads",
+        filters={"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]},
     )
 
-    # Call the implementation directly
-    result = await get_products_impl(request, identity)
-
-    # Should return only the display_product (has display_300x250)
     assert len(result.products) == 1
     assert result.products[0].product_id == "display_product"
 
@@ -151,61 +101,41 @@ async def test_filter_by_format_ids_with_formatid_objects(identity):
 
 
 @pytest.mark.asyncio
-async def test_filter_by_format_ids_no_matches(identity):
+async def test_filter_by_format_ids_no_matches(product_env):
     """Test that filtering returns empty when no products match."""
-    get_products_impl = _import_get_products_impl()
-
-    # Request a format that doesn't exist
-    request = GetProductsRequest(
-        brand={"domain": "testbrand.com"},
-        filters=ProductFilters(
-            format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="audio_30s")]
-        ),
+    result = await product_env.call_impl(
+        brief="audio ads",
+        filters={"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "audio_30s"}]},
     )
 
-    result = await get_products_impl(request, identity)
-
-    # Should return empty - no products have audio formats
     assert len(result.products) == 0
 
 
 @pytest.mark.asyncio
-async def test_filter_by_format_ids_video_format(identity):
+async def test_filter_by_format_ids_video_format(product_env):
     """Test filtering for video format returns correct product."""
-    get_products_impl = _import_get_products_impl()
-
-    request = GetProductsRequest(
-        brand={"domain": "testbrand.com"},
-        filters=ProductFilters(
-            format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720")]
-        ),
+    result = await product_env.call_impl(
+        brief="video ads",
+        filters={"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_1280x720"}]},
     )
 
-    result = await get_products_impl(request, identity)
-
-    # Should return only video_product
     assert len(result.products) == 1
     assert result.products[0].product_id == "video_product"
 
 
 @pytest.mark.asyncio
-async def test_filter_by_multiple_format_ids(identity):
+async def test_filter_by_multiple_format_ids(product_env):
     """Test filtering with multiple format IDs returns products matching any."""
-    get_products_impl = _import_get_products_impl()
-
-    request = GetProductsRequest(
-        brand={"domain": "testbrand.com"},
-        filters=ProductFilters(
-            format_ids=[
-                FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-                FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
+    result = await product_env.call_impl(
+        brief="all ads",
+        filters={
+            "format_ids": [
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+                {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_1280x720"},
             ]
-        ),
+        },
     )
 
-    result = await get_products_impl(request, identity)
-
-    # Should return both products (OR logic)
     assert len(result.products) == 2
     product_ids = {p.product_id for p in result.products}
     assert "display_product" in product_ids

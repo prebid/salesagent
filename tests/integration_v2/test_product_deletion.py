@@ -1,10 +1,10 @@
 """Integration tests for product deletion functionality.
 
-⚠️ MIGRATION NOTICE: This test has been migrated to tests/integration_v2/ to use the new
-pricing_options model. The original file in tests/integration/ is deprecated.
+MIGRATED: Uses factory-based setup via IntegrationEnv session binding.
 """
 
 from datetime import date
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
@@ -14,8 +14,11 @@ from src.admin.app import create_app
 
 app = create_app()
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, PricingOption, Principal, Product, Tenant, TenantManagementConfig
-from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
+from src.core.database.models import MediaBuy, Product, TenantManagementConfig
+from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.harness._base import IntegrationEnv
+
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
@@ -33,94 +36,36 @@ def client():
 @pytest.fixture
 def test_tenant_and_products(integration_db):
     """Create a test tenant with products for deletion tests."""
-    with get_db_session() as session:
-        # Clean up any existing test data
-        try:
-            session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == "test_delete"))
-            session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_delete"))
-            session.execute(delete(Product).where(Product.tenant_id == "test_delete"))
-            session.execute(delete(Principal).where(Principal.tenant_id == "test_delete"))
-            session.execute(delete(Tenant).where(Tenant.tenant_id == "test_delete"))
-            session.commit()
-        except:
-            session.rollback()
+    with IntegrationEnv() as _env:
+        tenant = TenantFactory(tenant_id="test_delete", subdomain="test-delete")
+        PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-        # Create test tenant with required setup
-        tenant = Tenant(
-            tenant_id="test_delete",
-            name="Test Delete Tenant",
-            subdomain="test-delete",
-            ad_server="mock",
-            is_active=True,
-        )
-        session.add(tenant)
-        session.commit()
-
-        # Add required setup data (currency limits, property tags)
-        add_required_setup_data(session, "test_delete")
-
-        # Create test principal (required for media buys)
-        import uuid
-
-        principal = Principal(
-            tenant_id="test_delete",
-            principal_id="test_principal",
-            name="Test Principal",
-            platform_mappings={"mock": {"advertiser_id": "test_principal"}},  # Use valid platform key (mock)
-            access_token=str(uuid.uuid4()),  # Required field
-        )
-        session.add(principal)
-        session.commit()
-
-        # Create test products using new pricing_options model
-        product1 = create_test_product_with_pricing(
-            session=session,
-            tenant_id="test_delete",
+        p1 = ProductFactory(
+            tenant=tenant,
             product_id="test_product_1",
             name="Test Product 1",
-            pricing_model="CPM",
-            rate="10.00",
-            is_fixed=False,
             format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
         )
+        PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("10.00"), is_fixed=False)
 
-        product2 = create_test_product_with_pricing(
-            session=session,
-            tenant_id="test_delete",
+        p2 = ProductFactory(
+            tenant=tenant,
             product_id="test_product_2",
             name="Test Product 2",
-            pricing_model="CPM",
-            rate="15.00",
-            is_fixed=False,
             format_ids=[{"agent_url": "https://test.com", "id": "video_30s"}],
         )
+        PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("15.00"), is_fixed=False)
 
-        # Product with invalid format data (for pattern validation testing)
-        product3 = create_test_product_with_pricing(
-            session=session,
-            tenant_id="test_delete",
+        # Product with invalid format data (string, not list) for validation testing
+        p3 = ProductFactory(
+            tenant=tenant,
             product_id="test_product_invalid",
             name="Test Product Invalid Format",
-            pricing_model="CPM",
-            rate="20.00",
-            is_fixed=False,
-            format_ids='[{"format_id": "test", "type": "invalid_type"}]',  # Invalid type for testing
+            format_ids='[{"format_id": "test", "type": "invalid_type"}]',
         )
+        PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("20.00"), is_fixed=False)
 
-        session.commit()
-
-        yield {"tenant": tenant, "products": [product1, product2, product3]}
-
-        # Cleanup
-        try:
-            session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == "test_delete"))
-            session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_delete"))
-            session.execute(delete(Product).where(Product.tenant_id == "test_delete"))
-            session.execute(delete(Principal).where(Principal.tenant_id == "test_delete"))
-            session.execute(delete(Tenant).where(Tenant.tenant_id == "test_delete"))
-            session.commit()
-        except:
-            pass
+    yield
 
 
 @pytest.fixture
@@ -139,10 +84,8 @@ def authenticated_session(client):
 def setup_super_admin_config(integration_db):
     """Setup super admin configuration in database."""
     with get_db_session() as session:
-        # Clean up existing config
         session.execute(delete(TenantManagementConfig).where(TenantManagementConfig.config_key == "super_admin_emails"))
 
-        # Create super admin config
         config = TenantManagementConfig(
             config_key="super_admin_emails", config_value="test@example.com", description="Test super admin emails"
         )
@@ -151,7 +94,6 @@ def setup_super_admin_config(integration_db):
 
         yield
 
-        # Cleanup
         session.execute(delete(TenantManagementConfig).where(TenantManagementConfig.config_key == "super_admin_emails"))
         session.commit()
 
