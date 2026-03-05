@@ -529,22 +529,6 @@ class WebhookDeliveryService:
             if media_buy_id in self._sequence_numbers:
                 del self._sequence_numbers[media_buy_id]
 
-    def reset_circuit_breaker(self, endpoint_url: str):
-        """Manually reset circuit breaker for an endpoint.
-
-        Args:
-            endpoint_url: Webhook endpoint URL
-        """
-        # Find matching endpoint keys
-        for key in list(self._circuit_breakers.keys()):
-            if endpoint_url in key:
-                circuit_breaker = self._circuit_breakers[key]
-                with circuit_breaker._lock:
-                    circuit_breaker.state = CircuitState.CLOSED
-                    circuit_breaker.failure_count = 0
-                    circuit_breaker.success_count = 0
-                logger.info(f"Circuit breaker reset for {endpoint_url}")
-
     def get_circuit_breaker_state(self, endpoint_url: str) -> tuple[CircuitState, int]:
         """Get circuit breaker state for an endpoint.
 
