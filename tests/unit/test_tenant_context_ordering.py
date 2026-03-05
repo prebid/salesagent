@@ -60,6 +60,54 @@ def test_get_current_tenant_succeeds_after_set_current_tenant():
     assert tenant["tenant_id"] == "test_tenant"
 
 
+def test_set_current_tenant_normalizes_tenant_context_to_dict():
+    """set_current_tenant must convert TenantContext to plain dict.
+
+    This is the fix for the TenantContext vs dict type mismatch bug:
+    resolve_identity() wraps tenant dicts in TenantContext, but downstream
+    isinstance(tenant, dict) checks failed silently, causing redundant DB
+    queries. set_current_tenant is the SINGLE conversion point.
+    """
+    from src.core.tenant_context import TenantContext
+
+    tc = TenantContext(tenant_id="norm_test", name="Normalize Test")
+    set_current_tenant(tc)
+    tenant = get_current_tenant()
+
+    assert isinstance(tenant, dict), (
+        f"ContextVar holds {type(tenant).__name__}, not dict — set_current_tenant failed to normalize TenantContext"
+    )
+    assert tenant["tenant_id"] == "norm_test"
+    assert tenant["name"] == "Normalize Test"
+
+
+def test_set_current_tenant_normalizes_lazy_tenant_context_to_dict():
+    """set_current_tenant must convert LazyTenantContext to plain dict."""
+    from unittest.mock import patch
+
+    from src.core.tenant_context import LazyTenantContext
+
+    # Patch get_tenant_by_id so LazyTenantContext._resolve() returns a minimal context
+    with patch("src.core.config_loader.get_tenant_by_id", return_value=None):
+        ltc = LazyTenantContext("lazy_test")
+        set_current_tenant(ltc)
+        tenant = get_current_tenant()
+
+    assert isinstance(tenant, dict), (
+        f"ContextVar holds {type(tenant).__name__}, not dict — set_current_tenant failed to normalize LazyTenantContext"
+    )
+    assert tenant["tenant_id"] == "lazy_test"
+
+
+def test_set_current_tenant_passes_dict_through():
+    """set_current_tenant must pass plain dicts through unchanged."""
+    test_dict = {"tenant_id": "dict_test", "name": "Dict Test"}
+    set_current_tenant(test_dict)
+    tenant = get_current_tenant()
+
+    assert tenant is test_dict, "Plain dict should be stored without conversion"
+
+
 def test_update_media_buy_calls_auth_before_tenant():
     """Regression test: update_media_buy must use identity.principal_id before identity.tenant.
 

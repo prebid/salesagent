@@ -232,17 +232,9 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
         stmt = select(ModelProduct).filter_by(tenant_id=tenant_id).options(selectinload(ModelProduct.pricing_options))
         products = session.scalars(stmt).all()
 
-        # Use shared conversion function - handles all required fields,
-        # pricing options (with typed instances), and all edge cases
         loaded_products = []
         for product in products:
-            try:
-                converted_product = convert_product_model_to_schema(product)
-                loaded_products.append(converted_product)
-            except Exception as e:
-                logger.error(f"Failed to convert product {product.product_id}: {e}")
-                # Re-raise to surface conversion errors
-                raise ValueError(f"Product {product.product_id} conversion failed: {e}") from e
+            loaded_products.append(convert_product_model_to_schema(product))
 
     # convert_product_model_to_schema returns LibraryProduct,
     # which our Product extends - safe cast at runtime
