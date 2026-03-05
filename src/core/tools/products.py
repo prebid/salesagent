@@ -245,11 +245,10 @@ async def _get_products_impl(
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
-    # req.brand is dict[str, Any] | None (our schema override accepts flexible input).
+    # req.brand is BrandReference | None after Pydantic parsing.
     offering = None
     if req.brand:
-        brand_dict: dict[str, Any] = req.brand if isinstance(req.brand, dict) else {}
-        domain = brand_dict.get("domain")
+        domain = req.brand.domain
         if domain:
             offering = f"Brand at {domain}"
 
