@@ -481,3 +481,279 @@ class TestEXT_G_06_HmacAuthRejection:
             assert success_500 is False
             assert result_500["attempts"] == 3
             assert env.mock["post"].call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-08 (SSRF validation — webhook failure does not reach buyer)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestWebhookSSRFValidation:
+    """Invalid/internal webhook URLs are rejected before any HTTP request is made.
+
+    Covers: UC-004-EXT-G-08
+    """
+
+    def test_internal_url_rejected_with_validation_error(self, integration_db):
+        """Delivery to an internal/link-local URL (e.g., AWS metadata) is rejected immediately.
+
+        Covers: UC-004-EXT-G-08 (src/core/webhook_delivery.py lines 93-99)
+        """
+        from tests.harness import WebhookEnv
+
+        with WebhookEnv() as env:
+            env.set_url_invalid("Webhook URL resolves to blocked IP range 169.254.0.0/16")
+
+            success, result = env.call_deliver(
+                webhook_url="http://169.254.169.254/latest/meta-data/",
+                payload={"media_buy_id": "mb_001"},
+                max_retries=3,
+                event_type="delivery.update",
+                tenant_id="test_tenant",
+                object_id="mb_001",
+            )
+
+            assert success is False
+            assert result["status"] == "failed"
+            assert "Invalid webhook URL" in result["error"]
+            assert result["attempts"] == 0
+            # SSRF prevented: no HTTP request was made
+            env.mock["post"].assert_not_called()
+
+    def test_ssrf_validation_records_failure_metrics(self, integration_db):
+        """When URL validation fails with tenant/event context, metrics are recorded.
+
+        Covers: UC-004-EXT-G-08 (src/core/webhook_delivery.py lines 95-98)
+        """
+        from unittest.mock import patch
+
+        from tests.harness import WebhookEnv
+
+        with WebhookEnv() as env:
+            env.set_url_invalid("Blocked hostname")
+
+            with patch("src.core.metrics.webhook_delivery_total") as mock_metric:
+                success, result = env.call_deliver(
+                    webhook_url="http://169.254.169.254/metadata",
+                    payload={"media_buy_id": "mb_001"},
+                    tenant_id="test_tenant",
+                    event_type="delivery.update",
+                )
+
+                assert success is False
+                mock_metric.labels.assert_called_once_with(
+                    tenant_id="test_tenant",
+                    event_type="delivery.update",
+                    status="validation_failed",
+                )
+                mock_metric.labels.return_value.inc.assert_called_once()
+
+    def test_ssrf_validation_skips_metrics_without_tenant(self, integration_db):
+        """When no tenant_id/event_type is provided, metrics are not recorded.
+
+        Covers: UC-004-EXT-G-08 (src/core/webhook_delivery.py line 95 -- falsy branch)
+        """
+        from unittest.mock import patch
+
+        from tests.harness import WebhookEnv
+
+        with WebhookEnv() as env:
+            env.set_url_invalid("Blocked hostname")
+
+            with patch("src.core.metrics.webhook_delivery_total") as mock_metric:
+                success, result = env.call_deliver(
+                    webhook_url="http://169.254.169.254/metadata",
+                    payload={"media_buy_id": "mb_001"},
+                    tenant_id=None,
+                    event_type=None,
+                )
+
+                assert success is False
+                assert result["attempts"] == 0
+                mock_metric.labels.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-01 / UC-004-EXT-G-03 (retry backoff + retry exhaustion)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestWebhookRetryBackoff:
+    """Server errors and network exceptions trigger retries with exponential backoff.
+
+    Covers: UC-004-EXT-G-01, UC-004-EXT-G-03
+    """
+
+    def test_5xx_retry_with_eventual_success(self, integration_db):
+        """503 -> 503 -> 200: delivery succeeds after retries.
+
+        Covers: UC-004-EXT-G-01
+        """
+        from tests.harness import WebhookEnv
+
+        with WebhookEnv() as env:
+            env.set_http_sequence(
+                [
+                    (503, "Service Unavailable"),
+                    (503, "Service Unavailable"),
+                    (200, "OK"),
+                ]
+            )
+
+            success, result = env.call_deliver(
+                webhook_url="https://buyer.example.com/webhook",
+                payload={"media_buy_id": "mb_001"},
+                max_retries=4,
+                event_type="delivery.update",
+                tenant_id="test_tenant",
+            )
+
+            assert success is True
+            assert result["status"] == "delivered"
+            assert result["attempts"] == 3
+            assert result["response_code"] == 200
+            assert env.mock["post"].call_count == 3
+            # Backoff sleeps: 2^0=1, 2^1=2 (before attempts 2 and 3)
+            assert env.mock["sleep"].call_count == 2
+
+    def test_5xx_retry_exhaustion(self, integration_db):
+        """Always-500 with max_retries=3: delivery fails after all attempts exhausted.
+
+        Covers: UC-004-EXT-G-03
+        """
+        from tests.harness import WebhookEnv
+
+        with WebhookEnv() as env:
+            env.set_http_status(500, "Internal Server Error")
+
+            success, result = env.call_deliver(
+                webhook_url="https://buyer.example.com/webhook",
+                payload={"media_buy_id": "mb_001"},
+                max_retries=3,
+                event_type="delivery.update",
+                tenant_id="test_tenant",
+            )
+
+            assert success is False
+            assert result["status"] == "failed"
+            assert result["attempts"] == 3
+            assert result["response_code"] == 500
+            assert env.mock["post"].call_count == 3
+
+    def test_timeout_triggers_retry(self, integration_db):
+        """requests.Timeout exception triggers retry with backoff.
+
+        Covers: UC-004-EXT-G-01 (src/core/webhook_delivery.py lines 222-225)
+        """
+        from unittest.mock import MagicMock
+
+        import requests as req_lib
+
+        from tests.harness import WebhookEnv
+
+        with WebhookEnv() as env:
+            # Timeout on first two attempts, then success
+            ok_response = MagicMock()
+            ok_response.status_code = 200
+            ok_response.text = "OK"
+            env.mock["post"].side_effect = [
+                req_lib.exceptions.Timeout("Request timed out"),
+                req_lib.exceptions.Timeout("Request timed out"),
+                ok_response,
+            ]
+
+            success, result = env.call_deliver(
+                max_retries=4,
+                event_type="delivery.update",
+                tenant_id="test_tenant",
+            )
+
+            assert success is True
+            assert result["attempts"] == 3
+            assert env.mock["post"].call_count == 3
+
+    def test_connection_error_triggers_retry(self, integration_db):
+        """requests.ConnectionError exception triggers retry with backoff.
+
+        Covers: UC-004-EXT-G-01 (src/core/webhook_delivery.py lines 227-230)
+        """
+        from unittest.mock import MagicMock
+
+        import requests as req_lib
+
+        from tests.harness import WebhookEnv
+
+        with WebhookEnv() as env:
+            ok_response = MagicMock()
+            ok_response.status_code = 200
+            ok_response.text = "OK"
+            env.mock["post"].side_effect = [
+                req_lib.exceptions.ConnectionError("Connection refused"),
+                ok_response,
+            ]
+
+            success, result = env.call_deliver(
+                max_retries=3,
+                event_type="delivery.update",
+                tenant_id="test_tenant",
+            )
+
+            assert success is True
+            assert result["attempts"] == 2
+            assert env.mock["post"].call_count == 2
+
+    def test_request_exception_triggers_retry(self, integration_db):
+        """Generic requests.RequestException triggers retry with backoff.
+
+        Covers: UC-004-EXT-G-01 (src/core/webhook_delivery.py lines 232-235)
+        """
+        from unittest.mock import MagicMock
+
+        import requests as req_lib
+
+        from tests.harness import WebhookEnv
+
+        with WebhookEnv() as env:
+            ok_response = MagicMock()
+            ok_response.status_code = 200
+            ok_response.text = "OK"
+            env.mock["post"].side_effect = [
+                req_lib.exceptions.RequestException("Something went wrong"),
+                ok_response,
+            ]
+
+            success, result = env.call_deliver(
+                max_retries=3,
+                event_type="delivery.update",
+                tenant_id="test_tenant",
+            )
+
+            assert success is True
+            assert result["attempts"] == 2
+            assert env.mock["post"].call_count == 2
+
+    def test_all_retries_timeout_reports_failure(self, integration_db):
+        """When all retry attempts timeout, delivery is marked failed with attempt count.
+
+        Covers: UC-004-EXT-G-03 (src/core/webhook_delivery.py lines 222-225, 243-274)
+        """
+        import requests as req_lib
+
+        from tests.harness import WebhookEnv
+
+        with WebhookEnv() as env:
+            env.mock["post"].side_effect = req_lib.exceptions.Timeout("Request timed out")
+
+            success, result = env.call_deliver(
+                max_retries=3,
+                event_type="delivery.update",
+                tenant_id="test_tenant",
+            )
+
+            assert success is False
+            assert result["status"] == "failed"
+            assert result["attempts"] == 3
+            assert "timeout" in result["error"].lower()
+            assert env.mock["post"].call_count == 3
