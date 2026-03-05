@@ -496,15 +496,6 @@ class TestAdapterFailureAuditTrail:
     Covers: UC-004-EXT-F-03
     """
 
-    @pytest.mark.xfail(
-        reason=(
-            "Production code at media_buy_delivery.py catches adapter exceptions "
-            "and logs via logger.error() but does NOT write to the AuditLog database table "
-            "via AuditLogger.log_operation(). NFR-003 requires adapter failures to be "
-            "recorded in the persistent audit trail."
-        ),
-        strict=True,
-    )
     def test_adapter_failure_writes_audit_log(self, integration_db):
         """When adapter.get_media_buy_delivery raises, the failure is audit-logged.
 

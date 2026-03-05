@@ -383,6 +383,11 @@ class WebhookDeliveryService:
                 # Send to all configured webhooks
                 sent_count = 0
                 for config in configs:
+                    # Skip auth-blocked endpoints (UC-004-EXT-G-07)
+                    if isinstance(getattr(config, "auth_blocked_at", None), datetime):
+                        logger.warning(f"⚠️ Auth blocked for {config.url}, skipping until credentials reconfigured")
+                        continue
+
                     endpoint_key = f"{tenant_id}:{config.url}"
 
                     # Get or create circuit breaker for this endpoint

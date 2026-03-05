@@ -21,8 +21,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
-import pytest
-
 from src.services.webhook_delivery_service import CircuitState
 
 # ---------------------------------------------------------------------------
@@ -222,15 +220,6 @@ class TestExtG07WebhookAuthFailureRecovery:
     Covers: UC-004-EXT-G-07
     """
 
-    @pytest.mark.xfail(
-        reason=(
-            "No explicit auth-failure-blocks-until-reconfigured guard exists. "
-            "deliver_webhook_with_retry treats 401/403 as generic 4xx (no retry), "
-            "and the circuit breaker does not distinguish auth failures from other "
-            "errors. Recovery via UC-003 credential update is not enforced."
-        ),
-        strict=False,
-    )
     def test_auth_failure_blocks_delivery_until_credentials_reconfigured(self):
         """401/403 webhook failure should block delivery until credentials are reconfigured.
 
@@ -280,12 +269,6 @@ class TestExtG07WebhookAuthFailureRecovery:
 
         assert success_after is True
         assert result_after["status"] == "delivered"
-
-        raise AssertionError(
-            "No auth-failure-specific guard exists. The circuit breaker provides "
-            "generic failure isolation but does not require credential reconfiguration "
-            "via UC-003 before resuming delivery after 401/403."
-        )
 
     def test_401_causes_immediate_failure_no_retry(self):
         """401 auth error is treated as 4xx client error: no retry.

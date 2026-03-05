@@ -185,6 +185,10 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
                 logger.warning(f"[Webhook Delivery] Client error, will NOT retry: {error_msg}")
                 last_error = error_msg
 
+                # Auth failures (401/403): block until credentials reconfigured
+                if response_code in (401, 403) and delivery.tenant_id:
+                    _set_auth_blocked(delivery.tenant_id, delivery.webhook_url)
+
                 # Update database record
                 if delivery.tenant_id and delivery.event_type:
                     _update_delivery_record(
@@ -351,3 +355,30 @@ def _update_delivery_record(
     except Exception as e:
         # Don't fail delivery if we can't update tracking record
         logger.error(f"[Webhook Delivery] Failed to update delivery record: {e}", exc_info=True)
+
+
+def _set_auth_blocked(tenant_id: str, webhook_url: str) -> None:
+    """Set auth_blocked_at on PushNotificationConfig for 401/403 auth failures.
+
+    Blocks further delivery attempts until credentials are reconfigured.
+    """
+    try:
+        from sqlalchemy import update
+
+        from src.core.database.models import PushNotificationConfig
+
+        with get_db_session() as session:
+            stmt = (
+                update(PushNotificationConfig)
+                .where(
+                    PushNotificationConfig.tenant_id == tenant_id,
+                    PushNotificationConfig.url == webhook_url,
+                    PushNotificationConfig.auth_blocked_at.is_(None),
+                )
+                .values(auth_blocked_at=datetime.now(UTC))
+            )
+            session.execute(stmt)
+            session.commit()
+            logger.warning(f"[Webhook Delivery] Auth failure blocked endpoint {webhook_url} for tenant {tenant_id}")
+    except Exception as e:
+        logger.error(f"[Webhook Delivery] Failed to set auth block: {e}", exc_info=True)

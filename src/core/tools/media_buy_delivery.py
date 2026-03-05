@@ -303,6 +303,22 @@ def _get_media_buy_delivery_impl(
 
                     except Exception as e:
                         logger.error(f"Error getting delivery for {media_buy_id}: {e}")
+                        # Write adapter failure to audit trail (NFR-003)
+                        try:
+                            from src.core.database.models import AuditLog
+
+                            audit_log = AuditLog(
+                                tenant_id=tenant["tenant_id"],
+                                operation="adapter_delivery_failure",
+                                principal_id=principal_id,
+                                success=False,
+                                error_message=str(e),
+                                details={"media_buy_id": media_buy_id},
+                            )
+                            if uow.session is not None:
+                                uow.session.add(audit_log)
+                        except Exception as audit_err:
+                            logger.error(f"Failed to write adapter failure audit log: {audit_err}")
                         context_val = req.context
                         return GetMediaBuyDeliveryResponse(
                             reporting_period={"start": reporting_period.start, "end": reporting_period.end},
