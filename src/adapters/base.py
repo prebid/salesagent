@@ -250,6 +250,42 @@ class AdServerAdapter(ABC):
         """
         return TargetingCapabilities(geo_countries=True)
 
+    def validate_before_creation(
+        self,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[str]:
+        """Pre-adapter validation that runs regardless of dry_run mode.
+
+        Checks constraints that would be caught by the adapter's create_media_buy
+        but need to run even when the adapter call is skipped (dry_run=True).
+
+        Default implementation validates pricing model compatibility.
+        Subclasses can override to add adapter-specific checks (e.g., impressions limits).
+
+        Returns:
+            List of error messages. Empty list means validation passed.
+        """
+        errors: list[str] = []
+        supported = self.get_supported_pricing_models()
+
+        if package_pricing_info:
+            for _pkg_id, pricing in package_pricing_info.items():
+                pricing_model = pricing.get("pricing_model", "")
+                if pricing_model and pricing_model not in supported:
+                    sorted_supported = ", ".join(sorted(s.upper() for s in supported))
+                    errors.append(
+                        f"Adapter does not support '{pricing_model}' pricing. "
+                        f"Supported pricing models: {sorted_supported}. "
+                        f"The requested pricing model ('{pricing_model}') is not available. "
+                        f"Please choose a product with compatible pricing."
+                    )
+
+        return errors
+
     @abstractmethod
     def create_media_buy(
         self,

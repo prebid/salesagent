@@ -17,7 +17,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from fastmcp.exceptions import ToolError
 from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
@@ -32,7 +31,6 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
-from src.core.exceptions import AdCPAdapterError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
@@ -440,14 +438,8 @@ class TestMinimumSpendValidation:
         assert response.media_buy_id is not None
         assert response.buyer_ref == "minspend_test_4"
 
-    @pytest.mark.xfail(
-        reason="dry_run=True now skips adapter call entirely (returns simulated success). "
-        "Adapter-level budget rejection only runs inside the adapter. "
-        "TODO: move excessive-budget validation to pre-adapter business logic.",
-        strict=True,
-    )
     async def test_unsupported_currency_rejected(self, setup_test_data):
-        """Test that excessively high budgets are rejected by the adapter (raises ToolError)."""
+        """Test that excessively high budgets are rejected by pre-adapter validation."""
         identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
@@ -460,7 +452,7 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # Try to create media buy with excessive budget
-        # $100,000 USD is excessive and will be rejected by adapter
+        # $100,000 USD produces 10M impressions which exceeds the adapter limit
         req = CreateMediaBuyRequest(
             buyer_ref="minspend_test_5",
             brand={"domain": "testbrand.com"},
@@ -475,12 +467,15 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        with pytest.raises((ToolError, AdCPAdapterError)) as exc_info:
-            await _create_media_buy_impl(req=req, identity=identity)
+        response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
-        # Verify the error message indicates adapter rejection
-        error_message = str(exc_info.value)
-        assert "PERCENTAGE_UNITS_BOUGHT_TOO_HIGH" in error_message or "Failed to create media buy" in error_message
+        # Verify pre-adapter validation caught the excessive impressions
+        from src.core.schemas import CreateMediaBuyError
+
+        assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
+        assert response.errors, "Expected error messages in CreateMediaBuyError"
+        error_msg = " ".join([err.message for err in response.errors])
+        assert "PERCENTAGE_UNITS_BOUGHT_TOO_HIGH" in error_msg or "VALUE_TOO_LARGE" in error_msg
 
     async def test_different_currency_different_minimum(self, setup_test_data):
         """Test that different currencies have different minimums."""

@@ -2829,6 +2829,28 @@ async def _create_media_buy_impl(
                 )
             raise
 
+        # PRE-VALIDATE: Run adapter-specific validation (pricing models, impressions, budgets)
+        # This runs regardless of dry_run mode to catch adapter-level rejections early.
+        pre_creation_errors: list[str] = adapter.validate_before_creation(
+            req, packages, start_time, end_time, package_pricing_info
+        )
+        if isinstance(pre_creation_errors, list) and pre_creation_errors:
+            logger.error(f"[PRE-VALIDATE] Adapter validation failed: {pre_creation_errors}")
+            if step:
+                ctx_manager.update_workflow_step(
+                    step.step_id, status="failed", error_message="Adapter validation failed"
+                )
+            return CreateMediaBuyResult(
+                response=CreateMediaBuyError(
+                    errors=[
+                        Error(code="adapter_validation_failed", message=msg, details=None)
+                        for msg in pre_creation_errors
+                    ],
+                    context=req.context,
+                ),
+                status=AdcpTaskStatus.failed.value,
+            )
+
         # Dry-run mode: skip adapter call entirely, return simulated response
         # All validation (products, pricing, budgets, creatives) has passed above.
         if testing_ctx.dry_run:
