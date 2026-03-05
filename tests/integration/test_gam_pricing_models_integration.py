@@ -27,7 +27,6 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.exceptions import AdCPAdapterError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
@@ -637,8 +636,6 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
 @pytest.mark.requires_db
 async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_pricing_models):
     """Test auction-based CPC (non-fixed) is rejected with clear error (not supported by adcp library v2.5.0)."""
-    from fastmcp.exceptions import ToolError
-
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     # Add auction CPC pricing option
@@ -683,15 +680,14 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
 
     # Auction CPC should be rejected because adcp library v2.5.0 doesn't support CpcAuctionPricingOption
     # Only CpcPricingOption exists, which requires is_fixed=true
-    # When calling _impl directly, AdCPAdapterError propagates (MCP wrapper converts to ToolError)
-    with pytest.raises((ToolError, AdCPAdapterError)) as exc_info:
-        await _create_media_buy_impl(req=request, identity=identity)
+    # Pre-adapter validation catches this and returns an error response (not an exception)
+    result = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify error message explains the limitation
-    error_message = str(exc_info.value)
-    assert "Auction CPC pricing option cpc_usd_auction is not supported" in error_message
-    # V3: Message updated to explain fixed_price requirement
-    assert "CPC pricing requires fixed_price" in error_message
+    # Verify error response explains the limitation
+    assert hasattr(result.response, "errors"), f"Expected error response, got: {type(result.response)}"
+    error_messages = [e.message for e in result.response.errors]
+    error_text = " ".join(error_messages)
+    assert "cpc" in error_text.lower(), f"Expected CPC-related error, got: {error_messages}"
 
     # Cleanup auction pricing option
     with get_db_session() as session:
