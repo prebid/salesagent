@@ -1367,17 +1367,6 @@ class AdCPRequestHandler(RequestHandler):
         brand_manifest_policy setting (public/require_brand/require_auth).
         """
         try:
-            # Normalize brand_manifest: URL string → dict (adcp v1.2.1 compat)
-            brand_manifest = parameters.get("brand_manifest")
-            if isinstance(brand_manifest, str):
-                brand_manifest = {"url": brand_manifest}
-            elif brand_manifest is not None and not isinstance(brand_manifest, dict):
-                raise ServerError(
-                    InvalidParamsError(
-                        message=f"brand_manifest must be a dict or URL string, got {type(brand_manifest)}"
-                    )
-                )
-
             brief = parameters.get("brief", "")
             brand = parameters.get("brand")
             filters = parameters.get("filters")
@@ -1387,6 +1376,7 @@ class AdCPRequestHandler(RequestHandler):
                 brief=brief,
                 brand=brand,
                 filters=filters,
+                property_list=parameters.get("property_list"),
                 min_exposures=parameters.get("min_exposures"),
                 strategy_id=parameters.get("strategy_id"),
                 context=parameters.get("context"),
