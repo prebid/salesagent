@@ -366,13 +366,7 @@ def _get_media_buy_delivery_impl(
 
                 # Get packages from raw_request
                 if buy.raw_request and isinstance(buy.raw_request, dict):
-                    # Try to get packages from raw_request.packages (AdCP v2.2+ format)
                     packages = buy.raw_request.get("packages", [])
-
-                    # Fallback: legacy format with product_ids
-                    if not packages and "product_ids" in buy.raw_request:
-                        product_ids = buy.raw_request.get("product_ids", [])
-                        packages = [{"product_id": pid} for pid in product_ids]
 
                     i = -1
                     for pkg_data in packages:
