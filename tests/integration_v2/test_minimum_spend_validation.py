@@ -467,15 +467,11 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        # Pre-adapter validation raises AdCPValidationError for excessive impressions/budget
+        from src.core.exceptions import AdCPValidationError
 
-        # Verify pre-adapter validation caught the excessive impressions
-        from src.core.schemas import CreateMediaBuyError
-
-        assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
-        assert response.errors, "Expected error messages in CreateMediaBuyError"
-        error_msg = " ".join([err.message for err in response.errors])
-        assert "PERCENTAGE_UNITS_BOUGHT_TOO_HIGH" in error_msg or "VALUE_TOO_LARGE" in error_msg
+        with pytest.raises(AdCPValidationError, match="PERCENTAGE_UNITS_BOUGHT_TOO_HIGH|VALUE_TOO_LARGE"):
+            await _create_media_buy_impl(req=req, identity=identity)
 
     async def test_different_currency_different_minimum(self, setup_test_data):
         """Test that different currencies have different minimums."""

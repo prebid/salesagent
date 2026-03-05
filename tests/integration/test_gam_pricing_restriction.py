@@ -308,21 +308,12 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
         protocol="mcp",
     )
 
-    from src.core.schemas import CreateMediaBuyError
+    from src.core.exceptions import AdCPValidationError
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    # GAM adapter rejects unsupported pricing models by returning CreateMediaBuyError
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
-
-    # Verify adapter returned error response
-    assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
-
-    # Check error indicates CPCV/pricing model rejection
-    assert response.errors, "Expected error messages in CreateMediaBuyError"
-    error_msg = " ".join([err.message.lower() for err in response.errors])
-    assert "cpcv" in error_msg or "pricing" in error_msg or "not supported" in error_msg or "gam" in error_msg, (
-        f"Expected pricing/GAM error, got: {error_msg}"
-    )
+    # GAM adapter rejects unsupported pricing models — _impl raises AdCPValidationError
+    with pytest.raises(AdCPValidationError, match="(?i)cpcv|pricing|not support"):
+        await _create_media_buy_impl(req=request, identity=identity)
 
 
 @pytest.mark.requires_db
@@ -398,20 +389,11 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
         protocol="mcp",
     )
 
-    from src.core.schemas import CreateMediaBuyError
+    from src.core.exceptions import AdCPValidationError
 
-    # GAM adapter rejects unsupported pricing models by returning CreateMediaBuyError
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
-
-    # Verify adapter returned error response
-    assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
-
-    # Check error indicates CPP/pricing model rejection
-    assert response.errors, "Expected error messages in CreateMediaBuyError"
-    error_msg = " ".join([err.message.lower() for err in response.errors])
-    assert "cpp" in error_msg or "pricing" in error_msg or "not supported" in error_msg or "gam" in error_msg, (
-        f"Expected pricing/GAM error, got: {error_msg}"
-    )
+    # GAM adapter rejects unsupported pricing models — _impl raises AdCPValidationError
+    with pytest.raises(AdCPValidationError, match="(?i)cpp|pricing|not support"):
+        await _create_media_buy_impl(req=request, identity=identity)
 
 
 @pytest.mark.requires_db
