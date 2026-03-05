@@ -29,15 +29,20 @@ setup:
          ```
          Record the exact pass count (e.g., "2973 passed").
 
-      2. **Run integration tests**:
+      2. **Start agent DB for integration tests**:
          ```bash
-         uv run pytest tests/integration/ -x -q 2>&1 | tail -5
+         eval $(.claude/skills/agent-db/agent-db.sh up)
+         ```
+
+      3. **Run integration tests**:
+         ```bash
+         scripts/run-test.sh tests/integration/ -x -q 2>&1 | tail -5
          ```
          Record the exact pass count.
 
-      3. **Run integration_v2 tests**:
+      4. **Run integration_v2 tests**:
          ```bash
-         uv run pytest tests/integration_v2/ -x -q 2>&1 | tail -5
+         scripts/run-test.sh tests/integration_v2/ -x -q 2>&1 | tail -5
          ```
          Record the exact pass count.
 
@@ -298,7 +303,21 @@ iterate:
            the key behavior that this task adds or changes. What should be true
            after implementation that isn't true now?
 
-        2. **Choose test location** (entity-suite-aware):
+        2. **Choose test level — default to integration**:
+
+           **The default test level is integration** (`tests/integration/`). A test
+           that runs against a real PostgreSQL database with real ORM models catches
+           bugs that mocked unit tests miss entirely.
+
+           Only use unit tests (`tests/unit/`) when ALL of these are true:
+           - The function is pure computation (no DB, no I/O, no side effects)
+           - The logic being tested is complex enough to warrant a focused test
+           - Mocking the DB would make the test meaningless (e.g., the bug IS in
+             how data flows through the DB layer)
+
+           If in doubt, write an integration test.
+
+           **Entity-suite-aware placement** (within your chosen level):
            - **First, check for an entity test suite**:
              ```bash
              ls tests/unit/test_product.py tests/unit/test_media_buy.py \
@@ -336,44 +355,46 @@ iterate:
              - See `tests/helpers/adcp_factories.py` for full list
              - For DB fixtures: use conftest.py fixtures, never inline `session.add()`
 
-        4. **Start Docker if needed** (integration/e2e tests):
-
-           **Acquire lock** (run in a single Bash call):
-           ```bash
-           LOCKFILE="/tmp/salesagent-docker.lock"
-           while ! mkdir "$LOCKFILE" 2>/dev/null; do
-             if [ -d "$LOCKFILE" ] && [ $(($(date +%s) - $(stat -f %m "$LOCKFILE"))) -gt 600 ]; then
-               rmdir "$LOCKFILE" 2>/dev/null
-             else
-               echo "Docker locked by another agent, waiting..." && sleep 5
-             fi
-           done
-           make test-stack-up 2>/dev/null || true && source .test-stack.env
-           ```
-
-           **IMPORTANT — release lock explicitly** after your tests run:
-           ```bash
-           rmdir /tmp/salesagent-docker.lock 2>/dev/null
-           ```
-           The `trap EXIT` pattern does NOT work in Claude Code agents because each
-           Bash tool call is a separate shell. You MUST release the lock manually.
-
-        5. **Factory check**: Verify your test uses factories:
+        4. **Factory check**: Verify your test uses factories:
            ```bash
            uv run python .pre-commit-hooks/check_test_factories.py tests/<level>/test_<area>.py
            ```
            If this reports suggestions for your NEW code, refactor to use factories.
 
-        6. **Run and confirm it fails for the RIGHT reason**:
+        5. **Run and confirm it fails for the RIGHT reason**:
            ```bash
-           uv run pytest tests/<level>/test_<area>.py::test_<name> -x -v
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v
            ```
            - ImportError or NameError = wrong reason (test has a bug)
            - AssertionError with clear message = right reason (behavior doesn't exist yet)
            - If the test already passes: the behavior already exists. Document this
              and consider whether additional edge case tests are needed.
 
-        7. **For refactors/rewrites** (behavior should NOT change):
+        ## BANNED Patterns
+
+        - **`pytest.mark.xfail` is BANNED.** xfail suppresses failure — the test
+          suite stays green. A regression test must produce a HARD FAILURE: pytest
+          exit code 1, "FAILED" in the output. xfail is NOT failing.
+
+        - **AST-scanning / source-code pattern tests are BANNED.** Regression tests
+          must call the actual function (`_impl`, factory, schema constructor) and
+          assert behavioral output. If the bug were re-introduced through a
+          different code construct, the test must still catch it. Tests that use
+          `ast.parse`, `grep`, or regex on source files are structural guards
+          (use /guard for those), NOT regression tests.
+
+        ## Verification: Paste the FAILED Output
+
+        After running the test, paste the LAST 5 LINES of pytest output into
+        the bead notes. You MUST see the word "FAILED" and a non-zero exit.
+        If you see "passed", "xfailed", or "xpassed", your test is wrong.
+
+        ```bash
+        scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v 2>&1 | tail -5
+        # You MUST see "FAILED" — if you see "passed", rewrite the test
+        ```
+
+        6. **For refactors/rewrites** (behavior should NOT change):
            - Verify existing tests pass BEFORE your changes:
              ```bash
              uv run pytest tests/unit/test_<area>.py -x -v
@@ -431,7 +452,7 @@ iterate:
 
         1. **Verify the regression test still fails** (from the write-test atom):
            ```bash
-           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v
            ```
            If the test now passes (e.g., someone else implemented it), note this
            and close the atom.
@@ -448,11 +469,13 @@ iterate:
            - Follow existing codebase conventions found in research
            - Don't add extras not covered by tests
 
-        2. **Verify**:
+        2. **Verify (red → green)**:
+           Run the SAME test that FAILED in the write-test atom:
            ```bash
-           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v 2>&1 | tail -5
+           # You MUST see "passed" — if you see "FAILED", your fix didn't work
            ```
-           The previously failing test must now pass.
+           If the test still fails, do NOT mark it xfail and move on. Fix the code.
 
         3. **Refactor**: With passing tests as safety net
            - Remove duplication, improve naming, simplify logic
