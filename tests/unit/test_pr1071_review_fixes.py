@@ -1,161 +1,207 @@
 """Regression tests for PR #1071 review findings.
 
 Tests for bugs found during Chris's code review of the AdCP v3.6 upgrade PR.
-Each test demonstrates the bug and guards against regression.
+Each test exercises the actual code path to verify correct behavior.
 """
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+from unittest.mock import MagicMock, patch
+
 import pytest
+
+from src.core.schemas import GetProductsRequest
 
 
 class TestDeliveryLoopErrorHandling:
-    """salesagent-m06j: raise e on line 415 kills entire multi-buy response.
+    """salesagent-m06j: single media buy error must not kill entire response.
 
-    The except block in _get_media_buy_delivery_impl re-raises immediately,
-    making logger.error() dead code. A single media buy error should be logged
-    and skipped, not kill the entire response.
+    The delivery loop should log errors for individual media buys and continue
+    processing the rest, returning partial results.
     """
 
-    def test_raise_e_makes_logger_error_dead_code(self):
-        """The except block must NOT re-raise — it should log and continue.
+    @pytest.mark.asyncio
+    async def test_single_media_buy_error_returns_partial_results(self):
+        """When one media buy raises during processing, others still appear in response."""
+        from src.core.resolved_identity import ResolvedIdentity
+        from src.core.schemas import GetMediaBuyDeliveryRequest
+        from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
-        Verify by inspecting the source AST: if `raise` appears before
-        `logger.error()` in the except block, the test fails.
-        """
-        import ast
-        from pathlib import Path
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=["mb_good", "mb_bad"],
+            start_date=(date.today() - timedelta(days=7)).isoformat(),
+            end_date=date.today().isoformat(),
+        )
 
-        source = Path("src/core/tools/media_buy_delivery.py").read_text()
-        tree = ast.parse(source)
+        tenant = {
+            "tenant_id": "test",
+            "brand_manifest_policy": "public",
+            "advertising_policy": {},
+        }
+        identity = ResolvedIdentity(
+            principal_id="p1",
+            tenant_id="test",
+            tenant=tenant,
+            protocol="mcp",
+        )
 
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ExceptHandler):
-                continue
+        # Create two mock media buys: one good, one that will error
+        good_buy = MagicMock()
+        good_buy.start_date = date.today() - timedelta(days=5)
+        good_buy.end_date = date.today() + timedelta(days=5)
+        good_buy.budget = "1000.00"
+        good_buy.raw_request = {
+            "buyer_ref": "buyer1",
+            "packages": [{"package_id": "pkg1", "product_id": "prod1"}],
+        }
+        good_buy.buyer_ref = "buyer1"
 
-            # Find the except block that handles media buy delivery errors
-            # It should contain logger.error with "Error getting delivery"
-            has_logger_error = False
-            has_raise_before_logger = False
+        bad_buy = MagicMock()
+        # This will raise when accessed in the loop (e.g., start_date raises)
+        type(bad_buy).start_date = property(lambda self: (_ for _ in ()).throw(ValueError("DB corruption")))
+        bad_buy.raw_request = None
 
-            for stmt in node.body:
-                # Check for logger.error call with "Error getting delivery"
-                if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
-                    func = stmt.value.func
-                    if (
-                        isinstance(func, ast.Attribute)
-                        and func.attr == "error"
-                        and isinstance(func.value, ast.Name)
-                        and func.value.id == "logger"
-                    ):
-                        # Check if message contains "Error getting delivery"
-                        if stmt.value.args:
-                            arg = stmt.value.args[0]
-                            if isinstance(arg, ast.JoinedStr):
-                                for val in arg.values:
-                                    if isinstance(val, ast.Constant) and "Error getting delivery" in str(val.value):
-                                        has_logger_error = True
-                                        break
+        target_buys = [("mb_good", good_buy), ("mb_bad", bad_buy)]
 
-                # Check for raise statement before this logger.error
-                if isinstance(stmt, ast.Raise) and not has_logger_error:
-                    has_raise_before_logger = True
+        mock_repo = MagicMock()
+        mock_repo.get_packages.return_value = []
 
-            if has_logger_error and has_raise_before_logger:
-                pytest.fail(
-                    "media_buy_delivery.py: 'raise e' appears before logger.error() "
-                    "in the delivery loop except block, making error logging dead code. "
-                    "A single media buy error kills the entire multi-buy response. "
-                    "Fix: remove 'raise e' so the loop can log and continue."
-                )
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.media_buys = mock_repo
+
+        with (
+            patch("src.core.tools.media_buy_delivery.get_principal_object", return_value=MagicMock()),
+            patch("src.core.tools.media_buy_delivery.get_adapter", return_value=MagicMock()),
+            patch("src.core.tools.media_buy_delivery.MediaBuyUoW", return_value=mock_uow),
+            patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
+            patch("src.core.tools.media_buy_delivery._get_pricing_options", return_value={}),
+        ):
+            response = _get_media_buy_delivery_impl(req, identity)
+
+        # The good media buy should still be in the response
+        assert len(response.media_buy_deliveries) >= 1, (
+            "A single media buy error killed the entire response — the loop must catch exceptions and continue"
+        )
+        assert response.media_buy_deliveries[0].media_buy_id == "mb_good"
 
 
 class TestBrandExtractionFromPydanticModel:
-    """salesagent-7bzt: isinstance(req.brand, dict) always False after Pydantic parsing.
+    """salesagent-7bzt: brand domain must be extracted after Pydantic coercion.
 
-    Pydantic coerces dict input to BrandReference, so isinstance(req.brand, dict)
-    is always False. The brand domain is never extracted, and tenants with
-    require_brand policy reject ALL product discovery requests.
+    When a buyer provides brand={"domain": "example.com"}, Pydantic coerces it
+    to BrandReference. The code must extract domain from the model, not treat
+    it as a dict.
     """
 
     def test_brand_reference_is_not_dict_after_pydantic(self):
         """After Pydantic parsing, req.brand is BrandReference, not dict."""
-        from src.core.schemas import GetProductsRequest
-
         req = GetProductsRequest(
             brand={"domain": "example.com"},
             brief="test products",
         )
 
-        # After Pydantic coercion, brand is NOT a dict
         assert not isinstance(req.brand, dict), "Pydantic should coerce dict to BrandReference"
-        # It should be a BrandReference with .domain attribute
         assert hasattr(req.brand, "domain")
         assert req.brand.domain == "example.com"
 
-    def test_brand_domain_extraction_uses_model_attribute(self):
-        """The products.py code must access req.brand.domain, not brand_dict.get('domain').
+    @pytest.mark.asyncio
+    async def test_require_brand_policy_succeeds_with_brand_domain(self):
+        """Tenant with require_brand policy must accept requests that provide brand domain.
 
-        Verify by inspecting source: if isinstance(req.brand, dict) pattern
-        is used for domain extraction, the test fails.
+        This was broken when isinstance(req.brand, dict) was used — Pydantic
+        coerces dict to BrandReference, so the check always returned False,
+        offering was always None, and require_brand rejected ALL requests.
         """
-        import ast
-        from pathlib import Path
+        from src.core.resolved_identity import ResolvedIdentity
+        from src.core.tools.products import _get_products_impl
 
-        source = Path("src/core/tools/products.py").read_text()
-        tree = ast.parse(source)
+        req = GetProductsRequest(
+            brand={"domain": "nike.com"},
+            brief="Athletic footwear",
+        )
 
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
+        tenant = {
+            "tenant_id": "test",
+            "brand_manifest_policy": "require_brand",
+            "advertising_policy": {},
+        }
+        identity = ResolvedIdentity(
+            principal_id="p1",
+            tenant_id="test",
+            tenant=tenant,
+            protocol="mcp",
+        )
 
-            # Look for isinstance(req.brand, dict) or isinstance(*.brand, dict)
-            if not isinstance(node.func, ast.Name) or node.func.id != "isinstance":
-                continue
+        with (
+            patch("src.core.tools.products.get_principal_object", return_value=None),
+            patch("src.core.tools.products.get_db_session") as mock_db,
+        ):
+            mock_session = MagicMock()
+            mock_result = MagicMock()
+            mock_result.unique.return_value.scalars.return_value.all.return_value = []
+            mock_session.execute.return_value = mock_result
+            mock_db.return_value.__enter__.return_value = mock_session
 
-            if len(node.args) < 2:
-                continue
+            # This must NOT raise AdCPAuthorizationError — brand IS provided
+            response = await _get_products_impl(req, identity)
 
-            # Check if second arg is 'dict'
-            if not (isinstance(node.args[1], ast.Name) and node.args[1].id == "dict"):
-                continue
-
-            # Check if first arg accesses .brand
-            first_arg = node.args[0]
-            if isinstance(first_arg, ast.Attribute) and first_arg.attr == "brand":
-                pytest.fail(
-                    "products.py uses isinstance(req.brand, dict) which is always False "
-                    "because Pydantic coerces dict input to BrandReference. "
-                    "Fix: access req.brand.domain directly instead."
-                )
+        assert response is not None
 
 
 class TestAuditLogBrandFieldName:
-    """salesagent-bff0: audit log key 'has_brand_manifest' is stale after 3.6 rename.
+    """salesagent-bff0: audit log must use 'has_brand' key after 3.6 rename.
 
-    In adcp 3.6.0, brand_manifest was renamed to brand. The audit log detail key
-    should reflect this rename for clarity and consistency.
+    In adcp 3.6.0, brand_manifest was renamed to brand. The audit log
+    detail key must reflect this.
     """
 
-    def test_audit_log_uses_has_brand_not_has_brand_manifest(self):
-        """Audit log details should use 'has_brand' key, not 'has_brand_manifest'.
+    @pytest.mark.asyncio
+    async def test_audit_log_records_has_brand_not_has_brand_manifest(self):
+        """Audit log details dict must contain 'has_brand', not 'has_brand_manifest'."""
+        from src.core.resolved_identity import ResolvedIdentity
+        from src.core.tools.products import _get_products_impl
 
-        The field was renamed from brand_manifest to brand in adcp 3.6.0.
-        """
-        import ast
-        from pathlib import Path
+        req = GetProductsRequest(
+            brand={"domain": "nike.com"},
+            brief="Athletic footwear",
+        )
 
-        source = Path("src/core/tools/products.py").read_text()
-        tree = ast.parse(source)
+        tenant = {
+            "tenant_id": "test",
+            "brand_manifest_policy": "public",
+            "advertising_policy": {},
+        }
+        identity = ResolvedIdentity(
+            principal_id="p1",
+            tenant_id="test",
+            tenant=tenant,
+            protocol="mcp",
+        )
 
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Dict):
-                continue
+        with (
+            patch("src.core.tools.products.get_principal_object", return_value=None),
+            patch("src.core.tools.products.get_db_session") as mock_db,
+            patch("src.core.tools.products.get_audit_logger") as mock_audit_logger,
+        ):
+            mock_session = MagicMock()
+            mock_result = MagicMock()
+            mock_result.unique.return_value.scalars.return_value.all.return_value = []
+            mock_session.execute.return_value = mock_result
+            mock_db.return_value.__enter__.return_value = mock_session
 
-            for key in node.keys:
-                if isinstance(key, ast.Constant) and key.value == "has_brand_manifest":
-                    pytest.fail(
-                        "products.py audit log uses stale key 'has_brand_manifest'. "
-                        "In adcp 3.6.0, brand_manifest was renamed to brand. "
-                        "Fix: rename key to 'has_brand'."
-                    )
+            mock_logger = MagicMock()
+            mock_audit_logger.return_value = mock_logger
+
+            await _get_products_impl(req, identity)
+
+        # Verify audit log was called with 'has_brand' key
+        mock_logger.log_operation.assert_called_once()
+        call_kwargs = mock_logger.log_operation.call_args
+        details = call_kwargs.kwargs.get("details") or call_kwargs[1].get("details")
+
+        assert "has_brand" in details, f"Audit log details missing 'has_brand' key: {details}"
+        assert "has_brand_manifest" not in details, f"Audit log still uses stale 'has_brand_manifest' key: {details}"
+        assert details["has_brand"] is True
