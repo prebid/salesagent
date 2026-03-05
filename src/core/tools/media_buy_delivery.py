@@ -412,7 +412,6 @@ def _get_media_buy_delivery_impl(
                 total_clicks += clicks if clicks is not None else 0
 
             except Exception as e:
-                raise e
                 logger.error(f"Error getting delivery for {media_buy_id}: {e}")
                 # TODO: @yusuf - Ask should we attach an error message for this media buy, instead of omitting it from the response?
                 # Continue with other media buys
