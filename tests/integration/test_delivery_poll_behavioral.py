@@ -2598,3 +2598,163 @@ class TestNonexistentMediaBuyIdsReturnEmptyDeliveries:
         assert result.aggregated_totals.media_buy_count == 0
         assert result.aggregated_totals.impressions == 0.0
         assert result.aggregated_totals.spend == 0.0
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-03 (integration — real circuit breaker)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestCircuitBreakerReportingDelayed:
+    """Open circuit breaker marks delivery status as 'reporting_delayed'.
+
+    Integration version: exercises the REAL _is_circuit_breaker_open() code
+    path by injecting an OPEN CircuitBreaker into the global singleton.
+
+    Covers: UC-004-EXT-G-03
+    """
+
+    def test_open_circuit_breaker_sets_reporting_delayed_status(self, integration_db):
+        """When a circuit breaker is OPEN for the tenant, active media buys
+        get status='reporting_delayed' instead of 'active'.
+
+        Covers: UC-004-EXT-G-03
+        """
+        from src.services.webhook_delivery_service import (
+            CircuitBreaker,
+            CircuitState,
+            webhook_delivery_service,
+        )
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        endpoint_key = "t1:https://example.com/webhook"
+        try:
+            # Inject an OPEN circuit breaker into the global singleton
+            cb = CircuitBreaker(failure_threshold=3)
+            cb.state = CircuitState.OPEN
+            webhook_delivery_service._circuit_breakers[endpoint_key] = cb
+
+            with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+                tenant = TenantFactory(tenant_id="t1")
+                principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+                buy = MediaBuyFactory(
+                    tenant=tenant,
+                    principal=principal,
+                    start_date=date(2026, 1, 1),
+                    end_date=date(2026, 12, 31),
+                )
+                env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+                response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+
+                assert len(response.media_buy_deliveries) == 1
+                assert response.media_buy_deliveries[0].status == "reporting_delayed"
+        finally:
+            # Clean up the injected circuit breaker
+            webhook_delivery_service._circuit_breakers.pop(endpoint_key, None)
+
+    def test_closed_circuit_breaker_does_not_affect_status(self, integration_db):
+        """When circuit breaker is CLOSED, status remains 'active' (not degraded).
+
+        Covers: UC-004-EXT-G-03
+        """
+        from src.services.webhook_delivery_service import (
+            CircuitBreaker,
+            CircuitState,
+            webhook_delivery_service,
+        )
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        endpoint_key = "t1:https://example.com/webhook"
+        try:
+            cb = CircuitBreaker(failure_threshold=3)
+            assert cb.state == CircuitState.CLOSED
+            webhook_delivery_service._circuit_breakers[endpoint_key] = cb
+
+            with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+                tenant = TenantFactory(tenant_id="t1")
+                principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+                buy = MediaBuyFactory(
+                    tenant=tenant,
+                    principal=principal,
+                    start_date=date(2026, 1, 1),
+                    end_date=date(2026, 12, 31),
+                )
+                env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+                response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+
+                assert len(response.media_buy_deliveries) == 1
+                assert response.media_buy_deliveries[0].status == "active"
+        finally:
+            webhook_delivery_service._circuit_breakers.pop(endpoint_key, None)
+
+
+# ---------------------------------------------------------------------------
+# Partial failure tolerance (coverage: media_buy_delivery.py lines 485-487)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestPartialFailureTolerance:
+    """When one media buy's processing raises an exception in the outer loop,
+    the response still includes delivery data for the other successful buys.
+
+    Coverage target: media_buy_delivery.py outer except handler (lines 485-487).
+    """
+
+    def test_one_buy_fails_other_still_returned(self, integration_db):
+        """Given 2 media buys, when processing of buy_2 raises an exception,
+        buy_1's delivery data is still present in the response.
+        """
+        from unittest.mock import patch
+
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy_1 = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_ok",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 12, 31),
+            )
+            buy_2 = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_fail",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 12, 31),
+            )
+            env.set_adapter_response("mb_ok", impressions=5000, spend=250.0)
+            env.set_adapter_response("mb_fail", impressions=3000, spend=150.0)
+
+            # Patch _is_circuit_breaker_open to raise on the second call,
+            # triggering the outer except handler (lines 485-487) for buy_2
+            # while buy_1 processes normally.
+            call_count = {"n": 0}
+
+            def circuit_breaker_side_effect(tenant_id):
+                call_count["n"] += 1
+                if call_count["n"] == 2:
+                    raise RuntimeError("Simulated processing error for buy_2")
+                return False
+
+            with patch(
+                "src.core.tools.media_buy_delivery._is_circuit_breaker_open",
+                side_effect=circuit_breaker_side_effect,
+            ):
+                response = env.call_impl(media_buy_ids=["mb_ok", "mb_fail"])
+
+            assert isinstance(response, GetMediaBuyDeliveryResponse)
+            # buy_1 should be present in the response
+            returned_ids = {d.media_buy_id for d in response.media_buy_deliveries}
+            assert "mb_ok" in returned_ids, f"Expected mb_ok in deliveries, got: {returned_ids}"
+            # buy_2 should be absent (skipped due to outer exception)
+            assert "mb_fail" not in returned_ids, f"Expected mb_fail to be absent from deliveries, got: {returned_ids}"
