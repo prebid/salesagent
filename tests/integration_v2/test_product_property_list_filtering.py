@@ -1,4 +1,8 @@
-"""Unit tests for property list filtering in get_products.
+"""Integration tests for property list filtering in get_products.
+
+MIGRATED from tests/unit/test_product_property_list_filtering.py.
+Uses ProductEnv harness + factories for pipeline-level property list filtering tests.
+Retains pure-function tests for extract/should_include/filter utility functions.
 
 Tests the filtering logic that restricts products based on buyer property lists.
 The property_list parameter on get_products allows buyers to specify which
@@ -16,12 +20,15 @@ Filtering rules:
 
 from unittest.mock import Mock, patch
 
+import pytest
 from adcp.types.generated_poc.core.property_id import PropertyId
 from adcp.types.generated_poc.core.publisher_property_selector import (
     PublisherPropertySelector,
     PublisherPropertySelector1,
     PublisherPropertySelector2,
 )
+
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector:
@@ -59,7 +66,10 @@ def _make_mock_product(
 
 
 class TestExtractPropertyIds:
-    """Test extraction of property IDs from publisher_properties."""
+    """Test extraction of property IDs from publisher_properties.
+
+    Pure function tests -- no DB needed.
+    """
 
     def test_extract_from_by_id_selector(self):
         from src.core.tools.products import extract_product_property_ids
@@ -105,7 +115,10 @@ class TestExtractPropertyIds:
 
 
 class TestShouldIncludeProduct:
-    """Test the product inclusion logic for property list filtering."""
+    """Test the product inclusion logic for property list filtering.
+
+    Pure function tests -- no DB needed.
+    """
 
     def test_product_with_all_selector_always_included(self):
         from src.core.tools.products import should_include_product_for_property_list
@@ -138,7 +151,7 @@ class TestShouldIncludeProduct:
             publisher_properties=[_make_selector_by_id(["prop_a", "prop_b", "prop_c"])],
             property_targeting_allowed=True,
         )
-        allowed = {"prop_a"}  # Only one overlaps
+        allowed = {"prop_a"}
         assert should_include_product_for_property_list(product, allowed) is True
 
     def test_targeting_not_allowed_partial_overlap_excluded(self):
@@ -150,7 +163,7 @@ class TestShouldIncludeProduct:
             publisher_properties=[_make_selector_by_id(["prop_a", "prop_b"])],
             property_targeting_allowed=False,
         )
-        allowed = {"prop_a", "prop_c"}  # prop_b not in allowed
+        allowed = {"prop_a", "prop_c"}
         assert should_include_product_for_property_list(product, allowed) is False
 
     def test_targeting_not_allowed_full_subset_included(self):
@@ -162,7 +175,7 @@ class TestShouldIncludeProduct:
             publisher_properties=[_make_selector_by_id(["prop_a", "prop_b"])],
             property_targeting_allowed=False,
         )
-        allowed = {"prop_a", "prop_b", "prop_c"}  # Both product props are in allowed
+        allowed = {"prop_a", "prop_b", "prop_c"}
         assert should_include_product_for_property_list(product, allowed) is True
 
     def test_targeting_not_allowed_exact_match_included(self):
@@ -196,14 +209,17 @@ class TestShouldIncludeProduct:
         product = _make_mock_product(
             "prod_default",
             publisher_properties=[_make_selector_by_id(["prop_a", "prop_b"])],
-            property_targeting_allowed=False,  # default
+            property_targeting_allowed=False,
         )
-        allowed = {"prop_a"}  # Only one overlaps - not enough for strict
+        allowed = {"prop_a"}
         assert should_include_product_for_property_list(product, allowed) is False
 
 
 class TestFilterProductsByPropertyList:
-    """Test the complete filter function that processes a list of products."""
+    """Test the complete filter function that processes a list of products.
+
+    Pure function tests -- no DB needed.
+    """
 
     def test_filters_correctly(self):
         from src.core.tools.products import filter_products_by_property_list
@@ -274,7 +290,10 @@ class TestFilterProductsByPropertyList:
 
 
 class TestCreateGetProductsRequestWithPropertyList:
-    """Test that create_get_products_request forwards property_list."""
+    """Test that create_get_products_request forwards property_list.
+
+    Schema helper tests -- no DB needed.
+    """
 
     def test_property_list_forwarded(self):
         from adcp.types import PropertyListReference
