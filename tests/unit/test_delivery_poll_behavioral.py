@@ -91,12 +91,6 @@ class TestStatusFilterPaused:
     Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-03
     """
 
-    @pytest.mark.xfail(
-        reason="Production code derives status from dates only (ready/active/completed). "
-        "'paused' is accepted as a filter value but never produced by date logic. "
-        "Needs model-level paused flag.",
-        strict=True,
-    )
     def test_paused_buys_returned(self):
         """status_filter='paused' includes only paused media buys.
 
@@ -105,8 +99,10 @@ class TestStatusFilterPaused:
         from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
         with DeliveryPollEnv() as env:
-            # Buy with current dates (would be "active" by date logic, never "paused")
-            env.add_buy(media_buy_id="mb_paused", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31))
+            # Buy with current dates and is_paused=True
+            env.add_buy(
+                media_buy_id="mb_paused", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31), is_paused=True
+            )
             env.set_adapter_response("mb_paused", impressions=1000, spend=50.0)
 
             response = env.call_impl(status_filter="paused")

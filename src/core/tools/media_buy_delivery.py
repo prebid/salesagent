@@ -55,6 +55,20 @@ from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimul
 from src.core.validation_helpers import format_validation_error
 
 
+def _is_circuit_breaker_open(tenant_id: str) -> bool:
+    """Check if any circuit breaker is OPEN for the given tenant.
+
+    Queries the global WebhookDeliveryService singleton for OPEN circuit breakers
+    on any endpoint associated with the tenant.
+    """
+    from src.services.webhook_delivery_service import CircuitState, webhook_delivery_service
+
+    for key, cb in webhook_delivery_service._circuit_breakers.items():
+        if key.startswith(f"{tenant_id}:") and cb.state == CircuitState.OPEN:
+            return True
+    return False
+
+
 def _get_media_buy_delivery_impl(
     req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity | None
 ) -> GetMediaBuyDeliveryResponse:
@@ -228,12 +242,19 @@ def _get_media_buy_delivery_impl(
 
                 buy_start_date_status = type_cast(date, buy.start_date)
                 buy_end_date_status = type_cast(date, buy.end_date)
-                if simulation_datetime.date() < buy_start_date_status:
+                if getattr(buy, "is_paused", False):
+                    status = "paused"
+                elif simulation_datetime.date() < buy_start_date_status:
                     status = "ready"
                 elif simulation_datetime.date() > buy_end_date_status:
                     status = "completed"
                 else:
                     status = "active"
+
+                # Override status when circuit breaker is open (reporting degraded),
+                # but not for paused buys (paused takes priority)
+                if status != "paused" and _is_circuit_breaker_open(tenant["tenant_id"]):
+                    status = "reporting_delayed"
 
                 # Get delivery metrics from adapter
                 adapter_package_metrics = {}  # Map package_id -> {impressions, spend, clicks}
@@ -738,7 +759,9 @@ def _get_target_media_buys(
         else:
             end_compare = type_cast(date, buy.end_date)
 
-        if reference_date < start_compare:
+        if getattr(buy, "is_paused", False):
+            current_status = "paused"
+        elif reference_date < start_compare:
             current_status = "ready"
         elif reference_date > end_compare:
             current_status = "completed"

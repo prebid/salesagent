@@ -77,15 +77,6 @@ class TestCircuitBreakerOpensAfterRetriesExhausted:
             assert cb.can_attempt() is False
             assert cb.can_attempt() is False
 
-    @pytest.mark.xfail(
-        reason="reporting_delayed status is not set by _get_media_buy_delivery_impl "
-        "when circuit breaker is open. The schema supports 'reporting_delayed' "
-        "(src/core/schemas/delivery.py:224) and the circuit breaker logic exists in "
-        "src/services/webhook_delivery_service.py:40-121, but there is no integration "
-        "between the circuit breaker state and the delivery status computation in "
-        "src/core/tools/media_buy_delivery.py:219-230.",
-        strict=True,
-    )
     def test_delivery_marked_reporting_delayed_when_circuit_open(self):
         """Delivery should be marked reporting_delayed when circuit breaker is open.
 

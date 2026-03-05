@@ -78,6 +78,15 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
     """
     from src.core.metrics import webhook_delivery_attempts, webhook_delivery_duration, webhook_delivery_total
 
+    # Reject delivery for paused media buys
+    if delivery.payload.get("status") == "paused":
+        logger.info("[Webhook Delivery] Rejected: media buy is paused")
+        return False, {
+            "status": "rejected",
+            "error": "Media buy is paused",
+            "attempts": 0,
+        }
+
     # Validate webhook URL for SSRF protection
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url(delivery.webhook_url)
     if not is_valid:

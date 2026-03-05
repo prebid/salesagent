@@ -145,12 +145,6 @@ class TestWebhookOnlyActiveMediaBuys:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-11
     """
 
-    @pytest.mark.xfail(
-        reason="deliver_webhook_with_retry does not check media buy status. "
-        "It sends whatever payload is given regardless of the media buy's state. "
-        "Webhook trigger scheduler with status filtering not yet implemented.",
-        strict=True,
-    )
     def test_paused_media_buy_webhook_rejected(self, integration_db):
         """Webhook delivery should be rejected for paused media buys.
 

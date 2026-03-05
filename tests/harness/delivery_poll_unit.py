@@ -48,6 +48,7 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         "principal": f"{MODULE}.get_principal_object",
         "adapter": f"{MODULE}.get_adapter",
         "pricing": f"{MODULE}._get_pricing_options",
+        "circuit_open": f"{MODULE}._is_circuit_breaker_open",
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -86,6 +87,7 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         budget: float = 10000.0,
         currency: str = "USD",
         raw_request: dict[str, Any] | None = None,
+        is_paused: bool = False,
     ) -> MagicMock:
         """Add a mock MediaBuy to the repository.
 
@@ -100,6 +102,7 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         buy.end_time = None
         buy.budget = budget
         buy.currency = currency
+        buy.is_paused = is_paused
         buy.raw_request = raw_request or {
             "buyer_ref": buyer_ref,
             "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],
