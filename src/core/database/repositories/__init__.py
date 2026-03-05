@@ -16,6 +16,7 @@ Usage:
 """
 
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.uow import MediaBuyUoW
 
-__all__ = ["MediaBuyRepository", "MediaBuyUoW"]
+__all__ = ["MediaBuyRepository", "MediaBuyUoW", "ProductRepository"]

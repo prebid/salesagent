@@ -120,11 +120,12 @@ def _make_real_product(product_id: str = "prod_1", **kwargs):
 
 
 def _mock_db_returning_products(products_to_return, mock_db_session):
-    """Configure mock_db_session to return given products from DB query."""
+    """Configure mock_db_session to return given products from DB query.
+
+    Matches ProductRepository.get_all_for_tenant() which uses session.scalars(stmt).all().
+    """
     mock_session = MagicMock()
-    mock_result = MagicMock()
-    mock_result.unique.return_value.scalars.return_value.all.return_value = products_to_return
-    mock_session.execute.return_value = mock_result
+    mock_session.scalars.return_value.all.return_value = products_to_return
     mock_db_session.return_value.__enter__.return_value = mock_session
     return mock_session
 
