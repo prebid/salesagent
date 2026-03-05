@@ -29,7 +29,7 @@ from src.core.auth import get_principal_object
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import create_get_products_request
+from src.core.schema_helpers import create_get_products_request, to_brand_reference
 from src.core.schemas import (
     GetProductsResponse,
     Product,  # Extends library Product
@@ -246,11 +246,12 @@ async def _get_products_impl(
 
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
     # req.brand is BrandReference | None after Pydantic parsing.
+    # to_brand_reference handles both dict and model (defensive for mock callers).
     offering = None
-    if req.brand:
-        domain = req.brand.domain
-        if domain:
-            offering = f"Brand at {domain}"
+    brand_ref = to_brand_reference(req.brand) if req.brand else None
+    if brand_ref:
+        if brand_ref.domain:
+            offering = f"Brand at {brand_ref.domain}"
 
     # Check brand_manifest_policy from tenant settings
     brand_manifest_policy = tenant.get("brand_manifest_policy", "require_auth")
