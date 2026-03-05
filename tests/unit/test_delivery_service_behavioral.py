@@ -597,17 +597,17 @@ class TestDeliverWithBackoffGenericException:
         mock_config.authentication_type = None
         mock_config.authentication_token = None
 
-        queue.enqueue({
-            "config": mock_config,
-            "payload": {"test": "data"},
-            "timestamp": datetime.now(UTC),
-        })
+        queue.enqueue(
+            {
+                "config": mock_config,
+                "payload": {"test": "data"},
+                "timestamp": datetime.now(UTC),
+            }
+        )
 
         with patch("src.services.webhook_delivery_service.httpx") as mock_httpx:
             mock_httpx.Client.return_value.__enter__ = MagicMock(
-                return_value=MagicMock(
-                    post=MagicMock(side_effect=RuntimeError("unexpected"))
-                )
+                return_value=MagicMock(post=MagicMock(side_effect=RuntimeError("unexpected")))
             )
             mock_httpx.Client.return_value.__exit__ = MagicMock(return_value=False)
             mock_httpx.TimeoutException = type("TimeoutException", (Exception,), {})

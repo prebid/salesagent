@@ -36,7 +36,6 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import DeliveryRepository
-from src.core.helpers import get_principal_id_from_context
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -286,20 +285,11 @@ def _get_media_buy_delivery_impl(
                             total_spend_from_adapter += float(adapter_pkg.spend)
                             total_impressions_from_adapter += int(adapter_pkg.impressions)
 
-                        # Use adapter's totals if available
-                        if adapter_response.totals:
-                            spend = float(adapter_response.totals.spend)
-                            impressions = int(adapter_response.totals.impressions)
-                            adapter_conversions = getattr(adapter_response.totals, "conversions", None)
-                            adapter_viewability = getattr(adapter_response.totals, "viewability", None)
-                        else:
-                            spend = total_spend_from_adapter
-                            impressions = total_impressions_from_adapter
-
-                        # Capture ext data from adapter response if present
-                        raw_ext = getattr(adapter_response, "ext", None)
-                        if raw_ext and isinstance(raw_ext, dict):
-                            adapter_ext = raw_ext
+                        # Adapter totals are always present (required field on schema)
+                        spend = float(adapter_response.totals.spend)
+                        impressions = int(adapter_response.totals.impressions)
+                        adapter_conversions = getattr(adapter_response.totals, "conversions", None)
+                        adapter_viewability = getattr(adapter_response.totals, "viewability", None)
 
                     except Exception as e:
                         logger.error(f"Error getting delivery for {media_buy_id}: {e}")
@@ -660,16 +650,6 @@ def get_media_buy_delivery_raw(
 
     # Call the implementation
     return _get_media_buy_delivery_impl(req, identity)
-
-
-# --- Admin Tools ---
-
-
-def _require_admin(context: Context) -> None:
-    """Verify the request is from an admin user."""
-    principal_id = get_principal_id_from_context(context)
-    if principal_id != "admin":
-        raise PermissionError("This operation requires admin privileges")
 
 
 def _resolve_delivery_status_filter(

@@ -747,3 +747,82 @@ class TestNextExpectedAtSerialization:
         resp = _make_media_buy_delivery_response(0)
         dumped = resp.model_dump(mode="json")
         assert "next_expected_at" not in dumped
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap fyl7: media_buy_delivery.py identity + helper edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestMissingPrincipalIdReturnsError:
+    """_get_media_buy_delivery_impl returns error when principal_id is missing.
+
+    Covers lines 91-93 of media_buy_delivery.py.
+    """
+
+    def test_none_principal_id_returns_error_response(self):
+        from src.core.resolved_identity import ResolvedIdentity
+
+        identity = ResolvedIdentity(
+            principal_id=None,
+            tenant_id="t1",
+            tenant=MagicMock(),
+        )
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+        response = _get_media_buy_delivery_impl(req, identity)
+        assert response.errors is not None
+        assert any(e.code == "principal_id_missing" for e in response.errors)
+
+    def test_empty_string_principal_id_returns_error_response(self):
+        from src.core.resolved_identity import ResolvedIdentity
+
+        identity = ResolvedIdentity(
+            principal_id="",
+            tenant_id="t1",
+            tenant=MagicMock(),
+        )
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+        response = _get_media_buy_delivery_impl(req, identity)
+        assert response.errors is not None
+        assert any(e.code == "principal_id_missing" for e in response.errors)
+
+
+class TestMissingTenantRaisesAuthError:
+    """_get_media_buy_delivery_impl raises AdCPAuthenticationError when tenant is None.
+
+    Covers line 132 of media_buy_delivery.py.
+    """
+
+    def test_none_tenant_raises_auth_error(self):
+        from src.core.exceptions import AdCPAuthenticationError
+        from src.core.resolved_identity import ResolvedIdentity
+
+        identity = ResolvedIdentity(
+            principal_id="p1",
+            tenant_id="t1",
+            tenant=None,
+        )
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
+
+        with patch("src.core.tools.media_buy_delivery.get_principal_object", return_value=MagicMock()):
+            with pytest.raises(AdCPAuthenticationError, match="No tenant context"):
+                _get_media_buy_delivery_impl(req, identity)
+
+
+class TestStatusFilterRawString:
+    """_resolve_delivery_status_filter handles raw string status values.
+
+    Covers line 694 (fallback path) of media_buy_delivery.py.
+    """
+
+    def test_raw_string_active_is_recognized(self):
+        valid = {"active", "ready", "paused", "completed", "failed"}
+        result = _resolve_delivery_status_filter("active", valid, lambda s: s.value)
+        assert result == ["active"]
+
+    def test_unknown_raw_string_defaults_to_active(self):
+        valid = {"active", "ready", "paused", "completed", "failed"}
+        result = _resolve_delivery_status_filter("nonexistent", valid, lambda s: s.value)
+        assert result == ["active"]
