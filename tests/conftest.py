@@ -549,7 +549,18 @@ def benchmark(request):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Modify test collection to skip certain tests in CI."""
-    # Note: requires_server tests are now supported via proper mcp_server fixture
-    # No longer skipping these tests in CI
-    pass
+    """Modify test collection to skip tests that need the full Docker stack."""
+    import socket
+
+    def _server_reachable(host: str = "localhost", port: int = 8100) -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return True
+        except OSError:
+            return False
+
+    server_available = _server_reachable()
+
+    for item in items:
+        if item.get_closest_marker("requires_server") and not server_available:
+            item.add_marker(pytest.mark.skip(reason="MCP server not running on localhost:8100"))
