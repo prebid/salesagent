@@ -310,9 +310,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_product_principal_access.py", "test_convert_product_includes_allowed_principal_ids"),
     ("tests/integration/test_product_principal_access.py", "test_allowed_principal_ids_excluded_from_serialization"),
     ("tests/integration/test_product_principal_access.py", "test_principal_model_exists_for_access_control"),
-    # tests/integration/test_product_v3.py
-    ("tests/integration/test_product_v3.py", "uc001_tenant"),
-    ("tests/integration/test_product_v3.py", "test_product_uow_tenant_isolation"),
+    # tests/integration/test_product_v3.py — migrated to factories
     # tests/integration/test_product_with_inventory_profile.py
     ("tests/integration/test_product_with_inventory_profile.py", "test_create_product_with_inventory_profile"),
     (
@@ -411,14 +409,10 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration_v2/test_error_paths.py", "test_tenant_with_principal"),
     # tests/integration_v2/test_gam_automation_focused.py
     ("tests/integration_v2/test_gam_automation_focused.py", "test_tenant_data"),
-    # tests/integration_v2/test_get_products_database_integration.py
-    ("tests/integration_v2/test_get_products_database_integration.py", "test_tenant_id"),
-    ("tests/integration_v2/test_get_products_database_integration.py", "optimized_test_setup"),
+    # tests/integration_v2/test_get_products_database_integration.py — migrated to factories
     # tests/integration_v2/test_get_products_filters.py
-    ("tests/integration_v2/test_get_products_filters.py", "setup_diverse_products"),
-    ("tests/integration_v2/test_get_products_filters.py", "setup_diverse_filter_products"),
-    # tests/integration_v2/test_get_products_format_id_filter.py
-    ("tests/integration_v2/test_get_products_format_id_filter.py", "setup_products_with_formatid_objects"),
+    # tests/integration_v2/test_get_products_filters.py — migrated to factories
+    # tests/integration_v2/test_get_products_format_id_filter.py — migrated to factories
     # tests/integration_v2/test_mcp_endpoints_comprehensive.py
     ("tests/integration_v2/test_mcp_endpoints_comprehensive.py", "setup_test_data"),
     # tests/integration_v2/test_mcp_tool_roundtrip_validation.py
@@ -435,8 +429,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration_v2/test_pricing_helpers.py", "test_create_flat_rate_product"),
     ("tests/integration_v2/test_pricing_helpers.py", "test_auto_generated_product_id"),
     ("tests/integration_v2/test_pricing_helpers.py", "test_multiple_products_with_pricing"),
-    # tests/integration_v2/test_product_deletion.py
-    ("tests/integration_v2/test_product_deletion.py", "test_tenant_and_products"),
+    # tests/integration_v2/test_product_deletion.py (test_tenant_and_products migrated to factories)
     ("tests/integration_v2/test_product_deletion.py", "setup_super_admin_config"),
     ("tests/integration_v2/test_product_deletion.py", "test_delete_product_with_active_media_buy"),
     ("tests/integration_v2/test_product_deletion.py", "test_delete_product_with_pending_media_buy"),

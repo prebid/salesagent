@@ -93,10 +93,19 @@ class TestDatabaseProductsIntegration:
             ).first()
 
             valid_product_fields = [
-                "product_id", "name", "description", "format_ids",
-                "delivery_type", "targeting_template", "measurement",
-                "creative_policy", "is_custom", "countries",
-                "implementation_config", "property_tags", "pricing_options",
+                "product_id",
+                "name",
+                "description",
+                "format_ids",
+                "delivery_type",
+                "targeting_template",
+                "measurement",
+                "creative_policy",
+                "is_custom",
+                "countries",
+                "implementation_config",
+                "property_tags",
+                "pricing_options",
             ]
             for field in valid_product_fields:
                 assert hasattr(db_product, field), f"Product model missing expected field: {field}"
@@ -183,9 +192,7 @@ class TestDatabasePerformanceOptimization:
         start_time = time.time()
 
         with get_db_session() as session:
-            products = session.scalars(
-                select(ProductModel).filter_by(tenant_id="perf-test")
-            ).all()
+            products = session.scalars(select(ProductModel).filter_by(tenant_id="perf-test")).all()
             for product in products:
                 _ = product.pricing_options
 
@@ -283,13 +290,15 @@ class TestDatabasePerformanceOptimization:
                     tenant_count = session.scalar(select(func.count()).select_from(Tenant))
                     pricing_count = session.scalar(select(func.count()).select_from(PricingOption))
 
-                    results.append({
-                        "operation_id": operation_id,
-                        "time": time.time() - start_time,
-                        "product_count": product_count,
-                        "tenant_count": tenant_count,
-                        "pricing_count": pricing_count,
-                    })
+                    results.append(
+                        {
+                            "operation_id": operation_id,
+                            "time": time.time() - start_time,
+                            "product_count": product_count,
+                            "tenant_count": tenant_count,
+                            "pricing_count": pricing_count,
+                        }
+                    )
             except Exception as e:
                 results.append({"operation_id": operation_id, "error": str(e)})
 
