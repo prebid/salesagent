@@ -29,15 +29,20 @@ setup:
          ```
          Record the exact pass count (e.g., "2973 passed").
 
-      2. **Run integration tests**:
+      2. **Start agent DB for integration tests**:
          ```bash
-         uv run pytest tests/integration/ -x -q 2>&1 | tail -5
+         eval $(.claude/skills/agent-db/agent-db.sh up)
+         ```
+
+      3. **Run integration tests**:
+         ```bash
+         scripts/run-test.sh tests/integration/ -x -q 2>&1 | tail -5
          ```
          Record the exact pass count.
 
-      3. **Run integration_v2 tests**:
+      4. **Run integration_v2 tests**:
          ```bash
-         uv run pytest tests/integration_v2/ -x -q 2>&1 | tail -5
+         scripts/run-test.sh tests/integration_v2/ -x -q 2>&1 | tail -5
          ```
          Record the exact pass count.
 
@@ -88,37 +93,21 @@ iterate:
            - Walk the data through each layer: input → parsing → business logic → output
            - Identify exactly where the bug manifests
            - Use Grep/Read to trace concrete values, not abstract reasoning
-        4. **Choose test level**: Based on the bug type, decide where the test goes:
-           - **Unit** (`tests/unit/`): Logic bugs, type errors, validation — no DB needed
-           - **Integration** (`tests/integration/`): DB constraint violations, query bugs,
-             cross-tenant leaks, ORM relationship issues — needs real PostgreSQL
-           - If unsure: if the bug involves a database column, FK, NOT NULL, or
-             cross-tenant isolation → it MUST be an integration test
+        4. **Choose test level — default to integration**:
 
-        5. **Start Docker if needed** (integration/e2e tests):
+           **The default test level is integration** (`tests/integration/`). A test
+           that runs against a real PostgreSQL database with real ORM models catches
+           bugs that mocked unit tests miss entirely.
 
-           **Acquire lock** (run in a single Bash call):
-           ```bash
-           LOCKFILE="/tmp/salesagent-docker.lock"
-           while ! mkdir "$LOCKFILE" 2>/dev/null; do
-             if [ -d "$LOCKFILE" ] && [ $(($(date +%s) - $(stat -f %m "$LOCKFILE"))) -gt 600 ]; then
-               rmdir "$LOCKFILE" 2>/dev/null
-             else
-               echo "Docker locked by another agent, waiting..." && sleep 5
-             fi
-           done
-           make test-stack-up 2>/dev/null || true && source .test-stack.env
-           ```
+           Only use unit tests (`tests/unit/`) when ALL of these are true:
+           - The function is pure computation (no DB, no I/O, no side effects)
+           - The logic being tested is complex enough to warrant a focused test
+           - Mocking the DB would make the test meaningless (e.g., the bug IS in
+             how data flows through the DB layer)
 
-           **IMPORTANT — release lock explicitly** after your tests run (step 6/7):
-           ```bash
-           rmdir /tmp/salesagent-docker.lock 2>/dev/null
-           ```
-           The `trap EXIT` pattern does NOT work in Claude Code agents because each
-           Bash tool call is a separate shell. You MUST release the lock manually
-           in a later Bash call. Do not rely on trap.
+           If in doubt, write an integration test.
 
-        6. **Write a failing test**:
+        5. **Write a failing test**:
            - Place it in the appropriate test file based on level chosen in step 4
            - The test should demonstrate the bug clearly and minimally
            - **Transport Parity Invariant**: Every behavioral test MUST verify
@@ -138,28 +127,48 @@ iterate:
                fixtures or extend them — never `session.add(Model(...))` inline
            - Run it and confirm it fails for the RIGHT reason:
              ```bash
-             # Unit tests:
-             uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
-
-             # Integration tests (requires Docker from step 5):
-             uv run pytest tests/integration/test_<area>.py::test_<name> -x -v
+             scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v
              ```
            - **CRITICAL**: The test MUST fail. If it passes, your test doesn't catch the
              bug. Rethink what the test asserts.
 
-        7. **Factory check**: Verify your test uses factories, not inline construction:
+        ## BANNED Patterns
+
+        - **`pytest.mark.xfail` is BANNED.** xfail suppresses failure — the test
+          suite stays green. A regression test must produce a HARD FAILURE: pytest
+          exit code 1, "FAILED" in the output. xfail is NOT failing.
+
+        - **AST-scanning / source-code pattern tests are BANNED.** Regression tests
+          must call the actual function (`_impl`, factory, schema constructor) and
+          assert behavioral output. If the bug were re-introduced through a
+          different code construct, the test must still catch it. Tests that use
+          `ast.parse`, `grep`, or regex on source files are structural guards
+          (use /guard for those), NOT regression tests.
+
+        ## Verification: Paste the FAILED Output
+
+        After running the test, paste the LAST 5 LINES of pytest output into
+        the bead notes. You MUST see the word "FAILED" and a non-zero exit.
+        If you see "passed", "xfailed", or "xpassed", your test is wrong.
+
+        ```bash
+        scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v 2>&1 | tail -5
+        # You MUST see "FAILED" — if you see "passed", rewrite the test
+        ```
+
+        6. **Factory check**: Verify your test uses factories, not inline construction:
            ```bash
            uv run python .pre-commit-hooks/check_test_factories.py tests/<level>/test_<area>.py
            ```
            If this reports suggestions for your NEW code, refactor to use factories
            before proceeding. Existing code suggestions can be ignored.
 
-        8. **Mutation check**: Mentally verify the test catches the right thing:
+        7. **Mutation check**: Mentally verify the test catches the right thing:
            - If you removed the buggy code, would the test fail?
            - If someone re-introduced the bug, would the test catch it?
            - If the answer to either is "no", rewrite the test.
 
-        9. **Confirm root cause**: After tracing, state in one sentence what is wrong
+        8. **Confirm root cause**: After tracing, state in one sentence what is wrong
            and why. This becomes the basis for the fix.
 
         ## Store Findings in the Bead
@@ -411,7 +420,7 @@ iterate:
 
         3. **Verify the test still fails**:
            ```bash
-           uv run pytest tests/<level>/test_<area>.py::test_<name> -x -v
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v
            ```
            If the test now passes (e.g., someone else fixed it), note this and
            close the atom.
@@ -421,11 +430,13 @@ iterate:
            - Follow existing codebase conventions
            - Don't refactor surrounding code — fix the bug only
 
-        5. **Verify the fix**:
+        5. **Verify the fix (red → green)**:
+           Run the SAME test that FAILED in the reproduce atom:
            ```bash
-           uv run pytest tests/<level>/test_<area>.py::test_<name> -x -v
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v 2>&1 | tail -5
+           # You MUST see "passed" — if you see "FAILED", your fix didn't work
            ```
-           The previously failing test must now pass.
+           If the test still fails, do NOT mark it xfail and move on. Fix the code.
 
         6. **Mutation verify**: Temporarily revert the fix and confirm the test fails again.
            Then re-apply the fix. This proves the test actually catches the bug.

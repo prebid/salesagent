@@ -126,7 +126,13 @@ def run_coverage(scope_name: str, sources: list[str], tests: list[str]) -> dict:
             total_stmts += stmts
             total_miss += miss
         else:
-            files[src] = {"statements": 0, "missing": 0, "coverage": 0, "missing_lines": [], "note": "not found in coverage data"}
+            files[src] = {
+                "statements": 0,
+                "missing": 0,
+                "coverage": 0,
+                "missing_lines": [],
+                "note": "not found in coverage data",
+            }
 
     total_pct = round((total_stmts - total_miss) / total_stmts * 100, 1) if total_stmts else 0
 
@@ -161,7 +167,7 @@ def _parse_term_output(scope_name: str, sources: list[str], tests: list[str], ex
             filename = Path(src).name.removesuffix(".py")
             if filename in line and "%" in line:
                 parts = line.split()
-                for i, p in enumerate(parts):
+                for _i, p in enumerate(parts):
                     if "%" in p:
                         pct = float(p.replace("%", ""))
                         stmts = int(parts[1]) if len(parts) > 1 else 0
@@ -211,7 +217,9 @@ def print_report(results: list[dict], verbose: bool = False) -> bool:
         if not passed:
             all_pass = False
 
-        print(f"\n  {scope}: {pct}% ({r['total_statements']} stmts, {r['total_missing']} uncovered) [{status} threshold={threshold}%]")
+        print(
+            f"\n  {scope}: {pct}% ({r['total_statements']} stmts, {r['total_missing']} uncovered) [{status} threshold={threshold}%]"
+        )
 
         for filepath, fdata in r.get("files", {}).items():
             fname = Path(filepath).name
