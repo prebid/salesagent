@@ -3749,21 +3749,22 @@ class TestDeliveryImplPricingLookup:
         """
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
-        # _get_pricing_options casts string IDs to int for Integer PK lookup
+        # _get_pricing_options matches by synthetic ID: {pricing_model}_{currency}_{fixed|auction}
         mock_po = MagicMock()
         mock_po.id = 42
         mock_po.pricing_model = "cpm"
+        mock_po.currency = "USD"
+        mock_po.is_fixed = True
 
         with patch("src.core.tools.media_buy_delivery.get_db_session") as mock_db:
             mock_session = MagicMock()
             mock_session.scalars.return_value.all.return_value = [mock_po]
             mock_db.return_value.__enter__.return_value = mock_session
 
-            # String ID "42" should be cast to int for PK lookup
-            result = _get_pricing_options(["42"])
+            result = _get_pricing_options(["cpm_usd_fixed"])
 
-            assert "42" in result
-            assert result["42"] == mock_po
+            assert "cpm_usd_fixed" in result
+            assert result["cpm_usd_fixed"] == mock_po
 
     def test_delivery_spend_with_correct_pricing(self):
         """UC-004-PL02: spend computed from rate and impressions.

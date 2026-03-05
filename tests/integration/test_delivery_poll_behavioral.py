@@ -1641,30 +1641,48 @@ class TestPricingOptionStringLookup:
     Covers: UC-004-MAIN-14
     """
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG salesagent-mq3n: _get_pricing_options casts string pricing_option_id "
-            "to int and queries PricingOption.id (integer PK). Non-numeric IDs like "
-            "'cpm_usd_fixed' are silently discarded."
-        ),
-        strict=True,
-    )
     def test_get_pricing_options_uses_string_id_not_integer_pk(self, integration_db):
         """_get_pricing_options should return dict keyed by string pricing_option_id.
 
         Covers: UC-004-MAIN-14
         """
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import PricingOption, Product, Tenant
         from src.core.tools.media_buy_delivery import _get_pricing_options
-        from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
 
-        tenant = TenantFactory(tenant_id="t1")
-        product = ProductFactory(tenant=tenant)
-        PricingOptionFactory(
-            product=product,
-            pricing_model="cpm",
-        )
+        with get_db_session() as session:
+            tenant = Tenant(
+                tenant_id="t1",
+                name="Test",
+                subdomain="t1",
+                is_active=True,
+                ad_server="mock",
+            )
+            session.add(tenant)
+            session.flush()
+            product = Product(
+                tenant_id="t1",
+                product_id="prod1",
+                name="Test Product",
+                format_ids=[],
+                property_tags=["all_inventory"],
+                targeting_template={},
+                delivery_type="standard",
+            )
+            session.add(product)
+            session.flush()
+            session.add(
+                PricingOption(
+                    tenant_id="t1",
+                    product_id="prod1",
+                    pricing_model="cpm",
+                    rate=5.00,
+                    currency="USD",
+                    is_fixed=True,
+                )
+            )
+            session.commit()
 
-        # The bug: calling with a non-numeric string ID silently discards it
         result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1")
 
         assert "cpm_usd_fixed" in result, (
@@ -1672,24 +1690,47 @@ class TestPricingOptionStringLookup:
             f"_get_pricing_options incorrectly uses integer PK."
         )
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG salesagent-mq3n: _get_pricing_options tries int() on string IDs. "
-            "Non-numeric strings are silently discarded."
-        ),
-        strict=True,
-    )
     def test_non_numeric_pricing_option_id_is_not_silently_discarded(self, integration_db):
         """Non-numeric string pricing_option_ids must not be dropped.
 
         Covers: UC-004-MAIN-14
         """
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import PricingOption, Product, Tenant
         from src.core.tools.media_buy_delivery import _get_pricing_options
-        from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
 
-        tenant = TenantFactory(tenant_id="t1")
-        product = ProductFactory(tenant=tenant)
-        PricingOptionFactory(product=product, pricing_model="cpm")
+        with get_db_session() as session:
+            tenant = Tenant(
+                tenant_id="t1",
+                name="Test",
+                subdomain="t1",
+                is_active=True,
+                ad_server="mock",
+            )
+            session.add(tenant)
+            session.flush()
+            product = Product(
+                tenant_id="t1",
+                product_id="prod1",
+                name="Test Product",
+                format_ids=[],
+                property_tags=["all_inventory"],
+                targeting_template={},
+                delivery_type="standard",
+            )
+            session.add(product)
+            session.flush()
+            session.add(
+                PricingOption(
+                    tenant_id="t1",
+                    product_id="prod1",
+                    pricing_model="cpm",
+                    rate=5.00,
+                    currency="USD",
+                    is_fixed=True,
+                )
+            )
+            session.commit()
 
         result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1")
 
@@ -1858,29 +1899,47 @@ class TestPricingOptionStringToIntComparisonRejected:
     Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
     """
 
-    @pytest.mark.xfail(
-        reason=(
-            "_get_pricing_options converts pricing_option_ids to int and queries "
-            "PricingOption.id (integer PK). Non-numeric string IDs like "
-            "'cpm_usd_fixed' are silently discarded. Should use string "
-            "pricing_option_id field for lookup instead."
-        ),
-        strict=True,
-    )
     def test_pricing_options_keyed_by_string_id_not_integer_pk(self, integration_db):
         """_get_pricing_options maps by string pricing_option_id, not integer PK.
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
         """
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import PricingOption, Product, Tenant
         from src.core.tools.media_buy_delivery import _get_pricing_options
-        from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
 
-        tenant = TenantFactory(tenant_id="t1")
-        product = ProductFactory(tenant=tenant)
-        po = PricingOptionFactory(
-            product=product,
-            pricing_model="CPM",
-        )
+        with get_db_session() as session:
+            tenant = Tenant(
+                tenant_id="t1",
+                name="Test",
+                subdomain="t1",
+                is_active=True,
+                ad_server="mock",
+            )
+            session.add(tenant)
+            session.flush()
+            product = Product(
+                tenant_id="t1",
+                product_id="prod1",
+                name="Test Product",
+                format_ids=[],
+                property_tags=["all_inventory"],
+                targeting_template={},
+                delivery_type="standard",
+            )
+            session.add(product)
+            session.flush()
+            po = PricingOption(
+                tenant_id="t1",
+                product_id="prod1",
+                pricing_model="cpm",
+                rate=5.00,
+                currency="USD",
+                is_fixed=True,
+            )
+            session.add(po)
+            session.commit()
+            po_id = po.id
 
         result = _get_pricing_options(
             tenant_id="t1",
@@ -1889,38 +1948,57 @@ class TestPricingOptionStringToIntComparisonRejected:
 
         # Key assertion: the map uses the string pricing_option_id, NOT the int PK
         assert "cpm_usd_fixed" in result
-        assert po.id not in result
+        assert po_id not in result
 
-    @pytest.mark.xfail(
-        reason=(
-            "_get_pricing_options converts pricing_option_ids to int and "
-            "silently discards non-numeric strings. The function never "
-            "queries by string pricing_option_id, so the result dict is empty."
-        ),
-        strict=True,
-    )
     def test_integer_pk_lookup_returns_none(self, integration_db):
         """Looking up pricing option by integer PK returns None (type mismatch caught).
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
         """
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import PricingOption, Product, Tenant
         from src.core.tools.media_buy_delivery import _get_pricing_options
-        from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
 
-        tenant = TenantFactory(tenant_id="t1")
-        product = ProductFactory(tenant=tenant)
-        PricingOptionFactory(
-            product=product,
-            pricing_model="CPC",
-        )
+        with get_db_session() as session:
+            tenant = Tenant(
+                tenant_id="t1",
+                name="Test",
+                subdomain="t1",
+                is_active=True,
+                ad_server="mock",
+            )
+            session.add(tenant)
+            session.flush()
+            product = Product(
+                tenant_id="t1",
+                product_id="prod1",
+                name="Test Product",
+                format_ids=[],
+                property_tags=["all_inventory"],
+                targeting_template={},
+                delivery_type="standard",
+            )
+            session.add(product)
+            session.flush()
+            session.add(
+                PricingOption(
+                    tenant_id="t1",
+                    product_id="prod1",
+                    pricing_model="cpc",
+                    rate=2.50,
+                    currency="USD",
+                    is_fixed=True,
+                )
+            )
+            session.commit()
 
         result = _get_pricing_options(
             tenant_id="t1",
-            pricing_option_ids=["cpc_usd_standard"],
+            pricing_option_ids=["cpc_usd_fixed"],
         )
 
         # Only the string pricing_option_id should work
-        assert result.get("cpc_usd_standard") is not None
+        assert result.get("cpc_usd_fixed") is not None
 
 
 # ---------------------------------------------------------------------------

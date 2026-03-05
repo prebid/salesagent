@@ -54,10 +54,7 @@ INTEGER_PK_MODELS = {
 
 # Known violations: (file_path, line_number, description)
 # Each entry is a known type mismatch that needs fixing.
-# FIXME: salesagent-mq3n — PricingOption.id queried with string values
-KNOWN_VIOLATIONS = {
-    "src/core/tools/media_buy_delivery.py::PricingOption.id.in_",
-}
+KNOWN_VIOLATIONS: set[str] = set()
 
 
 def _find_in_queries_on_integer_columns(filepath: str) -> list[tuple[int, str, str]]:
