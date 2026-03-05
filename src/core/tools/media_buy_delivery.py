@@ -181,13 +181,18 @@ def _get_media_buy_delivery_impl(
                         Error(code="media_buy_not_found", message=f"Buyer ref {requested_ref} not found")
                     )
 
-        pricing_option_ids = [
-            buy.raw_request.get("pricing_option_id")
-            for _, buy in target_media_buys
-            if buy.raw_request
-            and isinstance(buy.raw_request, dict)
-            and buy.raw_request.get("pricing_option_id") is not None
-        ]
+        pricing_option_ids: list[Any] = []
+        for _, buy in target_media_buys:
+            if buy.raw_request and isinstance(buy.raw_request, dict):
+                # Collect top-level pricing_option_id
+                top_id = buy.raw_request.get("pricing_option_id")
+                if top_id is not None:
+                    pricing_option_ids.append(top_id)
+                # Collect per-package pricing_option_ids
+                for pkg in buy.raw_request.get("packages", []):
+                    pkg_id = pkg.get("pricing_option_id")
+                    if pkg_id is not None:
+                        pricing_option_ids.append(pkg_id)
         pricing_options = _get_pricing_options(pricing_option_ids, tenant_id=tenant["tenant_id"])
 
         # Collect delivery data for each media buy
@@ -231,8 +236,11 @@ def _get_media_buy_delivery_impl(
 
                 # Get delivery metrics from adapter
                 adapter_package_metrics = {}  # Map package_id -> {impressions, spend, clicks}
+                adapter_ext: dict[str, Any] = {}  # Ext data from adapter response
                 total_spend_from_adapter = 0.0
                 total_impressions_from_adapter = 0
+                adapter_conversions: float | None = None
+                adapter_viewability: float | None = None
 
                 if not any(
                     [testing_ctx.dry_run, testing_ctx.mock_time, testing_ctx.jump_to_event, testing_ctx.test_session_id]
@@ -260,9 +268,16 @@ def _get_media_buy_delivery_impl(
                         if adapter_response.totals:
                             spend = float(adapter_response.totals.spend)
                             impressions = int(adapter_response.totals.impressions)
+                            adapter_conversions = getattr(adapter_response.totals, "conversions", None)
+                            adapter_viewability = getattr(adapter_response.totals, "viewability", None)
                         else:
                             spend = total_spend_from_adapter
                             impressions = total_impressions_from_adapter
+
+                        # Capture ext data from adapter response if present
+                        raw_ext = getattr(adapter_response, "ext", None)
+                        if raw_ext and isinstance(raw_ext, dict):
+                            adapter_ext = raw_ext
 
                     except Exception as e:
                         logger.error(f"Error getting delivery for {media_buy_id}: {e}")
@@ -370,6 +385,26 @@ def _get_media_buy_delivery_impl(
                             )
                         )
 
+                # Collect pricing options for this media buy
+                buy_pricing_options: list[dict[str, Any]] = []
+                if buy.raw_request and isinstance(buy.raw_request, dict):
+                    # Collect from top-level pricing_option_id
+                    top_po_id = buy.raw_request.get("pricing_option_id")
+                    if top_po_id and top_po_id in pricing_options:
+                        po = pricing_options[top_po_id]
+                        buy_pricing_options.append({"pricing_option_id": top_po_id, "pricing_model": po.pricing_model})
+                    # Collect from per-package pricing_option_ids
+                    for pkg_data in buy.raw_request.get("packages", []):
+                        pkg_po_id = pkg_data.get("pricing_option_id")
+                        if pkg_po_id and pkg_po_id not in {p["pricing_option_id"] for p in buy_pricing_options}:
+                            if pkg_po_id in pricing_options:
+                                po = pricing_options[pkg_po_id]
+                                buy_pricing_options.append(
+                                    {"pricing_option_id": pkg_po_id, "pricing_model": po.pricing_model}
+                                )
+                            else:
+                                buy_pricing_options.append({"pricing_option_id": pkg_po_id})
+
                 # Create delivery data
                 buyer_ref = buy.raw_request.get("buyer_ref", None)
 
@@ -393,6 +428,7 @@ def _get_media_buy_delivery_impl(
                     pricing_model=PricingModel(
                         "cpm"
                     ),  # TODO: @yusuf - remove this from adcp protocol. MediaBuy itself doesn't have pricing model. It is in package level
+                    pricing_options=buy_pricing_options or None,
                     totals=DeliveryTotals(
                         impressions=impressions,
                         spend=spend,
@@ -400,9 +436,12 @@ def _get_media_buy_delivery_impl(
                         ctr=ctr,  # Optional field
                         video_completions=None,  # Optional field
                         completion_rate=None,  # Optional field
+                        conversions=adapter_conversions,  # From adapter totals
+                        viewability=adapter_viewability,  # From adapter totals
                     ),
                     by_package=package_deliveries,
                     daily_breakdown=None,  # Optional field, not calculated in this implementation
+                    ext=adapter_ext,
                 )
 
                 deliveries.append(delivery_data)

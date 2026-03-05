@@ -131,6 +131,8 @@ class DeliveryTotals(SalesAgentBaseModel):
     completion_rate: float | None = Field(
         None, ge=0, le=1, description="Video completion rate (completions/impressions)"
     )
+    conversions: float | None = Field(None, ge=0, description="Total conversions (if applicable)")
+    viewability: float | None = Field(None, ge=0, le=1, description="Viewability percentage as 0.0-1.0 (if applicable)")
 
 
 class PackageDelivery(SalesAgentBaseModel):
@@ -234,9 +236,17 @@ class MediaBuyDeliveryData(SalesAgentBaseModel):
         default=False,
     )
     pricing_model: PricingModel | None = Field(default=None, description="Pricing model for this media buy")
+    pricing_options: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Pricing options active for this media buy, linking back to PricingOption records",
+    )
     totals: DeliveryTotals = Field(description="Aggregate metrics for this media buy across all packages")
     by_package: list[PackageDelivery] = Field(description="Metrics broken down by package")
     daily_breakdown: list[DailyBreakdown] | None = Field(None, description="Day-by-day delivery")
+    ext: dict[str, Any] = Field(
+        default_factory=dict,
+        description="AdCP extension object for adapter-specific data",
+    )
 
 
 class ReportingPeriod(LibraryReportingPeriod):

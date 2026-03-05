@@ -1538,8 +1538,8 @@ class TestUnpopulatedFieldsGraceful:
             # daily_breakdown is explicitly None (gap G42) — no error raised
             assert delivery.daily_breakdown is None
 
-    def test_delivery_totals_schema_lacks_effective_rate_and_viewability(self):
-        """DeliveryTotals does not have effective_rate or viewability fields (gap G44).
+    def test_delivery_totals_schema_lacks_effective_rate(self):
+        """DeliveryTotals does not have effective_rate field (gap G44).
 
         Covers: UC-004-MAIN-20
         """
@@ -1554,7 +1554,8 @@ class TestUnpopulatedFieldsGraceful:
             completion_rate=None,
         )
         assert not hasattr(totals, "effective_rate") or "effective_rate" not in DeliveryTotals.model_fields
-        assert not hasattr(totals, "viewability") or "viewability" not in DeliveryTotals.model_fields
+        # viewability is now present on DeliveryTotals (salesagent-2s79)
+        assert "viewability" in DeliveryTotals.model_fields
         assert totals.impressions == 5000.0
         assert totals.spend == 250.0
 
@@ -1611,8 +1612,8 @@ class TestUnpopulatedFieldsGraceful:
             # Gap G44: effective_rate not on local DeliveryTotals
             assert "effective_rate" not in DeliveryTotals.model_fields
 
-            # Gap G44: viewability not on local DeliveryTotals
-            assert "viewability" not in DeliveryTotals.model_fields
+            # viewability is now present on DeliveryTotals (salesagent-2s79)
+            assert "viewability" in DeliveryTotals.model_fields
 
             # Gap G42: creative_level_breakdowns (by_creative) not on PackageDelivery
             for pkg in delivery.by_package:
@@ -1804,12 +1805,6 @@ class TestDeliveryMetricsFieldPresence:
             assert hasattr(delivery.totals, "video_completions")
             assert delivery.totals.video_completions is None
 
-    @pytest.mark.xfail(
-        reason="DeliveryTotals schema does not include 'conversions' field. "
-        "Obligation requires conversions metric but it is missing from "
-        "src/core/schemas/delivery.py:DeliveryTotals.",
-        strict=True,
-    )
     def test_totals_include_conversions_field(self, integration_db):
         """Delivery totals include conversions metric field.
 
@@ -1833,10 +1828,6 @@ class TestDeliveryMetricsFieldPresence:
             delivery = result.media_buy_deliveries[0]
             assert hasattr(delivery.totals, "conversions")
 
-    @pytest.mark.xfail(
-        reason="DeliveryTotals schema does not include 'viewability' field.",
-        strict=True,
-    )
     def test_totals_include_viewability_field(self, integration_db):
         """Delivery totals include viewability metric field.
 
@@ -2075,15 +2066,6 @@ class TestEndToEndDeliveryMetricsCpmPricing:
             assert delivery.totals.spend == 25.0
             assert delivery.totals.impressions == 10000.0
 
-    @pytest.mark.xfail(
-        reason=(
-            "Obligation requires 'the pricing option is correctly identified in the "
-            "response'. MediaBuyDeliveryData has no pricing_options field to identify "
-            "which pricing option was used. PackageDelivery has pricing_model/rate/currency "
-            "from package_config, but no pricing_option_id back-reference."
-        ),
-        strict=True,
-    )
     def test_cpm_pricing_option_identified_in_response(self, integration_db):
         """CPM pricing option should be identifiable in the delivery response.
 
@@ -2210,14 +2192,6 @@ class TestEndToEndDeliveryMetricsCpcPricing:
             # CPC click calculation: floor(spend / rate) = floor(250 / 0.50) = 500
             assert delivery.by_package[0].clicks == 500
 
-    @pytest.mark.xfail(
-        reason=(
-            "Obligation requires 'the pricing option is correctly identified'. "
-            "MediaBuyDeliveryData has no pricing_options field. PackageDelivery has "
-            "pricing_model/rate/currency but no pricing_option_id back-reference."
-        ),
-        strict=True,
-    )
     def test_cpc_pricing_option_identified_in_response(self, integration_db):
         """CPC pricing option should be identifiable in the delivery response.
 
@@ -2340,15 +2314,6 @@ class TestDeliveryMetricsFlatRatePricing:
             pkg = delivery.by_package[0]
             assert pkg.spend == 5000.0
 
-    @pytest.mark.xfail(
-        reason=(
-            "Obligation requires spend to 'reflect the flat rate correctly'. "
-            "While totals.spend passes through from adapter, the FLAT_RATE "
-            "pricing option is not identifiable as a distinct entity in the "
-            "response. MediaBuyDeliveryData has no pricing_options field."
-        ),
-        strict=True,
-    )
     def test_flat_rate_pricing_option_identified_in_response(self, integration_db):
         """FLAT_RATE pricing option should be identifiable in the delivery response.
 
@@ -2407,13 +2372,6 @@ class TestDeliveryResponsePreservesExtFields:
     Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
     """
 
-    @pytest.mark.xfail(
-        reason=(
-            "MediaBuyDeliveryData does not have an ext field. Production code "
-            "does not propagate ext from adapter response to per-buy delivery data."
-        ),
-        strict=True,
-    )
     def test_ext_fields_preserved_in_delivery_data(self, integration_db):
         """ext fields from adapter response should flow through to MediaBuyDeliveryData.
 
@@ -2442,14 +2400,6 @@ class TestDeliveryResponsePreservesExtFields:
             delivery = result.media_buy_deliveries[0]
             assert hasattr(delivery, "ext") and delivery.ext is not None
 
-    @pytest.mark.xfail(
-        reason=(
-            "MediaBuyDeliveryData has no ext field in its schema definition, "
-            "so model_dump() does not include an 'ext' key. Ext propagation "
-            "from adapter to delivery data is not implemented."
-        ),
-        strict=True,
-    )
     def test_ext_fields_preserved_in_model_dump(self, integration_db):
         """ext fields should survive model_dump() serialization.
 
