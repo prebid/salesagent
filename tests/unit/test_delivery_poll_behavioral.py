@@ -258,11 +258,6 @@ class TestWebhookExcludesAggregatedTotals:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-09
     """
 
-    @pytest.mark.xfail(
-        reason="No webhook-specific payload assembly exists. GetMediaBuyDeliveryResponse.model_dump() "
-        "always includes aggregated_totals (required field). Webhook payload filtering not implemented.",
-        strict=True,
-    )
     def test_aggregated_totals_excluded_from_webhook_payload(self):
         """Webhook delivery payload should NOT contain aggregated_totals (polling only).
 
@@ -277,7 +272,7 @@ class TestWebhookExcludesAggregatedTotals:
             response = env.call_impl(media_buy_ids=["mb_001"])
 
             # Act — dump as webhook payload
-            payload = response.model_dump(mode="json")
+            payload = response.webhook_payload()
 
             # Assert — aggregated_totals should NOT be in webhook payload
             assert "aggregated_totals" not in payload
@@ -308,11 +303,6 @@ class TestWebhookRequestedMetricsFiltering:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
     """
 
-    @pytest.mark.xfail(
-        reason="requested_metrics field does not exist on GetMediaBuyDeliveryResponse or request schemas. "
-        "Metric filtering for webhook payloads not yet implemented.",
-        strict=True,
-    )
     def test_only_requested_metrics_in_payload(self):
         """Webhook payload should only include metrics specified in requested_metrics.
 
@@ -326,9 +316,9 @@ class TestWebhookRequestedMetricsFiltering:
 
             response = env.call_impl(media_buy_ids=["mb_001"])
 
-            # Act — dump payload (simulating filtering to [impressions, clicks])
-            payload = response.model_dump(mode="json")
-            totals = payload["aggregated_totals"]
+            # Act — dump payload filtering to [impressions, clicks]
+            payload = response.webhook_payload(requested_metrics=["impressions", "clicks"])
+            totals = payload["media_buy_deliveries"][0]["totals"]
 
             # Assert — only requested metrics should be present (spend excluded)
             assert "spend" not in totals, "spend should be excluded when not in requested_metrics"

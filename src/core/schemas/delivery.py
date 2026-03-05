@@ -292,6 +292,18 @@ class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuy
         ..., description="Array of delivery data for each media buy"
     )
 
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Override to ensure webhook metadata fields are present when notification_type is set.
+
+        The base AdCPBaseModel excludes None values, but the AdCP protocol requires
+        next_expected_at to be explicitly present (as null) when notification_type
+        is 'final' so consumers know no further reports are expected.
+        """
+        result = super().model_dump(**kwargs)
+        if self.notification_type is not None and "next_expected_at" not in result:
+            result["next_expected_at"] = None
+        return result
+
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
         count = len(self.media_buy_deliveries)
@@ -300,6 +312,37 @@ class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuy
         elif count == 1:
             return "Retrieved delivery data for 1 media buy."
         return f"Retrieved delivery data for {count} media buys."
+
+    def webhook_payload(
+        self,
+        requested_metrics: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Serialize response as a webhook payload.
+
+        Webhook payloads differ from polling responses:
+        - ``aggregated_totals`` is excluded (polling-only field)
+        - When *requested_metrics* is provided, each media-buy ``totals``
+          dict is filtered to only include those metric keys.
+
+        Args:
+            requested_metrics: If provided, only these metric names are
+                kept in each ``totals`` dict.  Non-metric keys (like
+                ``media_buy_id``, ``status``) are never filtered.
+
+        Returns:
+            JSON-ready dict suitable for webhook POST body.
+        """
+        data = self.model_dump(mode="json", exclude={"aggregated_totals"})
+
+        if requested_metrics is not None:
+            metrics_set = set(requested_metrics)
+            for delivery in data.get("media_buy_deliveries", []):
+                totals = delivery.get("totals")
+                if totals is not None:
+                    filtered = {k: v for k, v in totals.items() if k in metrics_set}
+                    delivery["totals"] = filtered
+
+        return data
 
 
 # Deprecated - kept for backward compatibility
