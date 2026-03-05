@@ -13,6 +13,7 @@ Usage::
 """
 
 from tests.factories.core import CurrencyLimitFactory, PropertyTagFactory, TenantFactory
+from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
 from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
@@ -28,10 +29,14 @@ ALL_FACTORIES = [
     MediaBuyFactory,
     MediaPackageFactory,
     PushNotificationConfigFactory,
+    CreativeFactory,
+    CreativeAssignmentFactory,
 ]
 
 __all__ = [
     "ALL_FACTORIES",
+    "CreativeAssignmentFactory",
+    "CreativeFactory",
     "CurrencyLimitFactory",
     "MediaBuyFactory",
     "MediaPackageFactory",
