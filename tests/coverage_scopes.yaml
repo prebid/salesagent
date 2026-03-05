@@ -24,6 +24,8 @@ scopes:
       - tests/unit/test_delivery_service_behavioral.py
       - tests/unit/test_delivery_metrics.py
       - tests/unit/test_delivery_simulator.py
+      - tests/unit/test_webhook_delivery.py
+      - tests/unit/test_webhook_delivery_service.py
       - tests/integration/test_delivery_poll_behavioral.py
       - tests/integration/test_delivery_webhook_behavioral.py
       - tests/integration/test_delivery_service_behavioral.py
