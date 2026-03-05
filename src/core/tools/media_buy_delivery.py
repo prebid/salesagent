@@ -198,11 +198,6 @@ def _get_media_buy_delivery_impl(
         pricing_option_ids: list[Any] = []
         for _, buy in target_media_buys:
             if buy.raw_request and isinstance(buy.raw_request, dict):
-                # Collect top-level pricing_option_id
-                top_id = buy.raw_request.get("pricing_option_id")
-                if top_id is not None:
-                    pricing_option_ids.append(top_id)
-                # Collect per-package pricing_option_ids
                 for pkg in buy.raw_request.get("packages", []):
                     pkg_id = pkg.get("pricing_option_id")
                     if pkg_id is not None:
@@ -382,7 +377,11 @@ def _get_media_buy_delivery_impl(
                             package_spend = spend / len(packages)
                             package_impressions = impressions / len(packages)
 
-                        if pricing_option and pricing_option.pricing_model == PricingModel.cpc and pricing_option.rate:
+                        if (
+                            pricing_option
+                            and pricing_option.pricing_model == PricingModel.cpc.value
+                            and pricing_option.rate
+                        ):
                             package_clicks = floor(spend / (float(pricing_option.rate)))
                         else:
                             package_clicks = None
@@ -410,11 +409,6 @@ def _get_media_buy_delivery_impl(
                 # Collect pricing options for this media buy
                 buy_pricing_options: list[dict[str, Any]] = []
                 if buy.raw_request and isinstance(buy.raw_request, dict):
-                    # Collect from top-level pricing_option_id
-                    top_po_id = buy.raw_request.get("pricing_option_id")
-                    if top_po_id and top_po_id in pricing_options:
-                        po = pricing_options[top_po_id]
-                        buy_pricing_options.append({"pricing_option_id": top_po_id, "pricing_model": po.pricing_model})
                     # Collect from per-package pricing_option_ids
                     for pkg_data in buy.raw_request.get("packages", []):
                         pkg_po_id = pkg_data.get("pricing_option_id")

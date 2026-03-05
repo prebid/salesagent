@@ -2758,3 +2758,153 @@ class TestPartialFailureTolerance:
             assert "mb_ok" in returned_ids, f"Expected mb_ok in deliveries, got: {returned_ids}"
             # buy_2 should be absent (skipped due to outer exception)
             assert "mb_fail" not in returned_ids, f"Expected mb_fail to be absent from deliveries, got: {returned_ids}"
+
+
+# ---------------------------------------------------------------------------
+# Domain business rule: CPC package-level click derivation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestCpcPackageClicksDerivation:
+    """Domain business rule: for CPC pricing, package clicks = floor(spend / rate).
+
+    This is NOT mandated by the AdCP spec — delivery-metrics.json defines clicks
+    as optional. This is our product decision: when the adapter doesn't return
+    clicks but we know the CPC rate, we derive clicks to give buyers better data.
+
+    The formula: clicks = floor(total_spend / cpc_rate)
+
+    Covers: media_buy_delivery.py line 386
+    """
+
+    def test_cpc_package_clicks_derived_from_spend_and_rate(self, integration_db):
+        """CPC package with $250 spend at $0.50/click -> 500 clicks.
+
+        Business rule: package_clicks = floor(spend / cpc_rate)
+        """
+        from decimal import Decimal
+        from math import floor
+
+        from tests.factories import (
+            MediaBuyFactory,
+            PricingOptionFactory,
+            PrincipalFactory,
+            ProductFactory,
+            TenantFactory,
+        )
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            product = ProductFactory(tenant=tenant)
+            PricingOptionFactory(
+                product=product,
+                pricing_model="cpc",
+                rate=Decimal("0.50"),
+                currency="USD",
+                is_fixed=True,
+            )
+
+            # Use SYNTHETIC pricing_option_id (how _get_pricing_options keys results)
+            synthetic_po_id = "cpc_usd_fixed"
+
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_cpc",
+                raw_request={
+                    "buyer_ref": "ref_cpc",
+                    "packages": [
+                        {
+                            "package_id": "pkg_cpc",
+                            "product_id": product.product_id,
+                            "pricing_option_id": synthetic_po_id,
+                        }
+                    ],
+                },
+            )
+
+            env.set_adapter_response(
+                "mb_cpc",
+                impressions=5000,
+                spend=250.0,
+                package_id="pkg_cpc",
+            )
+
+            result = env.call_impl(
+                media_buy_ids=["mb_cpc"],
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
+
+            assert result.aggregated_totals.media_buy_count == 1
+            delivery = result.media_buy_deliveries[0]
+            pkg = delivery.by_package[0]
+            assert pkg.package_id == "pkg_cpc"
+            # Domain business rule: clicks = floor(spend / cpc_rate)
+            assert pkg.clicks == floor(250.0 / 0.50)  # 500
+
+
+# ---------------------------------------------------------------------------
+# Data migration strategy: start_time preferred over start_date for status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestStartTimeFallbackForStatus:
+    """Data migration strategy: start_time (AdCP spec field, nullable) is preferred
+    over start_date (legacy NOT NULL column) when determining media buy status.
+
+    Media buys created before the start_time column was added have start_time=None
+    and rely on start_date. Newer media buys have both. The delivery code must
+    handle both cases correctly.
+
+    Covers: media_buy_delivery.py lines 743, 748
+    """
+
+    def test_start_time_used_for_status_when_present(self, integration_db):
+        """When start_time is set, status comparison uses start_time.date(),
+        not start_date.
+
+        Covers: media_buy_delivery.py line 743, 748
+        """
+        from datetime import UTC, datetime
+
+        from tests.factories import (
+            MediaBuyFactory,
+            PrincipalFactory,
+            TenantFactory,
+        )
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+
+            # start_date says 2025-01-01..2027-12-31 (active for any reasonable date)
+            # but start_time says 2028-01-01..2028-12-31 (not yet started)
+            # If start_time is used, status should be "ready" (not yet active)
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_time",
+                start_date=date(2025, 1, 1),
+                end_date=date(2027, 12, 31),
+                start_time=datetime(2028, 1, 1, tzinfo=UTC),
+                end_time=datetime(2028, 12, 31, tzinfo=UTC),
+            )
+
+            env.set_adapter_response("mb_time", impressions=0, spend=0.0)
+
+            # Query for "active" only — if start_time is respected, mb_time
+            # should NOT appear (it's "ready", not "active")
+            result = env.call_impl(
+                media_buy_ids=[buy.media_buy_id],
+                status_filter="active",
+            )
+
+            # The media buy should be filtered out because start_time makes it "ready"
+            returned_ids = {d.media_buy_id for d in result.media_buy_deliveries}
+            assert "mb_time" not in returned_ids
