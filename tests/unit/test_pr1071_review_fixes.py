@@ -38,7 +38,7 @@ class TestDeliveryLoopErrorHandling:
             has_logger_error = False
             has_raise_before_logger = False
 
-            for i, stmt in enumerate(node.body):
+            for stmt in node.body:
                 # Check for logger.error call with "Error getting delivery"
                 if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
                     func = stmt.value.func
@@ -53,9 +53,7 @@ class TestDeliveryLoopErrorHandling:
                             arg = stmt.value.args[0]
                             if isinstance(arg, ast.JoinedStr):
                                 for val in arg.values:
-                                    if isinstance(val, ast.Constant) and "Error getting delivery" in str(
-                                        val.value
-                                    ):
+                                    if isinstance(val, ast.Constant) and "Error getting delivery" in str(val.value):
                                         has_logger_error = True
                                         break
 
