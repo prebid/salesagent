@@ -51,11 +51,14 @@ def _make_identity(
     )
 
 
+_BRAND_DEFAULT = object()  # sentinel: use default brand when caller omits brand kwarg
+
+
 async def _call_get_products(
     tenant_id: str = "uc001_tenant",
     principal_id: str | None = "test_principal",
     brief: str = "",
-    brand: dict | None = None,
+    brand: dict | None | object = _BRAND_DEFAULT,
     filters: dict | None = None,
     property_list: dict | None = None,
     tenant_overrides: dict | None = None,
@@ -75,7 +78,7 @@ async def _call_get_products(
     ctx = Mock()
     ctx.meta = {"headers": {"x-adcp-auth": "test_token"}}
 
-    if brand is None:
+    if brand is _BRAND_DEFAULT:
         brand = {"domain": "testbrand.com"}
 
     return await get_products_raw(
@@ -666,24 +669,19 @@ class TestExtensionC:
         """Unresolvable brand reference with require_brand is rejected.
 
         Covers: UC-001-EXT-C-02
+
+        BrandReference requires domain (non-empty, validated), so the only
+        "unresolvable" scenario at runtime is brand=None — same as C-01.
+        We pass brand=None explicitly to test the policy rejection path.
         """
-        # BrandReference requires domain, but the impl currently does not extract
-        # domain from BrandReference objects (isinstance check returns False for
-        # Pydantic models), so offering stays None and require_brand rejects.
         with pytest.raises(AdCPAuthorizationError):
             await _call_get_products(
                 brief="display ads",
-                brand={"domain": "unknown-brand.test"},
+                brand=None,
                 tenant_overrides={"brand_manifest_policy": "require_brand"},
             )
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="Production bug: _get_products_impl line 297 isinstance(req.brand, dict) "
-        "is False for BrandReference objects, so domain is never extracted and offering "
-        "stays None. require_brand policy then always rejects, even with valid brand.",
-        strict=True,
-    )
     async def test_require_brand_valid_brand_passes(self, uc001_products):
         """Valid brand with require_brand policy succeeds.
 

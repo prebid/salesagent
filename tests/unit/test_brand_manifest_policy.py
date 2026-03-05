@@ -116,8 +116,10 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
 async def test_require_brand_policy_accepts_with_brand_manifest():
     """Test that require_brand policy accepts requests with brand (adcp 3.6.0: brand replaces brand_manifest)."""
     mock_request = MagicMock()
-    # adcp 3.6.0: brand replaces brand_manifest; use dict with domain field
-    mock_request.brand = {"domain": "nike.com"}
+    # adcp 3.6.0: brand is BrandReference with .domain attribute
+    mock_brand = MagicMock()
+    mock_brand.domain = "nike.com"
+    mock_request.brand = mock_brand
     mock_request.brief = "Athletic footwear"
     mock_request.filters = None
     mock_request.context = None
