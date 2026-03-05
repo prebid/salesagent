@@ -327,9 +327,7 @@ class TestSendWebhookEnhancedHmacSigning:
             # Reproduce the signature
             payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
             message = f"{sent_timestamp}.{payload_str}"
-            expected = hmac.new(
-                secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256
-            ).hexdigest()
+            expected = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
 
             assert sent_signature == expected
 
@@ -610,8 +608,8 @@ class TestDeliverWithBackoffTimeout:
             )
 
             # Make httpx.Client().post() raise TimeoutException
-            env.mock["client"].return_value.__enter__.return_value.post.side_effect = (
-                httpx.TimeoutException("Connection timed out")
+            env.mock["client"].return_value.__enter__.return_value.post.side_effect = httpx.TimeoutException(
+                "Connection timed out"
             )
 
             service = env.get_service()
@@ -632,3 +630,190 @@ class TestDeliverWithBackoffTimeout:
             endpoint_key = "t1:https://timeout.example.com/webhook"
             state, failure_count = service.get_circuit_breaker_state(endpoint_key)
             assert failure_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Coverage: is_adjusted notification type (line 239)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestIsAdjustedNotificationType:
+    """send_delivery_webhook with is_adjusted=True sets notification_type='adjusted'.
+
+    Covers: line 239 of webhook_delivery_service.py
+    """
+
+    def test_is_adjusted_sets_notification_type_adjusted(self, integration_db):
+        """When is_adjusted=True, the payload notification_type is 'adjusted'.
+
+        Covers: webhook_delivery_service.py line 239
+        """
+        from datetime import UTC, datetime
+
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url="https://adjusted.example.com/webhook",
+            )
+
+            env.set_http_response(200)
+            service = env.get_service()
+            result = service.send_delivery_webhook(
+                media_buy_id="mb_adj",
+                tenant_id="t1",
+                principal_id="p1",
+                reporting_period_start=datetime(2025, 6, 1, tzinfo=UTC),
+                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
+                impressions=1000,
+                spend=50.0,
+                is_adjusted=True,
+            )
+
+            assert result is True
+            post_mock = env.mock["client"].return_value.__enter__.return_value.post
+            sent_payload = post_mock.call_args.kwargs["json"]
+            assert sent_payload["notification_type"] == "adjusted"
+            assert sent_payload["is_adjusted"] is True
+
+
+# ---------------------------------------------------------------------------
+# Coverage: queue full drops webhook (lines 408-409)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestQueueFullDropsWebhook:
+    """When webhook queue is full, _send_webhook_enhanced drops the webhook.
+
+    Covers: lines 408-409 of webhook_delivery_service.py
+    """
+
+    def test_queue_full_skips_delivery(self, integration_db):
+        """When the per-endpoint queue is at max capacity, enqueue fails
+        and delivery is skipped for that endpoint.
+
+        Covers: webhook_delivery_service.py lines 408-409
+        """
+        from src.services.webhook_delivery_service import WebhookQueue
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url="https://full-queue.example.com/webhook",
+            )
+
+            env.set_http_response(200)
+            service = env.get_service()
+
+            # Pre-populate the queue to capacity (use small max_size)
+            endpoint_key = "t1:https://full-queue.example.com/webhook"
+            small_queue = WebhookQueue(max_size=1)
+            small_queue.enqueue({"dummy": "data"})  # Fill it
+            service._queues[endpoint_key] = small_queue
+
+            result = service._send_webhook_enhanced(
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_full",
+                delivery_payload={"test": "data"},
+            )
+
+            assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Coverage: weak webhook secret warning (line 463)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestWeakSecretNoSignature:
+    """Weak webhook secret (< 32 chars) triggers warning, no signature added.
+
+    Covers: line 463 of webhook_delivery_service.py
+    """
+
+    def test_weak_secret_omits_signature_header(self, integration_db):
+        """When webhook_secret is too short, X-ADCP-Signature is not added.
+
+        Covers: webhook_delivery_service.py line 463
+        """
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url="https://weak-secret.example.com/webhook",
+                webhook_secret="tooshort",  # < 32 chars
+            )
+
+            env.set_http_response(200)
+            service = env.get_service()
+            result = service._send_webhook_enhanced(
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_weak",
+                delivery_payload={"test": "data"},
+            )
+
+            assert result is True
+            post_mock = env.mock["client"].return_value.__enter__.return_value.post
+            sent_headers = post_mock.call_args.kwargs["headers"]
+            assert "X-ADCP-Signature" not in sent_headers
+
+
+# ---------------------------------------------------------------------------
+# Coverage: empty dequeue returns False (line 447)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestEmptyDequeueReturnsFalse:
+    """_deliver_with_backoff returns False when queue is empty.
+
+    Covers: line 447 of webhook_delivery_service.py
+    """
+
+    def test_deliver_with_backoff_empty_queue(self, integration_db):
+        """Calling _deliver_with_backoff with an empty queue returns False.
+
+        Covers: webhook_delivery_service.py line 447
+        """
+        from src.services.webhook_delivery_service import CircuitBreaker, WebhookQueue
+        from tests.harness import CircuitBreakerEnv
+
+        with CircuitBreakerEnv() as env:
+            service = env.get_service()
+            cb = CircuitBreaker()
+            empty_queue = WebhookQueue()
+
+            result = service._deliver_with_backoff("t1:https://empty.example.com", cb, empty_queue)
+            assert result is False
