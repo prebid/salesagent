@@ -166,14 +166,6 @@ class WebhookQueue:
                 return self.queue.popleft()
             return None
 
-    def size(self) -> int:
-        """Get current queue size.
-
-        Returns:
-            Number of webhooks in queue
-        """
-        with self._lock:
-            return len(self.queue)
 
 
 class WebhookDeliveryService:

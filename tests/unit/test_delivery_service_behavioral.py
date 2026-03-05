@@ -474,5 +474,166 @@ class TestWebhookEnhancedDBErrorHandling:
 
 
 # ---------------------------------------------------------------------------
+# Coverage gap 3vy9: WebhookDeliveryService internal state + data structures
+# ---------------------------------------------------------------------------
+
+
+class TestCircuitBreakerHalfOpenCanAttempt:
+    """CircuitBreaker.can_attempt() returns True when in HALF_OPEN state.
+
+    Covers line 90 of webhook_delivery_service.py.
+    """
+
+    def test_half_open_allows_attempt(self):
+        from src.services.webhook_delivery_service import CircuitBreaker
+
+        cb = CircuitBreaker()
+        cb.state = CircuitState.HALF_OPEN
+        assert cb.can_attempt() is True
+
+
+class TestCircuitBreakerRecordSuccessWhileOpen:
+    """CircuitBreaker.record_success() transitions OPEN→CLOSED defensively.
+
+    Covers lines 104-105 of webhook_delivery_service.py.
+    """
+
+    def test_record_success_while_open_closes_circuit(self):
+        from src.services.webhook_delivery_service import CircuitBreaker
+
+        cb = CircuitBreaker()
+        cb.state = CircuitState.OPEN
+        cb.record_success()
+        assert cb.state == CircuitState.CLOSED
+
+
+class TestWebhookQueueFull:
+    """WebhookQueue.enqueue() returns False when queue is at max capacity.
+
+    Covers lines 149-150, 153 of webhook_delivery_service.py.
+    """
+
+    def test_enqueue_returns_false_when_full(self):
+        from src.services.webhook_delivery_service import WebhookQueue
+
+        queue = WebhookQueue(max_size=1)
+        assert queue.enqueue({"data": "first"}) is True
+        assert queue.enqueue({"data": "second"}) is False
+
+
+class TestWebhookQueueEmptyDequeue:
+    """WebhookQueue.dequeue() returns None when queue is empty.
+
+    Covers line 167 of webhook_delivery_service.py.
+    """
+
+    def test_dequeue_empty_returns_none(self):
+        from src.services.webhook_delivery_service import WebhookQueue
+
+        queue = WebhookQueue()
+        assert queue.dequeue() is None
+
+
+class TestGetCircuitBreakerStateDefault:
+    """get_circuit_breaker_state() returns CLOSED/0 for unknown endpoints.
+
+    Covers line 545 of webhook_delivery_service.py (pre-removal line numbers).
+    """
+
+    def test_unknown_endpoint_returns_closed(self):
+        from src.services.webhook_delivery_service import WebhookDeliveryService
+
+        svc = WebhookDeliveryService()
+        state, failures = svc.get_circuit_breaker_state("https://nonexistent.example.com/hook")
+        assert state == CircuitState.CLOSED
+        assert failures == 0
+
+
+class TestResetSequence:
+    """reset_sequence() removes the sequence counter for a media buy.
+
+    Covers lines 528-530 of webhook_delivery_service.py (pre-removal line numbers).
+    """
+
+    def test_reset_removes_sequence_counter(self):
+        from src.services.webhook_delivery_service import WebhookDeliveryService
+
+        svc = WebhookDeliveryService()
+        # Manually set a sequence number
+        svc._sequence_numbers["mb_001"] = 5
+        svc.reset_sequence("mb_001")
+        assert "mb_001" not in svc._sequence_numbers
+
+    def test_reset_nonexistent_is_noop(self):
+        from src.services.webhook_delivery_service import WebhookDeliveryService
+
+        svc = WebhookDeliveryService()
+        # Should not raise for nonexistent key
+        svc.reset_sequence("mb_nonexistent")
+
+
+class TestDeliverWithBackoffGenericException:
+    """_deliver_with_backoff breaks on non-httpx exceptions.
+
+    Covers lines 514-516 of webhook_delivery_service.py (pre-removal line numbers).
+    """
+
+    def test_generic_exception_breaks_retry_loop(self):
+        from unittest.mock import MagicMock
+
+        from src.services.webhook_delivery_service import (
+            CircuitBreaker,
+            WebhookDeliveryService,
+            WebhookQueue,
+        )
+
+        svc = WebhookDeliveryService()
+        cb = CircuitBreaker()
+        queue = WebhookQueue()
+
+        mock_config = MagicMock()
+        mock_config.url = "https://example.com/hook"
+        mock_config.webhook_secret = None
+        mock_config.authentication_type = None
+        mock_config.authentication_token = None
+
+        queue.enqueue({
+            "config": mock_config,
+            "payload": {"test": "data"},
+            "timestamp": datetime.now(UTC),
+        })
+
+        with patch("src.services.webhook_delivery_service.httpx") as mock_httpx:
+            mock_httpx.Client.return_value.__enter__ = MagicMock(
+                return_value=MagicMock(
+                    post=MagicMock(side_effect=RuntimeError("unexpected"))
+                )
+            )
+            mock_httpx.Client.return_value.__exit__ = MagicMock(return_value=False)
+            mock_httpx.TimeoutException = type("TimeoutException", (Exception,), {})
+            mock_httpx.RequestError = type("RequestError", (Exception,), {})
+
+            result = svc._deliver_with_backoff("test_endpoint", cb, queue)
+
+        assert result is False
+        # Circuit breaker should record the failure
+        assert cb.failure_count >= 1
+
+
+class TestShutdownHandler:
+    """_shutdown() runs without error.
+
+    Covers lines 549-556 of webhook_delivery_service.py (pre-removal line numbers).
+    """
+
+    def test_shutdown_runs_cleanly(self):
+        from src.services.webhook_delivery_service import WebhookDeliveryService
+
+        svc = WebhookDeliveryService()
+        # Should not raise
+        svc._shutdown()
+
+
+# ---------------------------------------------------------------------------
 # UC-004-MAIN-02
 # ---------------------------------------------------------------------------
