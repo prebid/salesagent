@@ -26,6 +26,7 @@ from adcp.types import MediaBuyStatus
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import GetMediaBuyDeliveryRequest
+from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import (
     _get_media_buy_delivery_impl,
     _resolve_delivery_status_filter,
@@ -575,3 +576,174 @@ class TestMCPToolResultContent:
 # ---------------------------------------------------------------------------
 # UC-004-MAIN-14
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# UC-004-DISPLAY-01 — Display messages for MCP response envelope
+# ---------------------------------------------------------------------------
+
+
+def _make_media_buy_delivery_response(
+    media_buy_count: int = 0,
+    *,
+    notification_type: str | None = None,
+) -> GetMediaBuyDeliveryResponse:
+    """Build a minimal GetMediaBuyDeliveryResponse with *media_buy_count* entries."""
+    from datetime import UTC, datetime
+
+    from src.core.schemas.delivery import (
+        AggregatedTotals,
+        DeliveryTotals,
+        MediaBuyDeliveryData,
+    )
+
+    rp = {
+        "start": datetime(2025, 1, 1, tzinfo=UTC),
+        "end": datetime(2025, 1, 31, tzinfo=UTC),
+    }
+    deliveries = [
+        MediaBuyDeliveryData(
+            media_buy_id=f"mb_{i:03d}",
+            status="active",
+            totals=DeliveryTotals(impressions=1000.0, spend=50.0),
+            by_package=[],
+        )
+        for i in range(media_buy_count)
+    ]
+    kwargs: dict = {
+        "reporting_period": rp,
+        "currency": "USD",
+        "aggregated_totals": AggregatedTotals(impressions=0.0, spend=0.0, media_buy_count=media_buy_count),
+        "media_buy_deliveries": deliveries,
+    }
+    if notification_type is not None:
+        kwargs["notification_type"] = notification_type
+    return GetMediaBuyDeliveryResponse(**kwargs)
+
+
+def _make_creative_delivery_response(
+    creative_count: int = 0,
+) -> GetCreativeDeliveryResponse:
+    """Build a minimal GetCreativeDeliveryResponse with *creative_count* entries."""
+    from datetime import UTC, datetime
+
+    from src.core.schemas.delivery import CreativeDeliveryData
+
+    rp = {
+        "start": datetime(2025, 1, 1, tzinfo=UTC),
+        "end": datetime(2025, 1, 31, tzinfo=UTC),
+    }
+    creatives = [CreativeDeliveryData(creative_id=f"cr_{i:03d}") for i in range(creative_count)]
+    return GetCreativeDeliveryResponse(
+        reporting_period=rp,
+        currency="USD",
+        creatives=creatives,
+    )
+
+
+class TestMediaBuyDeliveryResponseStr:
+    """__str__ returns a human-readable summary for the MCP protocol envelope.
+
+    Covers: UC-004-DISPLAY-01
+    """
+
+    def test_zero_deliveries(self):
+        """Zero media buys produces 'No delivery data found' message.
+
+        Covers: UC-004-DISPLAY-01
+        """
+        resp = _make_media_buy_delivery_response(0)
+        assert str(resp) == "No delivery data found for the specified period."
+
+    def test_one_delivery(self):
+        """Single media buy produces singular message.
+
+        Covers: UC-004-DISPLAY-01
+        """
+        resp = _make_media_buy_delivery_response(1)
+        assert str(resp) == "Retrieved delivery data for 1 media buy."
+
+    def test_many_deliveries(self):
+        """Multiple media buys produces plural message with count.
+
+        Covers: UC-004-DISPLAY-01
+        """
+        resp = _make_media_buy_delivery_response(5)
+        assert str(resp) == "Retrieved delivery data for 5 media buys."
+
+
+class TestCreativeDeliveryResponseStr:
+    """__str__ returns a human-readable summary for creative delivery responses.
+
+    Covers: UC-004-DISPLAY-01
+    """
+
+    def test_zero_creatives(self):
+        """Zero creatives produces 'No creative delivery data found' message.
+
+        Covers: UC-004-DISPLAY-01
+        """
+        resp = _make_creative_delivery_response(0)
+        assert str(resp) == "No creative delivery data found for the specified period."
+
+    def test_one_creative(self):
+        """Single creative produces singular message.
+
+        Covers: UC-004-DISPLAY-01
+        """
+        resp = _make_creative_delivery_response(1)
+        assert str(resp) == "Retrieved delivery data for 1 creative."
+
+    def test_many_creatives(self):
+        """Multiple creatives produces plural message with count.
+
+        Covers: UC-004-DISPLAY-01
+        """
+        resp = _make_creative_delivery_response(3)
+        assert str(resp) == "Retrieved delivery data for 3 creatives."
+
+
+# ---------------------------------------------------------------------------
+# UC-004-SERIAL-01 — Serialization compliance for next_expected_at
+# ---------------------------------------------------------------------------
+
+
+class TestNextExpectedAtSerialization:
+    """model_dump() forces next_expected_at=null when notification_type is set.
+
+    The AdCP protocol requires next_expected_at to be explicitly present
+    (as null) when notification_type is 'final', so consumers know no
+    further reports are expected. The base model excludes None values,
+    so the override on line 304 re-injects it.
+
+    Covers: UC-004-SERIAL-01
+    """
+
+    def test_final_notification_includes_null_next_expected_at(self):
+        """notification_type='final' forces next_expected_at=null in JSON output.
+
+        Covers: UC-004-SERIAL-01
+        """
+        resp = _make_media_buy_delivery_response(0, notification_type="final")
+        dumped = resp.model_dump(mode="json")
+        assert "next_expected_at" in dumped
+        assert dumped["next_expected_at"] is None
+
+    def test_scheduled_notification_includes_null_next_expected_at(self):
+        """Any notification_type (not just 'final') forces next_expected_at into JSON.
+
+        Covers: UC-004-SERIAL-01
+        """
+        resp = _make_media_buy_delivery_response(0, notification_type="scheduled")
+        dumped = resp.model_dump(mode="json")
+        assert "next_expected_at" in dumped
+        assert dumped["next_expected_at"] is None
+
+    def test_no_notification_type_excludes_next_expected_at(self):
+        """Without notification_type, next_expected_at is excluded from JSON (base behavior).
+
+        Covers: UC-004-SERIAL-01
+        """
+        resp = _make_media_buy_delivery_response(0)
+        dumped = resp.model_dump(mode="json")
+        assert "next_expected_at" not in dumped
