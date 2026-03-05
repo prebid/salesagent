@@ -1,5 +1,5 @@
 import warnings
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
@@ -1652,15 +1652,14 @@ class Creative(LibraryCreative):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # === Overrides of listing Creative fields (with defaults for partial construction) ===
-    # The listing base requires these, but we allow None for DB records that predate schema.
-    name: str | None = Field(default=None, description="Creative name")  # type: ignore[assignment]
+    # === Overrides of listing Creative fields ===
+    # name: inherited as required str from LibraryCreative (no override needed)
     status: CreativeStatus = Field(
         default=CreativeStatus.pending_review,
         description="Workflow approval status",
     )
-    created_date: datetime | None = Field(default=None, description="Creation timestamp")  # type: ignore[assignment]
-    updated_date: datetime | None = Field(default=None, description="Update timestamp")  # type: ignore[assignment]
+    created_date: datetime = Field(default_factory=lambda: datetime.now(UTC), description="Creation timestamp")
+    updated_date: datetime = Field(default_factory=lambda: datetime.now(UTC), description="Update timestamp")
     # Override assets to untyped dict (our DB stores arbitrary asset dicts, not typed models)
     assets: dict[str, Any] | None = Field(default=None, description="Creative assets")
 

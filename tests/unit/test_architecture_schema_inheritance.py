@@ -186,9 +186,8 @@ class TestSchemaInheritance:
             ("SyncCreativeResult", "changes"),
             ("SyncCreativesRequest", "creatives"),
             ("SyncCreativesRequest", "push_notification_config"),
-            # Creative overrides — listing base requires these fields, but we add
-            # defaults for partial construction and override assets to untyped dict
-            ("Creative", "name"),
+            # Creative overrides — status gets a default, dates get default_factory,
+            # assets overridden to untyped dict (DB stores arbitrary asset dicts)
             ("Creative", "status"),
             ("Creative", "created_date"),
             ("Creative", "updated_date"),

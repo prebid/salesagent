@@ -210,6 +210,7 @@ class TestCreativeSchemaCompliance:
         """
         creative = Creative(
             creative_id="c_upgrade",
+            name="Test Banner",
             variants=[],
             format={"agent_url": DEFAULT_AGENT_URL, "id": "display_728x90"},
         )
@@ -242,6 +243,7 @@ class TestCreativeSchemaCompliance:
         for status in CreativeStatus:
             creative = Creative(
                 creative_id=f"c_{status.value}",
+                name="Test Banner",
                 format_id=_format_id(),
                 status=status,
             )
