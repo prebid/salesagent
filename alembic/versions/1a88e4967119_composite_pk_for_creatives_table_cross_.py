@@ -79,12 +79,13 @@ def upgrade() -> None:
         """)
     )
 
-    # For any orphan reviews where the creative no longer exists,
-    # set a sentinel value so NOT NULL can be enforced
+    # Delete orphan reviews where the creative no longer exists.
+    # These rows have NULL principal_id because the JOIN didn't match.
+    # Setting principal_id='unknown' doesn't help because the composite FK
+    # requires (creative_id, tenant_id, principal_id) to exist in creatives.
     conn.execute(
         text("""
-            UPDATE creative_reviews
-            SET principal_id = 'unknown'
+            DELETE FROM creative_reviews
             WHERE principal_id IS NULL
         """)
     )
@@ -106,11 +107,10 @@ def upgrade() -> None:
         """)
     )
 
-    # For any orphan assignments, set sentinel
+    # Delete orphan assignments where the creative no longer exists.
     conn.execute(
         text("""
-            UPDATE creative_assignments
-            SET principal_id = 'unknown'
+            DELETE FROM creative_assignments
             WHERE principal_id IS NULL
         """)
     )
