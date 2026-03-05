@@ -20,6 +20,20 @@ def _clear_cache():
     clear_cache()
 
 
+@pytest.fixture(autouse=True)
+def _stub_dns():
+    """Stub DNS resolution so tests don't make real DNS lookups.
+
+    Returns a public IP for all hostnames by default. Tests in
+    TestSSRFProtection override this where needed.
+    """
+    with patch(
+        "src.core.property_list_resolver.socket.gethostbyname",
+        return_value="93.184.216.34",
+    ):
+        yield
+
+
 def _make_ref(
     agent_url: str = "https://example.com",
     list_id: str = "list-1",
@@ -386,3 +400,121 @@ class TestErrorHandling:
 
         assert result == ["success.com"]
         assert call_count == 2
+
+
+class TestSSRFProtection:
+    """Tests for SSRF protection — buyer-supplied agent_url must be validated."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "malicious_url,description",
+        [
+            ("http://127.0.0.1:8080", "loopback IPv4 via HTTP"),
+            ("http://localhost:9200", "localhost hostname via HTTP"),
+            ("http://10.0.0.1/internal", "RFC1918 class A via HTTP"),
+            ("http://172.16.0.1/internal", "RFC1918 class B via HTTP"),
+            ("http://192.168.1.1/internal", "RFC1918 class C via HTTP"),
+            ("http://169.254.169.254/latest/meta-data", "AWS metadata via HTTP"),
+            ("http://metadata.google.internal", "GCP metadata via HTTP"),
+            ("http://[::1]:8080", "loopback IPv6 via HTTP"),
+        ],
+    )
+    async def test_rejects_http_scheme(self, malicious_url, description):
+        """HTTP URLs must be rejected regardless of destination (HTTPS required)."""
+        from src.core.property_list_resolver import resolve_property_list
+
+        ref = _make_ref(agent_url=malicious_url)
+
+        with pytest.raises(AdCPAdapterError, match="HTTPS"):
+            await resolve_property_list(ref)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "malicious_url,resolved_ip,description",
+        [
+            ("https://evil.com", "127.0.0.1", "DNS rebind to loopback"),
+            ("https://evil.com", "10.0.0.1", "DNS rebind to RFC1918 class A"),
+            ("https://evil.com", "172.16.0.1", "DNS rebind to RFC1918 class B"),
+            ("https://evil.com", "192.168.1.1", "DNS rebind to RFC1918 class C"),
+            ("https://evil.com", "169.254.169.254", "DNS rebind to link-local"),
+        ],
+    )
+    async def test_rejects_private_ip_after_dns_resolution(self, malicious_url, resolved_ip, description):
+        """HTTPS URLs that resolve to private/internal IPs must be rejected."""
+        from src.core.property_list_resolver import resolve_property_list
+
+        ref = _make_ref(agent_url=malicious_url)
+
+        with patch(
+            "src.core.property_list_resolver.socket.gethostbyname",
+            return_value=resolved_ip,
+        ):
+            with pytest.raises(AdCPAdapterError, match="[Bb]locked|[Pp]rivate|[Ii]nternal"):
+                await resolve_property_list(ref)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "hostname",
+        ["localhost", "metadata.google.internal", "169.254.169.254"],
+    )
+    async def test_rejects_blocked_hostnames(self, hostname):
+        """Known internal hostnames must be rejected even with HTTPS."""
+        from src.core.property_list_resolver import resolve_property_list
+
+        ref = _make_ref(agent_url=f"https://{hostname}")
+
+        with pytest.raises(AdCPAdapterError, match="blocked"):
+            await resolve_property_list(ref)
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_https_url(self):
+        """Plain HTTP agent_url must be rejected (HTTPS required)."""
+        from src.core.property_list_resolver import resolve_property_list
+
+        ref = _make_ref(agent_url="http://external-agent.example.com")
+
+        with pytest.raises(AdCPAdapterError, match="HTTPS"):
+            await resolve_property_list(ref)
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_http_schemes(self):
+        """Non-HTTP schemes (file://, ftp://, etc.) must be rejected."""
+        from src.core.property_list_resolver import resolve_property_list
+
+        ref = _make_ref(agent_url="file:///etc/passwd")
+
+        with pytest.raises(AdCPAdapterError, match="HTTPS"):
+            await resolve_property_list(ref)
+
+    @pytest.mark.asyncio
+    async def test_allows_valid_https_public_url(self):
+        """A valid HTTPS URL to a public host must still work."""
+        from src.core.property_list_resolver import resolve_property_list
+
+        ref = _make_ref(agent_url="https://agent.example.com")
+        response_json = _make_response_json(
+            identifiers=[{"type": "domain", "value": "pub.com"}],
+        )
+        mock_response = _make_mock_response(response_json)
+
+        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
+            mock_client = _make_mock_client(get_return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+
+            result = await resolve_property_list(ref)
+
+        assert result == ["pub.com"]
+
+    @pytest.mark.asyncio
+    async def test_validation_happens_before_http_request(self):
+        """URL validation must reject BEFORE any network I/O."""
+        from src.core.property_list_resolver import resolve_property_list
+
+        ref = _make_ref(agent_url="http://evil.internal:9200")
+
+        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
+            with pytest.raises(AdCPAdapterError, match="HTTPS"):
+                await resolve_property_list(ref)
+
+            # AsyncClient should never have been instantiated
+            mock_client_cls.assert_not_called()
