@@ -247,9 +247,11 @@ class BaseTestEnv:
         Default implementation maps status_code to exception class.
         """
         from src.core.exceptions import (
+            AdCPAdapterError,
             AdCPAuthenticationError,
             AdCPAuthorizationError,
             AdCPNotFoundError,
+            AdCPRateLimitError,
             AdCPValidationError,
         )
 
@@ -258,6 +260,8 @@ class BaseTestEnv:
             401: AdCPAuthenticationError,
             403: AdCPAuthorizationError,
             404: AdCPNotFoundError,
+            429: AdCPRateLimitError,
+            502: AdCPAdapterError,
         }
         error_cls = STATUS_TO_ERROR.get(status_code, Exception)
         message = data.get("message", data.get("error", str(data)))
