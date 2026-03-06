@@ -64,6 +64,38 @@ class TestCreativeSyncEnvContract:
             # Registry mock should have a return value configured
             assert env.mock["registry"].return_value is not None
 
+    def test_has_rest_endpoint(self):
+        """CreativeSyncEnv defines REST_ENDPOINT for REST dispatch."""
+        from tests.harness.creative_sync import CreativeSyncEnv
+
+        assert CreativeSyncEnv.REST_ENDPOINT == "/api/v1/creatives/sync"
+
+    def test_has_call_a2a(self):
+        """CreativeSyncEnv implements call_a2a for A2A dispatch."""
+        from tests.harness.creative_sync import CreativeSyncEnv
+
+        env = CreativeSyncEnv()
+        assert hasattr(env, "call_a2a")
+        # Should not raise NotImplementedError (unlike base class)
+        assert env.call_a2a.__func__ is not env.call_impl.__func__
+
+    def test_has_build_rest_body(self):
+        """CreativeSyncEnv implements build_rest_body for REST dispatch."""
+        from tests.harness.creative_sync import CreativeSyncEnv
+
+        env = CreativeSyncEnv()
+        body = env.build_rest_body(creatives=[], dry_run=True)
+        assert body == {"creatives": [], "dry_run": True}
+
+    def test_has_parse_rest_response(self):
+        """CreativeSyncEnv implements parse_rest_response."""
+        from tests.harness.creative_sync import CreativeSyncEnv
+
+        env = CreativeSyncEnv()
+        # Smoke test: should accept a dict with expected shape
+        response = env.parse_rest_response({"creatives": [], "dry_run": False})
+        assert response is not None
+
 
 class TestCreativeListEnvContract:
     """CreativeListEnv must mock only audit logger."""

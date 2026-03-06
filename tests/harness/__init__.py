@@ -39,13 +39,20 @@ Usage (unit — backward compat)::
 """
 
 from tests.harness._mock_uow import make_mock_uow
+from tests.harness.assertions import assert_envelope, assert_error_result, assert_payload_field
 from tests.harness.creative_formats import CreativeFormatsEnv
 from tests.harness.creative_list import CreativeListEnv
 from tests.harness.creative_sync import CreativeSyncEnv
+from tests.harness.transport import Transport, TransportResult
 
 __all__ = [
     "make_mock_uow",
     "CreativeFormatsEnv",
     "CreativeListEnv",
     "CreativeSyncEnv",
+    "Transport",
+    "TransportResult",
+    "assert_envelope",
+    "assert_error_result",
+    "assert_payload_field",
 ]

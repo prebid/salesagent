@@ -39,6 +39,7 @@ class CreativeFormatsEnv(IntegrationEnv):
         "registry": "src.core.creative_agent_registry.get_creative_agent_registry",
         "audit_logger": "src.core.tools.creative_formats.get_audit_logger",
     }
+    REST_ENDPOINT = "/api/v1/creative-formats"
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
@@ -67,3 +68,21 @@ class CreativeFormatsEnv(IntegrationEnv):
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("req", None)
         return _list_creative_formats_impl(**kwargs)
+
+    def call_a2a(self, **kwargs: Any) -> ListCreativeFormatsResponse:
+        """Call list_creative_formats_raw (A2A wrapper)."""
+        from src.core.tools.creative_formats import list_creative_formats_raw
+
+        self._commit_factory_data()
+        kwargs.setdefault("identity", self.identity)
+        kwargs.setdefault("req", None)
+        return list_creative_formats_raw(**kwargs)
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Convert kwargs to ListCreativeFormatsBody shape for REST POST."""
+        # ListCreativeFormatsBody only has adcp_version (no meaningful params)
+        return {}
+
+    def parse_rest_response(self, data: dict[str, Any]) -> ListCreativeFormatsResponse:
+        """Parse REST JSON into ListCreativeFormatsResponse."""
+        return ListCreativeFormatsResponse(**data)

@@ -53,6 +53,7 @@ class CreativeSyncEnv(IntegrationEnv):
         "send_notifications": "src.core.tools.creatives._sync._send_creative_notifications",
         "audit_log": "src.core.tools.creatives._sync._audit_log_sync",
     }
+    REST_ENDPOINT = "/api/v1/creatives/sync"
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
@@ -89,3 +90,36 @@ class CreativeSyncEnv(IntegrationEnv):
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
         return _sync_creatives_impl(**kwargs)
+
+    def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
+        """Call sync_creatives_raw (A2A wrapper) with real DB."""
+        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
+
+        self._commit_factory_data()
+        kwargs.setdefault("identity", self.identity)
+        kwargs.setdefault("creatives", [])
+        return sync_creatives_raw(**kwargs)
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Convert kwargs to SyncCreativesBody shape for REST POST."""
+        # The REST body expects 'creatives' as list[dict], matching SyncCreativesBody
+        body: dict[str, Any] = {}
+        if "creatives" in kwargs:
+            creatives = kwargs["creatives"]
+            # Convert Pydantic models to dicts if needed
+            body["creatives"] = [c.model_dump(mode="json") if hasattr(c, "model_dump") else c for c in creatives]
+        if "assignments" in kwargs and kwargs["assignments"] is not None:
+            body["assignments"] = kwargs["assignments"]
+        if "creative_ids" in kwargs and kwargs["creative_ids"] is not None:
+            body["creative_ids"] = kwargs["creative_ids"]
+        if "delete_missing" in kwargs:
+            body["delete_missing"] = kwargs["delete_missing"]
+        if "dry_run" in kwargs:
+            body["dry_run"] = kwargs["dry_run"]
+        if "validation_mode" in kwargs:
+            body["validation_mode"] = kwargs["validation_mode"]
+        return body
+
+    def parse_rest_response(self, data: dict[str, Any]) -> SyncCreativesResponse:
+        """Parse REST JSON into SyncCreativesResponse."""
+        return SyncCreativesResponse(**data)

@@ -157,8 +157,15 @@ Place tests in existing behavioral test files when possible:
 | UC-002 | `test_create_media_buy_behavioral.py` |
 | UC-003 | `test_update_media_buy_behavioral.py` |
 | UC-004 | `test_delivery_behavioral.py` |
-| UC-006 | `test_creative_behavioral.py` (create if needed) |
+| UC-006 sync (multi-transport) | `test_creative_sync_transport.py` |
+| UC-006 sync (impl only) | `test_creative_sync_behavioral.py` |
+| UC-006 list | `test_creative_list_behavioral.py` |
+| UC-006 formats | `test_creative_formats_behavioral.py` |
 | Other | `test_{use_case}_behavioral.py` (create if needed) |
+
+**Note:** For UC-006 obligations with transport variants in upstream BDD,
+prefer `/derive-tests` which generates parametrized multi-transport tests
+using the harness. See the multi-transport pattern in `/derive-tests`.
 
 New files must be added to `_UNIT_ENTITY_FILES` in
 `tests/unit/test_architecture_obligation_coverage.py`.

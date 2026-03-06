@@ -12,6 +12,12 @@ Subclasses override:
     EXTERNAL_PATCHES: dict[str, str]   -- {name: patch_target} for mocks
     _configure_mocks(): None           -- wire mock defaults
     call_impl(**kwargs): Any           -- call production function
+
+Multi-transport support (subclasses may also override):
+    call_a2a(**kwargs): Any            -- call _raw() A2A wrapper
+    REST_ENDPOINT: str                 -- POST endpoint path for REST dispatch
+    build_rest_body(**kwargs): dict    -- convert kwargs to REST body
+    parse_rest_response(data): model  -- parse JSON dict to Pydantic model
 """
 
 from __future__ import annotations
@@ -20,9 +26,11 @@ from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import MagicMock, patch
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
     from sqlalchemy.orm import Session
 
     from src.core.resolved_identity import ResolvedIdentity
+    from tests.harness.transport import Transport, TransportResult
 
 
 class BaseTestEnv:
@@ -50,6 +58,14 @@ class BaseTestEnv:
             env.add_buy(media_buy_id="mb_001")
             response = env.call_impl(media_buy_ids=["mb_001"])
 
+    Usage (multi-transport)::
+
+        @pytest.mark.parametrize("transport", [Transport.IMPL, Transport.A2A, Transport.REST])
+        def test_something(self, integration_db, transport):
+            with CreativeSyncEnv() as env:
+                result = env.call_via(transport, creatives=[...])
+                assert result.is_success
+
     Attributes:
         mock: dict[str, MagicMock]  -- active mocks keyed by short name
         identity: ResolvedIdentity  -- default identity (override via constructor)
@@ -57,6 +73,7 @@ class BaseTestEnv:
 
     EXTERNAL_PATCHES: dict[str, str] = {}
     MODULE: str = ""  # Convenience for unit envs building patch paths
+    REST_ENDPOINT: str = ""  # Override in subclass for REST dispatch
     use_real_db: bool = False
 
     def __init__(
@@ -71,20 +88,30 @@ class BaseTestEnv:
         self.mock: dict[str, MagicMock] = {}
         self._patchers: list[Any] = []
         self._session: Session | None = None
-        self._identity: ResolvedIdentity | None = None
+        self._identity_cache: dict[str, ResolvedIdentity] = {}
+        self._rest_client: Any = None  # Lazy-created TestClient
 
-    @property
-    def identity(self) -> ResolvedIdentity:
-        """ResolvedIdentity with sane defaults. Built lazily to avoid import at class level."""
-        if self._identity is None:
+    # -- Identity (one function, all transports) ----------------------------
+
+    def identity_for(self, transport: Transport) -> ResolvedIdentity:
+        """Build ResolvedIdentity with the correct protocol for *transport*.
+
+        This is the single source of truth for test identity across all
+        transports. The identity is cached per protocol so repeated calls
+        with the same transport return the same object.
+        """
+        from tests.harness.transport import TRANSPORT_PROTOCOL
+
+        protocol = TRANSPORT_PROTOCOL[transport]
+        if protocol not in self._identity_cache:
             from src.core.resolved_identity import ResolvedIdentity
             from src.core.testing_hooks import AdCPTestContext
 
-            self._identity = ResolvedIdentity(
+            self._identity_cache[protocol] = ResolvedIdentity(
                 principal_id=self._principal_id,
                 tenant_id=self._tenant_id,
                 tenant={"tenant_id": self._tenant_id, "name": "Test Tenant"},
-                protocol="mcp",
+                protocol=protocol,
                 testing_context=AdCPTestContext(
                     dry_run=self._dry_run,
                     mock_time=None,
@@ -92,7 +119,33 @@ class BaseTestEnv:
                     test_session_id=None,
                 ),
             )
-        return self._identity
+        return self._identity_cache[protocol]
+
+    @property
+    def identity(self) -> ResolvedIdentity:
+        """Default identity (protocol='mcp'). Backward-compatible."""
+        from tests.harness.transport import Transport
+
+        return self.identity_for(Transport.IMPL)
+
+    # -- Transport dispatch -------------------------------------------------
+
+    def call_via(self, transport: Transport, **kwargs: Any) -> TransportResult:
+        """Dispatch through *transport* and return normalized TransportResult.
+
+        Injects the correct identity for the transport into kwargs (unless
+        the caller explicitly provides one). Routes to the appropriate
+        dispatcher.
+        """
+        from tests.harness.dispatchers import DISPATCHERS
+
+        # Inject transport-correct identity
+        kwargs.setdefault("identity", self.identity_for(transport))
+
+        dispatcher = DISPATCHERS[transport]
+        return dispatcher.dispatch(self, **kwargs)
+
+    # -- Per-transport hooks (override in subclass) -------------------------
 
     def _configure_mocks(self) -> None:
         """Wire up happy-path return values on self.mock entries.
@@ -108,6 +161,67 @@ class BaseTestEnv:
         and call the _impl function.
         """
         raise NotImplementedError
+
+    def call_a2a(self, **kwargs: Any) -> Any:
+        """Call the _raw() A2A wrapper function.
+
+        Override in subclass. Should call the _raw() function with
+        the same kwargs as call_impl but through the A2A wrapper.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement call_a2a(). Override to enable Transport.A2A dispatch."
+        )
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Convert call_impl kwargs to the REST endpoint body shape.
+
+        Override in subclass. Must match the Pydantic body model
+        defined in src/routes/api_v1.py.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement build_rest_body(). Override to enable Transport.REST dispatch."
+        )
+
+    def parse_rest_response(self, data: dict[str, Any]) -> BaseModel:
+        """Parse REST JSON response dict into the expected Pydantic model.
+
+        Override in subclass.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement parse_rest_response(). "
+            "Override to enable Transport.REST dispatch."
+        )
+
+    def parse_rest_error(self, status_code: int, data: dict[str, Any]) -> Exception:
+        """Reconstruct an AdCPError from REST error response.
+
+        Default implementation maps status_code to exception class.
+        """
+        from src.core.exceptions import (
+            AdCPAuthenticationError,
+            AdCPAuthorizationError,
+            AdCPNotFoundError,
+            AdCPValidationError,
+        )
+
+        STATUS_TO_ERROR: dict[int, type[Exception]] = {
+            400: AdCPValidationError,
+            401: AdCPAuthenticationError,
+            403: AdCPAuthorizationError,
+            404: AdCPNotFoundError,
+        }
+        error_cls = STATUS_TO_ERROR.get(status_code, Exception)
+        message = data.get("message", data.get("error", str(data)))
+        return error_cls(message)
+
+    def get_rest_client(self) -> Any:
+        """Return FastAPI TestClient with auth dependency overridden.
+
+        Created lazily. Only available on IntegrationEnv subclasses.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement get_rest_client(). REST dispatch requires IntegrationEnv."
+        )
 
     def _commit_factory_data(self) -> None:
         """Flush pending session state before calling production code.
@@ -155,7 +269,17 @@ class BaseTestEnv:
     def __exit__(self, *exc: object) -> bool:
         errors: list[Exception] = []
 
-        # 1. Unbind factories (integration mode only)
+        # 1. Clean up REST client
+        if self._rest_client is not None:
+            try:
+                from src.app import app
+
+                app.dependency_overrides.clear()
+                self._rest_client = None
+            except Exception as e:
+                errors.append(e)
+
+        # 2. Unbind factories (integration mode only)
         if self.use_real_db:
             try:
                 from tests.factories import ALL_FACTORIES
@@ -172,7 +296,7 @@ class BaseTestEnv:
             except Exception as e:
                 errors.append(e)
 
-        # 2. Stop patches — each in its own try block
+        # 3. Stop patches — each in its own try block
         for patcher in reversed(self._patchers):
             try:
                 patcher.stop()
@@ -180,6 +304,7 @@ class BaseTestEnv:
                 errors.append(e)
         self._patchers.clear()
         self.mock.clear()
+        self._identity_cache.clear()
 
         if errors:
             raise errors[0]
@@ -190,6 +315,28 @@ class IntegrationEnv(BaseTestEnv):
     """Integration test environment — real database, only mocks external services.
 
     Requires ``integration_db`` pytest fixture.
+    Supports REST dispatch via FastAPI TestClient.
     """
 
     use_real_db = True
+
+    def get_rest_client(self) -> Any:
+        """Return FastAPI TestClient with auth overridden to return self.identity.
+
+        The TestClient uses the same app instance as production. Auth
+        dependencies are overridden to inject the test identity directly,
+        bypassing real token resolution.
+        """
+        if self._rest_client is None:
+            from starlette.testclient import TestClient
+
+            from src.app import app
+            from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+            from tests.harness.transport import Transport
+
+            rest_identity = self.identity_for(Transport.REST)
+            app.dependency_overrides[_require_auth_dep] = lambda: rest_identity
+            app.dependency_overrides[_resolve_auth_dep] = lambda: rest_identity
+            self._rest_client = TestClient(app)
+
+        return self._rest_client
