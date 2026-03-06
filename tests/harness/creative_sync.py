@@ -31,7 +31,7 @@ Available mocks via env.mock:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
@@ -56,9 +56,12 @@ class CreativeSyncEnv(IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
-        # Registry: return a mock that supports list_all_formats()
+        # Registry: return a mock that supports list_all_formats() + get_format()
         mock_registry = MagicMock()
         mock_registry.list_all_formats.return_value = []
+        # get_format must return a coroutine (consumed by run_async_in_sync_context
+        # in _validation.py). Return a truthy value to pass format existence check.
+        mock_registry.get_format = AsyncMock(return_value={"id": "display_300x250", "name": "Display 300x250"})
         self.mock["registry"].return_value = mock_registry
 
         # run_async: execute the coroutine synchronously (return empty list)
