@@ -761,3 +761,25 @@ Source: BR-UC-004-ext-g.md
 **Then** `ext` fields are preserved in the output
 **Business Rule** salesagent-7gnv
 **Priority** P1
+
+### Display Messages [salesagent-jz5z]
+
+#### Scenario: GetMediaBuyDeliveryResponse __str__ returns human-readable summary
+**Obligation ID** UC-004-DISPLAY-01
+**Layer** behavioral
+**Given** a GetMediaBuyDeliveryResponse with zero, one, or many media buy deliveries
+**When** `str()` is called on the response
+**Then** the result is a human-readable summary message suitable for MCP protocol envelope content field
+**Business Rule** Every MCP response has a clear human-readable summary
+**Priority** P2
+
+### Serialization Compliance [salesagent-jz5z]
+
+#### Scenario: next_expected_at explicitly null when notification_type is set
+**Obligation ID** UC-004-SERIAL-01
+**Layer** behavioral
+**Given** a GetMediaBuyDeliveryResponse with notification_type set and next_expected_at not set
+**When** `model_dump(mode='json')` is called
+**Then** the output includes `next_expected_at: null` so consumers know no further reports are expected
+**Business Rule** AdCP protocol requires explicit null for next_expected_at when notification_type is present
+**Priority** P2

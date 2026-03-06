@@ -11,7 +11,7 @@ Existing imports like ``from src.core.tools.creatives import _sync_creatives_imp
 continue to work.
 """
 
-from src.core.helpers import get_principal_id_from_context, log_tool_activity
+from src.core.helpers import log_tool_activity
 
 from ._assets import _build_creative_data, _extract_url_from_assets
 from ._assignments import _process_assignments
@@ -24,7 +24,6 @@ from .sync_wrappers import sync_creatives, sync_creatives_raw
 
 __all__ = [
     # Re-exported dependencies (for mock.patch compatibility)
-    "get_principal_id_from_context",
     "log_tool_activity",
     # Sync orchestrator
     "_sync_creatives_impl",

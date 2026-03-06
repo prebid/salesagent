@@ -3,35 +3,10 @@
 import logging
 from typing import Any
 
-from fastmcp.server.context import Context
-
 from src.core.config_loader import get_current_tenant, get_tenant_by_id, set_current_tenant
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tool_context import ToolContext
-from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
-
-
-def get_principal_id_from_context(context: Context | ToolContext | None) -> str | None:
-    """Extract principal ID from context.
-
-    Handles both FastMCP Context (from MCP protocol) and ToolContext (from A2A protocol).
-    Uses the unified resolve_identity path shared with A2A and REST.
-
-    Args:
-        context: FastMCP Context or ToolContext
-
-    Returns:
-        Principal ID string, or None if not authenticated
-    """
-    identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
-    if identity and identity.tenant_id:
-        if identity.tenant:
-            set_current_tenant(identity.tenant)
-        else:
-            set_current_tenant({"tenant_id": identity.tenant_id})
-    return identity.principal_id if identity else None
 
 
 def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str, Any]:
@@ -56,11 +31,10 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
     expected_tenant_id = None
     if identity:
         expected_tenant_id = identity.tenant_id
-        if not expected_tenant_id and identity.tenant:
+        if not expected_tenant_id and identity.tenant and isinstance(identity.tenant, dict):
             expected_tenant_id = identity.tenant.get("tenant_id")
 
-    # Step 1: Check existing ContextVar (always a dict thanks to
-    # set_current_tenant normalization)
+    # Step 1: Check existing ContextVar
     tenant = None
     try:
         tenant = get_current_tenant()
@@ -89,9 +63,8 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
             set_current_tenant(loaded)
             return loaded
         # DB lookup failed — use identity.tenant as fallback
-        if identity and identity.tenant and "tenant_id" in identity.tenant:
-            # set_current_tenant normalizes TenantContext to dict
+        if identity and identity.tenant and isinstance(identity.tenant, dict) and "tenant_id" in identity.tenant:
             set_current_tenant(identity.tenant)
-            return get_current_tenant()
+            return identity.tenant
 
     raise AdCPAuthenticationError("No tenant context available")

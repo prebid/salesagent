@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Pre-commit hook to detect tenant context ordering bugs.
 
-This hook checks that all MCP tool implementations call authentication
-(get_principal_id_from_context or get_principal_from_context) BEFORE
-calling get_current_tenant().
+This hook checks that all MCP tool implementations use authentication
+(identity.principal_id, identity.tenant, or get_principal_from_context)
+BEFORE calling get_current_tenant().
 
 Prevents regression of the bug fixed in update_media_buy where
 get_current_tenant() was called before tenant context was established.
@@ -47,9 +47,9 @@ def check_file(file_path: Path) -> list[str]:
 
         # Check if function has auth call before tenant call
         auth_patterns = [
-            r"get_principal_id_from_context\s*\(",
+            r"identity\.principal_id",
+            r"identity\.tenant",
             r"get_principal_from_context\s*\(",
-            r"_get_principal_id_from_context\s*\(",
         ]
 
         auth_pos = None
@@ -64,12 +64,12 @@ def check_file(file_path: Path) -> list[str]:
         tenant_pos = tenant_match.start()
 
         if auth_pos is None:
-            # Uses get_current_tenant() but no auth call - potential bug
+            # Uses get_current_tenant() but no auth pattern - potential bug
             line_num = content[:func_start].count("\n") + 1
             errors.append(
                 f"{file_path}:{line_num}: "
                 f"Function '_{func_name}_impl' calls get_current_tenant() "
-                f"but does not call get_principal_*_from_context() first. "
+                f"but does not access identity.principal_id or identity.tenant first. "
                 f"This will cause 'No tenant context set' errors."
             )
         elif auth_pos > tenant_pos:
@@ -111,13 +111,13 @@ def main():
         for error in all_errors:
             print(f"  {error}")
         print()
-        print("CRITICAL: All tool implementations must call authentication")
-        print("(get_principal_id_from_context or get_principal_from_context)")
-        print("BEFORE calling get_current_tenant().")
+        print("CRITICAL: All tool _impl functions must access identity.principal_id")
+        print("or identity.tenant BEFORE calling get_current_tenant().")
         print()
         print("Correct pattern:")
-        print("  1. principal_id = get_principal_id_from_context(ctx)")
-        print("  2. tenant = get_current_tenant()  # Now safe")
+        print("  1. identity = resolve_identity(...)  # At transport boundary")
+        print("  2. principal_id = identity.principal_id  # In _impl")
+        print("  3. tenant = get_current_tenant()  # Now safe")
         print()
         return 1
 

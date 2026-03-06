@@ -61,12 +61,13 @@ def get_current_tenant() -> dict[str, Any]:
     """Get current tenant from context.
 
     CRITICAL: This function must only be called AFTER tenant context has been established
-    via get_principal_id_from_context() or get_principal_from_context() + set_current_tenant().
+    via resolve_identity() at the transport boundary + set_current_tenant().
 
     Common mistake: Calling get_current_tenant() before authenticating the request.
     Correct order:
-        1. principal_id = get_principal_id_from_context(ctx)  # Sets tenant context
-        2. tenant = get_current_tenant()  # Now safe to call
+        1. identity = resolve_identity(headers, protocol=...)  # At transport boundary
+        2. set_current_tenant(identity.tenant)  # Sets tenant context
+        3. tenant = get_current_tenant()  # Now safe to call
 
     Raises:
         RuntimeError: If tenant context is not set (indicates authentication/ordering bug)
@@ -95,7 +96,7 @@ def get_current_tenant() -> dict[str, Any]:
             "falling back to default tenant would breach tenant isolation.\n"
             "\n"
             "COMMON CAUSE: Calling get_current_tenant() before authenticating the request.\n"
-            "FIX: Ensure get_principal_id_from_context(ctx) is called BEFORE get_current_tenant()."
+            "FIX: Ensure resolve_identity() is called at the transport boundary BEFORE get_current_tenant()."
             f"{caller_info}"
         )
     return tenant

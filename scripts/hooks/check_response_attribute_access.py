@@ -48,7 +48,7 @@ UNSAFE_PATTERNS = [
 
 # Exceptions: Files where these patterns are allowed
 ALLOWED_FILES = {
-    "src/core/schemas.py",  # Schema definitions can access their own fields
+    "src/core/schemas/",  # Schema definitions can access their own fields
     "tests/unit/test_all_response_str_methods.py",  # Tests validating __str__ methods
     "scripts/hooks/check_response_attribute_access.py",  # This file
 }

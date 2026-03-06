@@ -9,7 +9,6 @@ This package contains modular helper functions extracted from main.py for better
 
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.helpers.context_helpers import get_principal_id_from_context
 from src.core.helpers.creative_helpers import (
     CLICKTHROUGH_ASSET_IDS,
     IMPRESSION_TRACKER_ASSET_IDS,
@@ -32,7 +31,6 @@ from src.core.helpers.creative_helpers import (
 __all__ = [
     "get_adapter",
     "log_tool_activity",
-    "get_principal_id_from_context",
     "_extract_format_info",
     "_extract_format_namespace",
     "_normalize_format_value",

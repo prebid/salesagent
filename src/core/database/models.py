@@ -879,6 +879,7 @@ class MediaBuy(Base):
     approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     raw_request: Mapped[dict] = mapped_column(JSONType, nullable=False)
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
@@ -1911,6 +1912,7 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    auth_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", backref="push_notification_configs", overlaps="principal")

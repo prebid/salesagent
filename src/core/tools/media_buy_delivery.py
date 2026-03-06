@@ -18,7 +18,6 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import RootModel, ValidationError
 from rich.console import Console
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tool_context import ToolContext
@@ -33,9 +32,10 @@ from adcp.types.generated_poc.core.context import ContextObject
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 from src.core.auth import get_principal_object
+from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
-from src.core.helpers import get_principal_id_from_context
+from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -52,6 +52,20 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.validation_helpers import format_validation_error
+
+
+def _is_circuit_breaker_open(tenant_id: str) -> bool:
+    """Check if any circuit breaker is OPEN for the given tenant.
+
+    Queries the global WebhookDeliveryService singleton for OPEN circuit breakers
+    on any endpoint associated with the tenant.
+    """
+    from src.services.webhook_delivery_service import CircuitState, webhook_delivery_service
+
+    for key, cb in webhook_delivery_service._circuit_breakers.items():
+        if key.startswith(f"{tenant_id}:") and cb.state == CircuitState.OPEN:
+            return True
+    return False
 
 
 def _get_media_buy_delivery_impl(
@@ -181,14 +195,14 @@ def _get_media_buy_delivery_impl(
                         Error(code="media_buy_not_found", message=f"Buyer ref {requested_ref} not found")
                     )
 
-        pricing_option_ids = [
-            buy.raw_request.get("pricing_option_id")
-            for _, buy in target_media_buys
-            if buy.raw_request
-            and isinstance(buy.raw_request, dict)
-            and buy.raw_request.get("pricing_option_id") is not None
-        ]
-        pricing_options = _get_pricing_options(pricing_option_ids, tenant_id=tenant["tenant_id"], session=uow.session)
+        pricing_option_ids: list[Any] = []
+        for _, buy in target_media_buys:
+            if buy.raw_request and isinstance(buy.raw_request, dict):
+                for pkg in buy.raw_request.get("packages", []):
+                    pkg_id = pkg.get("pricing_option_id")
+                    if pkg_id is not None:
+                        pricing_option_ids.append(pkg_id)
+        pricing_options = _get_pricing_options(pricing_option_ids, tenant_id=tenant["tenant_id"])
 
         # Collect delivery data for each media buy
         deliveries = []
@@ -222,17 +236,27 @@ def _get_media_buy_delivery_impl(
 
                 buy_start_date_status = type_cast(date, buy.start_date)
                 buy_end_date_status = type_cast(date, buy.end_date)
-                if simulation_datetime.date() < buy_start_date_status:
+                if getattr(buy, "is_paused", False):
+                    status = "paused"
+                elif simulation_datetime.date() < buy_start_date_status:
                     status = "ready"
                 elif simulation_datetime.date() > buy_end_date_status:
                     status = "completed"
                 else:
                     status = "active"
 
+                # Override status when circuit breaker is open (reporting degraded),
+                # but not for paused buys (paused takes priority)
+                if status != "paused" and _is_circuit_breaker_open(tenant["tenant_id"]):
+                    status = "reporting_delayed"
+
                 # Get delivery metrics from adapter
                 adapter_package_metrics = {}  # Map package_id -> {impressions, spend, clicks}
+                adapter_ext: dict[str, Any] = {}  # Ext data from adapter response
                 total_spend_from_adapter = 0.0
                 total_impressions_from_adapter = 0
+                adapter_conversions: float | None = None
+                adapter_viewability: float | None = None
 
                 if not any(
                     [testing_ctx.dry_run, testing_ctx.mock_time, testing_ctx.jump_to_event, testing_ctx.test_session_id]
@@ -256,16 +280,30 @@ def _get_media_buy_delivery_impl(
                             total_spend_from_adapter += float(adapter_pkg.spend)
                             total_impressions_from_adapter += int(adapter_pkg.impressions)
 
-                        # Use adapter's totals if available
-                        if adapter_response.totals:
-                            spend = float(adapter_response.totals.spend)
-                            impressions = int(adapter_response.totals.impressions)
-                        else:
-                            spend = total_spend_from_adapter
-                            impressions = total_impressions_from_adapter
+                        # Adapter totals are always present (required field on schema)
+                        spend = float(adapter_response.totals.spend)
+                        impressions = int(adapter_response.totals.impressions)
+                        adapter_conversions = getattr(adapter_response.totals, "conversions", None)
+                        adapter_viewability = getattr(adapter_response.totals, "viewability", None)
 
                     except Exception as e:
                         logger.error(f"Error getting delivery for {media_buy_id}: {e}")
+                        # Write adapter failure to audit trail (NFR-003)
+                        try:
+                            from src.core.database.models import AuditLog
+
+                            audit_log = AuditLog(
+                                tenant_id=tenant["tenant_id"],
+                                operation="adapter_delivery_failure",
+                                principal_id=principal_id,
+                                success=False,
+                                error_message=str(e),
+                                details={"media_buy_id": media_buy_id},
+                            )
+                            if uow.session is not None:
+                                uow.session.add(audit_log)
+                        except Exception as audit_err:
+                            logger.error(f"Failed to write adapter failure audit log: {audit_err}")
                         context_val = req.context
                         return GetMediaBuyDeliveryResponse(
                             reporting_period={"start": reporting_period.start, "end": reporting_period.end},
@@ -313,13 +351,7 @@ def _get_media_buy_delivery_impl(
 
                 # Get packages from raw_request
                 if buy.raw_request and isinstance(buy.raw_request, dict):
-                    # Try to get packages from raw_request.packages (AdCP v2.2+ format)
                     packages = buy.raw_request.get("packages", [])
-
-                    # Fallback: legacy format with product_ids
-                    if not packages and "product_ids" in buy.raw_request:
-                        product_ids = buy.raw_request.get("product_ids", [])
-                        packages = [{"product_id": pid} for pid in product_ids]
 
                     i = -1
                     for pkg_data in packages:
@@ -345,7 +377,11 @@ def _get_media_buy_delivery_impl(
                             package_spend = spend / len(packages)
                             package_impressions = impressions / len(packages)
 
-                        if pricing_option and pricing_option.pricing_model == PricingModel.cpc and pricing_option.rate:
+                        if (
+                            pricing_option
+                            and pricing_option.pricing_model == PricingModel.cpc.value
+                            and pricing_option.rate
+                        ):
                             package_clicks = floor(spend / (float(pricing_option.rate)))
                         else:
                             package_clicks = None
@@ -370,6 +406,21 @@ def _get_media_buy_delivery_impl(
                             )
                         )
 
+                # Collect pricing options for this media buy
+                buy_pricing_options: list[dict[str, Any]] = []
+                if buy.raw_request and isinstance(buy.raw_request, dict):
+                    # Collect from per-package pricing_option_ids
+                    for pkg_data in buy.raw_request.get("packages", []):
+                        pkg_po_id = pkg_data.get("pricing_option_id")
+                        if pkg_po_id and pkg_po_id not in {p["pricing_option_id"] for p in buy_pricing_options}:
+                            if pkg_po_id in pricing_options:
+                                po = pricing_options[pkg_po_id]
+                                buy_pricing_options.append(
+                                    {"pricing_option_id": pkg_po_id, "pricing_model": po.pricing_model}
+                                )
+                            else:
+                                buy_pricing_options.append({"pricing_option_id": pkg_po_id})
+
                 # Create delivery data
                 buyer_ref = buy.raw_request.get("buyer_ref", None)
 
@@ -393,6 +444,7 @@ def _get_media_buy_delivery_impl(
                     pricing_model=PricingModel(
                         "cpm"
                     ),  # TODO: @yusuf - remove this from adcp protocol. MediaBuy itself doesn't have pricing model. It is in package level
+                    pricing_options=buy_pricing_options or None,
                     totals=DeliveryTotals(
                         impressions=impressions,
                         spend=spend,
@@ -400,9 +452,12 @@ def _get_media_buy_delivery_impl(
                         ctr=ctr,  # Optional field
                         video_completions=None,  # Optional field
                         completion_rate=None,  # Optional field
+                        conversions=adapter_conversions,  # From adapter totals
+                        viewability=adapter_viewability,  # From adapter totals
                     ),
                     by_package=package_deliveries,
                     daily_breakdown=None,  # Optional field, not calculated in this implementation
+                    ext=adapter_ext,
                 )
 
                 deliveries.append(delivery_data)
@@ -413,8 +468,45 @@ def _get_media_buy_delivery_impl(
 
             except Exception as e:
                 logger.error(f"Error getting delivery for {media_buy_id}: {e}")
-                # TODO: @yusuf - Ask should we attach an error message for this media buy, instead of omitting it from the response?
-                # Continue with other media buys
+                # Skip this media buy and continue with others
+
+        # --- Compute response-level webhook metadata (u5hf, uelj, 8g9e) ---
+
+        # notification_type: "final" when all deliveries are completed, "scheduled" otherwise
+        if deliveries and all(d.status == "completed" for d in deliveries):
+            notification_type = "final"
+        elif deliveries:
+            notification_type = "scheduled"
+        else:
+            notification_type = None
+
+        # next_expected_at: set for non-final deliveries (default 24h interval)
+        if notification_type and notification_type != "final":
+            next_expected_at = datetime.now(UTC) + timedelta(hours=24)
+        else:
+            next_expected_at = None
+
+        # sequence_number: persistent auto-increment per media buy via WebhookDeliveryLog
+        sequence_number = None
+        if deliveries and uow.session is not None:
+            delivery_repo = DeliveryRepository(uow.session, tenant["tenant_id"])
+            # Use the first media buy's sequence as the response-level sequence
+            first_mb_id = deliveries[0].media_buy_id
+            max_seq = delivery_repo.get_max_sequence_number(first_mb_id, task_type="delivery_poll")
+            sequence_number = max_seq + 1
+            # Persist the new sequence number
+            from uuid import uuid4
+
+            delivery_repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_id,
+                media_buy_id=first_mb_id,
+                webhook_url="delivery_poll://internal",
+                task_type="delivery_poll",
+                status="success",
+                sequence_number=sequence_number,
+                notification_type=notification_type,
+            )
 
         # Create AdCP-compliant response
         context_val = req.context
@@ -431,6 +523,9 @@ def _get_media_buy_delivery_impl(
             media_buy_deliveries=deliveries,
             errors=not_found_errors or None,
             context=context_val,
+            notification_type=notification_type,
+            sequence_number=sequence_number,
+            next_expected_at=next_expected_at,
         )
 
         # Apply testing hooks if needed
@@ -551,16 +646,6 @@ def get_media_buy_delivery_raw(
     return _get_media_buy_delivery_impl(req, identity)
 
 
-# --- Admin Tools ---
-
-
-def _require_admin(context: Context) -> None:
-    """Verify the request is from an admin user."""
-    principal_id = get_principal_id_from_context(context)
-    if principal_id != "admin":
-        raise PermissionError("This operation requires admin privileges")
-
-
 def _resolve_delivery_status_filter(
     status_filter: Any,
     valid_internal_statuses: set[str],
@@ -622,7 +707,14 @@ def _get_target_media_buys(
             return "ready"
         return status.value
 
-    filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses, _to_internal)
+    # When specific IDs/refs are provided without an explicit status_filter,
+    # return all matching buys regardless of status. The "active" default only
+    # applies when browsing (no specific IDs).
+    has_explicit_ids = bool(req.media_buy_ids or req.buyer_refs)
+    if has_explicit_ids and not req.status_filter:
+        filter_statuses = list(valid_internal_statuses)
+    else:
+        filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses, _to_internal)
 
     # Preserve if/elif/else precedence: media_buy_ids takes priority over buyer_refs
     if req.media_buy_ids:
@@ -651,7 +743,9 @@ def _get_target_media_buys(
         else:
             end_compare = type_cast(date, buy.end_date)
 
-        if reference_date < start_compare:
+        if getattr(buy, "is_paused", False):
+            current_status = "paused"
+        elif reference_date < start_compare:
             current_status = "ready"
         elif reference_date > end_compare:
             current_status = "completed"
@@ -665,25 +759,24 @@ def _get_target_media_buys(
 
 
 def _get_pricing_options(
-    pricing_option_ids: list[Any | None],
-    tenant_id: str | None = None,
-    session: Session | None = None,
+    pricing_option_ids: list[Any | None], tenant_id: str | None = None
 ) -> dict[str, PricingOption]:
-    # Cast string IDs from JSON to int for Integer PK column (Pattern #3: cast at boundary)
-    int_ids = []
-    for pid in pricing_option_ids:
-        if pid is not None:
-            try:
-                int_ids.append(int(pid))
-            except (ValueError, TypeError):
-                logger.warning(f"Skipping non-numeric pricing_option_id: {pid}")
-    if not int_ids:
+    # pricing_option_ids are synthetic strings like "cpm_usd_fixed" generated by
+    # product_conversion.py.  The PricingOption table has no pricing_option_id column;
+    # the synthetic ID is derived from (pricing_model, currency, is_fixed).
+    # We fetch all tenant pricing options and match by reconstructing the synthetic ID.
+    string_ids = {str(pid) for pid in pricing_option_ids if pid is not None}
+    if not string_ids:
         return {}
-    if session is None:
-        raise ValueError("session is required for _get_pricing_options")
-    statement = select(PricingOption).where(
-        PricingOption.id.in_(int_ids),
-        PricingOption.tenant_id == tenant_id,
-    )
-    pricing_options = session.scalars(statement).all()
-    return {str(pricing_option.id): pricing_option for pricing_option in pricing_options}
+    with get_db_session() as session:
+        statement = select(PricingOption).where(
+            PricingOption.tenant_id == tenant_id,
+        )
+        all_options = session.scalars(statement).all()
+        result: dict[str, PricingOption] = {}
+        for po in all_options:
+            fixed_str = "fixed" if po.is_fixed else "auction"
+            synthetic_id = f"{po.pricing_model}_{po.currency.lower()}_{fixed_str}"
+            if synthetic_id in string_ids:
+                result[synthetic_id] = po
+        return result

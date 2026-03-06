@@ -166,15 +166,6 @@ class WebhookQueue:
                 return self.queue.popleft()
             return None
 
-    def size(self) -> int:
-        """Get current queue size.
-
-        Returns:
-            Number of webhooks in queue
-        """
-        with self._lock:
-            return len(self.queue)
-
 
 class WebhookDeliveryService:
     """Webhook delivery service with enhanced security and reliability features.
@@ -383,6 +374,11 @@ class WebhookDeliveryService:
                 # Send to all configured webhooks
                 sent_count = 0
                 for config in configs:
+                    # Skip auth-blocked endpoints (UC-004-EXT-G-07)
+                    if isinstance(getattr(config, "auth_blocked_at", None), datetime):
+                        logger.warning(f"⚠️ Auth blocked for {config.url}, skipping until credentials reconfigured")
+                        continue
+
                     endpoint_key = f"{tenant_id}:{config.url}"
 
                     # Get or create circuit breaker for this endpoint
@@ -523,22 +519,6 @@ class WebhookDeliveryService:
         with self._lock:
             if media_buy_id in self._sequence_numbers:
                 del self._sequence_numbers[media_buy_id]
-
-    def reset_circuit_breaker(self, endpoint_url: str):
-        """Manually reset circuit breaker for an endpoint.
-
-        Args:
-            endpoint_url: Webhook endpoint URL
-        """
-        # Find matching endpoint keys
-        for key in list(self._circuit_breakers.keys()):
-            if endpoint_url in key:
-                circuit_breaker = self._circuit_breakers[key]
-                with circuit_breaker._lock:
-                    circuit_breaker.state = CircuitState.CLOSED
-                    circuit_breaker.failure_count = 0
-                    circuit_breaker.success_count = 0
-                logger.info(f"Circuit breaker reset for {endpoint_url}")
 
     def get_circuit_breaker_state(self, endpoint_url: str) -> tuple[CircuitState, int]:
         """Get circuit breaker state for an endpoint.
