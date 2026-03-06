@@ -283,15 +283,6 @@ def _list_creatives_impl(
             # Get assets dict from database (all production data uses AdCP v2.4 format)
             assets_dict = db_creative.data.get("assets", {}) if db_creative.data else {}
 
-            # Safety check: Skip creatives with empty assets (should be filtered by query, but defensive)
-            if not assets_dict:
-                logger.warning(
-                    f"Creative {db_creative.creative_id} has empty assets dict - "
-                    f"should have been filtered by query. Skipping.",
-                    extra={"creative_id": db_creative.creative_id, "tenant_id": tenant["tenant_id"]},
-                )
-                continue
-
             # Convert string status to CreativeStatus enum
             from src.core.schemas import CreativeStatus
 
@@ -523,11 +514,6 @@ def list_creatives_raw(
     Returns:
         ListCreativesResponse with filtered creative assets and pagination info
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx)
-
     return _list_creatives_impl(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
