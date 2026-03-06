@@ -1251,150 +1251,126 @@ class TestAIPoweredApprovalDeferredNotification:
 
 @pytest.mark.requires_db
 class TestAsyncLifecycleSubmitted:
-    """Async sync: queued operation returns SyncCreativesAsyncResponseSubmitted.
+    """Queued sync operation returns SyncCreativesSubmitted.
 
     Covers: UC-006-ASYNC-LIFECYCLE-01
 
-    The adcp spec (3.6.0) defines SyncCreativesSubmitted with context + ext.
-    Currently NOT IMPLEMENTED — sync_creatives always runs synchronously.
-    These tests document the gap: when async mode is eventually supported,
-    sync_creatives should return a submitted acknowledgment instead of
-    blocking until completion.
+    Given the system supports async creative sync
+    When a sync operation is queued
+    Then a SyncCreativesAsyncResponseSubmitted is returned
+    And it conforms to the adcp 3.6.0 async-response-submitted schema
     """
 
-    def test_library_schema_exists(self, integration_db):
-        """The adcp library provides SyncCreativesSubmitted with expected fields."""
+    @pytest.mark.xfail(
+        reason="Async lifecycle not implemented (salesagent-gkxa)",
+        strict=True,
+    )
+    def test_queued_sync_returns_submitted(self, integration_db):
+        """Queued sync operation returns SyncCreativesSubmitted with context."""
         from adcp.types.generated_poc.media_buy.sync_creatives_async_response_submitted import (
             SyncCreativesSubmitted,
         )
 
-        instance = SyncCreativesSubmitted()
-        assert hasattr(instance, "context")
-        assert hasattr(instance, "ext")
-        # Verify fields exist in schema
-        assert "context" in SyncCreativesSubmitted.model_fields
-        assert "ext" in SyncCreativesSubmitted.model_fields
-
-    def test_sync_creatives_returns_synchronous_response(self, integration_db):
-        """Currently sync_creatives always returns SyncCreativesResponse (synchronous).
-
-        GAP: Should support returning SyncCreativesSubmitted when async mode requested.
-        """
-        from src.core.schemas import SyncCreativesResponse
-
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             result = env.call_via(
                 Transport.IMPL,
-                creatives=[_creative(creative_id="c_async_test", name="Async Test")],
+                creatives=[_creative(creative_id="c_async_sub", name="Async Submit")],
+                # BDD: "the system supports async creative sync"
+                async_mode=True,
             )
 
-            assert result.is_success
-            # Response is always synchronous SyncCreativesResponse — no async path exists
-            assert isinstance(result.payload, SyncCreativesResponse)
+            # BDD: "a SyncCreativesAsyncResponseSubmitted is returned"
+            assert isinstance(result.payload, SyncCreativesSubmitted)
+            # BDD: "conforms to the adcp 3.6.0 async-response-submitted schema"
+            assert result.payload.context is not None
 
 
 @pytest.mark.requires_db
 class TestAsyncLifecycleWorking:
-    """Async sync: in-progress operation returns SyncCreativesAsyncResponseWorking.
+    """In-progress async operation returns SyncCreativesWorking with progress.
 
     Covers: UC-006-ASYNC-LIFECYCLE-02
 
-    The adcp spec defines SyncCreativesWorking with progress fields:
-    percentage, current_step, total_steps, step_number,
-    creatives_processed, creatives_total.
-
-    NOT IMPLEMENTED — no async task queue or progress tracking exists.
+    Given an async sync operation is in progress
+    When the Buyer checks status
+    Then a SyncCreativesAsyncResponseWorking is returned with progress information
+    And includes percentage, steps, and creatives processed counts
     """
 
-    def test_library_schema_exists(self, integration_db):
-        """The adcp library provides SyncCreativesWorking with progress fields."""
+    @pytest.mark.xfail(
+        reason="Async lifecycle not implemented (salesagent-gkxa)",
+        strict=True,
+    )
+    def test_in_progress_returns_working_with_progress(self, integration_db):
+        """Status check on in-progress async op returns SyncCreativesWorking."""
         from adcp.types.generated_poc.media_buy.sync_creatives_async_response_working import (
             SyncCreativesWorking,
         )
 
-        instance = SyncCreativesWorking(
-            percentage=50.0,
-            current_step="validating",
-            total_steps=3,
-            step_number=2,
-            creatives_processed=5,
-            creatives_total=10,
-        )
-        assert instance.percentage == 50.0
-        assert instance.current_step == "validating"
-        assert instance.creatives_processed == 5
-        assert instance.creatives_total == 10
-        # Verify constraint enforcement
-        dumped = instance.model_dump()
-        assert dumped["percentage"] == 50.0
-        assert dumped["step_number"] == 2
-
-    def test_no_progress_tracking_in_sync(self, integration_db):
-        """Currently sync_creatives has no progress tracking mechanism.
-
-        GAP: Should emit progress updates during async processing.
-        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            result = env.call_via(
+
+            # First: queue an async operation
+            submit_result = env.call_via(
                 Transport.IMPL,
                 creatives=[
-                    _creative(creative_id="c_progress_1", name="Progress 1"),
-                    _creative(creative_id="c_progress_2", name="Progress 2"),
+                    _creative(creative_id="c_prog_1", name="Progress 1"),
+                    _creative(creative_id="c_prog_2", name="Progress 2"),
                 ],
+                async_mode=True,
+            )
+            context_id = submit_result.payload.context
+
+            # BDD: "When the Buyer checks status"
+            status_result = env.call_via(
+                Transport.IMPL,
+                context=context_id,
             )
 
-            assert result.is_success
-            # All creatives processed synchronously — no intermediate progress
-            assert len(result.payload.creatives) == 2
+            # BDD: "a SyncCreativesAsyncResponseWorking is returned"
+            assert isinstance(status_result.payload, SyncCreativesWorking)
+            # BDD: "includes percentage, steps, and creatives processed counts"
+            assert status_result.payload.percentage is not None
+            assert status_result.payload.creatives_processed is not None
+            assert status_result.payload.creatives_total is not None
 
 
 @pytest.mark.requires_db
 class TestAsyncLifecycleInputRequired:
-    """Async sync: paused operation returns SyncCreativesAsyncResponseInputRequired.
+    """Paused async operation returns SyncCreativesInputRequired.
 
     Covers: UC-006-ASYNC-LIFECYCLE-03
 
-    The adcp spec defines SyncCreativesInputRequired with reason enum:
-    APPROVAL_REQUIRED, ASSET_CONFIRMATION, FORMAT_CLARIFICATION.
-
-    NOT IMPLEMENTED — no pause/resume mechanism for async sync exists.
+    Given an async sync operation requires Buyer input (approval, asset confirmation)
+    When the system pauses
+    Then a SyncCreativesAsyncResponseInputRequired is returned
+    And indicates what input is needed
     """
 
-    def test_library_schema_exists(self, integration_db):
-        """The adcp library provides SyncCreativesInputRequired with reason enum."""
+    @pytest.mark.xfail(
+        reason="Async lifecycle not implemented (salesagent-gkxa)",
+        strict=True,
+    )
+    def test_approval_needed_returns_input_required(self, integration_db):
+        """Async op needing approval returns SyncCreativesInputRequired."""
         from adcp.types.generated_poc.media_buy.sync_creatives_async_response_input_required import (
             Reason,
             SyncCreativesInputRequired,
         )
 
-        # Verify all reason codes exist
-        assert Reason.APPROVAL_REQUIRED.value == "APPROVAL_REQUIRED"
-        assert Reason.ASSET_CONFIRMATION.value == "ASSET_CONFIRMATION"
-        assert Reason.FORMAT_CLARIFICATION.value == "FORMAT_CLARIFICATION"
-
-        instance = SyncCreativesInputRequired(reason=Reason.APPROVAL_REQUIRED)
-        assert instance.reason == Reason.APPROVAL_REQUIRED
-        assert "reason" in SyncCreativesInputRequired.model_fields
-
-    def test_approval_not_paused_for_input(self, integration_db):
-        """Currently approval_mode=require-human does NOT pause for input.
-
-        GAP: When async mode is supported, creatives requiring approval should
-        pause the async operation and return SyncCreativesInputRequired with
-        reason=APPROVAL_REQUIRED instead of just setting status=pending_review.
-        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             env.identity.tenant["approval_mode"] = "require-human"
 
+            # BDD: "async sync operation requires Buyer input"
             result = env.call_via(
                 Transport.IMPL,
-                creatives=[_creative(creative_id="c_input_req", name="Input Required Test")],
+                creatives=[_creative(creative_id="c_input_req", name="Needs Approval")],
+                async_mode=True,
             )
 
-            assert result.is_success
-            # Creative is created with pending_review — no async pause
-            creative_result = result.payload.creatives[0]
-            assert creative_result.action == CreativeAction.created
+            # BDD: "a SyncCreativesAsyncResponseInputRequired is returned"
+            assert isinstance(result.payload, SyncCreativesInputRequired)
+            # BDD: "indicates what input is needed"
+            assert result.payload.reason == Reason.APPROVAL_REQUIRED
