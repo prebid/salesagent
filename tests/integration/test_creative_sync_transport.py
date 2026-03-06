@@ -33,11 +33,8 @@ class TestSyncCreativeCreateTransport:
         Covers: T-UC-006-main-rest, T-UC-006-main-mcp
         """
         with CreativeSyncEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-            )
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
             result = env.call_via(
                 transport,
@@ -64,11 +61,8 @@ class TestSyncCreativeCreateTransport:
     def test_empty_creative_list_returns_success(self, integration_db, transport):
         """Empty creative list is a valid no-op across all transports."""
         with CreativeSyncEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-            )
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
             result = env.call_via(transport, creatives=[])
 
@@ -79,11 +73,8 @@ class TestSyncCreativeCreateTransport:
     def test_dry_run_does_not_persist(self, integration_db, transport):
         """Dry run previews changes without persisting across all transports."""
         with CreativeSyncEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-            )
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
             result = env.call_via(
                 transport,
