@@ -100,7 +100,7 @@ class TestProductRepositoryGetAllForTenant:
 
         with get_db_session() as session:
             repo = ProductRepository(session, f"test-tenant-{uid}")
-            products = repo.get_all_for_tenant()
+            products = repo.list_all()
 
         assert len(products) == 2
         product_ids = {p.product_id for p in products}
@@ -124,7 +124,7 @@ class TestProductRepositoryGetAllForTenant:
 
         with get_db_session() as session:
             repo_a = ProductRepository(session, tenant_a_id)
-            products_a = repo_a.get_all_for_tenant()
+            products_a = repo_a.list_all()
 
         assert len(products_a) == 1
         assert products_a[0].product_id == f"prod-a-{uid}"
@@ -142,7 +142,7 @@ class TestProductRepositoryGetAllForTenant:
 
         with get_db_session() as session:
             repo = ProductRepository(session, f"test-tenant-{uid}")
-            products = repo.get_all_for_tenant()
+            products = repo.list_all()
 
         # Access pricing_options OUTSIDE the session — must be eager-loaded
         assert len(products) == 1
@@ -165,7 +165,7 @@ class TestProductRepositoryGetAllForTenant:
 
         with get_db_session() as session:
             repo = ProductRepository(session, f"test-tenant-{uid}")
-            products = repo.get_all_for_tenant()
+            products = repo.list_all()
 
         # Should convert to Pydantic schema without errors
         schema = convert_product_model_to_schema(products[0])

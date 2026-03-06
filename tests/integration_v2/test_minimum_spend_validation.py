@@ -438,12 +438,6 @@ class TestMinimumSpendValidation:
         assert response.media_buy_id is not None
         assert response.buyer_ref == "minspend_test_4"
 
-    @pytest.mark.xfail(
-        reason="dry_run=True now skips adapter call entirely (returns simulated success). "
-        "Adapter-level budget rejection only runs inside the adapter. "
-        "TODO: move excessive-budget validation to pre-adapter business logic.",
-        strict=True,
-    )
     async def test_unsupported_currency_rejected(self, setup_test_data):
         """Test that excessively high budgets are rejected by pre-adapter validation."""
         identity = ResolvedIdentity(
