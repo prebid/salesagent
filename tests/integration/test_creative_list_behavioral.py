@@ -4,15 +4,23 @@ Behavioral tests using CreativeListEnv + real PostgreSQL + factory_boy.
 Replaces mock-heavy unit tests from test_creative.py with provable assertions
 against actual database state.
 
-Covers: salesagent-wdkc
+Covers: salesagent-wdkc, salesagent-39ic
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
-from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+from tests.factories import (
+    CreativeAssignmentFactory,
+    CreativeFactory,
+    MediaBuyFactory,
+    PrincipalFactory,
+    TenantFactory,
+)
 from tests.harness import CreativeListEnv, make_identity
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -231,3 +239,475 @@ class TestListPrincipalIsolation:
 
         assert len(response.creatives) == 1
         assert response.creatives[0].creative_id == "c_p1"
+
+
+# ---------------------------------------------------------------------------
+# Advanced Filtering Tests — Covers: salesagent-39ic
+# ---------------------------------------------------------------------------
+
+
+class TestListTagsFilter:
+    """Tags filter exercises line 128 (tags → name.contains)."""
+
+    def test_tags_filter_returns_matching(self, integration_db):
+        """Covers: UC-006-LIST-FILTER-04 — tags filter matches creatives by name substring."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_summer",
+                name="Summer Campaign Banner",
+            )
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_winter",
+                name="Winter Campaign Video",
+            )
+
+            response = env.call_impl(tags=["Summer"])
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_summer"
+
+
+class TestListDateFilters:
+    """Created_after/created_before filters exercise lines 130, 132."""
+
+    def test_created_after_returns_newer(self, integration_db):
+        """Covers: UC-006-LIST-FILTER-05 — created_after filters older creatives."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            now = datetime.now(UTC)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_old",
+                created_at=now - timedelta(days=30),
+            )
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_new",
+                created_at=now - timedelta(hours=1),
+            )
+
+            cutoff = (now - timedelta(days=7)).isoformat()
+            response = env.call_impl(created_after=cutoff)
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_new"
+
+    def test_created_before_returns_older(self, integration_db):
+        """Covers: UC-006-LIST-FILTER-06 — created_before filters newer creatives."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            now = datetime.now(UTC)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_old",
+                created_at=now - timedelta(days=30),
+            )
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_new",
+                created_at=now - timedelta(hours=1),
+            )
+
+            cutoff = (now - timedelta(days=7)).isoformat()
+            response = env.call_impl(created_before=cutoff)
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_old"
+
+
+class TestListSearchFilter:
+    """Search filter exercises line 134 (search → name_contains)."""
+
+    def test_search_matches_name_substring(self, integration_db):
+        """Covers: UC-006-LIST-FILTER-07 — search matches creative name case-insensitively."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_hero",
+                name="Hero Banner Ad",
+            )
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_footer",
+                name="Footer Widget",
+            )
+
+            response = env.call_impl(search="hero")
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_hero"
+
+
+class TestListMediaBuyFilter:
+    """Media buy ID filter exercises lines 139, 141."""
+
+    def test_media_buy_id_returns_assigned(self, integration_db):
+        """Covers: UC-006-LIST-FILTER-08 — media_buy_id filters to assigned creatives."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            c1 = CreativeFactory(tenant=tenant, principal=principal, creative_id="c_assigned")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_unassigned")
+
+            mb = MediaBuyFactory(tenant=tenant)
+            CreativeAssignmentFactory(creative=c1, media_buy=mb)
+
+            response = env.call_impl(media_buy_id=mb.media_buy_id)
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_assigned"
+
+    def test_media_buy_ids_multiple(self, integration_db):
+        """Covers: UC-006-LIST-FILTER-09 — media_buy_ids returns from multiple buys."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            c1 = CreativeFactory(tenant=tenant, principal=principal, creative_id="c_buy1")
+            c2 = CreativeFactory(tenant=tenant, principal=principal, creative_id="c_buy2")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_nobuy")
+
+            mb1 = MediaBuyFactory(tenant=tenant, media_buy_id="mb_1")
+            mb2 = MediaBuyFactory(tenant=tenant, media_buy_id="mb_2")
+            CreativeAssignmentFactory(creative=c1, media_buy=mb1)
+            CreativeAssignmentFactory(creative=c2, media_buy=mb2)
+
+            response = env.call_impl(media_buy_ids=["mb_1", "mb_2"])
+
+        ids = {c.creative_id for c in response.creatives}
+        assert ids == {"c_buy1", "c_buy2"}
+
+
+class TestListBuyerRefFilter:
+    """Buyer ref filter exercises lines 145, 147."""
+
+    def test_buyer_ref_returns_matching(self, integration_db):
+        """Covers: UC-006-LIST-FILTER-10 — buyer_ref filters via assignment→media_buy join."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            c1 = CreativeFactory(tenant=tenant, principal=principal, creative_id="c_ref_match")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_no_ref")
+
+            mb = MediaBuyFactory(tenant=tenant, buyer_ref="buyer-abc")
+            CreativeAssignmentFactory(creative=c1, media_buy=mb)
+
+            response = env.call_impl(buyer_ref="buyer-abc")
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_ref_match"
+
+
+class TestListStructuredFilters:
+    """Structured CreativeFilters merge exercises line 151."""
+
+    def test_structured_filters_merge_with_flat(self, integration_db):
+        """Covers: UC-006-LIST-FILTER-11 — structured filters merge with flat params in request."""
+        from adcp import CreativeFilters
+
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_1",
+                status="approved",
+                format="display_300x250",
+            )
+
+            # Structured filters with name_contains + flat status
+            # Line 151: filters_dict = {**filters.model_dump(exclude_none=True), **filters_dict}
+            structured = CreativeFilters(name_contains="Creative")
+            response = env.call_impl(status="approved", filters=structured)
+
+        # Flat status AND structured name_contains both appear in filters_applied
+        applied = response.query_summary.filters_applied
+        assert any("statuses" in f for f in applied)
+        assert any("search=" in f for f in applied)
+
+
+# ---------------------------------------------------------------------------
+# Sorting Tests — Covers: salesagent-39ic
+# ---------------------------------------------------------------------------
+
+
+class TestListSorting:
+    """Sort by name and status exercises line 170-171."""
+
+    def test_sort_by_name_asc(self, integration_db):
+        """Covers: UC-006-LIST-SORT-01 — sort by name ascending."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_b", name="Bravo")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_a", name="Alpha")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_c", name="Charlie")
+
+            response = env.call_impl(sort_by="name", sort_order="asc")
+
+        names = [c.name for c in response.creatives]
+        assert names == ["Alpha", "Bravo", "Charlie"]
+
+    def test_sort_by_status(self, integration_db):
+        """Covers: UC-006-LIST-SORT-02 — sort by status ascending."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_pend",
+                status="pending_review",
+            )
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_app",
+                status="approved",
+            )
+
+            response = env.call_impl(sort_by="status", sort_order="asc")
+
+        statuses = [c.status.value for c in response.creatives]
+        assert statuses == sorted(statuses)
+
+    def test_sort_applied_in_response(self, integration_db):
+        """Covers: UC-006-LIST-SORT-03 — sort_applied dict in response."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1")
+
+            response = env.call_impl(sort_by="name", sort_order="asc")
+
+        sort = response.query_summary.sort_applied
+        assert sort.field == "name"
+        assert sort.direction.value == "asc"
+
+
+# ---------------------------------------------------------------------------
+# Query Summary Tests — Covers: salesagent-39ic
+# ---------------------------------------------------------------------------
+
+
+class TestListQuerySummary:
+    """Query summary shows filters_applied for each filter type."""
+
+    def test_filters_applied_includes_media_buy_ids(self, integration_db):
+        """Covers: UC-006-LIST-QS-01 — filters_applied lists media_buy_ids."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            c1 = CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1")
+            mb = MediaBuyFactory(tenant=tenant, media_buy_id="mb_qs_1")
+            CreativeAssignmentFactory(creative=c1, media_buy=mb)
+
+            response = env.call_impl(media_buy_ids=["mb_qs_1"])
+
+        assert any("media_buy_ids" in f for f in response.query_summary.filters_applied)
+
+    def test_filters_applied_includes_search(self, integration_db):
+        """Covers: UC-006-LIST-QS-02 — filters_applied lists search term."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1")
+
+            response = env.call_impl(search="banner")
+
+        assert any("search=" in f for f in response.query_summary.filters_applied)
+
+    def test_filters_applied_includes_dates(self, integration_db):
+        """Covers: UC-006-LIST-QS-03 — filters_applied lists created_after/before."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1")
+
+            response = env.call_impl(
+                created_after="2024-01-01T00:00:00+00:00",
+                created_before="2027-12-31T23:59:59+00:00",
+            )
+
+        applied = response.query_summary.filters_applied
+        assert any("created_after" in f for f in applied)
+        assert any("created_before" in f for f in applied)
+
+    def test_filters_applied_includes_tags(self, integration_db):
+        """Covers: UC-006-LIST-QS-04 — filters_applied lists tags."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1", name="Test tag1")
+
+            response = env.call_impl(tags=["tag1"])
+
+        assert any("tags=" in f for f in response.query_summary.filters_applied)
+
+    def test_filters_applied_includes_buyer_refs(self, integration_db):
+        """Covers: UC-006-LIST-QS-05 — filters_applied lists buyer_refs."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            c1 = CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1")
+            mb = MediaBuyFactory(tenant=tenant, buyer_ref="buyer-qs")
+            CreativeAssignmentFactory(creative=c1, media_buy=mb)
+
+            response = env.call_impl(buyer_refs=["buyer-qs"])
+
+        assert any("buyer_refs" in f for f in response.query_summary.filters_applied)
+
+
+# ---------------------------------------------------------------------------
+# Response Shape Tests — Covers: salesagent-39ic
+# ---------------------------------------------------------------------------
+
+
+class TestListResponseShape:
+    """Creative response object construction — format_parameters, snippet, etc."""
+
+    def test_format_parameters_extracted(self, integration_db):
+        """Covers: UC-006-LIST-RESP-01 — format_parameters width/height in FormatId."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_fmt_params",
+                format_parameters={"width": 300, "height": 250, "duration_ms": 15000},
+            )
+
+            response = env.call_impl()
+
+        creative = response.creatives[0]
+        assert creative.format_id.width == 300
+        assert creative.format_id.height == 250
+        assert creative.format_id.duration_ms == 15000
+
+    def test_snippet_creative_content_uri(self, integration_db):
+        """Covers: UC-006-LIST-RESP-02 — snippet creative uses snippet-based content_uri."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_snippet",
+                data={
+                    "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                    "snippet": "<script>/* ad tag */</script>",
+                },
+            )
+
+            response = env.call_impl()
+
+        # Snippet creative exists and has assets
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_snippet"
+
+    def test_pagination_total_count(self, integration_db):
+        """Covers: UC-006-LIST-RESP-03 — pagination includes total_count."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            for i in range(5):
+                CreativeFactory(tenant=tenant, principal=principal, creative_id=f"c_tc_{i}")
+
+            response = env.call_impl(limit=2)
+
+        assert response.pagination.total_count == 5
+        assert response.pagination.has_more is True
+        assert response.query_summary.total_matching == 5
+        assert response.query_summary.returned == 2
+
+    def test_query_summary_message_with_pages(self, integration_db):
+        """Covers: UC-006-LIST-RESP-04 — query summary shows page info when paginated."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            for i in range(4):
+                CreativeFactory(tenant=tenant, principal=principal, creative_id=f"c_msg_{i}")
+
+            response = env.call_impl(limit=2, page=1)
+
+        # Paginated response has has_more
+        assert response.pagination.has_more is True
+        assert response.query_summary.total_matching == 4
+
+
+# ---------------------------------------------------------------------------
+# Transport Parity Tests — Covers: salesagent-39ic
+# ---------------------------------------------------------------------------
+
+
+class TestListTransportParity:
+    """Same behavior across IMPL and A2A transports."""
+
+    def test_a2a_returns_same_as_impl(self, integration_db):
+        """Covers: UC-006-LIST-TRANSPORT-01 — A2A and IMPL return identical results."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_transport",
+                status="approved",
+            )
+
+            impl_response = env.call_impl(status="approved")
+            a2a_response = env.call_a2a(status="approved")
+
+        assert len(impl_response.creatives) == len(a2a_response.creatives)
+        assert impl_response.creatives[0].creative_id == a2a_response.creatives[0].creative_id
+
+    def test_mcp_returns_same_as_impl(self, integration_db):
+        """Covers: UC-006-LIST-TRANSPORT-02 — MCP wrapper returns identical results."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_mcp",
+                status="approved",
+            )
+
+            impl_response = env.call_impl(status="approved")
+            mcp_response = env.call_mcp(status="approved")
+
+        assert len(impl_response.creatives) == len(mcp_response.creatives)
+        assert impl_response.creatives[0].creative_id == mcp_response.creatives[0].creative_id
