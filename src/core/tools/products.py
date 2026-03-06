@@ -714,6 +714,16 @@ async def _get_products_impl(
                     if adapter_channels and not request_channels.intersection(set(adapter_channels)):
                         continue
 
+            # Filter by device_types (local extension, not in AdCP spec)
+            requested_device_types = getattr(req.filters, "device_types", None)
+            if requested_device_types:
+                product_device_types = getattr(product, "device_types", None)
+                if product_device_types:
+                    # Product declares supported device types — must have intersection
+                    if not set(product_device_types).intersection(set(requested_device_types)):
+                        continue
+                # else: product has no device_types restriction — matches any filter
+
             # Product passed all filters
             filtered_products.append(product)
 

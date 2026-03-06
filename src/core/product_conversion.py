@@ -395,6 +395,13 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     # Principal access control (internal field)
     product_data["allowed_principal_ids"] = getattr(product_model, "allowed_principal_ids", None)
 
+    # Device type targeting (from targeting_template.device_targets)
+    targeting_template = getattr(product_model, "targeting_template", None)
+    if targeting_template and isinstance(targeting_template, dict):
+        device_targets = targeting_template.get("device_targets")
+        if isinstance(device_targets, list):
+            product_data["device_types"] = device_targets
+
     return Product(**product_data)
 
 

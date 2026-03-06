@@ -92,6 +92,13 @@ class Product(LibraryProduct):
     )
     # channels: inherited from library Product as list[MediaChannel] | None (public per AdCP spec)
 
+    # Device type targeting (from targeting_template.device_targets in DB)
+    device_types: list[str] | None = Field(
+        default=None,
+        description="Internal: Device types this product supports (mobile, desktop, tablet, ctv, etc.)",
+        exclude=True,  # Exclude from serialization by default
+    )
+
     # Principal access control
     allowed_principal_ids: list[str] | None = Field(
         default=None,
@@ -258,11 +265,20 @@ class ProductFilters(LibraryFilters):
     - min_exposures: Minimum exposures for measurement validity
     - standard_formats_only: Only return IAB standard formats
 
+    Local extensions (not in AdCP product-filters.json):
+    - device_types: Filter by device form factors (mobile, desktop, tablet, ctv, etc.)
+
     This pattern ensures:
     - External requests use library Filters (spec-compliant)
     - We automatically get spec updates when library updates
     - No manual field duplication = no drift from spec
     """
+
+    # Local extension: device type filtering
+    device_types: list[str] | None = Field(
+        default=None,
+        description="Filter by device form factors (mobile, desktop, tablet, ctv, dooh, audio)",
+    )
 
     @model_validator(mode="before")
     @classmethod
