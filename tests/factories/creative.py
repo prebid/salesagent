@@ -17,6 +17,7 @@ class CreativeFactory(SQLAlchemyModelFactory):
         model = Creative
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
+        exclude = ("principal",)
 
     # Composite PK fields
     creative_id = factory.Sequence(lambda n: f"creative_{n:04d}")
@@ -30,7 +31,7 @@ class CreativeFactory(SQLAlchemyModelFactory):
     agent_url = "https://creative.adcontextprotocol.org"
     format = "display_300x250"
     status = "pending"
-    data = factory.LazyFunction(dict)
+    data = factory.LazyFunction(lambda: {"assets": {"banner": {"url": "https://example.com/banner.png"}}})
 
     class Params:
         """Traits for common creative configurations."""
@@ -43,6 +44,7 @@ class CreativeAssignmentFactory(SQLAlchemyModelFactory):
         model = CreativeAssignment
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
+        exclude = ("creative", "media_buy")
 
     assignment_id = factory.Sequence(lambda n: f"assignment_{n:04d}")
     creative = factory.SubFactory(CreativeFactory)
