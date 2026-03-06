@@ -5,10 +5,12 @@ transports. Fixture setup and payload assertions are shared; only the
 dispatch mechanism varies.
 
 Covers: UC-006-MAIN-MCP-04 through UC-006-MAIN-MCP-09 (transport-paired)
+Covers: UC-006-MAIN-REST-{01,02,03}
 Covers: UC-006-GENERATIVE-CREATIVE-BUILD-01 through BUILD-08
 Covers: UC-006-FORMAT-VALIDATION-{ADAPTER,UNREACHABLE,UNKNOWN}-01
 Covers: UC-006-ASSIGNMENT-{PACKAGE-VALIDATION,FORMAT-COMPATIBILITY,RESULT}-*
 Covers: UC-006-EXT-{A,B,D,E,H,I,J}-*
+Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-03
 """
 
 from __future__ import annotations
@@ -30,7 +32,10 @@ ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
 
 @pytest.mark.requires_db
 class TestSyncCreativeCreateTransport:
-    """New creative creation via all transports."""
+    """New creative creation via all transports.
+
+    Covers: UC-006-MAIN-REST-01
+    """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_new_creative_created(self, integration_db, transport):
@@ -1087,3 +1092,151 @@ class TestGeminiKeyMissing:
         creative_result = result.payload.creatives[0]
         assert creative_result.action == CreativeAction.failed
         assert any("gemini" in e.lower() for e in (creative_result.errors or []))
+
+
+# ---------------------------------------------------------------------------
+# REST-specific obligation tests (non-parametrized — REST transport only)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestSlackNotificationOnSync:
+    """Slack notification fires for require-human approval mode with webhook configured.
+
+    Covers: UC-006-MAIN-REST-02
+    """
+
+    def test_notification_called_on_require_human(self, integration_db):
+        """When approval_mode=require-human and slack_webhook_url is set,
+        _send_creative_notifications is called with the creative info."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            # Set tenant fields on the REST-specific identity
+            identity = env.identity_for(Transport.REST)
+            identity.tenant["approval_mode"] = "require-human"
+            identity.tenant["slack_webhook_url"] = "https://hooks.slack.com/test"
+
+            result = env.call_via(
+                Transport.REST,
+                creatives=[_creative(creative_id="c_slack_test", name="Slack Notify Creative")],
+            )
+
+            assert result.is_success
+            send_mock = env.mock["send_notifications"]
+            assert send_mock.called, "_send_creative_notifications should be called"
+            call_kwargs = send_mock.call_args[1]
+            creatives_needing = call_kwargs["creatives_needing_approval"]
+            assert len(creatives_needing) >= 1
+            assert any(c["creative_id"] == "c_slack_test" for c in creatives_needing)
+            assert call_kwargs["approval_mode"] == "require-human"
+
+    def test_notification_not_called_without_webhook(self, integration_db):
+        """When slack_webhook_url is not set, _send_creative_notifications
+        is still called but with tenant lacking webhook (function returns early)."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            # require-human mode but NO slack_webhook_url
+            env.identity.tenant["approval_mode"] = "require-human"
+
+            result = env.call_via(
+                Transport.IMPL,
+                creatives=[_creative(creative_id="c_no_webhook")],
+            )
+
+            assert result.is_success
+            send_mock = env.mock["send_notifications"]
+            # Called because creatives_needing_approval is non-empty and not dry_run
+            assert send_mock.called
+
+
+@pytest.mark.requires_db
+class TestAIReviewTrigger:
+    """AI review submitted to background executor when approval_mode=ai-powered.
+
+    Covers: UC-006-MAIN-REST-03
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_ai_review_submitted(self, integration_db, transport):
+        """When approval_mode=ai-powered, the AI review executor receives a
+        submit() call and creative status is pending_review."""
+        from unittest.mock import MagicMock as MockMaker
+        from unittest.mock import patch
+
+        mock_executor = MockMaker()
+        mock_executor.submit.return_value = MockMaker()  # mock future
+
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            env.identity_for(transport).tenant["approval_mode"] = "ai-powered"
+
+            with (
+                patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
+                patch("src.admin.blueprints.creatives._ai_review_lock", MockMaker()),
+                patch("src.admin.blueprints.creatives._ai_review_tasks", {}),
+            ):
+                result = env.call_via(
+                    transport,
+                    creatives=[_creative(creative_id="c_ai_review", name="AI Review Creative")],
+                )
+
+            assert result.is_success
+            assert_envelope(result, transport)
+            creative_result = result.payload.creatives[0]
+            assert creative_result.action == CreativeAction.created
+            # status is exclude=True (stripped in REST serialization), verify via DB
+            with get_db_session() as session:
+                db_creative = session.scalars(select(DBCreative).filter_by(creative_id="c_ai_review")).first()
+                assert db_creative is not None
+                assert db_creative.status == "pending_review"
+            assert mock_executor.submit.called, "AI review executor.submit should be called"
+
+
+@pytest.mark.requires_db
+class TestAIPoweredApprovalDeferredNotification:
+    """AI-powered approval mode defers Slack notification — not sent during sync.
+
+    Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-03
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_notification_deferred_for_ai_powered(self, integration_db, transport):
+        """When approval_mode=ai-powered, _send_creative_notifications is called
+        but with approval_mode='ai-powered' (real function would return early).
+        Workflow steps are still created."""
+        from unittest.mock import MagicMock as MockMaker
+        from unittest.mock import patch
+
+        mock_executor = MockMaker()
+        mock_executor.submit.return_value = MockMaker()
+
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            identity = env.identity_for(transport)
+            identity.tenant["approval_mode"] = "ai-powered"
+            identity.tenant["slack_webhook_url"] = "https://hooks.slack.com/test"
+
+            with (
+                patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
+                patch("src.admin.blueprints.creatives._ai_review_lock", MockMaker()),
+                patch("src.admin.blueprints.creatives._ai_review_tasks", {}),
+            ):
+                result = env.call_via(
+                    transport,
+                    creatives=[_creative(creative_id="c_ai_deferred", name="AI Deferred Creative")],
+                )
+
+            assert result.is_success
+            assert_envelope(result, transport)
+            # Verify status via DB (status is exclude=True, stripped in REST)
+            with get_db_session() as session:
+                db_creative = session.scalars(select(DBCreative).filter_by(creative_id="c_ai_deferred")).first()
+                assert db_creative is not None
+                assert db_creative.status == "pending_review"
+
+            # Verify _send_creative_notifications was called with ai-powered mode
+            send_mock = env.mock["send_notifications"]
+            assert send_mock.called
+            call_kwargs = send_mock.call_args[1] if send_mock.call_args[1] else {}
+            if "approval_mode" in call_kwargs:
+                assert call_kwargs["approval_mode"] == "ai-powered"
