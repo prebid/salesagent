@@ -763,3 +763,156 @@ class TestListTransportParity:
 
         assert len(impl_response.creatives) == len(mcp_response.creatives)
         assert impl_response.creatives[0].creative_id == mcp_response.creatives[0].creative_id
+
+
+class TestListCreativeObjectConstruction:
+    """Tests for Creative object construction from DB rows — listing.py lines 226-308."""
+
+    pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+    def test_snippet_creative_gets_snippet_url(self, integration_db):
+        """Spec: snippet creatives use data.url as content_uri, fallback to script tag."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_snippet",
+                data={
+                    "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                    "snippet": "<script>var ad = 1;</script>",
+                    "url": "https://cdn.example.com/ad.html",
+                },
+            )
+            response = env.call_impl()
+
+        assert len(response.creatives) == 1
+        # Snippet creative should use the url from data
+        assert response.creatives[0].creative_id == "c_snippet"
+
+    def test_snippet_creative_without_url_gets_fallback(self, integration_db):
+        """Spec: snippet creative with no url gets script tag fallback."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_snippet_no_url",
+                data={
+                    "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                    "snippet": "<script>var ad = 1;</script>",
+                },
+            )
+            response = env.call_impl()
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_snippet_no_url"
+
+    def test_non_snippet_creative_uses_url(self, integration_db):
+        """Spec: non-snippet creatives use data.url as content_uri."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_normal",
+                data={
+                    "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                    "url": "https://cdn.example.com/creative.jpg",
+                },
+            )
+            response = env.call_impl()
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_normal"
+
+    def test_format_parameters_width_height(self, integration_db):
+        """Spec: format_parameters populates FormatId width/height/duration_ms."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_format_params",
+                format_parameters={"width": 728, "height": 90, "duration_ms": 15000},
+            )
+            response = env.call_impl()
+
+        assert len(response.creatives) == 1
+        creative = response.creatives[0]
+        assert creative.format_id.width == 728
+        assert creative.format_id.height == 90
+        assert creative.format_id.duration_ms == 15000
+
+    def test_format_parameters_partial(self, integration_db):
+        """Spec: format_parameters with only width still populates correctly."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_partial_params",
+                format_parameters={"width": 300},
+            )
+            response = env.call_impl()
+
+        assert len(response.creatives) == 1
+        creative = response.creatives[0]
+        assert creative.format_id.width == 300
+        assert creative.format_id.height is None
+
+    def test_invalid_status_defaults_to_pending_review(self, integration_db):
+        """Spec: unknown status string defaults to pending_review."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_bad_status",
+                status="completely_bogus_status",
+            )
+            response = env.call_impl()
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].status.value == "pending_review"
+
+    def test_creative_with_tags(self, integration_db):
+        """Spec: creative tags from data dict are included in response."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_with_tags",
+                data={
+                    "assets": {"banner": {"url": "https://example.com/b.png"}},
+                    "tags": ["brand_safe", "premium"],
+                },
+            )
+            response = env.call_impl()
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].tags == ["brand_safe", "premium"]
+
+    def test_creative_without_tags_returns_none(self, integration_db):
+        """Spec: creative with no tags key in data returns None tags."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_no_tags",
+                data={"assets": {"banner": {"url": "https://example.com/b.png"}}},
+            )
+            response = env.call_impl()
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].tags is None

@@ -15,6 +15,7 @@ from adcp.types.generated_poc.core.format import (
     Assets16,
     Dimensions,
     Renders,
+    Responsive,
 )
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 
@@ -419,3 +420,130 @@ class TestFormatsEdgeCases:
             req = ListCreativeFormatsRequest(name_search="")
             response = env.call_impl(req=req)
         assert len(response.formats) == 3
+
+
+class TestCreativeFormatsResponsiveFilter:
+    """Tests for is_responsive filter — creative_formats.py lines 209-220, 260."""
+
+    def test_responsive_filter_true(self, integration_db):
+        """Spec: is_responsive=True returns only responsive formats."""
+        responsive_format = _make_format(
+            "resp1",
+            "Responsive Banner",
+            renders=[
+                Renders(
+                    role="primary",
+                    dimensions=Dimensions(
+                        width=300,
+                        height=250,
+                        responsive=Responsive(width=True, height=False),
+                    ),
+                )
+            ],
+        )
+        fixed_format = _make_format(
+            "fixed1",
+            "Fixed Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+        )
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([responsive_format, fixed_format])
+            req = ListCreativeFormatsRequest(is_responsive=True)
+            response = env.call_impl(req=req)
+
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "resp1"
+
+    def test_responsive_filter_false(self, integration_db):
+        """Spec: is_responsive=False returns only non-responsive formats."""
+        responsive_format = _make_format(
+            "resp1",
+            "Responsive Banner",
+            renders=[
+                Renders(
+                    role="primary",
+                    dimensions=Dimensions(
+                        width=300,
+                        height=250,
+                        responsive=Responsive(width=True, height=False),
+                    ),
+                )
+            ],
+        )
+        fixed_format = _make_format(
+            "fixed1",
+            "Fixed Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+        )
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([responsive_format, fixed_format])
+            req = ListCreativeFormatsRequest(is_responsive=False)
+            response = env.call_impl(req=req)
+
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "fixed1"
+
+
+class TestCreativeFormatsDimensionFilters:
+    """Tests for dimension filters — creative_formats.py lines 278-285."""
+
+    def test_min_height_filter(self, integration_db):
+        """Spec: min_height filter returns formats with height >= threshold."""
+        tall = _make_format(
+            "tall1",
+            "Tall Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=160, height=600))],
+        )
+        short = _make_format(
+            "short1",
+            "Short Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
+        )
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([tall, short])
+            req = ListCreativeFormatsRequest(min_height=200)
+            response = env.call_impl(req=req)
+
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "tall1"
+
+    def test_max_height_filter(self, integration_db):
+        """Spec: max_height filter returns formats with height <= threshold."""
+        tall = _make_format(
+            "tall1",
+            "Tall Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=160, height=600))],
+        )
+        short = _make_format(
+            "short1",
+            "Short Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
+        )
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([tall, short])
+            req = ListCreativeFormatsRequest(max_height=200)
+            response = env.call_impl(req=req)
+
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "short1"
+
+    def test_no_renders_excluded_from_dimension_filter(self, integration_db):
+        """Spec: formats without renders are excluded when dimension filters applied."""
+        no_renders = _make_format("nr1", "No Renders Format")
+        with_renders = _make_format(
+            "wr1",
+            "With Renders",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+        )
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([no_renders, with_renders])
+            req = ListCreativeFormatsRequest(min_width=100)
+            response = env.call_impl(req=req)
+
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "wr1"

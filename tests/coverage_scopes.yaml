@@ -42,6 +42,13 @@ scopes:
       - tests/integration/test_creative_assignment_principal_id.py
       - tests/integration/test_creative_review_model.py
       - tests/integration/test_creative_sync_data_preservation.py
+      - tests/integration/test_creative_formats_behavioral.py
+      - tests/integration/test_creative_list_behavioral.py
+      - tests/integration/test_creative_repository.py
+      - tests/integration/test_creative_sync_behavioral.py
+      - tests/integration/test_creative_sync_processing.py
+      - tests/integration/test_creative_sync_transport.py
+      - tests/integration/test_list_creatives_auth.py
     threshold: 100
 
   # --- Pre-existing code (90% minimum) ---
