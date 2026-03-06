@@ -1060,7 +1060,7 @@ class TestCreativeLifecycleMCP:
         with (
             patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter,
-            patch("src.core.main.get_product_catalog") as mock_catalog,
+            patch("src.core.tools.products.get_product_catalog") as mock_catalog,
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch(
                 "src.core.tools.media_buy_create._validate_creatives_before_adapter_call"

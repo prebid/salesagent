@@ -592,7 +592,7 @@ class TestCreativeUploadFailure:
                     "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
                 ),
                 patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
                 patch("src.core.helpers.validate_creative_format_against_product", return_value=(True, None)),
                 patch(
                     "src.core.tools.media_buy_create._get_format_spec_sync",
@@ -916,7 +916,7 @@ class TestCreativeIdsNotFound:
                     "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
                 ),
                 patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
                 patch("src.core.tools.media_buy_create.get_slack_notifier"),
                 patch("src.core.tools.media_buy_create.activity_feed"),
             ):

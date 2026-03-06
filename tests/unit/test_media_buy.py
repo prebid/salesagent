@@ -1364,7 +1364,7 @@ class TestCreateMediaBuyAdapterInteraction:
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=MagicMock()),
             patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
-            patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+            patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
             patch(
                 "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
                 side_effect=AssertionError("adapter must not be called in dry_run mode"),
