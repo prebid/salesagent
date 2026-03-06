@@ -196,14 +196,14 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
                 params = data.get("params", {})
                 if "message" in params and isinstance(params["message"], dict):
                     message = params["message"]
-                    if "messageId" in message and isinstance(message["messageId"], (int, float)):
+                    if "messageId" in message and isinstance(message["messageId"], int | float):
                         logger.warning(
                             f"Converting numeric messageId {message['messageId']} to string for compatibility"
                         )
                         message["messageId"] = str(message["messageId"])
                         body = json.dumps(data).encode()
 
-            if "id" in data and isinstance(data["id"], (int, float)):
+            if "id" in data and isinstance(data["id"], int | float):
                 logger.warning(f"Converting numeric JSON-RPC id {data['id']} to string for compatibility")
                 data["id"] = str(data["id"])
                 body = json.dumps(data).encode()
@@ -227,11 +227,15 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 # Health and debug routes
 # ---------------------------------------------------------------------------
 
+from src.routes.admin_multi_tenant import router as admin_multi_tenant_router  # noqa: E402
+from src.routes.admin_tenant import router as admin_tenant_router  # noqa: E402
 from src.routes.api_v1 import router as api_v1_router  # noqa: E402
 from src.routes.health import debug_router as health_debug_router  # noqa: E402
 from src.routes.health import router as health_router  # noqa: E402
 
 app.include_router(api_v1_router)
+app.include_router(admin_multi_tenant_router)
+app.include_router(admin_tenant_router)
 app.include_router(health_router)
 app.include_router(health_debug_router)
 
@@ -271,10 +275,10 @@ admin_wsgi = WSGIMiddleware(flask_admin_app)
 _ADMIN_PATHS = ["/admin", "/static", "/auth", "/api", "/callback", "/logout", "/login", "/signup", "/test"]
 
 for _path in _ADMIN_PATHS:
-    app.mount(_path, admin_wsgi)  # type: ignore[arg-type]  # WSGIMiddleware is a valid ASGI app; starlette/a2wsgi typing mismatch
+    app.mount(_path, admin_wsgi)
 
 # Tenant-specific admin: /tenant/{tenant_id}/admin/...
-app.mount("/tenant", admin_wsgi)  # type: ignore[arg-type]  # WSGIMiddleware is a valid ASGI app; starlette/a2wsgi typing mismatch
+app.mount("/tenant", admin_wsgi)
 
 
 # ---------------------------------------------------------------------------

@@ -98,7 +98,7 @@ def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestErr
     """Translate AdCPError to an A2A SDK error type preserving semantics."""
     if isinstance(exc, AdCPValidationError):
         return InvalidParamsError(message=exc.message)
-    elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):
+    elif isinstance(exc, AdCPAuthenticationError | AdCPAuthorizationError):
         return InvalidRequestError(message=exc.message)
     else:
         return InternalError(message=exc.message)
