@@ -1,23 +1,25 @@
-"""Integration tests: sync_creatives auth, isolation, validation, and CRUD workflow.
+"""Integration tests: sync_creatives auth, isolation, validation, CRUD, extensions, provenance.
 
 Behavioral tests using CreativeSyncEnv + real PostgreSQL + factory_boy.
 Replaces mock-heavy unit tests from test_creative.py with provable assertions
 against actual database state.
 
-Covers: salesagent-xwkj, salesagent-11th
+Covers: salesagent-xwkj, salesagent-11th, salesagent-0m59
 """
 
 from __future__ import annotations
+
+from datetime import UTC
 
 import pytest
 from adcp.types import CreativeAction
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
 
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
-from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
+from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.creative_sync import CreativeSyncEnv
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -773,3 +775,467 @@ class TestSchemaCompleteness:
         assert result.action in list(CreativeAction)
         assert isinstance(result.changes, list)
         assert isinstance(result.errors, list)
+
+
+# ---------------------------------------------------------------------------
+# Extension Gaps — Covers: salesagent-0m59 (TestExtensionGaps conversion)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncExtensions:
+    """Extension scenarios: format errors, validation modes, assignment errors."""
+
+    def test_tenant_not_found_raises_auth_error(self, integration_db):
+        """Covers: UC-006-EXT-B-01 — tenant=None with principal → AdCPAuthenticationError."""
+        identity = _make_identity(principal_id="p1", tenant=None)
+        with CreativeSyncEnv() as env:
+            with pytest.raises(AdCPAuthenticationError, match="tenant"):
+                env.call_impl(creatives=[_make_creative_asset()], identity=identity)
+
+    def test_strict_validation_per_creative_independence(self, integration_db):
+        """Covers: UC-006-EXT-C-02 — strict: bad creative fails, good continues."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(creative_id="c_bad", name=""),  # empty name fails
+                    _make_creative_asset(creative_id="c_good", name="Good Creative"),
+                ],
+                validation_mode="strict",
+            )
+
+        assert len(response.creatives) == 2
+        result_by_id = {r.creative_id: r for r in response.creatives}
+        assert result_by_id["c_bad"].action == CreativeAction.failed
+        assert result_by_id["c_good"].action != CreativeAction.failed
+
+    def test_lenient_validation_bad_creative_fails_good_continues(self, integration_db):
+        """Covers: UC-006-EXT-C-03 — lenient: invalid creative failed, valid ones proceed."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(creative_id="c_bad", name=""),
+                    _make_creative_asset(creative_id="c_good", name="Good"),
+                ],
+                validation_mode="lenient",
+            )
+
+        assert len(response.creatives) == 2
+        result_by_id = {r.creative_id: r for r in response.creatives}
+        assert result_by_id["c_bad"].action == CreativeAction.failed
+
+    def test_missing_name_field_fails_validation(self, integration_db):
+        """Covers: UC-006-EXT-D-02 — dict without name → action=failed with errors."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[
+                    {
+                        "creative_id": "c_no_name",
+                        "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+                        "assets": {"banner": {"url": "https://example.com/b.png"}},
+                    }
+                ],
+            )
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].action == CreativeAction.failed
+        assert len(response.creatives[0].errors) > 0
+
+    def test_unknown_format_fails_with_hint(self, integration_db):
+        """Covers: UC-006-EXT-F-01 — format not in registry → failed with hint."""
+        from unittest.mock import AsyncMock
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Override: registry.get_format returns None (format not found)
+            registry_mock = env.mock["registry"].return_value
+            registry_mock.get_format = AsyncMock(return_value=None)
+
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_unknown_fmt")],
+            )
+
+        assert len(response.creatives) == 1
+        result = response.creatives[0]
+        assert result.action == CreativeAction.failed
+        assert any("list_creative_formats" in e for e in (result.errors or []))
+
+    def test_unreachable_agent_fails_with_retry(self, integration_db):
+        """Covers: UC-006-EXT-G-01 — agent unreachable → failed with retry suggestion."""
+        from unittest.mock import AsyncMock
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Override: registry.get_format raises ConnectionError
+            registry_mock = env.mock["registry"].return_value
+            registry_mock.get_format = AsyncMock(side_effect=ConnectionError("Agent unreachable"))
+
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_unreachable")],
+            )
+
+        assert len(response.creatives) == 1
+        result = response.creatives[0]
+        assert result.action == CreativeAction.failed
+        assert any("unreachable" in e.lower() for e in (result.errors or []))
+
+    def test_package_not_found_lenient_logs_error(self, integration_db):
+        """Covers: UC-006-EXT-J-02 — lenient: missing package → assignment_errors."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c1", name="OK Creative")],
+                assignments={"c1": ["missing_pkg"]},
+                validation_mode="lenient",
+            )
+
+        assert len(response.creatives) == 1
+        result = response.creatives[0]
+        assert result.assignment_errors is not None
+        assert "missing_pkg" in result.assignment_errors
+
+    def test_package_not_found_strict_raises(self, integration_db):
+        """Covers: UC-006-EXT-J-01 — strict: missing package → AdCPNotFoundError."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            with pytest.raises(AdCPNotFoundError, match="Package not found"):
+                env.call_impl(
+                    creatives=[_make_creative_asset(creative_id="c1", name="OK")],
+                    assignments={"c1": ["PKG-GONE"]},
+                    validation_mode="strict",
+                )
+
+    def test_format_mismatch_strict_raises(self, integration_db):
+        """Covers: UC-006-EXT-K-01 — strict: format mismatch → AdCPValidationError."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Product only supports display_300x250
+            product = ProductFactory(
+                tenant=tenant,
+                format_ids=[{"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"}],
+            )
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(
+                media_buy=media_buy,
+                package_config={"product_id": product.product_id, "package_id": "pkg_fmt"},
+            )
+            pkg_id = pkg.package_id
+
+            # Creative uses video_30s format (different from product's display)
+            with pytest.raises(AdCPValidationError, match="not supported"):
+                env.call_impl(
+                    creatives=[
+                        _make_creative_asset(
+                            creative_id="c_vid",
+                            name="Video Creative",
+                            format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="video_30s"),
+                        )
+                    ],
+                    assignments={"c_vid": [pkg_id]},
+                    validation_mode="strict",
+                )
+
+    def test_format_mismatch_lenient_logs_error(self, integration_db):
+        """Covers: UC-006-EXT-K-02 — lenient: format mismatch → assignment_errors."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            product = ProductFactory(
+                tenant=tenant,
+                format_ids=[{"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"}],
+            )
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(
+                media_buy=media_buy,
+                package_config={"product_id": product.product_id, "package_id": "pkg_fmt"},
+            )
+            pkg_id = pkg.package_id
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(
+                        creative_id="c_vid",
+                        name="Video",
+                        format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="video_30s"),
+                    )
+                ],
+                assignments={"c_vid": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        result = response.creatives[0]
+        assert result.assignment_errors is not None
+        assert pkg_id in result.assignment_errors
+
+    def test_adapter_format_skips_registry(self, integration_db):
+        """Covers: UC-006-EXT-H-02 — adapter:// agent_url bypasses external format lookup."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(
+                        creative_id="c_adapter",
+                        format_id=AdcpFormatId(agent_url="broadstreet://default", id="billboard"),
+                    )
+                ],
+            )
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].action != CreativeAction.failed
+
+
+# ---------------------------------------------------------------------------
+# Provenance Validation — Covers: salesagent-0m59 (TestProvenanceValidation conversion)
+# ---------------------------------------------------------------------------
+
+
+class TestProvenanceEnforcement:
+    """Provenance metadata enforcement end-to-end through sync flow."""
+
+    def test_provenance_required_missing_adds_warning(self, integration_db):
+        """Covers: UC-006-PROV-01 — product requires provenance, creative lacks it → warning."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            # Product with provenance_required policy
+            ProductFactory(
+                tenant=tenant,
+                creative_policy={"provenance_required": True, "co_branding": "optional"},
+            )
+
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_no_prov", name="No Provenance")],
+            )
+
+        assert len(response.creatives) == 1
+        result = response.creatives[0]
+        assert result.action != CreativeAction.failed
+        assert any("provenance" in w.lower() for w in (result.warnings or []))
+
+    def test_provenance_present_no_warning(self, integration_db):
+        """Covers: UC-006-PROV-02 — provenance present → no warning."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            ProductFactory(
+                tenant=tenant,
+                creative_policy={"provenance_required": True, "co_branding": "optional"},
+            )
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(
+                        creative_id="c_with_prov",
+                        name="With Provenance",
+                        provenance={"digital_source_type": "digital_creation", "ai_tool": "DALL-E"},
+                    )
+                ],
+            )
+
+        assert len(response.creatives) == 1
+        result = response.creatives[0]
+        assert result.action != CreativeAction.failed
+        provenance_warnings = [w for w in (result.warnings or []) if "provenance" in w.lower()]
+        assert len(provenance_warnings) == 0
+
+    def test_provenance_not_required_no_warning(self, integration_db):
+        """Covers: UC-006-PROV-03 — no provenance policy → no warning."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            # No product with provenance_required (or no products at all)
+
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_free", name="No Policy")],
+            )
+
+        assert len(response.creatives) == 1
+        result = response.creatives[0]
+        provenance_warnings = [w for w in (result.warnings or []) if "provenance" in w.lower()]
+        assert len(provenance_warnings) == 0
+
+    def test_provenance_required_false_no_warning(self, integration_db):
+        """Covers: UC-006-PROV-04 — provenance_required=False → no warning."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            ProductFactory(
+                tenant=tenant,
+                creative_policy={"provenance_required": False, "co_branding": "optional"},
+            )
+
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_opt", name="Optional")],
+            )
+
+        assert len(response.creatives) == 1
+        result = response.creatives[0]
+        provenance_warnings = [w for w in (result.warnings or []) if "provenance" in w.lower()]
+        assert len(provenance_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# Media Buy Status Transition — Covers: salesagent-0m59 (TestMediaBuyStatusTransition conversion)
+# ---------------------------------------------------------------------------
+
+
+class TestMediaBuyStatusOnSync:
+    """Media buy status transitions on creative assignment with real DB."""
+
+    def test_draft_with_approved_at_transitions_to_pending_creatives(self, integration_db):
+        """Covers: UC-006-MEDIA-BUY-STATUS-01 — draft + approved_at → pending_creatives."""
+        from datetime import datetime
+
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import MediaBuy as DBMediaBuy
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="draft",
+                approved_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            mb_id = media_buy.media_buy_id
+            pkg_id = pkg.package_id
+
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_mb", name="MB Test")],
+                assignments={"c_mb": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        with get_db_session() as session:
+            mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
+            assert mb is not None
+            assert mb.status == "pending_creatives"
+
+    def test_draft_without_approved_at_stays_draft(self, integration_db):
+        """Covers: UC-006-MEDIA-BUY-STATUS-02 — draft without approved_at stays draft."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import MediaBuy as DBMediaBuy
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="draft",
+                approved_at=None,
+            )
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            mb_id = media_buy.media_buy_id
+            pkg_id = pkg.package_id
+
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_mb2", name="MB Test 2")],
+                assignments={"c_mb2": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        with get_db_session() as session:
+            mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
+            assert mb is not None
+            assert mb.status == "draft"
+
+    def test_non_draft_status_unchanged(self, integration_db):
+        """Covers: UC-006-MEDIA-BUY-STATUS-03 — active status not affected by assignment."""
+        from datetime import datetime
+
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import MediaBuy as DBMediaBuy
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="active",
+                approved_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            mb_id = media_buy.media_buy_id
+            pkg_id = pkg.package_id
+
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_mb3", name="MB Test 3")],
+                assignments={"c_mb3": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        with get_db_session() as session:
+            mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
+            assert mb is not None
+            assert mb.status == "active"
+
+    def test_upsert_assignment_still_transitions(self, integration_db):
+        """Covers: UC-006-MEDIA-BUY-STATUS-04 — upserted assignment triggers status check."""
+        from datetime import datetime
+
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import MediaBuy as DBMediaBuy
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="draft",
+                approved_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            mb_id = media_buy.media_buy_id
+            pkg_id = pkg.package_id
+
+            # First assignment
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_upsert_mb", name="Upsert MB")],
+                assignments={"c_upsert_mb": [pkg_id]},
+                validation_mode="lenient",
+            )
+            # Second assignment (upsert) — status transition should still work
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_upsert_mb", name="Upsert MB")],
+                assignments={"c_upsert_mb": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        with get_db_session() as session:
+            mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
+            assert mb is not None
+            assert mb.status == "pending_creatives"
