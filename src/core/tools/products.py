@@ -933,12 +933,6 @@ async def get_products_raw(
     Returns:
         GetProductsResponse containing matching products
     """
-    # Resolve identity from transport context if not provided
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
-
     # Create request object - adcp library validates schema
     req = create_get_products_request(
         brief=brief or "",

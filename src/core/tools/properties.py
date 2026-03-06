@@ -250,8 +250,4 @@ def list_authorized_properties_raw(
     Returns:
         ListAuthorizedPropertiesResponse with authorized properties
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return _list_authorized_properties_impl(req, identity)

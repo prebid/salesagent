@@ -398,8 +398,4 @@ def list_creative_formats_raw(
     Returns:
         ListCreativeFormatsResponse with all available formats
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return _list_creative_formats_impl(req, identity)

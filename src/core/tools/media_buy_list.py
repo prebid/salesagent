@@ -280,11 +280,6 @@ def get_media_buys_raw(
     Returns:
         GetMediaBuysResponse
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=True, protocol="a2a")
-
     req = GetMediaBuysRequest(
         media_buy_ids=media_buy_ids,
         buyer_refs=buyer_refs,

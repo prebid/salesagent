@@ -303,9 +303,5 @@ async def get_adcp_capabilities_raw(
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
     req = GetAdcpCapabilitiesRequest()
     return _get_adcp_capabilities_impl(req, identity)

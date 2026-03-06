@@ -533,11 +533,6 @@ def get_media_buy_delivery_raw(
     Returns:
         GetMediaBuyDeliveryResponse with delivery metrics
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx)
-
     # Create request object
     req = GetMediaBuyDeliveryRequest(
         media_buy_ids=media_buy_ids,

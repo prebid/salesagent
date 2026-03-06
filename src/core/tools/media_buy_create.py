@@ -3825,11 +3825,6 @@ async def create_media_buy_raw(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
 
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=True)
-
     # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return await _create_media_buy_impl(
         req=req,
