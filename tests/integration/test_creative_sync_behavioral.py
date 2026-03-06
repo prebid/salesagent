@@ -17,10 +17,8 @@ from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.testing_hooks import AdCPTestContext
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
-from tests.harness.creative_sync import CreativeSyncEnv
+from tests.harness import CreativeSyncEnv, make_identity
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
@@ -39,16 +37,7 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
     return CreativeAsset(**defaults)
 
 
-def _make_identity(principal_id=None, tenant_id=None, tenant=None, **kwargs):
-    """Build a ResolvedIdentity with explicit control over all fields."""
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id or "test_tenant",
-        tenant=tenant,
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
-        **kwargs,
-    )
+_make_identity = make_identity  # Canonical version from tests.harness
 
 
 # ---------------------------------------------------------------------------

@@ -19,11 +19,9 @@ from adcp.types.generated_poc.core.format import (
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.exceptions import AdCPAuthenticationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
-from src.core.testing_hooks import AdCPTestContext
 from tests.factories import TenantFactory
-from tests.harness.creative_formats import CreativeFormatsEnv
+from tests.harness import CreativeFormatsEnv, make_identity
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
@@ -48,16 +46,7 @@ def _make_format(
     )
 
 
-def _make_identity(principal_id=None, tenant_id=None, tenant=None, **kwargs):
-    """Build a ResolvedIdentity with explicit control over all fields."""
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id or "test_tenant",
-        tenant=tenant,
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
-        **kwargs,
-    )
+_make_identity = make_identity  # Canonical version from tests.harness
 
 
 # ---------------------------------------------------------------------------

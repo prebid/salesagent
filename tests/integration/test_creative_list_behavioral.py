@@ -12,26 +12,15 @@ from __future__ import annotations
 import pytest
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.testing_hooks import AdCPTestContext
 from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
-from tests.harness.creative_list import CreativeListEnv
+from tests.harness import CreativeListEnv, make_identity
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-def _make_identity(principal_id=None, tenant_id=None, tenant=None, **kwargs):
-    """Build a ResolvedIdentity with explicit control over all fields."""
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id or "test_tenant",
-        tenant=tenant,
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
-        **kwargs,
-    )
+_make_identity = make_identity  # Canonical version from tests.harness
 
 
 # ---------------------------------------------------------------------------
