@@ -369,6 +369,21 @@ class IntegrationEnv(BaseTestEnv):
 
     use_real_db = True
 
+    def setup_default_data(self) -> tuple[Any, Any]:
+        """Create default tenant + principal via factories.
+
+        Must be called inside the ``with env:`` block (factories are bound
+        to the session during ``__enter__``).
+
+        Returns (tenant, principal) ORM instances. Uses self._tenant_id
+        and self._principal_id from constructor.
+        """
+        from tests.factories import PrincipalFactory, TenantFactory
+
+        tenant = TenantFactory(tenant_id=self._tenant_id)
+        principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
+        return tenant, principal
+
     def get_rest_client(self) -> Any:
         """Return FastAPI TestClient with auth overridden to return self.identity.
 

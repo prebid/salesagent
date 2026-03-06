@@ -15,7 +15,6 @@ import pytest
 from adcp.types import CreativeAction
 
 from src.core.exceptions import AdCPNotFoundError
-from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope
 
 # All four transports: IMPL, A2A, REST, MCP
@@ -33,8 +32,7 @@ class TestSyncCreativeCreateTransport:
         Covers: T-UC-006-main-rest, T-UC-006-main-mcp
         """
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.setup_default_data()
 
             result = env.call_via(
                 transport,
@@ -61,8 +59,7 @@ class TestSyncCreativeCreateTransport:
     def test_empty_creative_list_returns_success(self, integration_db, transport):
         """Empty creative list is a valid no-op across all transports."""
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.setup_default_data()
 
             result = env.call_via(transport, creatives=[])
 
@@ -73,8 +70,7 @@ class TestSyncCreativeCreateTransport:
     def test_dry_run_does_not_persist(self, integration_db, transport):
         """Dry run previews changes without persisting across all transports."""
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.setup_default_data()
 
             result = env.call_via(
                 transport,
@@ -120,8 +116,7 @@ class TestSyncUpsertReturnsUpdatedTransport:
     def test_upsert_existing_creative_reports_updated(self, integration_db, transport):
         """Syncing a creative that already exists returns action=updated."""
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.setup_default_data()
 
             # First sync: create the creative
             creative_data = _creative(creative_id="c_upsert")
@@ -148,8 +143,7 @@ class TestSyncSavepointIsolationTransport:
     def test_good_creative_persists_despite_bad_in_batch(self, integration_db, transport):
         """Savepoint isolation: bad creative doesn't roll back good ones."""
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.setup_default_data()
 
             result = env.call_via(
                 transport,
@@ -181,8 +175,7 @@ class TestSyncStrictModeAbortTransport:
     def test_strict_mode_missing_package_aborts(self, integration_db, transport):
         """Strict validation_mode raises on missing package assignment."""
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.setup_default_data()
 
             result = env.call_via(
                 transport,
@@ -206,8 +199,7 @@ class TestSyncLenientModeContinuesTransport:
     def test_lenient_mode_missing_package_records_error(self, integration_db, transport):
         """Lenient validation_mode logs error and continues past missing package."""
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.setup_default_data()
 
             result = env.call_via(
                 transport,
@@ -234,8 +226,7 @@ class TestSyncFormatValidationTransport:
     def test_unknown_format_fails_before_db_write(self, integration_db, transport):
         """Creative with unknown format_id gets action=failed."""
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.setup_default_data()
 
             # Override: registry.get_format returns None (format not found)
             registry_mock = env.mock["registry"].return_value
@@ -264,8 +255,7 @@ class TestSyncRegistryCachingTransport:
     def test_registry_called_once_for_multiple_creatives(self, integration_db, transport):
         """list_all_formats is called once regardless of creative count."""
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.setup_default_data()
 
             result = env.call_via(
                 transport,

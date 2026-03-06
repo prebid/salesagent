@@ -307,6 +307,14 @@ class TestBaseClassContract:
 class TestEnvMethodNamingConsistency:
     """Env methods with the same name across subclasses must have consistent semantics."""
 
+    def test_integration_env_has_setup_default_data(self):
+        """IntegrationEnv.setup_default_data creates tenant + principal via factories."""
+        from tests.harness._base import IntegrationEnv
+
+        assert hasattr(IntegrationEnv, "setup_default_data"), (
+            "IntegrationEnv should have setup_default_data() to reduce boilerplate"
+        )
+
     def test_base_env_has_run_mcp_wrapper(self):
         """BaseTestEnv exposes _run_mcp_wrapper for DRY MCP dispatch."""
         from tests.harness._base import BaseTestEnv
