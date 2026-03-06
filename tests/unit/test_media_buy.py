@@ -3018,7 +3018,6 @@ class TestDeliveryImplSingleBuy:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3028,10 +3027,6 @@ class TestDeliveryImplSingleBuy:
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
-            # Inner session for PricingOption query
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3754,16 +3749,14 @@ class TestDeliveryImplPricingLookup:
         mock_po.id = 42
         mock_po.pricing_model = "cpm"
 
-        with patch("src.core.tools.media_buy_delivery.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_session.scalars.return_value.all.return_value = [mock_po]
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [mock_po]
 
-            # String ID "42" should be cast to int for PK lookup
-            result = _get_pricing_options(["42"])
+        # String ID "42" should be cast to int for PK lookup
+        result = _get_pricing_options(["42"], session=mock_session)
 
-            assert "42" in result
-            assert result["42"] == mock_po
+        assert "42" in result
+        assert result["42"] == mock_po
 
     def test_delivery_spend_with_correct_pricing(self):
         """UC-004-PL02: spend computed from rate and impressions.

@@ -143,6 +143,12 @@ and rethink. Never adjust tests to fit code without documented justification.
 - Don't skip write-test for tasks — no test = no gate on correctness
 - Don't combine write-test and implement into one step — the test must fail BEFORE implementation starts
 - Don't write tests that pass immediately (unless guarding existing behavior in a refactor)
+- Don't use pytest.mark.xfail in regression tests — xfail is NOT a failing test
+- Don't use AST/source-code scanning as regression tests — test behavior, not code text
+- Don't write unit tests when an integration test is feasible — mock-heavy tests are echo chambers
+- Don't report "done" if the regression test never produced a FAILED output
+- Don't substitute `make quality` for `scripts/run-test.sh` when iterating — use the targeted runner
+- Don't substitute `scripts/run-test.sh` for `./run_all_tests.sh` in the finalize atom — the full suite is mandatory
 
 ## See Also
 

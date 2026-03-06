@@ -45,8 +45,6 @@ IMPL_FILES = [
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
 # FIXME(salesagent-qo8a): all _impl functions should use repositories instead of get_db_session()
 IMPL_SESSION_ALLOWLIST = {
-    # media_buy_delivery.py — 1 function with get_db_session()
-    ("src/core/tools/media_buy_delivery.py", "_get_pricing_options"),
     # products.py — 1 function with get_db_session() (product queries moved to ProductRepository)
     # FIXME(salesagent-qo8a): _get_products_impl still uses get_db_session() for policy review + dynamic pricing
     ("src/core/tools/products.py", "_get_products_impl"),
@@ -121,6 +119,9 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_context_persistence.py", "test_simplified_context"),
     # tests/integration/test_creative_assignment_principal_id.py
     ("tests/integration/test_creative_assignment_principal_id.py", "ca_creatives"),
+    # tests/integration/test_product_repository.py — repository test legitimately uses session.add()
+    ("tests/integration/test_product_repository.py", "_create_test_tenant"),
+    ("tests/integration/test_product_repository.py", "_create_test_product"),
     # tests/integration/test_creative_review_model.py
     ("tests/integration/test_creative_review_model.py", "_create_test_tenant_with_creative"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_query"),

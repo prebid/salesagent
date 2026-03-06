@@ -176,10 +176,6 @@ def _standard_patches(
             f"{_PATCH_PREFIX}._get_pricing_options",
             return_value=pricing_options or {},
         ),
-        # Mock the inner get_db_session used for PricingOption query
-        "db_session": patch(
-            f"{_PATCH_PREFIX}.get_db_session",
-        ),
         # Mock UoW so _get_media_buy_delivery_impl doesn't hit real DB
         "uow": patch(
             f"{_PATCH_PREFIX}.MediaBuyUoW",
@@ -248,10 +244,8 @@ class TestDeliveryImplSingleBuyOrchestration:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # -- Assertions --
@@ -361,10 +355,8 @@ class TestDeliveryImplMultiBuyAggregation:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Sum invariants
@@ -429,10 +421,8 @@ class TestDeliveryImplAdapterError:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Should return error response, not raise
@@ -484,10 +474,8 @@ class TestDeliveryImplAdapterError:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert response.reporting_period.start.month == 3
@@ -539,7 +527,6 @@ class TestDeliveryImplIdentificationModes:
             patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter),
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test_tenant"}),
             patch(f"{_PATCH_PREFIX}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH_PREFIX}.get_db_session"),
             patch(f"{_PATCH_PREFIX}.MediaBuyUoW", return_value=mock_uow),
         ):
             return _get_media_buy_delivery_impl(req, identity)
@@ -574,10 +561,8 @@ class TestDeliveryImplIdentificationModes:
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert len(response.media_buy_deliveries) == 1
@@ -616,10 +601,8 @@ class TestDeliveryImplIdentificationModes:
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert len(response.media_buy_deliveries) == 1
@@ -658,10 +641,8 @@ class TestDeliveryImplIdentificationModes:
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # The request passed to _get_target_media_buys has both set
@@ -700,10 +681,8 @@ class TestDeliveryImplIdentificationModes:
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         call_req = mock_target.call_args[0][0]
@@ -742,10 +721,8 @@ class TestDeliveryImplIdentificationModes:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Only 1 delivery returned, error reported for missing ID (salesagent-mexj fix)
@@ -771,7 +748,6 @@ class TestDeliveryImplIdentificationModes:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -862,7 +838,6 @@ class TestDeliveryImplStatusFilter:
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             _get_media_buy_delivery_impl(req, identity)
@@ -1039,7 +1014,6 @@ class TestDeliveryImplCustomDateRange:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -1060,7 +1034,6 @@ class TestDeliveryImplCustomDateRange:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             response = _get_media_buy_delivery_impl(req, identity)

@@ -878,7 +878,7 @@ async def _get_products_impl(
             "product_count": len(eligible_products),
             "brief_length": len(brief_text),
             "has_filters": req.filters is not None,
-            "has_brand_manifest": req.brand is not None,
+            "has_brand": req.brand is not None,
             "elapsed_ms": elapsed_ms,
         },
     )

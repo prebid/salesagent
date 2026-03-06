@@ -1,5 +1,6 @@
 """Authentication utilities for MCP server."""
 
+import hmac
 import logging
 
 from sqlalchemy import select
@@ -36,7 +37,7 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
             # Check if it's the admin token for this specific tenant
             tenant_stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
             tenant_obj = session.scalars(tenant_stmt).first()
-            if tenant_obj and tenant_obj.admin_token == token:
+            if tenant_obj and tenant_obj.admin_token and hmac.compare_digest(tenant_obj.admin_token, token):
                 logger.debug("Token matches admin token for tenant '%s'", tenant_id)
                 return f"{tenant_id}_admin", None
 
@@ -78,46 +79,3 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
     except Exception as e:
         logger.error(f"[AUTH] Database error during principal lookup: {e}", exc_info=True)
         return None, None
-
-
-def get_principal_object(principal_id: str, tenant_id: str | None = None) -> Principal | None:
-    """Get the Principal object with platform mappings using retry logic.
-
-    Args:
-        principal_id: The principal ID to look up
-        tenant_id: Tenant ID for isolation (falls back to current tenant if None)
-
-    Returns:
-        Principal object or None if not found
-    """
-    if not principal_id:
-        return None
-
-    def _get_principal_object(session):
-        from src.core.schemas import Principal as PrincipalSchema
-
-        # Resolve tenant_id from current context if not provided
-        _tenant_id = tenant_id
-        if _tenant_id is None:
-            current_tenant = get_current_tenant()
-            _tenant_id = current_tenant["tenant_id"]
-
-        # Query the database for the principal (scoped to tenant)
-        stmt = select(Principal).filter_by(principal_id=principal_id, tenant_id=_tenant_id)
-        db_principal = session.scalars(stmt).first()
-
-        if db_principal:
-            # Convert to Pydantic model
-            return PrincipalSchema(
-                principal_id=db_principal.principal_id,
-                name=db_principal.name,
-                platform_mappings=db_principal.platform_mappings or {},
-            )
-
-        return None
-
-    try:
-        return execute_with_retry(_get_principal_object)
-    except Exception as e:
-        logger.error(f"[AUTH] Database error during principal object lookup: {e}", exc_info=True)
-        return None
