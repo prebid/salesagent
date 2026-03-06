@@ -282,12 +282,19 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
 
 
 @pytest.mark.requires_db
+@pytest.mark.xfail(
+    reason="dry_run=True now skips adapter call entirely (returns simulated success). "
+    "GAM pricing rejection only runs inside the adapter, which is no longer invoked. "
+    "Adapter pricing validation is unit-tested in test_gam_pricing_compatibility.py. "
+    "TODO: move adapter-level pricing validation to pre-adapter business logic.",
+    strict=True,
+)
 async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_product):
     """Test that GAM adapter rejects CPCV pricing model with clear error."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -333,7 +340,7 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -370,6 +377,13 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
 
 
 @pytest.mark.requires_db
+@pytest.mark.xfail(
+    reason="dry_run=True now skips adapter call entirely (returns simulated success). "
+    "GAM pricing rejection only runs inside the adapter, which is no longer invoked. "
+    "Adapter pricing validation is unit-tested in test_gam_pricing_compatibility.py. "
+    "TODO: move adapter-level pricing validation to pre-adapter business logic.",
+    strict=True,
+)
 async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_non_cpm_product):
     """Test that GAM adapter rejects CPP when buyer chooses it from multi-pricing product."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -377,7 +391,7 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",
@@ -422,7 +436,7 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1",

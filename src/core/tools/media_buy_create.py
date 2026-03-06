@@ -12,12 +12,16 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
-from adcp import BrandManifest, PushNotificationConfig
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+from adcp import PushNotificationConfig
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
+from adcp.types.aliases import Package as ResponsePackage
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
@@ -216,7 +220,11 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
         return None
 
 
-def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant_id: str) -> None:
+def _validate_creatives_before_adapter_call(
+    packages: list[MediaPackage],
+    tenant_id: str,
+    session: "Session | None" = None,
+) -> None:
     """Validate all creatives have required fields BEFORE calling adapter.
 
     This prevents GAM order creation when creatives are invalid, enabling
@@ -227,14 +235,17 @@ def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant
     Args:
         packages: List of Package objects with creative_ids
         tenant_id: Tenant ID for database lookup
+        session: SQLAlchemy session (from UoW).
 
     Raises:
         AdCPValidationError: If any creative is missing required fields (URL, dimensions)
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Creative as DBCreative
+
+    if session is None:
+        raise ValueError("session is required for _validate_creatives_before_adapter_call")
 
     # Collect all creative IDs from all packages
     all_creative_ids = set()
@@ -248,16 +259,22 @@ def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant
         return
 
     # Fetch all creatives in one query
-    with get_db_session() as session:
-        stmt = select(DBCreative).where(
-            DBCreative.tenant_id == tenant_id, DBCreative.creative_id.in_(list(all_creative_ids))
-        )
-        creatives_list = list(session.scalars(stmt).all())
+    stmt = select(DBCreative).where(
+        DBCreative.tenant_id == tenant_id, DBCreative.creative_id.in_(list(all_creative_ids))
+    )
+    creatives_list = list(session.scalars(stmt).all())
 
     # Validate each creative has required fields
     validation_errors = []
     for creative in creatives_list:
         creative_data = creative.data or {}
+
+        # BR-RULE-026: Reject creatives in terminal error states
+        if hasattr(creative, "status") and creative.status in ("error", "rejected"):
+            validation_errors.append(
+                f"Creative {creative.creative_id} has status '{creative.status}' and cannot be used in a media buy"
+            )
+            continue
 
         # Get format specification from creative agent (uses in-memory cache with 30min TTL)
         format_spec = None
@@ -295,13 +312,65 @@ def _validate_creatives_before_adapter_call(packages: list[MediaPackage], tenant
                 f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
             )
 
+    # --- Format compatibility check: creative format vs product accepted formats ---
+    # Build creative_id -> format mapping from fetched creatives
+    creative_format_map: dict[str, str] = {}
+    for creative in creatives_list:
+        if creative.format:
+            creative_format_map[creative.creative_id] = str(creative.format)
+
+    # Collect all product_ids from packages that have creatives
+    product_ids_needed: set[str] = set()
+    for package in packages:
+        pkg_creative_ids = _get_creative_ids(package)
+        if pkg_creative_ids and package.product_id:
+            product_ids_needed.add(package.product_id)
+
+    if product_ids_needed:
+        from src.core.database.models import Product as DBProduct
+
+        product_stmt = select(DBProduct).where(
+            DBProduct.tenant_id == tenant_id, DBProduct.product_id.in_(list(product_ids_needed))
+        )
+        products_list = list(session.scalars(product_stmt).all())
+
+        # Build product_id -> set of accepted format id strings
+        product_format_map: dict[str, set[str]] = {}
+        for product in products_list:
+            accepted_formats: set[str] = set()
+            if product.format_ids:
+                for fmt in product.format_ids:
+                    fmt_id = fmt.get("id") if isinstance(fmt, dict) else getattr(fmt, "id", None)
+                    if fmt_id:
+                        accepted_formats.add(str(fmt_id))
+            product_format_map[product.product_id] = accepted_formats
+
+        # Check each package's creatives against its product's accepted formats
+        for package in packages:
+            pkg_creative_ids = _get_creative_ids(package)
+            if not pkg_creative_ids or not package.product_id:
+                continue
+
+            accepted = product_format_map.get(package.product_id)
+            if accepted is None or not accepted:
+                continue  # Product not found or has no formats — skip format check
+
+            for cid in pkg_creative_ids:
+                creative_fmt = creative_format_map.get(cid)
+                if creative_fmt and creative_fmt not in accepted:
+                    validation_errors.append(
+                        f"Creative {cid} has format '{creative_fmt}' which is not accepted by "
+                        f"product {package.product_id} (accepted formats: {sorted(accepted)})"
+                    )
+
     if validation_errors:
         error_msg = (
-            "Cannot create media buy with invalid reference creatives. "
-            "The following reference creatives are missing required fields:\n"
+            "Cannot create media buy with invalid creatives. "
+            "The following creatives have validation errors:\n"
             + "\n".join(f"  • {err}" for err in validation_errors)
             + "\n\nReference creatives must have dimensions (width/height) and a content URL "
             "matching their format specification. "
+            + "Creative formats must match the product's accepted formats. "
             + "Generative creatives will be converted to reference formats during campaign creation. "
             + "Please ensure reference creatives are properly synced before creating media buys."
         )
@@ -394,9 +463,8 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy
     from src.core.database.models import MediaPackage as DBMediaPackage
+    from src.core.database.repositories import MediaBuyUoW
 
     logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
 
@@ -405,8 +473,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     from src.core.database.models import Tenant
 
     try:
-        # Load tenant and set context
-        with get_db_session() as session:
+        # Load tenant and set context — single UoW for all reads
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.session is not None
+            session = uow.session
             stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
             tenant_obj = session.scalars(stmt_tenant).first()
 
@@ -450,6 +520,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 return False, error_msg
 
             # Load packages from media_packages table
+            # FIXME(salesagent-rva2): migrate to uow.media_buys.get_packages()
             stmt_packages = select(DBMediaPackage).filter_by(media_buy_id=media_buy_id)
             db_packages = session.scalars(stmt_packages).all()
 
@@ -712,9 +783,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 f"{len(packages)} packages, start={start_time}, end={end_time}"
             )
 
-        # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
-        # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
-        _validate_creatives_before_adapter_call(packages, tenant_id)
+            # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
+            # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
+            _validate_creatives_before_adapter_call(packages, tenant_id, session=session)
 
         # Execute adapter creation (outside session to avoid conflicts)
         response = _execute_adapter_media_buy_creation(
@@ -740,7 +811,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
         # Upload and associate inline creatives if any exist
         # This handles inline creatives that were uploaded during initial media buy creation
-        with get_db_session() as session:
+        with MediaBuyUoW(tenant_id) as uow2:
+            assert uow2.session is not None
+            session = uow2.session
             from src.core.database.models import Creative as CreativeModel
             from src.core.database.models import CreativeAssignment
 
@@ -768,9 +841,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         }
                     )
 
-                # Load all creatives
+                # Load all creatives (scoped to tenant)
                 all_creative_ids = list(packages_by_creative.keys())
-                stmt_creatives = select(CreativeModel).filter(CreativeModel.creative_id.in_(all_creative_ids))
+                stmt_creatives = select(CreativeModel).filter(
+                    CreativeModel.tenant_id == tenant_id,
+                    CreativeModel.creative_id.in_(all_creative_ids),
+                )
                 creatives = session.scalars(stmt_creatives).all()
 
                 # Create creative map
@@ -917,6 +993,13 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
             return False, error_msg
 
+        # Update media buy status to 'active' after successful adapter execution
+        # (UC-002:437 — "updates the media buy status to active")
+        with MediaBuyUoW(tenant_id) as uow3:
+            assert uow3.media_buys is not None
+            uow3.media_buys.update_status(media_buy_id, "active")
+            logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
+
         return True, None
 
     except Exception as e:
@@ -951,7 +1034,7 @@ def _validate_pricing_model_selection(
         }
 
     Raises:
-        AdCPValidationError: If pricing_model validation fails
+        ToolError: If pricing_model validation fails
     """
     from decimal import Decimal
 
@@ -1102,7 +1185,7 @@ async def _validate_and_convert_format_ids(
         List of validated FormatId dicts with {agent_url, id}
 
     Raises:
-        AdCPValidationError: If any format_id is invalid, unregistered, or doesn't exist
+        ToolError: If any format_id is invalid, unregistered, or doesn't exist
     """
     from src.core.creative_agent_registry import CreativeAgentRegistry
 
@@ -1195,7 +1278,7 @@ from src.services.slack_notifier import get_slack_notifier
 
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    push_notification_config: dict[str, Any] | BaseModel | None = None,
+    push_notification_config: dict[str, Any] | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
 ) -> CreateMediaBuyResult:
@@ -1203,17 +1286,12 @@ async def _create_media_buy_impl(
 
     Args:
         req: Validated CreateMediaBuyRequest with all protocol fields
-        push_notification_config: Push notification config for status updates (model or dict)
+        push_notification_config: Push notification config dict (transport wrapper serializes models)
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:
         CreateMediaBuyResult wrapping response and status
     """
-    # Normalize push_notification_config to dict for downstream dict-based operations
-    # (A2A server passes a2a.types.PushNotificationConfig model)
-    if push_notification_config is not None and isinstance(push_notification_config, BaseModel):
-        push_notification_config = push_notification_config.model_dump(mode="json")
-
     request_start_time = time.time()
 
     # Warn if unsupported reporting_webhook frequency is requested
@@ -1270,6 +1348,19 @@ async def _create_media_buy_impl(
             status=AdcpTaskStatus.failed.value,
         )
 
+    # Validate buyer_ref uniqueness within tenant+principal scope (BR-RULE-009)
+    if req.buyer_ref:
+        from src.core.database.repositories import MediaBuyUoW
+
+        with MediaBuyUoW(tenant["tenant_id"]) as dup_uow:
+            assert dup_uow.media_buys is not None
+            existing = dup_uow.media_buys.get_by_principal(principal_id, buyer_refs=[req.buyer_ref])
+            if existing:
+                raise AdCPValidationError(
+                    f"buyer_ref '{req.buyer_ref}' already exists for this principal. "
+                    f"Each buyer_ref must be unique within a principal."
+                )
+
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
     ctx_manager = get_context_manager()
@@ -1289,15 +1380,10 @@ async def _create_media_buy_impl(
                 persistent_ctx = ctx_manager.create_context(tenant_id=tenant["tenant_id"], principal_id=principal_id)
 
         # Create workflow step for tracking this operation
-        # Prepare request data with protocol detection
-        request_data_for_workflow = req.model_dump(mode="json")
-
-        # Store protocol type for webhook payload creation
-        request_data_for_workflow["protocol"] = identity.protocol
-
-        # Store push_notification_config in workflow step request_data (same pattern as sync_creatives)
+        # Pass model directly — ContextManager serializes at the DB boundary
+        workflow_metadata: dict[str, Any] = {"protocol": identity.protocol}
         if push_notification_config:
-            request_data_for_workflow["push_notification_config"] = push_notification_config
+            workflow_metadata["push_notification_config"] = push_notification_config
 
         step = ctx_manager.create_workflow_step(
             context_id=persistent_ctx.context_id,
@@ -1305,14 +1391,15 @@ async def _create_media_buy_impl(
             owner="system",
             status="in_progress",
             tool_name="create_media_buy",
-            request_data=request_data_for_workflow,
+            request_data=req,
+            request_metadata=workflow_metadata,
         )
 
         # Register push notification config if provided (MCP/A2A protocol support)
         # Skip for dry_run mode (no database writes)
         if push_notification_config:
-            from src.core.database.database_session import get_db_session
             from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+            from src.core.database.repositories import MediaBuyUoW
 
             logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
 
@@ -1330,7 +1417,9 @@ async def _create_media_buy_impl(
                 config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
 
                 # Save to database
-                with get_db_session() as db:
+                with MediaBuyUoW(tenant["tenant_id"]) as pnc_uow:
+                    assert pnc_uow.session is not None
+                    db = pnc_uow.session
                     # Check if config already exists
                     from sqlalchemy import select
 
@@ -1359,7 +1448,7 @@ async def _create_media_buy_impl(
                         )
                         db.add(new_config)
 
-                    db.commit()
+                    # UoW auto-commits on clean exit
                     logger.info(
                         f"[MCP/A2A] Push notification config {'updated' if existing_config else 'created'}: {config_id}"
                     )
@@ -1459,12 +1548,14 @@ async def _create_media_buy_impl(
 
         from sqlalchemy import select
 
-        from src.core.database.database_session import get_db_session
         from src.core.database.models import CurrencyLimit
         from src.core.database.models import Product as ProductModel
+        from src.core.database.repositories import MediaBuyUoW
 
         # Get products first to determine currency from pricing options
-        with get_db_session() as session:
+        with MediaBuyUoW(tenant["tenant_id"]) as validation_uow:
+            assert validation_uow.session is not None
+            session = validation_uow.session
             # Get products from database
             from sqlalchemy.orm import selectinload
 
@@ -1906,7 +1997,7 @@ async def _create_media_buy_impl(
             # Generate permanent package IDs (not dependent on media buy ID)
             # These IDs will be used whether the media buy is pending or approved
             pending_packages = []
-            raw_request_dict = req.model_dump(mode="json", by_alias=True)  # Serialize with aliases (e.g., content_uri)
+            package_id_map: dict[int, str] = {}  # 0-based index → package_id
 
             # req.packages validated earlier in _create_media_buy_impl
             assert req.packages is not None, "packages required - validated earlier"
@@ -1950,8 +2041,8 @@ async def _create_media_buy_impl(
                     )
                 )
 
-                # Update the package in raw_request with the generated package_id so UI can find it
-                raw_request_dict["packages"][idx - 1]["package_id"] = package_id
+                # Track package_id for injection into serialized raw_request (0-based index)
+                package_id_map[idx - 1] = package_id
 
             # Remap package_pricing_info from index-based keys to actual package IDs
             # Note: pending_packages loop used enumerate(req.packages, 1) but pricing used enumerate(req.packages) starting at 0
@@ -1968,26 +2059,24 @@ async def _create_media_buy_impl(
 
             # Create media buy record in the database with permanent ID
             # Status is "pending_approval" but the ID is final
-            with get_db_session() as session:
-                pending_buy = MediaBuy(
+            # Repository handles raw_request serialization + package_id injection at the DB boundary
+            with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
+                assert pending_uow.session is not None and pending_uow.media_buys is not None
+                pending_uow.media_buys.create_from_request(
                     media_buy_id=media_buy_id,
-                    buyer_ref=req.buyer_ref,
+                    req=req,
                     principal_id=principal.principal_id,
-                    tenant_id=tenant["tenant_id"],
-                    status="pending_approval",
-                    order_name=f"{req.buyer_ref} - {start_time.strftime('%Y-%m-%d')}",
                     advertiser_name=principal.name,
                     budget=total_budget,
-                    currency=request_currency or "USD",  # Use request_currency from validation above
-                    start_date=start_time.date(),
-                    end_date=end_time.date(),
+                    currency=request_currency or "USD",
                     start_time=start_time,
                     end_time=end_time,
-                    raw_request=raw_request_dict,  # Now includes package_id in each package
+                    status="pending_approval",
+                    order_name=f"{req.buyer_ref} - {start_time.strftime('%Y-%m-%d')}",
+                    package_id_map=package_id_map,
+                    by_alias=True,
                     created_at=datetime.now(UTC),
                 )
-                session.add(pending_buy)
-                session.commit()
                 logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
 
             # Log to activity feed for manual approval case
@@ -2028,7 +2117,9 @@ async def _create_media_buy_impl(
 
             # Create MediaPackage records for structured querying
             # This enables the UI to display packages and creative assignments to work properly
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as pkg_uow:
+                assert pkg_uow.session is not None
+                session = pkg_uow.session
                 from src.core.database.models import MediaPackage as DBMediaPackage
 
                 for pkg_obj in pending_packages:
@@ -2112,24 +2203,27 @@ async def _create_media_buy_impl(
                     )
                     session.add(db_package)
 
-                session.commit()
+                # UoW auto-commits on clean exit
                 logger.info(f"✅ Created {len(pending_packages)} MediaPackage records")
 
             # Link the workflow step to the media buy so the approval button shows in UI
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as wf_uow:
+                assert wf_uow.session is not None
                 from src.core.database.models import ObjectWorkflowMapping
 
                 mapping = ObjectWorkflowMapping(
                     object_type="media_buy", object_id=media_buy_id, step_id=step.step_id, action="create"
                 )
-                session.add(mapping)
-                session.commit()
+                wf_uow.session.add(mapping)
+                # UoW auto-commits on clean exit
                 logger.info(f"✅ Linked workflow step {step.step_id} to media buy")
 
             # Create creative assignments for manual approval flow
             # This must happen AFTER media packages are created so we have package_ids
             if req.packages:
-                with get_db_session() as session:
+                with MediaBuyUoW(tenant["tenant_id"]) as assign_uow:
+                    assert assign_uow.session is not None
+                    session = assign_uow.session
                     from src.core.database.models import Creative as DBCreative
                     from src.core.database.models import CreativeAssignment as DBAssignment
 
@@ -2229,6 +2323,7 @@ async def _create_media_buy_impl(
                                 assignment = DBAssignment(
                                     assignment_id=assignment_id,
                                     tenant_id=tenant["tenant_id"],
+                                    principal_id=principal_id,
                                     media_buy_id=media_buy_id,
                                     package_id=pkg_id,
                                     creative_id=creative_id,
@@ -2238,7 +2333,7 @@ async def _create_media_buy_impl(
                                     f"[CREATIVE_ASSIGN_DEBUG] Created assignment {assignment_id} for creative {creative_id}"
                                 )
 
-                            session.commit()
+                            # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
             # Return success response with packages awaiting approval
@@ -2292,12 +2387,13 @@ async def _create_media_buy_impl(
                     )
 
                     # Persist the auto-generated config to database
-                    with get_db_session() as db_session:
+                    with MediaBuyUoW(tenant["tenant_id"]) as gam_uow:
+                        assert gam_uow.session is not None
                         product_stmt = select(ModelProduct).filter_by(product_id=schema_product.product_id)
-                        db_product = db_session.scalars(product_stmt).first()
+                        db_product = gam_uow.session.scalars(product_stmt).first()
                         if db_product:
                             db_product.implementation_config = schema_product.implementation_config
-                            db_session.commit()
+                            # UoW auto-commits on clean exit
                             logger.info(f"Saved auto-generated GAM config for product {schema_product.product_id}")
 
                 # Validate the config (whether existing or auto-generated)
@@ -2721,7 +2817,9 @@ async def _create_media_buy_impl(
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
         try:
-            _validate_creatives_before_adapter_call(packages, tenant["tenant_id"])
+            with MediaBuyUoW(tenant["tenant_id"]) as pre_validate_uow:
+                assert pre_validate_uow.session is not None
+                _validate_creatives_before_adapter_call(packages, tenant["tenant_id"], session=pre_validate_uow.session)
         except AdCPError:
             # Validation failed - creative validation errors already logged
             # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
@@ -2730,6 +2828,27 @@ async def _create_media_buy_impl(
                     step.step_id, status="failed", error_message="Creative validation failed"
                 )
             raise
+
+        # Dry-run mode: skip adapter call entirely, return simulated response
+        # All validation (products, pricing, budgets, creatives) has passed above.
+        if testing_ctx.dry_run:
+            logger.info("[DRY_RUN] Validation passed, returning simulated response without adapter call")
+            simulated_packages = [
+                ResponsePackage(
+                    package_id=pkg.package_id,
+                    product_id=pkg.product_id,
+                    buyer_ref=pkg.buyer_ref,
+                    budget=pkg.budget,
+                )
+                for pkg in packages
+            ]
+            simulated_response = CreateMediaBuySuccess(
+                media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
+                buyer_ref=req.buyer_ref or "",
+                packages=simulated_packages,
+                context=req.context,
+            )
+            return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
         # Call adapter using shared creation logic
         # Note: start_time variable already resolved from 'asap' to actual datetime if needed
@@ -2758,12 +2877,6 @@ async def _create_media_buy_impl(
             for i, pkg_item in enumerate(response.packages):
                 # pkg_item is dict[str, Any] here (response.packages), different scope from earlier Package usage
                 logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
-
-        # Dry-run mode: Return adapter response without database writes
-        # Adapter validation has run, so errors (like unsupported pricing) are already caught above
-        if testing_ctx.dry_run:
-            logger.info("[DRY_RUN] Adapter validation passed, returning response without database writes")
-            return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.completed.value)
 
         # Type narrowing: after dry_run return, step and persistent_ctx are guaranteed to exist
         # This is needed for mypy to understand these won't be None in the code below
@@ -2801,32 +2914,30 @@ async def _create_media_buy_impl(
         )
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
-        with get_db_session() as session:
-            new_media_buy = MediaBuy(
+        # Repository handles raw_request serialization at the DB boundary
+        with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
+            assert create_uow.media_buys is not None
+            create_uow.media_buys.create_from_request(
                 media_buy_id=response.media_buy_id,
-                tenant_id=tenant["tenant_id"],
+                req=req,
                 principal_id=principal_id,
-                buyer_ref=req.buyer_ref,  # AdCP v2.4 buyer reference
-                order_name=req.po_number or f"Order-{response.media_buy_id}",
                 advertiser_name=principal.name,
-                campaign_objective=getattr(req, "campaign_objective", ""),  # Optional field
-                kpi_goal=getattr(req, "kpi_goal", ""),  # Optional field
-                budget=total_budget,  # Extract total budget
-                currency=request_currency,  # AdCP v2.4 currency field (resolved above)
-                start_date=start_time.date(),  # Legacy field for compatibility
-                end_date=end_time.date(),  # Legacy field for compatibility
-                start_time=start_time,  # AdCP v2.4 datetime scheduling (resolved from 'asap' if needed)
-                end_time=end_time,  # AdCP v2.4 datetime scheduling
+                budget=total_budget,
+                currency=request_currency,
+                start_time=start_time,
+                end_time=end_time,
                 status=media_buy_status,
-                raw_request=req.model_dump(mode="json"),
+                campaign_objective=getattr(req, "campaign_objective", "") or "",
+                kpi_goal=getattr(req, "kpi_goal", "") or "",
             )
-            session.add(new_media_buy)
-            session.commit()
+            # UoW auto-commits on clean exit
 
         # Populate media_packages table for structured querying
         # This enables creative_assignments to work properly
         if req.packages or (response.packages and len(response.packages) > 0):
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as auto_pkg_uow:
+                assert auto_pkg_uow.session is not None
+                session = auto_pkg_uow.session
                 from src.core.database.models import MediaPackage as DBMediaPackage
 
                 # Use response packages if available (has package_ids), otherwise generate from request
@@ -2899,7 +3010,7 @@ async def _create_media_buy_impl(
                     )
                     session.add(db_package)
 
-                session.commit()
+                session.flush()  # Flush so packages are visible for line_item_id queries below
                 logger.info(
                     f"Saved {len(packages_to_save)} packages to media_packages table for media_buy {response.media_buy_id}"
                 )
@@ -2918,6 +3029,7 @@ async def _create_media_buy_impl(
 
                         from src.core.database.models import MediaPackage as DBMediaPackage
 
+                        # FIXME(salesagent-rva2): migrate to uow.media_buys.get_package()
                         package_stmt = select(DBMediaPackage).filter_by(
                             media_buy_id=response.media_buy_id, package_id=pkg_id
                         )
@@ -2932,14 +3044,16 @@ async def _create_media_buy_impl(
                         else:
                             logger.warning(f"⚠️  Could not find DB package {pkg_id} to save platform_line_item_id")
 
-                    session.commit()
+                    # UoW auto-commits on clean exit
                     logger.info("✓ Saved platform_line_item_ids to database")
                 else:
                     logger.info("[DEBUG] No platform_line_item_ids found on response object")
 
         # Handle creative_ids in packages if provided (immediate association)
         if req.packages:
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as creative_uow:
+                assert creative_uow.session is not None
+                session = creative_uow.session
                 from src.core.database.models import Creative as DBCreative
                 from src.core.database.models import CreativeAssignment as DBAssignment
 
@@ -3184,13 +3298,14 @@ async def _create_media_buy_impl(
                             assignment = DBAssignment(
                                 assignment_id=assignment_id,
                                 tenant_id=tenant["tenant_id"],
+                                principal_id=principal_id,
                                 media_buy_id=response.media_buy_id,
                                 package_id=response_package_id,
                                 creative_id=creative_id,
                             )
                             session.add(assignment)
 
-                        session.commit()
+                        session.flush()  # Flush assignments before adapter call
 
                         # Associate creatives with line items in ad server immediately
                         if platform_line_item_id and platform_creative_ids:
@@ -3350,11 +3465,12 @@ async def _create_media_buy_impl(
         # Also log specific media buy activity
         try:
             principal_name = "Unknown"
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as log_uow:
+                assert log_uow.session is not None
                 principal_stmt = select(ModelPrincipal).filter_by(
                     principal_id=principal_id, tenant_id=tenant["tenant_id"]
                 )
-                principal_db = session.scalars(principal_stmt).first()
+                principal_db = log_uow.session.scalars(principal_stmt).first()
                 if principal_db:
                     principal_name = principal_db.name
 
@@ -3396,11 +3512,12 @@ async def _create_media_buy_impl(
         try:
             # Get principal name for notification (reuse from activity logging above)
             principal_name = "Unknown"
-            with get_db_session() as session:
+            with MediaBuyUoW(tenant["tenant_id"]) as slack_uow:
+                assert slack_uow.session is not None
                 principal_stmt2 = select(ModelPrincipal).filter_by(
                     principal_id=principal_id, tenant_id=tenant["tenant_id"]
                 )
-                principal_db = session.scalars(principal_stmt2).first()
+                principal_db = slack_uow.session.scalars(principal_stmt2).first()
                 if principal_db:
                     principal_name = principal_db.name
 
@@ -3545,10 +3662,10 @@ async def _create_media_buy_impl(
 
 async def create_media_buy(
     buyer_ref: str,
-    brand_manifest: BrandManifest | str,  # BrandManifest or URL string - REQUIRED per AdCP v2.2.0 spec
-    packages: list[PackageRequest],  # REQUIRED per AdCP spec - Package objects with all fields
-    start_time: str,  # datetime ISO 8601 or 'asap' - REQUIRED per AdCP spec
-    end_time: str,  # datetime ISO 8601 - REQUIRED per AdCP spec
+    brand: Any | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
+    packages: list[PackageRequest] | None = None,  # REQUIRED per AdCP spec - Package objects with all fields
+    start_time: str | None = None,  # datetime ISO 8601 or 'asap' - REQUIRED per AdCP spec
+    end_time: str | None = None,  # datetime ISO 8601 - REQUIRED per AdCP spec
     budget: Any | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
     po_number: str | None = None,
     product_ids: list[str] | None = None,  # Legacy format conversion
@@ -3565,6 +3682,8 @@ async def create_media_buy(
     strategy_id: str | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
+    buyer_campaign_ref: str | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     webhook_url: str | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -3575,7 +3694,7 @@ async def create_media_buy(
 
     Args:
         buyer_ref: Buyer reference for tracking (REQUIRED per AdCP spec)
-        brand_manifest: Brand information manifest - inline object or URL string (REQUIRED per AdCP v2.2.0 spec)
+        brand: Brand reference with domain field - per AdCP v3.6.0 spec
         packages: Array of packages with products and budgets (REQUIRED - budgets are at package level per AdCP v2.2.0)
         start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)
         end_time: Campaign end time ISO 8601 (REQUIRED)
@@ -3595,6 +3714,8 @@ async def create_media_buy(
         strategy_id: Optional strategy ID for linking operations
         push_notification_config: Push notification config dict with url, authentication (AdCP spec)
         context: Application level context per adcp spec
+        buyer_campaign_ref: Buyer's campaign reference identifier (optional, per AdCP spec)
+        ext: Extension object for custom fields (optional, per AdCP spec)
         ctx:  FastMCP context (automatically provided) (automatically provided)
 
     Returns:
@@ -3605,13 +3726,15 @@ async def create_media_buy(
     try:
         req = CreateMediaBuyRequest(
             buyer_ref=buyer_ref,
-            brand_manifest=brand_manifest,
+            brand=brand,
             packages=packages,
             start_time=start_time,
             end_time=end_time,
             po_number=po_number,
             reporting_webhook=reporting_webhook,
             context=context,
+            buyer_campaign_ref=buyer_campaign_ref,
+            ext=ext,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
@@ -3619,16 +3742,20 @@ async def create_media_buy(
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
-    result = await _create_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
+    # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None)
+    pnc_dict = push_notification_config.model_dump() if push_notification_config else None
+    result = await _create_media_buy_impl(
+        req=req, push_notification_config=pnc_dict, identity=identity, context_id=_ctx_id
+    )
     return ToolResult(content=str(result), structured_content=result)
 
 
 async def create_media_buy_raw(
     buyer_ref: str,
-    brand_manifest: Any,  # BrandManifest | str - REQUIRED per AdCP v2.2.0 spec
-    packages: list[Any],  # REQUIRED per AdCP spec
-    start_time: Any,  # datetime | Literal["asap"] | str - REQUIRED per AdCP spec
-    end_time: Any,  # datetime | str - REQUIRED per AdCP spec
+    brand: Any | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
+    packages: list[Any] | None = None,  # REQUIRED per AdCP spec
+    start_time: Any | None = None,  # datetime | Literal["asap"] | str - REQUIRED per AdCP spec
+    end_time: Any | None = None,  # datetime | str - REQUIRED per AdCP spec
     budget: Any | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
     po_number: str | None = None,
     product_ids: list[str] | None = None,  # Legacy format conversion
@@ -3645,6 +3772,8 @@ async def create_media_buy_raw(
     strategy_id: str | None = None,
     push_notification_config: dict[str, Any] | None = None,
     context: dict[str, Any] | None = None,  # Application level context per adcp spec
+    buyer_campaign_ref: str | None = None,
+    ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -3654,7 +3783,7 @@ async def create_media_buy_raw(
 
     Args:
         buyer_ref: Buyer reference identifier (REQUIRED per AdCP spec)
-        brand_manifest: Brand information manifest - inline object or URL string (REQUIRED per AdCP v2.2.0 spec)
+        brand: Brand reference with domain field - per AdCP v3.6.0 spec
         packages: List of media packages (REQUIRED)
         start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)
         end_time: Campaign end time ISO 8601 (REQUIRED)
@@ -3673,6 +3802,8 @@ async def create_media_buy_raw(
         enable_creative_macro: Enable creative macro
         strategy_id: Strategy ID
         push_notification_config: Push notification config for status updates
+        buyer_campaign_ref: Buyer's campaign reference identifier (optional, per AdCP spec)
+        ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -3684,13 +3815,15 @@ async def create_media_buy_raw(
     try:
         req = CreateMediaBuyRequest(
             buyer_ref=buyer_ref,
-            brand_manifest=brand_manifest,
+            brand=brand,
             packages=packages,
             start_time=start_time,
             end_time=end_time,
             po_number=po_number,
             reporting_webhook=to_reporting_webhook(reporting_webhook),
             context=to_context_object(context),
+            buyer_campaign_ref=buyer_campaign_ref,
+            ext=ext,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
@@ -3700,6 +3833,7 @@ async def create_media_buy_raw(
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
 
+    # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return await _create_media_buy_impl(
         req=req,
         push_notification_config=push_notification_config,

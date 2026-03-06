@@ -18,7 +18,7 @@ class TestDateTimeStringParsing:
         """Test parsing ISO 8601 with Z timezone (most common format)."""
         req = CreateMediaBuyRequest(
             buyer_ref="test_ref",  # Required per AdCP spec
-            brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
+            brand={"domain": "nike.com"},
             po_number="TEST-001",
             packages=[
                 {
@@ -47,7 +47,7 @@ class TestDateTimeStringParsing:
         """Test parsing ISO 8601 with +00:00 offset."""
         req = CreateMediaBuyRequest(
             buyer_ref="test_ref",  # Required per AdCP spec
-            brand_manifest={"name": "Adidas UltraBoost 2025 running shoes"},
+            brand={"domain": "adidas.com"},
             po_number="TEST-002",
             packages=[
                 {
@@ -72,7 +72,7 @@ class TestDateTimeStringParsing:
         """Test parsing ISO 8601 with PST offset."""
         req = CreateMediaBuyRequest(
             buyer_ref="test_ref",  # Required per AdCP spec
-            brand_manifest={"name": "Puma RS-X 2025 training shoes"},
+            brand={"domain": "puma.com"},
             po_number="TEST-003",
             packages=[
                 {
@@ -116,7 +116,7 @@ class TestDateTimeStringParsing:
         with pytest.raises(ValidationError, match="timezone"):
             CreateMediaBuyRequest(
                 buyer_ref="test_ref",  # Required per AdCP spec
-                brand_manifest={"name": "Converse Chuck Taylor All Star sneakers"},
+                brand={"domain": "converse.com"},
                 po_number="TEST-006",
                 packages=[
                     {
@@ -138,7 +138,7 @@ class TestDateTimeStringParsing:
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
                 buyer_ref="test_ref",  # Required per AdCP spec
-                brand_manifest={"name": "Vans Old Skool skateboard shoes"},
+                brand={"domain": "vans.com"},
                 po_number="TEST-007",
                 packages=[
                     {
@@ -158,7 +158,7 @@ class TestDateTimeStringParsing:
         """Test that parsed datetimes can be serialized back to ISO 8601."""
         req = CreateMediaBuyRequest(
             buyer_ref="test_ref",  # Required per AdCP spec
-            brand_manifest={"name": "Asics Gel-Kayano 29 running shoes"},
+            brand={"domain": "asics.com"},
             po_number="TEST-008",
             packages=[
                 {
@@ -190,7 +190,7 @@ class TestDateTimeParsingEdgeCases:
         """Test that accessing .tzinfo on datetime works correctly."""
         req = CreateMediaBuyRequest(
             buyer_ref="test_ref",  # Required per AdCP spec
-            brand_manifest={"name": "Brooks Ghost 15 running shoes"},
+            brand={"domain": "brooks.com"},
             po_number="TEST-009",
             packages=[
                 {
@@ -218,7 +218,7 @@ class TestDateTimeParsingEdgeCases:
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_ref",  # Required per AdCP spec
-            brand_manifest={"name": "Saucony Triumph 20 running shoes"},
+            brand={"domain": "saucony.com"},
             packages=[
                 {
                     "buyer_ref": "pkg_1",

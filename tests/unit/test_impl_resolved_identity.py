@@ -75,6 +75,12 @@ class TestImplSignaturesAcceptResolvedIdentity:
         param = self._get_identity_param(_get_media_buy_delivery_impl)
         assert param is not None, "_get_media_buy_delivery_impl must have 'identity' parameter"
 
+    def test_media_buy_list_impl_accepts_resolved_identity(self):
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+
+        param = self._get_identity_param(_get_media_buys_impl)
+        assert param is not None, "_get_media_buys_impl must have 'identity' parameter"
+
     def test_performance_impl_accepts_resolved_identity(self):
         from src.core.tools.performance import _update_performance_index_impl
 
@@ -126,6 +132,7 @@ class TestNoTransportImportsInImpl:
         ("src.core.tools.media_buy_create", "_create_media_buy_impl"),
         ("src.core.tools.media_buy_update", "_update_media_buy_impl"),
         ("src.core.tools.media_buy_delivery", "_get_media_buy_delivery_impl"),
+        ("src.core.tools.media_buy_list", "_get_media_buys_impl"),
         ("src.core.tools.performance", "_update_performance_index_impl"),
         ("src.core.tools.creatives._sync", "_sync_creatives_impl"),
         ("src.core.tools.creatives.listing", "_list_creatives_impl"),

@@ -12,6 +12,7 @@ import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
 from src.core.resolved_identity import ResolvedIdentity
@@ -34,7 +35,7 @@ async def test_public_policy_allows_no_brand_manifest():
     """Test that public policy allows requests without brand_manifest."""
     # Create mock request without brand_manifest
     mock_request = MagicMock()
-    mock_request.brand_manifest = None
+    mock_request.brand = None
     mock_request.brief = "Athletic footwear"
     mock_request.filters = None
     mock_request.context = None
@@ -85,7 +86,7 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
     """Test that require_brand policy rejects requests without brand_manifest."""
     # Create mock request without brand_manifest
     mock_request = MagicMock()
-    mock_request.brand_manifest = None
+    mock_request.brand = None
     mock_request.brief = "Athletic footwear"
     mock_request.filters = None
     mock_request.context = None
@@ -112,14 +113,10 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
 
 @pytest.mark.asyncio
 async def test_require_brand_policy_accepts_with_brand_manifest():
-    """Test that require_brand policy accepts requests with brand_manifest."""
-    # Create mock request WITH brand_manifest
-    mock_brand_manifest = MagicMock()
-    mock_brand_manifest.name = "Nike"
-    mock_brand_manifest.url = "https://nike.com"
-
+    """Test that require_brand policy accepts requests with brand (adcp 3.6.0: brand replaces brand_manifest)."""
     mock_request = MagicMock()
-    mock_request.brand_manifest = mock_brand_manifest
+    # adcp 3.6.0: brand replaces brand_manifest; use BrandReference model
+    mock_request.brand = BrandReference(domain="nike.com")
     mock_request.brief = "Athletic footwear"
     mock_request.filters = None
     mock_request.context = None
@@ -172,7 +169,7 @@ async def test_require_auth_policy_rejects_no_auth():
     mock_brand_manifest.name = "Nike"
 
     mock_request = MagicMock()
-    mock_request.brand_manifest = mock_brand_manifest
+    mock_request.brand = mock_brand_manifest
     mock_request.brief = "Athletic footwear"
     mock_request.filters = None
     mock_request.context = None
@@ -198,7 +195,7 @@ async def test_require_auth_policy_accepts_with_auth():
     """Test that require_auth policy accepts authenticated requests (brand_manifest optional)."""
     # Create mock request WITHOUT brand_manifest
     mock_request = MagicMock()
-    mock_request.brand_manifest = None
+    mock_request.brand = None
     mock_request.brief = "Athletic footwear"
     mock_request.filters = None
     mock_request.context = None

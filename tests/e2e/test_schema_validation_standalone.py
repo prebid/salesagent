@@ -109,18 +109,18 @@ async def test_get_products_request_validation():
         wholesale_request = {"buying_mode": "wholesale"}
         await validator.validate_request("get-products", wholesale_request)
 
-        # Brief mode with brand_manifest
+        # Brief mode with brand
         full_request = {
             "buying_mode": "brief",
             "brief": "Looking for display advertising",
-            "brand_manifest": {"url": "https://example.com", "name": "Example Brand"},
+            "brand": {"domain": "testbrand.com"},
         }
         await validator.validate_request("get-products", full_request)
 
-        # Wholesale mode with brand_manifest as URL string
+        # Wholesale mode with brand
         url_request = {
             "buying_mode": "wholesale",
-            "brand_manifest": "https://cdn.example.com/brand-manifest.json",
+            "brand": {"domain": "testbrand.com"},
         }
         await validator.validate_request("get-products", url_request)
 

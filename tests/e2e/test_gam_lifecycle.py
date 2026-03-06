@@ -219,7 +219,7 @@ def _seed_lifecycle_test_data():
             updated_at=datetime.now(UTC),
             creative_auto_approve_threshold=0.8,
             creative_auto_reject_threshold=0.2,
-            brand_manifest_policy="flexible",
+            brand_manifest_policy="public",
             auth_setup_mode=True,
         )
         session.add(tenant)
@@ -427,7 +427,7 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
     )
 
     request = CreateMediaBuyRequest(
-        brand_manifest={"name": "E2E Lifecycle Test"},
+        brand={"domain": "testbrand.com"},
         buyer_ref=f"e2e_{po_number}",
         po_number=po_number,
         start_time=start_time,
@@ -472,7 +472,7 @@ def _persist_media_buy(response, request, packages, start_time, end_time):
             start_time=start_time,
             end_time=end_time,
             status="approved",
-            raw_request={"brand_manifest": {"name": "E2E Lifecycle Test"}, "buyer_ref": request.buyer_ref},
+            raw_request={"brand": {"domain": "testbrand.com"}, "buyer_ref": request.buyer_ref},
         )
         session.add(media_buy)
         session.flush()

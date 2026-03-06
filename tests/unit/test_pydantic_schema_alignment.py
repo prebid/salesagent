@@ -52,16 +52,28 @@ SCHEMA_TO_MODEL_MAP = {
     # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
-# These tests download schemas from adcontextprotocol.org/schemas/latest/ which
-# is a moving target — the live spec evolves ahead of the adcp library we depend on.
-# The adcp library (package 3.6.0) doesn't yet have fields like `fields`, `refine`,
-# `idempotency_key` that the latest spec defines. There are no versioned schema URLs.
-# xfail until the adcp library catches up (tracked in the 3.6 migration PR).
-_XFAIL_SCHEMA_DRIFT = pytest.mark.xfail(
-    reason="Live /schemas/latest/ has fields not yet in adcp library (fields, refine, idempotency_key). "
-    "No versioned schema URLs exist. Will be resolved with adcp protocol alignment.",
-    strict=False,
-)
+# Fields that exist in the online AdCP JSON schema but are NOT yet in the adcp 3.6.0
+# Python library. These are spec-vs-library mismatches, not bugs in our code.
+# See test_schema_account_field_mismatch.py for detailed documentation.
+# FIXME(salesagent-amkf): Remove entries as adcp library adds these fields.
+KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
+    "/schemas/latest/media-buy/get-products-request.json": {
+        "fields",  # Schema defines field selection, library doesn't have it yet
+        "refine",  # Schema defines refinement array, library doesn't have it yet
+        "time_budget",  # Schema defines time budget, library doesn't have it yet
+    },
+    "/schemas/latest/media-buy/update-media-buy-request.json": {
+        "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
+    },
+    "/schemas/latest/media-buy/get-media-buy-delivery-request.json": {
+        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+        "reporting_dimensions",  # Schema defines it, library doesn't have it yet
+    },
+    "/schemas/latest/media-buy/sync-creatives-request.json": {
+        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+        "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
+    },
+}
 
 
 def _schema_ref_to_cache_path(schema_ref: str) -> Path:
@@ -134,12 +146,30 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             return "2025-02-01T00:00:00Z"
         elif "push-notification" in ref.lower():
             return {"url": "https://example.com/notify"}
+        elif "validation-mode" in ref.lower():
+            return "strict"
         elif "context" in ref.lower():
             return {"session_id": "test-session"}
         elif "ext" in ref.lower():
             return {"custom_field": "test"}
         # For unknown refs, return a minimal object
         return {}
+
+    # Handle field-level oneOf (e.g., status_filter: oneOf[enum, array-of-enum])
+    # Pick the first variant and recursively generate a value for it.
+    if field_spec and "oneOf" in field_spec:
+        first_variant = field_spec["oneOf"][0]
+        # The variant might be a $ref (e.g., to an enum schema) or inline type
+        if "$ref" in first_variant:
+            ref = first_variant["$ref"]
+            # Load the referenced schema to get enum values or type info
+            ref_schema = load_json_schema(ref)
+            if "enum" in ref_schema:
+                return ref_schema["enum"][0]
+            variant_type = ref_schema.get("type", "string")
+            return generate_example_value(variant_type, field_name, ref_schema)
+        variant_type = first_variant.get("type", "string")
+        return generate_example_value(variant_type, field_name, first_variant)
 
     if field_type == "string":
         # Check for pattern constraints in schema
@@ -343,7 +373,6 @@ def generate_full_valid_request(schema: dict[str, Any]) -> dict[str, Any]:
 class TestPydanticSchemaAlignment:
     """Test that Pydantic models accept all fields from AdCP JSON schemas."""
 
-    @_XFAIL_SCHEMA_DRIFT
     @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
     def test_model_accepts_all_schema_fields(self, schema_ref: str, model_class: type):
         """Test that Pydantic model accepts ALL fields defined in JSON schema.
@@ -371,6 +400,8 @@ class TestPydanticSchemaAlignment:
             # value_errors can indicate custom validators (business logic requirements)
             # These are acceptable if they don't reject spec fields
             # Only fail if we're rejecting fields that ARE in the spec
+            known = KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())
+            rejected_fields = [f for f in rejected_fields if f not in known]
             if rejected_fields:
                 error_msg = f"\n{model_class.__name__} REJECTED AdCP spec fields!\n"
                 error_msg += f"   Rejected fields: {rejected_fields}\n"
@@ -465,6 +496,11 @@ class TestPydanticSchemaAlignment:
         # Generate minimal request
         minimal_request = generate_minimal_valid_request(schema)
 
+        # Strip fields that are known library mismatches (spec has them, library doesn't yet)
+        known_mismatches = KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())
+        for field in known_mismatches:
+            minimal_request.pop(field, None)
+
         # This should work
         try:
             instance = model_class(**minimal_request)
@@ -500,10 +536,10 @@ class TestSpecificFieldValidation:
     """Specific regression tests for fields that have caused issues."""
 
     def test_create_media_buy_accepts_brand_manifest(self):
-        """REGRESSION TEST: brand_manifest must be accepted per AdCP v2.2.0."""
+        """REGRESSION TEST: brand must be accepted per AdCP v3.6.0 (replaced brand_manifest)."""
         request = CreateMediaBuyRequest(
             buyer_ref="test_ref",  # Required per AdCP spec
-            brand_manifest={"name": "Nike Air Jordan 2025"},
+            brand={"domain": "nike.com"},
             packages=[
                 {
                     "buyer_ref": "pkg_1",
@@ -515,18 +551,13 @@ class TestSpecificFieldValidation:
             start_time="2025-02-01T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
         )
-        # Verify brand_manifest was accepted
-        assert request.brand_manifest is not None
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(request.brand_manifest, "name"):
-            assert request.brand_manifest.name == "Nike Air Jordan 2025"
-        elif hasattr(request.brand_manifest, "root") and hasattr(request.brand_manifest.root, "name"):
-            assert request.brand_manifest.root.name == "Nike Air Jordan 2025"
+        # Verify brand was accepted
+        assert request.brand is not None
 
     def test_get_products_accepts_filters(self):
         """REGRESSION TEST: filters must be accepted (PR #195 issue)."""
         request = GetProductsRequest(
-            brand_manifest={"name": "Test Product"},
+            brand={"domain": "testproduct.com"},
             filters={
                 "delivery_type": "guaranteed",
                 "format_types": ["video"],
@@ -539,30 +570,26 @@ class TestSpecificFieldValidation:
         """Test that GetProductsRequest accepts all optional fields per spec.
 
         Note: adcp_version is NOT a field on GetProductsRequest per AdCP spec.
-        All fields are optional.
+        All fields are optional, including brand.
+        adcp 3.6.0: brand replaced brand_manifest.
         """
         # Empty request is valid
         empty_request = GetProductsRequest()
-        assert empty_request.brand_manifest is None
+        assert empty_request.brand is None
         assert empty_request.brief is None
         assert empty_request.filters is None
 
-        # With brand_manifest only
+        # With brand only
         request = GetProductsRequest(
-            brand_manifest={"name": "Test Product"},
+            brand={"domain": "testproduct.com"},
         )
-        # Library may wrap in BrandManifestReference with BrandManifest in root
-        if hasattr(request.brand_manifest, "name"):
-            assert request.brand_manifest.name == "Test Product"
-        elif hasattr(request.brand_manifest, "root") and hasattr(request.brand_manifest.root, "name"):
-            assert request.brand_manifest.root.name == "Test Product"
+        assert request.brand is not None
         assert request.brief is None
 
 
 class TestFieldNameConsistency:
     """Test that field names match between Pydantic models and JSON schemas."""
 
-    @_XFAIL_SCHEMA_DRIFT
     @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
     def test_field_names_match_schema(self, schema_ref: str, model_class: type):
         """Test that Pydantic model field names match JSON schema property names."""
@@ -587,6 +614,10 @@ class TestFieldNameConsistency:
         if missing_in_model:
             # Some fields might be intentionally skipped (like adcp_version with defaults)
             critical_missing = missing_in_model - {"adcp_version"}
+
+            # Filter out known spec-vs-library mismatches
+            known = KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())
+            critical_missing = critical_missing - known
 
             if critical_missing:
                 pytest.fail(

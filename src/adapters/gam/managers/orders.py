@@ -509,7 +509,11 @@ class GAMOrdersManager:
                     # Check if format type is supported by product
                     # Convert enum to string for comparison (adcp 2.5.0 uses Type enum)
                     format_type_str = (
-                        format_obj.type.value if hasattr(format_obj.type, "value") else str(format_obj.type)
+                        format_obj.type.value
+                        if format_obj.type is not None and hasattr(format_obj.type, "value")
+                        else str(format_obj.type)
+                        if format_obj.type is not None
+                        else ""
                     )
                     if format_type_str not in supported_format_types:
                         error_msg = (
@@ -645,7 +649,10 @@ class GAMOrdersManager:
                 # Get creative sizes from database if using creative_ids
                 if package.creative_ids:
                     with get_db_session() as session:
-                        creative_stmt = select(DBCreative).where(DBCreative.creative_id.in_(package.creative_ids))
+                        creative_stmt = select(DBCreative).where(
+                            DBCreative.tenant_id == tenant_id,
+                            DBCreative.creative_id.in_(package.creative_ids),
+                        )
                         db_creatives = session.scalars(creative_stmt).all()
 
                         for db_creative in db_creatives:

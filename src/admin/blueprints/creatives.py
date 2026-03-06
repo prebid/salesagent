@@ -45,6 +45,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
+from src.core.database.repositories.media_buy import MediaBuyRepository
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
 # All format-related routes have been removed
@@ -146,7 +147,10 @@ async def _call_webhook_for_creative_status(
         from src.core.database.models import Creative
 
         creative_ids = [m.object_id for m in all_mappings]
-        stmt_creatives = select(Creative).filter(Creative.creative_id.in_(creative_ids))
+        stmt_creatives = select(Creative).filter(
+            Creative.tenant_id == tenant_id,
+            Creative.creative_id.in_(creative_ids),
+        )
         all_creatives = db_session.scalars(stmt_creatives).all()
 
         # Check if ANY creative is still pending review
@@ -279,9 +283,10 @@ def index(tenant_id, **kwargs):
 @require_tenant_access()
 def review_creatives(tenant_id, **kwargs):
     """Unified creative management: view, review, and manage all creatives."""
-    from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Product
+    from src.core.database.models import Creative, CreativeAssignment, Principal, Product
 
     with get_db_session() as db_session:
+        repo = MediaBuyRepository(db_session, tenant_id)
         # Get tenant
         stmt = select(Tenant).filter_by(tenant_id=tenant_id)
         tenant = db_session.scalars(stmt).first()
@@ -307,8 +312,7 @@ def review_creatives(tenant_id, **kwargs):
             # Get media buy details for each assignment
             media_buys = []
             for assignment in assignments:
-                stmt = select(MediaBuy).filter_by(media_buy_id=assignment.media_buy_id)
-                media_buy = db_session.scalars(stmt).first()
+                media_buy = repo.get_by_id(assignment.media_buy_id)
                 if media_buy:
                     media_buys.append(
                         {
@@ -324,14 +328,13 @@ def review_creatives(tenant_id, **kwargs):
             # Get promoted offering from first media buy (if any)
             promoted_offering = None
             if media_buys and media_buys[0]:
-                stmt = select(MediaBuy).filter_by(media_buy_id=media_buys[0]["media_buy_id"])
-                first_buy = db_session.scalars(stmt).first()
+                first_buy = repo.get_by_id(media_buys[0]["media_buy_id"])
                 if first_buy and first_buy.raw_request:
                     packages = first_buy.raw_request.get("packages", [])
                     if packages:
                         product_id = packages[0].get("product_id")
                         if product_id:
-                            stmt = select(Product).filter_by(product_id=product_id)
+                            stmt = select(Product).filter_by(product_id=product_id, tenant_id=tenant_id)
                             product = db_session.scalars(stmt).first()
                             if product:
                                 promoted_offering = product.name
@@ -425,7 +428,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             prior_ai_review = None
             stmt = (
                 select(CreativeReview)
-                .filter_by(creative_id=creative_id, review_type="ai")
+                .filter_by(creative_id=creative_id, tenant_id=tenant_id, review_type="ai")
                 .order_by(CreativeReview.reviewed_at.desc())
                 .limit(1)
             )
@@ -442,6 +445,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 review_id=review_id,
                 creative_id=creative_id,
                 tenant_id=tenant_id,
+                principal_id=creative.principal_id,
                 reviewed_at=datetime.now(UTC),
                 review_type="human",
                 reviewer_email=approved_by,
@@ -511,7 +515,9 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             # Check if this creative approval unblocks any media buys
             # If a media buy was waiting for creatives (status="pending_creatives"),
             # check if all its creatives are now approved
-            from src.core.database.models import CreativeAssignment, MediaBuy
+            from src.core.database.models import CreativeAssignment
+
+            mb_repo = MediaBuyRepository(db_session, tenant_id)
 
             stmt_assignments = select(CreativeAssignment).filter_by(tenant_id=tenant_id, creative_id=creative_id)
             assignments = db_session.scalars(stmt_assignments).all()
@@ -524,8 +530,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 media_buy_id = assignment.media_buy_id
 
                 # Get the media buy
-                stmt_buy = select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant_id)
-                media_buy = db_session.scalars(stmt_buy).first()
+                media_buy = mb_repo.get_by_id(media_buy_id)
 
                 if not media_buy:
                     continue
@@ -535,12 +540,17 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 # Only check if media buy is waiting for creatives
                 if media_buy.status in {"pending_creatives", "draft"}:
                     # Get all creative assignments for this media buy
-                    stmt_all_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
+                    stmt_all_assignments = select(CreativeAssignment).filter_by(
+                        media_buy_id=media_buy_id, tenant_id=tenant_id
+                    )
                     all_assignments = db_session.scalars(stmt_all_assignments).all()
 
                     # Get all creatives for this media buy
                     creative_ids = [a.creative_id for a in all_assignments]
-                    stmt_creatives = select(Creative).filter(Creative.creative_id.in_(creative_ids))
+                    stmt_creatives = select(Creative).filter(
+                        Creative.tenant_id == tenant_id,
+                        Creative.creative_id.in_(creative_ids),
+                    )
                     all_creatives = db_session.scalars(stmt_creatives).all()
 
                     # Check if all creatives are approved
@@ -615,7 +625,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             prior_ai_review = None
             stmt = (
                 select(CreativeReview)
-                .filter_by(creative_id=creative_id, review_type="ai")
+                .filter_by(creative_id=creative_id, tenant_id=tenant_id, review_type="ai")
                 .order_by(CreativeReview.reviewed_at.desc())
                 .limit(1)
             )
@@ -632,6 +642,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
                 review_id=review_id,
                 creative_id=creative_id,
                 tenant_id=tenant_id,
+                principal_id=creative.principal_id,
                 reviewed_at=datetime.now(UTC),
                 review_type="human",
                 reviewer_email=rejected_by,
@@ -886,7 +897,9 @@ def get_ai_review_status(task_id: str) -> dict:
             return {"status": "failed", "error": str(e), "creative_id": task_info["creative_id"]}
 
 
-def _create_review_record(db_session, creative_id: str, tenant_id: str, ai_result: dict):
+def _create_review_record(
+    db_session, creative_id: str, tenant_id: str, ai_result: dict, principal_id: str | None = None
+):
     """Create a CreativeReview record from AI review result.
 
     Args:
@@ -900,6 +913,7 @@ def _create_review_record(db_session, creative_id: str, tenant_id: str, ai_resul
             - confidence_score: Float 0.0-1.0
             - policy_triggered: Policy that was triggered
             - ai_recommendation: Optional AI recommendation if different from final
+        principal_id: Principal ID (required for composite FK to creatives)
     """
     from src.core.database.models import CreativeReview
 
@@ -910,6 +924,7 @@ def _create_review_record(db_session, creative_id: str, tenant_id: str, ai_resul
             review_id=review_id,
             creative_id=creative_id,
             tenant_id=tenant_id,
+            principal_id=principal_id,
             reviewed_at=datetime.now(UTC),
             review_type="ai",
             reviewer_email=None,
@@ -1014,10 +1029,10 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
             if promoted_offering is None:
                 promoted_offering = "Unknown"
                 if creative.data.get("media_buy_id"):
-                    from src.core.database.models import MediaBuy, Product
+                    from src.core.database.models import Product
 
-                    stmt = select(MediaBuy).filter_by(media_buy_id=creative.data["media_buy_id"])
-                    media_buy = db_session.scalars(stmt).first()
+                    ai_repo = MediaBuyRepository(db_session, tenant_id)
+                    media_buy = ai_repo.get_by_id(creative.data["media_buy_id"])
                     if media_buy and media_buy.raw_request:
                         packages = media_buy.raw_request.get("packages", [])
                         if packages:
@@ -1094,6 +1109,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                     creative_id,
                     tenant_id,
                     result_dict,
+                    principal_id=creative.principal_id,
                 )
                 # Record metrics
                 ai_review_total.labels(
@@ -1120,6 +1136,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                         creative_id,
                         tenant_id,
                         result_dict,
+                        principal_id=creative.principal_id,
                     )
                     # Record metrics
                     ai_review_total.labels(
@@ -1142,6 +1159,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                         creative_id,
                         tenant_id,
                         result_dict,
+                        principal_id=creative.principal_id,
                     )
                     # Record metrics
                     ai_review_total.labels(
@@ -1167,6 +1185,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                         creative_id,
                         tenant_id,
                         result_dict,
+                        principal_id=creative.principal_id,
                     )
                     # Record metrics
                     ai_review_total.labels(
@@ -1189,6 +1208,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                         creative_id,
                         tenant_id,
                         result_dict,
+                        principal_id=creative.principal_id,
                     )
                     # Record metrics
                     ai_review_total.labels(
@@ -1213,6 +1233,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
                 creative_id,
                 tenant_id,
                 result_dict,
+                principal_id=creative.principal_id,
             )
             # Record metrics
             ai_review_total.labels(tenant_id=tenant_id, decision="pending_review", policy_triggered="uncertain").inc()

@@ -40,9 +40,10 @@ def sample_request():
     """Sample CreateMediaBuyRequest."""
     start_time = datetime.now(UTC)
     end_time = start_time + timedelta(days=30)
+    # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
     return CreateMediaBuyRequest(
         buyer_ref="test_buyer_ref_123",
-        brand_manifest={"name": "Test Brand"},
+        brand={"domain": "testbrand.com"},
         packages=[
             PackageRequest(product_id="prod_123", buyer_ref="pkg_001", budget=5000.0, pricing_option_id="test_pricing"),
             PackageRequest(product_id="prod_456", buyer_ref="pkg_002", budget=5000.0, pricing_option_id="test_pricing"),

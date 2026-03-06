@@ -147,6 +147,7 @@ def _create_creative_assignment(
     tenant_id: str,
     media_buy_id: str,
     creative_id: str,
+    principal_id: str = "test_principal",
 ) -> None:
     """Assign a creative to a media buy."""
     import uuid
@@ -155,6 +156,7 @@ def _create_creative_assignment(
         assignment = CreativeAssignment(
             assignment_id=f"assign_{uuid.uuid4().hex[:8]}",
             tenant_id=tenant_id,
+            principal_id=principal_id,
             media_buy_id=media_buy_id,
             creative_id=creative_id,
             package_id="default_package",  # Required field

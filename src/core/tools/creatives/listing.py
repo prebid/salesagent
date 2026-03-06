@@ -7,9 +7,9 @@ from typing import Any, cast
 
 from adcp import CreativeFilters
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.core.pagination_request import PaginationRequest
 from adcp.types.generated_poc.media_buy.list_creatives_request import (
     FieldModel,
-    Pagination,
     Sort,
 )
 from fastmcp.server.context import Context
@@ -89,9 +89,7 @@ def _list_creatives_impl(
     """
     from adcp.types import CreativeFilters as LibraryCreativeFilters
     from adcp.types import Sort as LibrarySort
-
-    # V3: Request Pagination uses limit/offset, Response Pagination uses batch_number/total_batches
-    from adcp.types.generated_poc.media_buy.list_creatives_request import Pagination as LibraryPagination
+    from adcp.types.generated_poc.core.pagination_request import PaginationRequest as LibraryPagination
 
     from src.core.schemas import ListCreativesRequest
 
@@ -157,7 +155,8 @@ def _list_creatives_impl(
 
     # Build pagination
     offset = (page - 1) * effective_limit
-    structured_pagination = LibraryPagination(offset=offset, limit=effective_limit)
+    # 3.6.0: PaginationRequest is cursor-based (max_results, cursor). DB query uses offset/limit internally.
+    structured_pagination = LibraryPagination(max_results=effective_limit)
 
     # Build sort
     field_mapping = {
@@ -363,7 +362,7 @@ def _list_creatives_impl(
                 format_id=format_obj,
                 assets=assets_dict,
                 tags=db_creative.data.get("tags") if db_creative.data else None,
-                # AdCP spec fields (library Creative)
+                # AdCP spec fields (listing Creative)
                 status=status_enum,
                 created_date=created_at_dt,
                 updated_date=updated_at_dt,
@@ -441,11 +440,8 @@ def _list_creatives_impl(
             sort_applied=sort_applied,
         ),
         pagination=SchemaPagination(
-            limit=limit,
-            offset=offset_calc,
             has_more=has_more,
-            total_pages=total_pages,
-            current_page=page,
+            total_count=total_count,
         ),
         creatives=creatives,
         format_summary=None,
@@ -467,7 +463,7 @@ async def list_creatives(
     search: str = None,
     filters: CreativeFilters | None = None,
     sort: Sort | None = None,
-    pagination: Pagination | None = None,
+    pagination: PaginationRequest | None = None,
     fields: list[FieldModel | str] | None = None,
     include_performance: bool = False,
     include_assignments: bool = False,
@@ -538,6 +534,11 @@ def list_creatives_raw(
     created_after: str = None,
     created_before: str = None,
     search: str = None,
+    filters: CreativeFilters | None = None,
+    fields: list[str] | None = None,
+    include_performance: bool = False,
+    include_assignments: bool = False,
+    include_sub_assets: bool = False,
     page: int = 1,
     limit: int = 50,
     sort_by: str = "created_date",
@@ -561,6 +562,11 @@ def list_creatives_raw(
         created_after: Filter creatives created after this date (ISO format) (optional)
         created_before: Filter creatives created before this date (ISO format) (optional)
         search: Search in creative name or description (optional)
+        filters: Advanced filtering options (CreativeFilters model, optional)
+        fields: Specific fields to return (optional)
+        include_performance: Include performance metrics (optional)
+        include_assignments: Include package assignments (optional)
+        include_sub_assets: Include sub-assets (optional)
         page: Page number for pagination (default: 1)
         limit: Number of results per page (default: 50, max: 1000)
         sort_by: Sort field (default: created_date)
@@ -588,6 +594,11 @@ def list_creatives_raw(
         created_after=created_after,
         created_before=created_before,
         search=search,
+        filters=filters,
+        fields=fields,
+        include_performance=include_performance,
+        include_assignments=include_assignments,
+        include_sub_assets=include_sub_assets,
         page=page,
         limit=limit,
         sort_by=sort_by,

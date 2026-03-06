@@ -1295,8 +1295,14 @@ class AdCPRequestHandler(RequestHandler):
             ValueError: For unknown skills or invalid parameters
         """
         # Inject push_notification_config into parameters for skills that need it
+        # Serialize to dict at the transport boundary — _impl accepts dict, not BaseModel
         if push_notification_config and skill_name in ("create_media_buy", "sync_creatives"):
-            parameters = {**parameters, "push_notification_config": push_notification_config}
+            pnc_dict = (
+                push_notification_config.model_dump(mode="json")
+                if hasattr(push_notification_config, "model_dump")
+                else push_notification_config
+            )
+            parameters = {**parameters, "push_notification_config": pnc_dict}
         logger.info(f"Handling explicit skill: {skill_name} with parameters: {list(parameters.keys())}")
 
         # Validate identity for non-discovery skills
@@ -1355,36 +1361,22 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_get_products_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_products skill invocation.
 
-        Aligned with adcp v1.2.1 spec - brand_manifest must be a dict.
+        Aligned with adcp spec - brand must be a BrandReference dict.
 
         NOTE: Authentication is OPTIONAL for this endpoint. Access depends on tenant's
         brand_manifest_policy setting (public/require_brand/require_auth).
         """
         try:
-            # Normalize brand_manifest: URL string → dict (adcp v1.2.1)
-            brand_manifest = parameters.get("brand_manifest")
-            if isinstance(brand_manifest, str):
-                brand_manifest = {"url": brand_manifest}
-            elif brand_manifest is not None and not isinstance(brand_manifest, dict):
-                raise ServerError(
-                    InvalidParamsError(
-                        message=f"brand_manifest must be a dict or URL string, got {type(brand_manifest)}"
-                    )
-                )
-
             brief = parameters.get("brief", "")
+            brand = parameters.get("brand")
+            filters = parameters.get("filters")
 
-            # Require either brand_manifest OR brief
-            if not brief and not brand_manifest:
-                raise ServerError(
-                    InvalidParamsError(message="Either 'brand_manifest' or 'brief' parameter is required")
-                )
-
-            # Call core function with identity — _raw handles full schema validation
+            # Call core function with identity — _impl validates search criteria
             response = await core_get_products_tool(
                 brief=brief,
-                brand_manifest=brand_manifest,
-                filters=parameters.get("filters"),
+                brand=brand,
+                filters=filters,
+                property_list=parameters.get("property_list"),
                 min_exposures=parameters.get("min_exposures"),
                 strategy_id=parameters.get("strategy_id"),
                 context=parameters.get("context"),
@@ -1407,6 +1399,9 @@ class AdCPRequestHandler(RequestHandler):
                 response_data.setdefault("success", True)
             return apply_version_compat("get_products", response_data, adcp_version)
 
+        except AdCPError:
+            # Let AdCPError propagate to outer handler for proper translation
+            raise
         except Exception as e:
             logger.error(f"Error in get_products skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve products: {str(e)}"))
@@ -1416,7 +1411,7 @@ class AdCPRequestHandler(RequestHandler):
 
         IMPORTANT: This handler ONLY accepts AdCP spec-compliant format:
         - packages[] (required) - each package must have budget
-        - brand_manifest (required)
+        - brand (required)
         - start_time (required)
         - end_time (required)
 
@@ -1440,7 +1435,7 @@ class AdCPRequestHandler(RequestHandler):
             params.setdefault("buyer_ref", f"A2A-{identity.principal_id}")
 
             # Validate required AdCP parameters (packages is optional in model but required by spec)
-            required_params = ["brand_manifest", "packages", "start_time", "end_time"]
+            required_params = ["brand", "packages", "start_time", "end_time"]
             missing_params = [p for p in required_params if p not in params]
             if missing_params:
                 return {
@@ -1474,7 +1469,7 @@ class AdCPRequestHandler(RequestHandler):
 
             # Call core function with validated parameters and identity
             response = await core_create_media_buy_tool(
-                brand_manifest=params.get("brand_manifest"),
+                brand=params.get("brand"),
                 po_number=req.po_number,
                 buyer_ref=req.buyer_ref,
                 packages=params["packages"],  # Required — validated above
@@ -1942,15 +1937,9 @@ class AdCPRequestHandler(RequestHandler):
         try:
             # Identity already resolved at transport boundary (on_message_send)
 
-            # Extract brand name from query and create brand_manifest
-            # This provides backward compatibility for natural language queries
-            brand_name = self._extract_brand_name_from_query(query)
-            brand_manifest = {"name": brand_name} if brand_name else None
-
             # Call core function directly using the underlying function
             response = await core_get_products_tool(
                 brief=query,
-                brand_manifest=brand_manifest,
                 identity=identity,
             )
 
@@ -1973,7 +1962,7 @@ class AdCPRequestHandler(RequestHandler):
         """Extract or infer brand name from the user query.
 
         Used for backward compatibility with natural language queries.
-        Extracts a brand name to populate brand_manifest for adcp v1.2.1.
+        Extracts a brand name to populate brand (BrandReference) for adcp v3.6.0.
         """
         # Look for common patterns that might indicate the brand/offering
         query_lower = query.lower()
@@ -2022,12 +2011,12 @@ class AdCPRequestHandler(RequestHandler):
             return {
                 "success": False,
                 "message": f"Authentication successful for {principal_id}. To create a media buy, use explicit skill invocation with AdCP v2.2.0 spec-compliant format.",
-                "required_fields": ["brand_manifest", "packages", "start_time", "end_time"],
+                "required_fields": ["brand", "packages", "start_time", "end_time"],
                 "note": "Per AdCP v2.2.0 spec, budget is specified at the PACKAGE level, not top level",
                 "authenticated_tenant": tenant_id,
                 "authenticated_principal": principal_id,
                 "example": {
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "example.com"},
                     "packages": [
                         {
                             "buyer_ref": "pkg_1",

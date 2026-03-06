@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, GAMLineItem, GAMOrder, MediaBuy, Tenant
+from src.core.database.repositories import MediaBuyRepository
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +63,8 @@ class MediaBuyReadinessService:
 
         try:
             # Get media buy
-            stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt).first()
+            repo = MediaBuyRepository(session, tenant_id)
+            media_buy = repo.get_by_id(media_buy_id)
 
             if not media_buy:
                 return {
@@ -339,8 +340,8 @@ class MediaBuyReadinessService:
         """
         with get_db_session() as session:
             # Get all media buys for tenant
-            stmt = select(MediaBuy).filter_by(tenant_id=tenant_id)
-            media_buys = session.scalars(stmt).all()
+            repo = MediaBuyRepository(session, tenant_id)
+            media_buys = repo.list_all()
 
             # Initialize counts
             summary = {

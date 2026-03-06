@@ -31,6 +31,14 @@ def pytest_configure(config):
     """
     os.environ.setdefault("FASTMCP_DEPRECATION_WARNINGS", "false")
 
+    # Disable OpenTelemetry SDK during tests. Logfire (added for Pydantic AI
+    # observability) initializes an OTLP exporter that tries to connect to
+    # localhost:4317/4318 on teardown. With no collector running, this produces
+    # noisy "Exception while exporting Span" / ConnectionError stack traces
+    # after every test run. OTEL_SDK_DISABLED prevents the SDK from
+    # initializing entirely, eliminating the noise with zero test impact.
+    os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent

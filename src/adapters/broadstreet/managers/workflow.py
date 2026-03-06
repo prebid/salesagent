@@ -83,7 +83,7 @@ class BroadstreetWorkflowManager(BaseWorkflowManager):
             str: The workflow step ID if created successfully, None otherwise
         """
         # Build campaign name
-        brand_name = getattr(request.brand_manifest, "name", None) or "Unknown Brand"
+        brand_name = (request.brand.domain if request.brand is not None else None) or "Unknown Brand"
         campaign_name = f"{brand_name} - {start_time.strftime('%Y%m%d')}"
         if request.po_number:
             campaign_name = f"AdCP-{request.po_number}"

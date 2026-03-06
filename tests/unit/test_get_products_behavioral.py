@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPAuthorizationError, AdCPError
+from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.products import _get_products_impl
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 def _make_mock_request(
     brief: str = "Athletic footwear",
-    brand_manifest=None,
+    brand=None,
     filters=None,
     context=None,
 ):
@@ -41,7 +41,7 @@ def _make_mock_request(
     """
     mock_request = MagicMock()
     mock_request.brief = brief
-    mock_request.brand_manifest = brand_manifest
+    mock_request.brand = brand
     mock_request.filters = filters
     mock_request.context = context
     # _get_products_impl reads these via getattr() -- avoid truthy MagicMock
@@ -120,11 +120,12 @@ def _make_real_product(product_id: str = "prod_1", **kwargs):
 
 
 def _mock_db_returning_products(products_to_return, mock_db_session):
-    """Configure mock_db_session to return given products from DB query."""
+    """Configure mock_db_session to return given products from DB query.
+
+    Matches ProductRepository.get_all_for_tenant() which uses session.scalars(stmt).all().
+    """
     mock_session = MagicMock()
-    mock_result = MagicMock()
-    mock_result.unique.return_value.scalars.return_value.all.return_value = products_to_return
-    mock_session.execute.return_value = mock_result
+    mock_session.scalars.return_value.all.return_value = products_to_return
     mock_db_session.return_value.__enter__.return_value = mock_session
     return mock_session
 
@@ -783,8 +784,11 @@ class TestNoBriefSkipsRanking:
             identity = _setup_standard_mocks(mocks, tenant, [p1, p2])
 
             # AI ranking should NOT be called when brief is empty
+            # brand satisfies "at least one search criterion" validation
             with patch("src.services.ai.factory.get_factory") as mock_factory:
-                response = await _get_products_impl(_make_mock_request(brief=""), identity)
+                response = await _get_products_impl(
+                    _make_mock_request(brief="", brand={"domain": "example.com"}), identity
+                )
                 mock_factory.assert_not_called()
 
         assert len(response.products) == 2
@@ -800,7 +804,8 @@ class TestNoBriefSkipsRanking:
         with _PipelinePatches() as mocks:
             identity = _setup_standard_mocks(mocks, tenant, [product])
 
-            response = await _get_products_impl(_make_mock_request(brief=""), identity)
+            # brand satisfies "at least one search criterion" validation
+            response = await _get_products_impl(_make_mock_request(brief="", brand={"domain": "example.com"}), identity)
 
         for p in response.products:
             assert getattr(p, "brief_relevance", None) is None
@@ -966,3 +971,85 @@ class TestProductConversionNegativeCardinality:
 
         with pytest.raises(ValueError, match="no pricing_options"):
             convert_product_model_to_schema(mock_model)
+
+
+# ---------------------------------------------------------------------------
+# Search criteria validation (salesagent-k13e)
+# ---------------------------------------------------------------------------
+
+
+class TestSearchCriteriaValidation:
+    """_get_products_impl requires at least one search criterion (brief, brand, or filters).
+
+    Enforced uniformly across all transports (MCP, A2A, REST).
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_search_criteria_raises_validation_error(self):
+        """When brief, brand, and filters are all empty/None, _impl raises AdCPValidationError."""
+        req = _make_mock_request(brief=None, brand=None, filters=None)
+        identity = _make_identity()
+
+        with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
+            await _get_products_impl(req, identity)
+
+    @pytest.mark.asyncio
+    async def test_empty_string_brief_counts_as_no_criteria(self):
+        """An empty string brief is equivalent to None for search criteria validation."""
+        req = _make_mock_request(brief="", brand=None, filters=None)
+        identity = _make_identity()
+
+        with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
+            await _get_products_impl(req, identity)
+
+    @pytest.mark.asyncio
+    async def test_brief_alone_satisfies_search_criteria(self):
+        """A non-empty brief is sufficient search criteria."""
+        req = _make_mock_request(brief="Athletic footwear", brand=None, filters=None)
+        tenant = _make_tenant()
+        p = _make_real_product()
+
+        with _PipelinePatches() as mocks:
+            identity = _setup_standard_mocks(mocks, tenant, [p])
+            response = await _get_products_impl(req, identity)
+
+        assert response.products is not None
+
+    @pytest.mark.asyncio
+    async def test_brand_alone_satisfies_search_criteria(self):
+        """A brand reference is sufficient search criteria."""
+        req = _make_mock_request(brief=None, brand={"domain": "nike.com"}, filters=None)
+        tenant = _make_tenant()
+        p = _make_real_product()
+
+        with _PipelinePatches() as mocks:
+            identity = _setup_standard_mocks(mocks, tenant, [p])
+            response = await _get_products_impl(req, identity)
+
+        assert response.products is not None
+
+    @pytest.mark.asyncio
+    async def test_filters_alone_satisfies_search_criteria(self):
+        """A filters object is sufficient search criteria."""
+        from adcp import ProductFilters
+
+        req = _make_mock_request(brief=None, brand=None, filters=ProductFilters())
+        tenant = _make_tenant()
+        p = _make_real_product()
+
+        with _PipelinePatches() as mocks:
+            identity = _setup_standard_mocks(mocks, tenant, [p])
+            response = await _get_products_impl(req, identity)
+
+        assert response.products is not None
+
+    @pytest.mark.asyncio
+    async def test_validation_error_has_correct_error_code(self):
+        """AdCPValidationError has error_code='VALIDATION_ERROR'."""
+        req = _make_mock_request(brief=None, brand=None, filters=None)
+        identity = _make_identity()
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            await _get_products_impl(req, identity)
+
+        assert exc_info.value.error_code == "VALIDATION_ERROR"

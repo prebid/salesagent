@@ -140,6 +140,52 @@ Each adapter handles:
 - Error handling
 - Dry-run simulation
 
+## Transport Parity Invariant
+
+**All business behavior MUST be identical across MCP, A2A, and REST transports.**
+
+The system exposes the same tools through three transports:
+- **MCP** — FastMCP tools at `/mcp/`
+- **A2A** — Agent-to-agent protocol at `/a2a`
+- **REST** — Admin API at `/admin/api/`
+
+All three call the same `_impl` functions (Critical Pattern #5). The transport
+wrappers handle only: identity resolution, error format translation, and
+protocol framing. No business logic, validation, or data transformation lives
+in the wrappers.
+
+### Why This Matters
+
+Historical drift put validation, error handling, and edge-case behavior in
+transport wrappers rather than `_impl`. A test passing against one transport may
+fail against another because:
+- Validation exists in A2A but not MCP (or vice versa)
+- Error codes differ between transports for the same failure
+- Parameters are silently dropped by one wrapper but not another
+
+### Testing Enforcement
+
+Every behavioral integration test MUST verify all three transports:
+
+```python
+@pytest.mark.parametrize("transport", ["mcp", "a2a", "rest"])
+def test_empty_update_rejected(transport, ...):
+    """BR-RULE-022: identical behavior regardless of transport."""
+    response = call_tool(transport, "update_media_buy", {...})
+    assert response.error_code == "VALIDATION_ERROR"
+```
+
+When transport parity fails, the bug is in the wrapper that deviates — fix the
+wrapper, don't weaken the test.
+
+### Structural Guards
+
+Four guards enforce the transport boundary (see `docs/development/structural-guards.md`):
+- `test_transport_agnostic_impl.py` — no transport imports in `_impl`
+- `test_impl_resolved_identity.py` — `_impl` takes `ResolvedIdentity`, not `Context`
+- `test_no_toolerror_in_impl.py` — `_impl` raises `AdCPError`, not `ToolError`
+- `test_architecture_boundary_completeness.py` — wrappers forward all `_impl` params
+
 ## MCP Protocol Implementation
 
 ### FastMCP Framework

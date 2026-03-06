@@ -14,7 +14,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, WorkflowStep
+from src.core.database.models import WorkflowStep
+from src.core.database.repositories import MediaBuyRepository
 
 logger = logging.getLogger(__name__)
 
@@ -269,8 +270,8 @@ def _send_approval_webhook(tenant_id: str, order_id: str, workflow_step_id: str,
     try:
         # Find media buy associated with this order
         with get_db_session() as db:
-            stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=order_id)
-            media_buy = db.scalars(stmt).first()
+            repo = MediaBuyRepository(db, tenant_id)
+            media_buy = repo.get_by_id(order_id)
 
             if not media_buy:
                 logger.warning(f"No media buy found for order {order_id}, cannot send webhook")

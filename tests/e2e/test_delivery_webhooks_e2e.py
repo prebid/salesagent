@@ -130,7 +130,7 @@ class TestDailyDeliveryWebhookFlow:
         products_result = await client.call_tool(
             "get_products",
             {
-                "brand_manifest": {"name": "Daily Delivery Webhook Test"},
+                "brand": {"domain": "testbrand.com"},
                 "brief": "display advertising",
                 "context": {"e2e": "delivery_webhook_get_products"},
             },
@@ -174,7 +174,7 @@ class TestDailyDeliveryWebhookFlow:
             total_budget=2000.0,
             start_time=start_time,
             end_time=end_time,
-            brand_manifest={"name": "Daily Delivery Webhook Test"},
+            brand={"domain": "testbrand.com"},
             webhook_url=delivery_webhook_server["url"],
             reporting_frequency="daily",
             context={"e2e": "delivery_webhook_create_media_buy"},

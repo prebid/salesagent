@@ -50,8 +50,10 @@ class TestSchemaLibraryInheritance:
         from adcp.types import AggregatedTotals as LibraryAggregatedTotals
         from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
         from adcp.types import Measurement as LibraryMeasurement
-        from adcp.types.generated_poc.media_buy.list_creatives_response import (
-            Pagination as LibraryResponsePagination,
+
+        # adcp 3.6.0: Pagination moved to core.pagination_response as PaginationResponse
+        from adcp.types.generated_poc.core.pagination_response import (
+            PaginationResponse as LibraryResponsePagination,
         )
 
         from src.core.schemas import AggregatedTotals, DeliveryMeasurement, Measurement, Pagination
@@ -61,7 +63,7 @@ class TestSchemaLibraryInheritance:
             "DeliveryMeasurement must extend library type."
         )
         assert issubclass(AggregatedTotals, LibraryAggregatedTotals), "AggregatedTotals must extend library type."
-        # Pagination for list responses uses page-based pagination (limit/offset/total_pages)
+        # Pagination for list responses uses page-based pagination (has_more, cursor, total_count)
         assert issubclass(Pagination, LibraryResponsePagination), "Pagination must extend library response pagination."
 
     def test_brand_manifest_is_library_type(self):
@@ -189,6 +191,9 @@ class TestSchemaLibraryInheritance:
             "ListAuthorizedPropertiesRequest",
             "ListAuthorizedPropertiesResponse",
             # GetMediaBuyDeliveryResponse — migrated (local MediaBuyDeliveryData override)
+            # GetMediaBuysRequest/Response — added in adcp 3.6.0, migration tracked
+            "GetMediaBuysRequest",
+            "GetMediaBuysResponse",
         }
 
         # Get all Request/Response classes from our schemas

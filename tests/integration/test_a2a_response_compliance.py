@@ -116,7 +116,7 @@ class TestA2ASpecCompliance:
 
         response_data = {
             "query_summary": QuerySummary(total_matching=0, returned=0),
-            "pagination": Pagination(limit=50, offset=0, has_more=False),
+            "pagination": Pagination(has_more=False),
             "creatives": [],
         }
 
@@ -205,14 +205,14 @@ class TestA2ASpecCompliance:
         """Test get_media_buy_delivery returns only spec-defined fields."""
         from datetime import UTC, datetime
 
-        from src.core.schemas import AggregatedTotals, ReportingPeriod
+        from src.core.schemas import AggregatedTotals
 
         ctx = {"user_id": "1234567890"}
         response = GetMediaBuyDeliveryResponse(
-            reporting_period=ReportingPeriod(
-                start=datetime.now(UTC),
-                end=datetime.now(UTC),
-            ),
+            reporting_period={
+                "start": datetime.now(UTC).isoformat(),
+                "end": datetime.now(UTC).isoformat(),
+            },
             currency="USD",
             media_buy_deliveries=[],
             aggregated_totals=AggregatedTotals(  # Required field per AdCP spec

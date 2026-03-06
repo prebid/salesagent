@@ -245,7 +245,7 @@ class TestCreateMediaBuyV24Format:
         # NOTE: budget is at package level per AdCP v2.4 spec (not a top-level parameter)
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_v24",  # REQUIRED per AdCP v2.2.0
-            brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
+            brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
@@ -314,7 +314,7 @@ class TestCreateMediaBuyV24Format:
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_v24_targeting",  # REQUIRED per AdCP v2.2.0
-            brand_manifest={"name": "Adidas UltraBoost 2025 running shoes"},
+            brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
@@ -393,7 +393,7 @@ class TestCreateMediaBuyV24Format:
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_v24_multi",  # REQUIRED per AdCP v2.2.0
-            brand_manifest={"name": "Puma RS-X 2025 training shoes"},
+            brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
@@ -440,7 +440,7 @@ class TestCreateMediaBuyV24Format:
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_v24_a2a",  # REQUIRED per AdCP v2.2.0
-            brand_manifest={"name": "Reebok Nano 2025 cross-training shoes"},
+            brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
@@ -479,7 +479,7 @@ class TestCreateMediaBuyV24Format:
         # pricing_option_id format: {model}_{currency}_{fixed|auction}
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_v24_standard",
-            brand_manifest={"name": "Under Armour HOVR 2025 running shoes"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 PackageRequest(
                     buyer_ref="pkg_v24_test",

@@ -13,6 +13,64 @@ variables:
 labels:
   - "mol:bug-triage"
 
+# ── Setup (runs once before any bug iteration) ───────────────────
+setup:
+  - id: "baseline"
+    title: "Establish baseline — zero failures"
+    description: |
+      Run the full quality suite BEFORE any code changes. This establishes the
+      clean slate. Every failure after this point belongs to you.
+
+      ## Instructions
+
+      1. **Run quality gate**:
+         ```bash
+         make quality 2>&1 | tail -5
+         ```
+         Record the exact pass count (e.g., "2973 passed").
+
+      2. **Start agent DB for integration tests**:
+         ```bash
+         eval $(.claude/skills/agent-db/agent-db.sh up)
+         ```
+
+      3. **Run integration tests**:
+         ```bash
+         scripts/run-test.sh tests/integration/ -x -q 2>&1 | tail -5
+         ```
+         Record the exact pass count.
+
+      4. **Run integration_v2 tests**:
+         ```bash
+         scripts/run-test.sh tests/integration_v2/ -x -q 2>&1 | tail -5
+         ```
+         Record the exact pass count.
+
+      ## Gate — HARD STOP on any failure
+
+      If ANY test fails in the baseline:
+      - Do NOT proceed to the next atom.
+      - Do NOT classify failures as "pre-existing" or "from another agent."
+      - Report the exact failures and leave this atom OPEN.
+
+      You are in an isolated worktree. If the baseline fails, your environment
+      setup is wrong (missing `uv sync`, wrong DB, stale cache). Fix it or stop.
+
+      ## Record Baseline
+
+      Write the counts to the epic so the finalize atom can compare:
+
+      ```bash
+      bd update {EPIC_ID} --append-notes "## Baseline (pre-change)
+      - make quality: [N] passed, 0 failed
+      - integration: [N] passed, 0 failed
+      - integration_v2: [N] passed, 0 failed
+      - Total: [sum] passed, 0 failed"
+      ```
+
+    acceptance: "All three gates pass with zero failures. Exact counts recorded in epic notes."
+    labels: ["atom:baseline"]
+
 iterate:
   over: "BUG_IDS"
   item_var: "BUG_ID"
@@ -35,33 +93,82 @@ iterate:
            - Walk the data through each layer: input → parsing → business logic → output
            - Identify exactly where the bug manifests
            - Use Grep/Read to trace concrete values, not abstract reasoning
-        4. **Choose test level**: Based on the bug type, decide where the test goes:
-           - **Unit** (`tests/unit/`): Logic bugs, type errors, validation — no DB needed
-           - **Integration** (`tests/integration/`): DB constraint violations, query bugs,
-             cross-tenant leaks, ORM relationship issues — needs real PostgreSQL
-           - If unsure: if the bug involves a database column, FK, NOT NULL, or
-             cross-tenant isolation → it MUST be an integration test
+        4. **Choose test level — default to integration**:
+
+           **The default test level is integration** (`tests/integration/`). A test
+           that runs against a real PostgreSQL database with real ORM models catches
+           bugs that mocked unit tests miss entirely.
+
+           Only use unit tests (`tests/unit/`) when ALL of these are true:
+           - The function is pure computation (no DB, no I/O, no side effects)
+           - The logic being tested is complex enough to warrant a focused test
+           - Mocking the DB would make the test meaningless (e.g., the bug IS in
+             how data flows through the DB layer)
+
+           If in doubt, write an integration test.
 
         5. **Write a failing test**:
            - Place it in the appropriate test file based on level chosen in step 4
            - The test should demonstrate the bug clearly and minimally
+           - **Transport Parity Invariant**: Every behavioral test MUST verify
+             identical behavior across all three transports (MCP, A2A, REST).
+             Use `@pytest.mark.parametrize("transport", ["mcp", "a2a", "rest"])`
+             or explicitly test the same scenario through all 3 entry points.
+             If behavior differs between transports, the bug is in the wrapper.
+             See `docs/development/architecture.md` "Transport Parity Invariant".
+           - **Use factories for test data** (CLAUDE.md Pattern #8):
+             - Import from `tests.helpers.adcp_factories` — never inline-construct
+               ORM models or Pydantic schemas with manual field plucking
+             - Available factories: `create_test_db_product`, `create_test_package_request`,
+               `create_test_creative_asset`, `create_test_brand_manifest`,
+               `create_test_media_buy_request_dict`, etc.
+             - See `tests/helpers/adcp_factories.py` for the full list
+             - For DB fixtures (Tenant, Principal, MediaBuy): use existing conftest.py
+               fixtures or extend them — never `session.add(Model(...))` inline
            - Run it and confirm it fails for the RIGHT reason:
              ```bash
-             # Unit tests:
-             uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
-
-             # Integration tests:
-             uv run pytest tests/integration/test_<area>.py::test_<name> -x -v
+             scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v
              ```
            - **CRITICAL**: The test MUST fail. If it passes, your test doesn't catch the
              bug. Rethink what the test asserts.
 
-        6. **Mutation check**: Mentally verify the test catches the right thing:
+        ## BANNED Patterns
+
+        - **`pytest.mark.xfail` is BANNED.** xfail suppresses failure — the test
+          suite stays green. A regression test must produce a HARD FAILURE: pytest
+          exit code 1, "FAILED" in the output. xfail is NOT failing.
+
+        - **AST-scanning / source-code pattern tests are BANNED.** Regression tests
+          must call the actual function (`_impl`, factory, schema constructor) and
+          assert behavioral output. If the bug were re-introduced through a
+          different code construct, the test must still catch it. Tests that use
+          `ast.parse`, `grep`, or regex on source files are structural guards
+          (use /guard for those), NOT regression tests.
+
+        ## Verification: Paste the FAILED Output
+
+        After running the test, paste the LAST 5 LINES of pytest output into
+        the bead notes. You MUST see the word "FAILED" and a non-zero exit.
+        If you see "passed", "xfailed", or "xpassed", your test is wrong.
+
+        ```bash
+        scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v 2>&1 | tail -5
+        # You MUST see "FAILED" — if you see "passed", rewrite the test
+        ```
+
+        6. **Factory check**: Verify your test uses factories, not inline construction:
+           ```bash
+           uv run python .pre-commit-hooks/check_test_factories.py tests/<level>/test_<area>.py
+           ```
+           If this reports suggestions for your NEW code, refactor to use factories
+           before proceeding. Existing code suggestions can be ignored.
+
+        7. **Mutation check**: Mentally verify the test catches the right thing:
            - If you removed the buggy code, would the test fail?
            - If someone re-introduced the bug, would the test catch it?
            - If the answer to either is "no", rewrite the test.
 
-        7. **Confirm root cause**: After tracing, state in one sentence what is wrong
+        8. **Confirm root cause**: After tracing, state in one sentence what is wrong
            and why. This becomes the basis for the fix.
 
         ## Store Findings in the Bead
@@ -70,6 +177,7 @@ iterate:
         bd update {BUG_ID} --append-notes "## Reproduction
         - Test level: [unit | integration | e2e]
         - Failing test: tests/<level>/test_<area>.py::test_<name>
+        - Docker required: [yes | no]
         - Root cause: [one sentence]
         - Data flow trace: [entry point] → [layer] → [bug manifests here]
         - Mutation check: [what happens if bug is re-introduced]
@@ -105,7 +213,8 @@ iterate:
         ```
         Do NOT close this atom if not reproducible — leave it open for triage.
 
-      acceptance: "Failing test exists AND has been run (not just written). Test level documented (unit/integration/e2e). Root cause identified. reproduce:complete label added. Notes contain Reproduction section with test level + mutation check. Design contains Root Cause + Fix Approach."
+      acceptance: "Failing test exists AND has been run (not just written). Test level documented (unit/integration/e2e). If integration: Docker started and test run against real PostgreSQL. Root cause identified. reproduce:complete label added. Notes contain Reproduction section with test level + mutation check. Design contains Root Cause + Fix Approach."
+      depends_on: ["baseline"]
       labels: ["atom:reproduce"]
 
     # ── Atom 2: Trace Similar ────────────────────────────────────
@@ -302,28 +411,37 @@ iterate:
            **STOP** — go back and write the test first. A pattern-match fix without a
            failing test is not acceptable.
 
-        2. **Verify the test still fails**:
+        2. **Start Docker if needed**: Check "Docker required" in the Reproduction section.
+           If yes, acquire the lock and start Docker (see reproduce atom for full
+           mutex script). **Remember to release the lock** after tests complete:
            ```bash
-           uv run pytest tests/<level>/test_<area>.py::test_<name> -x -v
+           rmdir /tmp/salesagent-docker.lock 2>/dev/null
+           ```
+
+        3. **Verify the test still fails**:
+           ```bash
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v
            ```
            If the test now passes (e.g., someone else fixed it), note this and
            close the atom.
 
-        3. **Apply the fix**: Make the minimal change described in the design field.
+        4. **Apply the fix**: Make the minimal change described in the design field.
            - Follow CLAUDE.md critical patterns
            - Follow existing codebase conventions
            - Don't refactor surrounding code — fix the bug only
 
-        4. **Verify the fix**:
+        5. **Verify the fix (red → green)**:
+           Run the SAME test that FAILED in the reproduce atom:
            ```bash
-           uv run pytest tests/<level>/test_<area>.py::test_<name> -x -v
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v 2>&1 | tail -5
+           # You MUST see "passed" — if you see "FAILED", your fix didn't work
            ```
-           The previously failing test must now pass.
+           If the test still fails, do NOT mark it xfail and move on. Fix the code.
 
-        5. **Mutation verify**: Temporarily revert the fix and confirm the test fails again.
+        6. **Mutation verify**: Temporarily revert the fix and confirm the test fails again.
            Then re-apply the fix. This proves the test actually catches the bug.
 
-        6. **Run full quality gate**:
+        7. **Run full quality gate**:
            ```bash
            make quality
            ```
@@ -357,61 +475,64 @@ iterate:
         bd close {BUG_ID}
         ```
 
-      acceptance: "make quality passes. Failing test from reproduce atom now passes. Mutation verified: reverting fix causes test to fail again. No existing tests modified without documented justification. Original task {BUG_ID} closed."
+      acceptance: "make quality passes. Failing test from reproduce atom now passes (run against real DB if integration-level). Mutation verified: reverting fix causes test to fail again. No existing tests modified without documented justification. Original task {BUG_ID} closed."
       depends_on: ["triage-{BUG_ID}"]
       depends_on_prev_barrier: true
       labels: ["atom:fix"]
 
-    # ── Atom 6: E2E Verify (MANDATORY) ───────────────────────────
+    # ── Atom 6: E2E Verify (Optional) ───────────────────────────
     - id: "e2e-verify-{BUG_ID}"
       title: "E2E verify fix for {BUG_ID}"
       description: |
-        MANDATORY verification for bug {BUG_ID}. This atom MUST be executed.
-        There is no skip path. Run the tests.
+        Optional verification for bug {BUG_ID} against real systems.
+
+        ## When to Skip
+
+        If the bug is purely in business logic (no adapter/API interaction),
+        this atom can be closed immediately with a note:
+        ```bash
+        bd update {BUG_ID} --append-notes "## E2E Verification: Skipped
+        Bug is in business logic only — unit test coverage is sufficient."
+        ```
+
+        ## When to Execute
+
+        If the bug touches:
+        - Adapter code (GAM, etc.)
+        - External API calls
+        - Data serialization sent to external systems
+        - Protocol-level behavior (MCP, A2A)
 
         ## Instructions
 
-        1. **Determine test level** based on what the bug touches:
-
-           | Bug Area | Test Suite | Command |
-           |----------|-----------|---------|
-           | Unit-only logic (pure functions, data transforms) | unit | `tox -e unit` |
-           | Database interactions, tenant resolution, auth | integration | `tox -e integration` |
-           | A2A handler, skill invocation, protocol behavior | integration_v2 | `tox -e integration_v2` |
-           | Adapter code (GAM, etc.), external API calls | e2e | `tox -e e2e` |
-           | Full system (multiple services, nginx routing) | e2e | `tox -e e2e` |
-
-           If the bug touches multiple areas, run ALL applicable suites.
-
-        2. **Start Docker if needed** (integration and above require it):
+        1. **Check if e2e test infrastructure exists** for the affected area:
            ```bash
-           make test-stack-up && source .test-stack.env
+           ls tests/e2e/
            ```
 
-        3. **Run the test suite(s)**:
+        2. **If e2e test exists**: Run it and verify it passes:
            ```bash
-           tox -e <suite>
-           ```
-           Run the FULL suite, not just the new regression test. The purpose
-           is to verify no regressions were introduced by the fix.
-
-        4. **If tests fail**: DO NOT close this atom. Fix the failures first,
-           then re-run. The fix atom may need to be reopened.
-
-        5. **Record result**:
-           ```bash
-           bd update {BUG_ID} --append-notes "## E2E Verification: PASS
-           Ran: <list of suites executed>
-           Result: <N> passed, <M> failed, <K> skipped
-           Command: <exact tox command used>"
+           uv run pytest tests/e2e/test_<area>.py -x -v
            ```
 
-        6. **Tear down Docker if started**:
+        3. **If no e2e test exists**: Either:
+           a. Write a minimal e2e test if the infrastructure supports it
+           b. Document manual verification steps and ask the user to confirm:
+              ```bash
+              bd update {BUG_ID} --append-notes "## E2E Verification: Manual
+              Steps to verify in real environment:
+              1. [step 1]
+              2. [step 2]
+              Expected result: [what should happen]"
+              ```
+
+        4. **Record result**:
            ```bash
-           make test-stack-down
+           bd update {BUG_ID} --append-notes "## E2E Verification: [PASS | MANUAL | SKIPPED]
+           [details]"
            ```
 
-      acceptance: "At least one test suite ran to completion with 0 failures. Test output recorded in bead notes. No skipping allowed — this atom must show test execution evidence."
+      acceptance: "E2E verification completed, skipped with justification, or manual steps documented."
       depends_on: ["fix-{BUG_ID}"]
       labels: ["atom:e2e-verify"]
 
@@ -462,6 +583,53 @@ iterate:
 
 # ── Finalize (after all bugs) ──────────────────────────────────
 finalize:
+  - id: verify-no-regression
+    title: "Verify zero regressions vs baseline"
+    description: |
+      Compare final test results against the baseline recorded in the setup atom.
+      This is the clean slate verification — you must return what you received.
+
+      ## Instructions
+
+      1. **Read the baseline** from the epic:
+         ```bash
+         bd show {EPIC_ID}
+         ```
+         Find the "## Baseline (pre-change)" section. Note the exact counts.
+
+      2. **Run the full test suite** (MANDATORY — this is the only correct way):
+         ```bash
+         ./run_all_tests.sh
+         ```
+         This starts Docker, runs all 5 suites (unit, integration, integration_v2,
+         e2e, ui) via tox, and tears down. Do NOT substitute with individual pytest
+         commands — `./run_all_tests.sh` is the single source of truth.
+
+      3. **Compare counts**:
+         - Passes must be >= baseline (new tests are expected)
+         - Failures must be exactly 0
+         - Any new failure means YOUR changes broke something — fix it
+
+      4. **Record final results**:
+         ```bash
+         bd update {EPIC_ID} --append-notes "## Final (post-change)
+         - make quality: [N] passed, 0 failed (baseline: [N])
+         - integration: [N] passed, 0 failed (baseline: [N])
+         - integration_v2: [N] passed, 0 failed (baseline: [N])
+         - Delta: +[N] new tests, 0 regressions"
+         ```
+
+      ## HARD STOP
+
+      If ANY gate has failures that were not in the baseline:
+      - Do NOT close this atom.
+      - Do NOT commit.
+      - Fix the regressions first, then re-run this atom.
+
+    acceptance: "All three gates pass. Zero regressions vs baseline. Final counts recorded in epic notes."
+    depends_on_all_barriers: true
+    labels: ["atom:verify-regression"]
+
   - id: sync-and-verify
     title: "Sync beads and verify clean state"
     description: |
@@ -486,11 +654,6 @@ finalize:
          git log --oneline -20
          ```
 
-      4. Final quality check:
-         ```bash
-         make quality
-         ```
-
-    acceptance: "All {N} bugs closed. bd sync done. make quality passes. git clean."
-    depends_on_all_barriers: true
+    acceptance: "All {N} bugs closed. bd sync done. git clean."
+    depends_on: ["verify-no-regression"]
     labels: ["atom:verify"]

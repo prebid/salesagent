@@ -131,6 +131,13 @@ class TestPlacementIdsValidation:
         mock_cm.__enter__ = Mock(return_value=mock_session)
         mock_cm.__exit__ = Mock(return_value=False)
 
+        # Build mock UoW
+        mock_uow = MagicMock()
+        mock_uow.session = mock_session
+        mock_uow.media_buys = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+
         with (
             patch(
                 "src.core.helpers.context_helpers.ensure_tenant_context",
@@ -141,6 +148,7 @@ class TestPlacementIdsValidation:
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
             patch(f"{MODULE}.get_adapter") as m_adapter,
             patch(f"{MODULE}.get_audit_logger", return_value=MagicMock()),
+            patch(f"{MODULE}.MediaBuyUoW", return_value=mock_uow),
             patch(f"{DB_MODULE}.get_db_session", return_value=mock_cm),
         ):
             m_principal_obj.return_value = MagicMock(principal_id="principal_test")
@@ -157,26 +165,27 @@ class TestPlacementIdsValidation:
             m_adapter.return_value = mock_adapter
 
             # Mock DB lookups for the creative_assignments path:
-            # 1. media_buy lookup (by media_buy_id)
+            # 1. media_buy lookup via repo
             mock_media_buy = MagicMock()
             mock_media_buy.media_buy_id = "mb_placement"
             mock_media_buy.status = "approved"
             mock_media_buy.approved_at = None
+            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_media_buy
 
-            # 2. package lookup
+            # 2. package lookup via repo
             mock_package = MagicMock()
             mock_package.package_config = {"product_id": "prod_1"}
+            mock_uow.media_buys.get_package.return_value = mock_package
 
-            # 3. product lookup with placements that do NOT include "invalid_placement"
+            # 3. product lookup via session (not in repo)
             mock_product = MagicMock()
             mock_product.placements = [
                 {"placement_id": "homepage_atf"},
                 {"placement_id": "sidebar"},
             ]
 
-            # Wire up scalars().first() to return the right objects in sequence
             mock_scalars = MagicMock()
-            mock_scalars.first.side_effect = [mock_media_buy, mock_package, mock_product]
+            mock_scalars.first.side_effect = [mock_product]
             mock_session.scalars.return_value = mock_scalars
 
             req = UpdateMediaBuyRequest(
@@ -226,6 +235,13 @@ class TestPlacementIdsValidation:
         mock_cm.__enter__ = Mock(return_value=mock_session)
         mock_cm.__exit__ = Mock(return_value=False)
 
+        # Build mock UoW
+        mock_uow = MagicMock()
+        mock_uow.session = mock_session
+        mock_uow.media_buys = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+
         with (
             patch(
                 "src.core.helpers.context_helpers.ensure_tenant_context",
@@ -236,6 +252,7 @@ class TestPlacementIdsValidation:
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
             patch(f"{MODULE}.get_adapter") as m_adapter,
             patch(f"{MODULE}.get_audit_logger", return_value=MagicMock()),
+            patch(f"{MODULE}.MediaBuyUoW", return_value=mock_uow),
             patch(f"{DB_MODULE}.get_db_session", return_value=mock_cm),
         ):
             m_principal_obj.return_value = MagicMock(principal_id="principal_test")
@@ -251,22 +268,24 @@ class TestPlacementIdsValidation:
             mock_adapter.manual_approval_operations = []
             m_adapter.return_value = mock_adapter
 
-            # Mock media_buy lookup
+            # Mock media_buy lookup via repo
             mock_media_buy = MagicMock()
             mock_media_buy.media_buy_id = "mb_no_placements"
             mock_media_buy.status = "approved"
             mock_media_buy.approved_at = None
+            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_media_buy
 
-            # Mock package lookup
+            # Mock package lookup via repo
             mock_package = MagicMock()
             mock_package.package_config = {"product_id": "prod_no_placements"}
+            mock_uow.media_buys.get_package.return_value = mock_package
 
-            # Mock product with NO placements (empty list)
+            # Mock product with NO placements (empty list) via session
             mock_product = MagicMock()
             mock_product.placements = []
 
             mock_scalars = MagicMock()
-            mock_scalars.first.side_effect = [mock_media_buy, mock_package, mock_product]
+            mock_scalars.first.side_effect = [mock_product]
             mock_session.scalars.return_value = mock_scalars
 
             req = UpdateMediaBuyRequest(

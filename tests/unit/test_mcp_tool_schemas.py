@@ -11,15 +11,17 @@ class TestMCPToolTypedSchemas:
     """Verify MCP tools expose typed schemas instead of untyped dicts."""
 
     def test_get_products_uses_typed_parameters(self):
-        """get_products should use BrandManifest, ProductFilters, ContextObject types."""
+        """get_products should use BrandReference (adcp 3.6.0), ProductFilters, ContextObject types."""
         from src.core.tools.products import get_products
 
         sig = inspect.signature(get_products)
         params = sig.parameters
 
-        # Check brand_manifest uses BrandManifest type
-        assert "BrandManifest" in str(params["brand_manifest"].annotation), (
-            f"brand_manifest should use BrandManifest type, got {params['brand_manifest'].annotation}"
+        # adcp 3.6.0: brand_manifest replaced by brand (BrandReference)
+        assert "brand" in params, "get_products should have 'brand' parameter (adcp 3.6.0)"
+        assert "brand_manifest" not in params, "brand_manifest was removed in adcp 3.6.0"
+        assert "BrandReference" in str(params["brand"].annotation), (
+            f"brand should use BrandReference type, got {params['brand'].annotation}"
         )
 
         # Check filters uses ProductFilters type
@@ -75,16 +77,21 @@ class TestMCPToolTypedSchemas:
         )
 
     def test_create_media_buy_uses_typed_parameters(self):
-        """create_media_buy should use BrandManifest, PackageRequest, etc."""
+        """create_media_buy should use BrandReference (brand), PackageRequest, etc.
+
+        adcp 3.6.0: brand_manifest renamed to brand (BrandReference with domain field).
+        """
         from src.core.tools.media_buy_create import create_media_buy
 
         sig = inspect.signature(create_media_buy)
         params = sig.parameters
 
-        # Check brand_manifest uses BrandManifest type (or str for URL)
-        assert "BrandManifest" in str(params["brand_manifest"].annotation), (
-            f"brand_manifest should use BrandManifest type, got {params['brand_manifest'].annotation}"
+        # adcp 3.6.0: brand_manifest → brand (BrandReference)
+        assert "brand" in params, (
+            f"create_media_buy should have 'brand' parameter (adcp 3.6.0). Got parameters: {list(params.keys())}"
         )
+        # brand_manifest is no longer in the signature
+        assert "brand_manifest" not in params, "brand_manifest was removed in adcp 3.6.0, use 'brand' instead"
 
         # Check packages uses PackageRequest type
         assert "PackageRequest" in str(params["packages"].annotation), (
@@ -178,15 +185,14 @@ class TestMCPToolTypedSchemas:
 class TestMCPToolSchemaNotUntyped:
     """Ensure MCP tools don't use untyped dict parameters for complex types."""
 
-    def test_no_untyped_dict_for_brand_manifest(self):
-        """brand_manifest should NOT be dict[str, Any]."""
+    def test_brand_manifest_removed_from_get_products(self):
+        """brand_manifest parameter must not exist in get_products (removed in adcp 3.6.0)."""
         from src.core.tools.products import get_products
 
         sig = inspect.signature(get_products)
-        annotation = str(sig.parameters["brand_manifest"].annotation)
-
-        # Should not contain plain dict without a type name
-        assert "dict[str, Any]" not in annotation, "brand_manifest should use typed model, not dict[str, Any]"
+        assert "brand_manifest" not in sig.parameters, (
+            "brand_manifest was removed in adcp 3.6.0 — get_products must use 'brand' instead"
+        )
 
     def test_no_untyped_dict_for_filters(self):
         """filters should NOT be dict."""

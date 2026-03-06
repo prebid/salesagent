@@ -27,6 +27,7 @@ See [Contributing](contributing.md) for detailed development workflows.
 
 - **[Architecture](architecture.md)** - System design and component overview
 - **[Contributing](contributing.md)** - Development workflows, testing, code style
+- **[Structural Guards](structural-guards.md)** - Automated architecture enforcement tests
 - **[Troubleshooting](troubleshooting.md)** - Common development issues
 
 ## Key Resources

@@ -44,9 +44,10 @@ class TestInlineCreativesInAdapters:
     def mock_request(self):
         """Request with inline creatives."""
         # Per AdCP v2.2.0: budget removed from top-level (now at package level)
+        # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
         return CreateMediaBuyRequest(
             buyer_ref="test_buyer_ref",
-            brand_manifest="https://example.com/brand",
+            brand={"domain": "example.com"},
             start_time=datetime.now(UTC),
             end_time=datetime.now(UTC) + timedelta(days=30),
             packages=[
@@ -59,6 +60,7 @@ class TestInlineCreativesInAdapters:
                     creatives=[
                         Creative(
                             creative_id="creative_1",
+                            variants=[],
                             name="Test Creative 1",
                             format_id=FormatId(agent_url="https://creative.test", id="display_300x250"),
                             assets={"main": {"url": "https://example.com/ad1.png", "width": 300, "height": 250}},

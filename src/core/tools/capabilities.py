@@ -159,8 +159,8 @@ def _get_adcp_capabilities_impl(
         content_standards=False,
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
-        # property_list_filtering: Not implemented yet
-        property_list_filtering=False,
+        # property_list_filtering: Implemented — filters products by buyer property lists
+        property_list_filtering=True,
     )
 
     # Build targeting capabilities from adapter

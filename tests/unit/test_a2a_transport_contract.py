@@ -314,7 +314,7 @@ class TestA2AResponseShape:
         payload = _build_jsonrpc(
             "create_media_buy",
             {
-                "brand_manifest": {"name": "Test"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": [{"buyer_ref": "pkg1", "product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm"}],
                 "start_time": "2026-03-01T00:00:00Z",
                 "end_time": "2026-03-31T00:00:00Z",
@@ -365,9 +365,10 @@ class TestA2AResponseShape:
         """list_creatives response must contain 'creatives' list."""
         from src.core.schemas import ListCreativesResponse
 
+        # adcp 3.6.0: Pagination uses cursor-based pagination (has_more, total_count, cursor)
         mock_impl.return_value = ListCreativesResponse(
             creatives=[],
-            pagination={"page": 1, "limit": 50, "total": 0, "has_more": False, "offset": 0},
+            pagination={"has_more": False, "total_count": 0},
             query_summary={"filters_applied": [], "returned": 0, "total_matching": 0},
         )
 

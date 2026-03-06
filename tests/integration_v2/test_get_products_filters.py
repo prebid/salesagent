@@ -200,7 +200,7 @@ class TestGetProductsFilterBehavior:
 
         # Call get_products (currently no direct filter param support, will add)
         result = await get_products(
-            brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
+            brand={"domain": "testbrand.com"},
             brief="",
             ctx=context,
         )
@@ -224,7 +224,7 @@ class TestGetProductsFilterBehavior:
         context = mock_context
 
         result = await get_products(
-            brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
+            brand={"domain": "testbrand.com"},
             brief="",
             ctx=context,
         )
@@ -248,7 +248,7 @@ class TestGetProductsFilterBehavior:
         context = mock_context
 
         result = await get_products(
-            brand_manifest={"name": "Nike Air Jordan 2025 basketball shoes"},
+            brand={"domain": "testbrand.com"},
             brief="",
             ctx=context,
         )
@@ -457,7 +457,7 @@ class TestNewGetProductsFilters:
         context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
 
         result = await get_products(
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             brief="",
             filters={"countries": ["US"]},
             ctx=context,
@@ -483,7 +483,7 @@ class TestNewGetProductsFilters:
         context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
 
         result = await get_products(
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             brief="",
             filters={"countries": ["CA", "GB"]},
             ctx=context,
@@ -509,7 +509,7 @@ class TestNewGetProductsFilters:
         context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
 
         result = await get_products(
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             brief="",
             filters={"channels": ["display"]},
             ctx=context,
@@ -535,7 +535,7 @@ class TestNewGetProductsFilters:
         context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
 
         result = await get_products(
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             brief="",
             filters={"channels": ["olv"]},  # V3: "video" → "olv"
             ctx=context,
@@ -555,7 +555,7 @@ class TestNewGetProductsFilters:
         context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
 
         result = await get_products(
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             brief="",
             filters={"channels": ["streaming_audio", "social"]},  # V3: "audio" → "streaming_audio", "native" → "social"
             ctx=context,
@@ -580,7 +580,7 @@ class TestNewGetProductsFilters:
         context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
 
         result = await get_products(
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             brief="",
             filters={"channels": ["retail_media"]},  # V3: "retail" → "retail_media"
             ctx=context,
@@ -600,7 +600,7 @@ class TestNewGetProductsFilters:
         context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
 
         result = await get_products(
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             brief="",
             filters={
                 "countries": ["US"],
@@ -626,7 +626,7 @@ class TestNewGetProductsFilters:
         context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
 
         result = await get_products(
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             brief="",
             filters={
                 "countries": ["CA"],

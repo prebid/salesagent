@@ -237,7 +237,7 @@ class TestA2AParameterMapping:
             # Request missing required AdCP parameters
             incomplete_parameters = {
                 "buyer_ref": "campaign_123",
-                # Missing: brand_manifest, packages, budget, start_time, end_time
+                # Missing: brand, packages, start_time, end_time
             }
 
             import asyncio
@@ -251,5 +251,5 @@ class TestA2AParameterMapping:
 
             # ValidationError message includes missing field names
             error_message = str(result.get("message", "")).lower()
-            assert "brand_manifest" in error_message, "Error message should mention missing 'brand_manifest'"
+            assert "brand" in error_message, "Error message should mention missing 'brand'"
             assert "packages" in error_message, "Error message should mention missing 'packages'"

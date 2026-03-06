@@ -574,6 +574,33 @@ def sample_products(integration_db, sample_tenant):
                 price_guidance=None,
                 implementation_config=None,
                 properties=None,
+                # Placements for placement-targeting validation (adcp#208)
+                placements=[
+                    {
+                        "placement_id": "homepage_atf",
+                        "name": "Homepage Above the Fold",
+                        "description": "Premium above-the-fold placement on homepage",
+                        "format_ids": [
+                            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+                        ],
+                    },
+                    {
+                        "placement_id": "sidebar",
+                        "name": "Sidebar",
+                        "description": "Standard sidebar placement",
+                        "format_ids": [
+                            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+                        ],
+                    },
+                    {
+                        "placement_id": "article_inline",
+                        "name": "Article Inline",
+                        "description": "Inline placement within article content",
+                        "format_ids": [
+                            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
+                        ],
+                    },
+                ],
             ),
             Product(
                 tenant_id=sample_tenant["tenant_id"],

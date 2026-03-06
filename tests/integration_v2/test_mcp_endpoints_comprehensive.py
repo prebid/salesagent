@@ -149,7 +149,7 @@ class TestMCPEndpointsComprehensive:
                 "get_products",
                 {
                     "brief": "display ads for news content",
-                    "brand_manifest": {"name": "Tech startup promoting AI analytics platform"},
+                    "brand": {"domain": "testbrand.com"},
                 },
             )
 
@@ -189,7 +189,7 @@ class TestMCPEndpointsComprehensive:
                 "get_products",
                 {
                     "brief": "display advertising on news websites",
-                    "brand_manifest": {"name": "B2B software company"},
+                    "brand": {"domain": "testbrand.com"},
                 },
             )
 
@@ -203,16 +203,16 @@ class TestMCPEndpointsComprehensive:
     @pytest.mark.timeout(60)
     @pytest.mark.requires_server
     async def test_get_products_missing_required_field(self, mcp_client):
-        """Test that get_products succeeds without brand_manifest when authenticated.
+        """Test that get_products succeeds without brand when authenticated.
 
         With default brand_manifest_policy='require_auth', authenticated requests
-        can omit brand_manifest. A generic offering is used instead.
+        can omit brand. A generic offering is used instead.
         """
         async with mcp_client as client:
             # Should succeed - authenticated user with require_auth policy
             result = await client.call_tool(
                 "get_products",
-                {"brief": "display ads"},  # No brand_manifest - allowed when authenticated
+                {"brief": "display ads"},  # No brand - allowed when authenticated
             )
 
             # Should return products successfully
@@ -232,7 +232,7 @@ class TestMCPEndpointsComprehensive:
 
         # Test: Standard AdCP format with explicit packages
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Adidas UltraBoost 2025 running shoes"},
+            brand={"domain": "testbrand.com"},
             buyer_ref="custom_ref_123",
             po_number="PO-V24-67890",
             packages=[
@@ -271,7 +271,7 @@ class TestMCPEndpointsComprehensive:
                     "get_products",
                     {
                         "brief": "test",
-                        "brand_manifest": {"name": "test"},
+                        "brand": {"domain": "testbrand.com"},
                     },
                 )
 
@@ -317,7 +317,7 @@ class TestMCPEndpointsComprehensive:
                 "get_products",
                 {
                     "brief": "Looking for premium display advertising",
-                    "brand_manifest": {"name": "Enterprise SaaS platform for data analytics"},
+                    "brand": {"domain": "testbrand.com"},
                 },
             )
 
@@ -335,7 +335,7 @@ class TestMCPEndpointsComprehensive:
             buy_result = await client.call_tool(
                 "create_media_buy",
                 {
-                    "brand_manifest": {"name": "Enterprise SaaS platform for data analytics"},
+                    "brand": {"domain": "testbrand.com"},
                     "buyer_ref": "test_workflow_buy_001",  # Required per AdCP spec
                     "packages": [
                         create_test_package_request_dict(

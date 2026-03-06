@@ -10,14 +10,18 @@ Each test references its upstream BDD scenario ID for traceability.
 
 from unittest.mock import MagicMock, patch
 
-from adcp.types import AssetContentType
 from adcp.types.generated_poc.core.format import (
-    Asset,
     Assets,
     Assets5,
+    Assets16,
     Dimensions,
     Renders,
 )
+
+# adcp 3.6.0: Assets classes are type-discriminated by asset_type + item_type.
+# Assets = individual image, Assets5 = individual video
+# Assets16 = repeatable_group (has nested assets, no asset_type)
+# Nested group assets: Assets17 (image), Assets18 (video), Assets20 (text), etc.
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.resolved_identity import ResolvedIdentity
@@ -196,21 +200,22 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_finds_type_in_group_assets(self):
         """Format with group assets containing requested type should be included."""
-        group_asset = Assets5(
+        # adcp 3.6.0: repeatable_group uses Assets16, nested items use Assets17+ variants
+        from adcp.types.generated_poc.core.format import Assets17, Assets20
+
+        group_asset = Assets16(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=True,
             min_count=1,
             max_count=5,
             assets=[
-                Asset(
+                Assets17(
                     asset_id="product_image",
-                    asset_type=AssetContentType.image,
                     required=True,
                 ),
-                Asset(
+                Assets20(
                     asset_id="product_title",
-                    asset_type=AssetContentType.text,
                     required=True,
                 ),
             ],
@@ -233,16 +238,18 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_excludes_group_without_match(self):
         """Format with group assets NOT containing requested type should be excluded."""
-        group_asset = Assets5(
+        # adcp 3.6.0: repeatable_group uses Assets16, nested text items use Assets20
+        from adcp.types.generated_poc.core.format import Assets20
+
+        group_asset = Assets16(
             item_type="repeatable_group",
             asset_group_id="text_group",
             required=True,
             min_count=1,
             max_count=3,
             assets=[
-                Asset(
+                Assets20(
                     asset_id="headline",
-                    asset_type=AssetContentType.text,
                     required=True,
                 ),
             ],
@@ -264,22 +271,24 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_mixed_individual_and_group(self):
         """Format with both individual and group assets: filter checks both."""
-        individual_asset = Assets(
+        # adcp 3.6.0: Assets5 = individual video, Assets16 = repeatable_group
+        # Assets16 nested assets use Assets17+ classes (image=Assets17)
+        from adcp.types.generated_poc.core.format import Assets17
+
+        individual_asset = Assets5(
             item_type="individual",
             asset_id="hero_video",
-            asset_type=AssetContentType.video,
             required=True,
         )
-        group_asset = Assets5(
+        group_asset = Assets16(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=False,
             min_count=0,
             max_count=5,
             assets=[
-                Asset(
+                Assets17(
                     asset_id="product_image",
-                    asset_type=AssetContentType.image,
                     required=True,
                 ),
             ],
@@ -452,15 +461,16 @@ class TestAssetTypesFilterExclusion:
 
     def test_format_with_non_matching_assets_excluded(self):
         """Format with assets that do not match any requested type is excluded."""
+        # adcp 3.6.0: use typed asset classes - Assets (image), Assets9 (html)
+        from adcp.types.generated_poc.core.format import Assets9
+
         formats = [
             _make_format(
                 "image_banner",
                 "Image Banner",
                 assets=[
                     Assets(
-                        item_type="individual",
                         asset_id="main",
-                        asset_type=AssetContentType.image,
                         required=True,
                     ),
                 ],
@@ -469,10 +479,8 @@ class TestAssetTypesFilterExclusion:
                 "html_widget",
                 "HTML Widget",
                 assets=[
-                    Assets(
-                        item_type="individual",
+                    Assets9(
                         asset_id="code",
-                        asset_type=AssetContentType.html,
                         required=True,
                     ),
                 ],
@@ -487,15 +495,14 @@ class TestAssetTypesFilterExclusion:
 
     def test_format_with_assets_of_wrong_type_excluded_while_match_kept(self):
         """Only formats with at least one matching asset type are kept."""
+        # adcp 3.6.0: Assets (image), Assets5 (video)
         formats = [
             _make_format(
                 "image_only",
                 "Image Only",
                 assets=[
                     Assets(
-                        item_type="individual",
                         asset_id="photo",
-                        asset_type=AssetContentType.image,
                         required=True,
                     ),
                 ],
@@ -504,10 +511,8 @@ class TestAssetTypesFilterExclusion:
                 "video_format",
                 "Video Format",
                 assets=[
-                    Assets(
-                        item_type="individual",
+                    Assets5(
                         asset_id="clip",
-                        asset_type=AssetContentType.video,
                         required=True,
                     ),
                 ],

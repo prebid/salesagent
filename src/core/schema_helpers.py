@@ -13,7 +13,8 @@ Philosophy:
 from typing import Any
 
 from adcp import GetProductsRequest, GetProductsResponse, Product
-from adcp.types.generated_poc.core.brand_manifest import BrandManifest
+from adcp.types import PropertyListReference
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.product_filters import ProductFilters
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
@@ -55,20 +56,59 @@ def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> R
     return None  # Fallback for unexpected types
 
 
+def to_brand_reference(brand: dict[str, Any] | BrandReference | None) -> BrandReference | None:
+    """Convert dict brand to BrandReference for adcp 3.6.0 compatibility.
+
+    Args:
+        brand: Brand as dict or BrandReference or None
+
+    Returns:
+        BrandReference or None
+    """
+    if brand is None:
+        return None
+    if isinstance(brand, BrandReference):
+        return brand
+    if isinstance(brand, dict):
+        return BrandReference(**brand)
+    return None  # Fallback for unexpected types
+
+
+def to_property_list_reference(
+    property_list: dict[str, Any] | PropertyListReference | None,
+) -> PropertyListReference | None:
+    """Convert dict to PropertyListReference for adcp compatibility.
+
+    Args:
+        property_list: Property list reference as dict or PropertyListReference or None
+
+    Returns:
+        PropertyListReference or None
+    """
+    if property_list is None:
+        return None
+    if isinstance(property_list, PropertyListReference):
+        return property_list
+    if isinstance(property_list, dict):
+        return PropertyListReference(**property_list)
+    return None  # Fallback for unexpected types
+
+
 def create_get_products_request(
     brief: str = "",
-    brand_manifest: dict[str, Any] | BrandManifest | None = None,
+    brand: dict[str, Any] | BrandReference | None = None,
     filters: dict[str, Any] | ProductFilters | None = None,
+    property_list: dict[str, Any] | PropertyListReference | None = None,
     context: dict[str, Any] | ContextObject | None = None,
 ) -> GetProductsRequest:
-    """Create GetProductsRequest aligned with adcp v1.2.1 spec.
+    """Create GetProductsRequest aligned with adcp v3.6.0 spec.
 
     Args:
         brief: Natural language description of campaign requirements
-        brand_manifest: Brand information as dict or BrandManifest. Must follow AdCP BrandManifest schema.
-                       Example: {"name": "Acme", "url": "https://acme.com"}
-                       Or: {"url": "https://acme.com"}
+        brand: Brand reference per adcp 3.6.0 (BrandReference or dict with domain field).
+               Example: BrandReference(domain="acme.com") or {"domain": "acme.com"}
         filters: Structured filters for product discovery (dict or ProductFilters)
+        property_list: Property list reference for filtering by buyer's property list
         context: Application-level context (dict or ContextObject)
 
     Returns:
@@ -76,31 +116,10 @@ def create_get_products_request(
 
     Examples:
         >>> req = create_get_products_request(
-        ...     brand_manifest={"name": "Acme", "url": "https://acme.com"},
+        ...     brand=BrandReference(domain="acme.com"),
         ...     brief="Display ads"
         ... )
     """
-    # Handle brand_manifest - can be dict, BrandManifest, or None
-    brand_manifest_obj: BrandManifest | None = None
-    if brand_manifest is not None:
-        if isinstance(brand_manifest, BrandManifest):
-            brand_manifest_obj = brand_manifest
-        elif isinstance(brand_manifest, dict):
-            # Adapt brand_manifest to ensure 'name' field exists (adcp 2.5.0 requirement)
-            brand_manifest_adapted = brand_manifest
-            if "name" not in brand_manifest:
-                # If only 'url' provided, use domain as name
-                if "url" in brand_manifest:
-                    from urllib.parse import urlparse
-
-                    url_str = brand_manifest["url"]
-                    domain = urlparse(url_str).netloc or url_str
-                    brand_manifest_adapted = {**brand_manifest, "name": domain}
-                else:
-                    # Fallback: use a placeholder name
-                    brand_manifest_adapted = {**brand_manifest, "name": "Brand"}
-            brand_manifest_obj = BrandManifest(**brand_manifest_adapted)
-
     # Handle filters - can be dict, ProductFilters, or None
     filters_obj: ProductFilters | None = None
     if filters is not None:
@@ -110,9 +129,10 @@ def create_get_products_request(
             filters_obj = ProductFilters(**filters)
 
     return GetProductsRequest(
-        brand_manifest=brand_manifest_obj,
+        brand=to_brand_reference(brand),
         brief=brief or None,
         filters=filters_obj,
+        property_list=to_property_list_reference(property_list),
         context=to_context_object(context),
     )
 
@@ -151,11 +171,13 @@ def create_get_products_response(
 
 # Re-export commonly used generated types for convenience
 __all__ = [
+    "to_brand_reference",
     "to_context_object",
     "to_reporting_webhook",
     "create_get_products_request",
     "create_get_products_response",
     # Re-export types for type hints
+    "BrandReference",
     "GetProductsRequest",
     "GetProductsResponse",
     "Product",

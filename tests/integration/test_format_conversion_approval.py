@@ -219,7 +219,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [
@@ -323,7 +323,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [
@@ -426,7 +426,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [
@@ -528,7 +528,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [
@@ -633,7 +633,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [
@@ -736,7 +736,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [
@@ -838,7 +838,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [
@@ -935,7 +935,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [
@@ -1048,7 +1048,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [
@@ -1145,7 +1145,7 @@ class TestFormatConversionApproval:
                 status="pending_approval",
                 raw_request={
                     "buyer_ref": "test_buyer_ref",
-                    "brand_manifest": "https://example.com/brand-manifest.json",
+                    "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
                     "packages": [

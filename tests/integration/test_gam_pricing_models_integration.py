@@ -381,7 +381,7 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
 
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer_cpm",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_cpm",
@@ -430,7 +430,7 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
 
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer_cpc",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_cpc",
@@ -480,7 +480,7 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
 
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer_vcpm",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_vcpm",
@@ -531,7 +531,7 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
     # 10 day campaign: $5000 total = $500/day
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer_flatrate",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_flat",
@@ -581,7 +581,7 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
 
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer_multi",
-        brand_manifest={"name": "https://example.com/campaign"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_1_cpm",
@@ -660,7 +660,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
 
     request = CreateMediaBuyRequest(
         buyer_ref="test_buyer_auction",
-        brand_manifest={"name": "https://example.com/product"},
+        brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 buyer_ref="pkg_auction_cpc",

@@ -1,0 +1,305 @@
+name: structural-guard
+description: >
+  Create AST-scanning structural enforcement tests that catch categories of
+  architecture violations automatically on every `make quality` run. Each guard
+  follows the same pattern: research the principle from #1050/#1066, scan the
+  codebase for violations, write an enforcement test, mark known violations
+  with an allowlist (that shrinks, never grows), and verify.
+
+variables:
+  GUARD_NAMES:
+    description: "Space-separated guard names to create (e.g., schema-inheritance boundary-completeness query-type-safety no-error-dicts)"
+    required: true
+
+labels:
+  - "mol:structural-guard"
+
+iterate:
+  over: "GUARD_NAMES"
+  item_var: "GUARD_NAME"
+  all_var: "ALL_GUARDS"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # ── Atom 1: Research Principle ──────────────────────────────────
+    - id: "research-{GUARD_NAME}"
+      title: "Research principle for {GUARD_NAME} guard"
+      description: |
+        Understand the architectural principle that the {GUARD_NAME} guard
+        should enforce. This research drives what the AST test scans for.
+
+        ## Instructions
+
+        1. **Identify the principle** for guard `{GUARD_NAME}`:
+
+           | Guard Name | Principle | What to Enforce |
+           |-----------|-----------|-----------------|
+           | schema-inheritance | AdCP schemas extend library base classes | Every schema class in src/core/schemas.py that corresponds to an adcp library type must inherit from the library type, not redefine fields |
+           | boundary-completeness | MCP/A2A/REST wrappers expose all _impl parameters | Compare _impl function signatures with their MCP/A2A/REST wrapper signatures — no parameter should be silently dropped |
+           | query-type-safety | DB queries use correct column types | When querying by ID columns, the type used in the query (string/int) must match the column definition |
+           | no-error-dicts | Business logic raises exceptions, never returns error dicts | No _impl function should return {"success": False, ...} or {"error": ...} patterns — raise AdCPError subclasses instead |
+
+        2. **Read the existing structural tests** for patterns to follow:
+           - `tests/unit/test_no_toolerror_in_impl.py` — AST scanning pattern
+           - `tests/unit/test_transport_agnostic_impl.py` — import scanning pattern
+           - `tests/unit/test_impl_resolved_identity.py` — signature inspection pattern
+
+        3. **Read the architecture source**:
+           - GitHub issue #1050 (layered architecture proposal)
+           - CLAUDE.md critical patterns (especially #1 AdCP Schema, #5 Shared Impl)
+
+        4. **Determine scanning approach**:
+           - AST-based (parsing source code structure)
+           - Introspection-based (inspecting live Python objects)
+           - Hybrid (both)
+
+        ## Store Research
+
+        ```bash
+        bd update {GUARD_NAME}-guard --append-notes "## Guard Research: {GUARD_NAME}
+        - Principle: [one sentence]
+        - Scanning approach: [AST / introspection / hybrid]
+        - Files to scan: [which source files]
+        - Pattern to detect: [what the AST/introspection looks for]
+        - Existing similar tests: [references to test_no_toolerror_in_impl.py etc.]"
+        ```
+
+        Write the implementation plan:
+        ```bash
+        bd update {GUARD_NAME}-guard --design "## Core Invariant
+        [The architectural principle this guard enforces]
+
+        ## Test File
+        tests/unit/test_architecture_{GUARD_NAME}.py
+
+        ## Scanning Strategy
+        [How the test works: what it scans, what it asserts]
+
+        ## Known Violations
+        [Expected violations in current code that need allowlisting]"
+        ```
+
+      acceptance: "Research complete. Principle defined. Scanning approach chosen. Implementation plan in design field."
+      labels: ["atom:research"]
+
+    # ── Atom 2: Scan Violations ────────────────────────────────────
+    - id: "scan-{GUARD_NAME}"
+      title: "Scan codebase for {GUARD_NAME} violations"
+      description: |
+        Scan the entire codebase for current violations of the {GUARD_NAME}
+        principle. This creates the initial allowlist of known violations.
+
+        ## Precondition
+
+        Read the research from the previous atom. The design field should contain
+        the scanning strategy and which files to scan.
+
+        ## Instructions
+
+        1. **Run the scan manually** using Grep/Read:
+           - For each file in the scan scope, check for the violation pattern
+           - Record every violation: file path, line number, description
+
+        2. **Classify each violation**:
+           - **FIXABLE_NOW**: Can be fixed as part of existing beads tasks
+           - **FIXABLE_LATER**: Needs its own task (file a beads issue)
+           - **ARCHITECTURAL**: Requires design decision (needs user input)
+
+        3. **Build the allowlist**:
+           The allowlist is a set/dict in the test file that documents known
+           violations. Each entry has: file path, violation description, linked
+           beads task ID.
+
+        ## Store Findings
+
+        ```bash
+        bd update {GUARD_NAME}-guard --append-notes "## Violation Scan
+        - Total violations found: N
+        - FIXABLE_NOW: N
+        - FIXABLE_LATER: N
+        - ARCHITECTURAL: N
+
+        ## Violations
+        - path/to/file.py:line — [description] — [FIXABLE_NOW|LATER|ARCH]
+        [repeat]"
+        ```
+
+        For FIXABLE_LATER violations, create beads tasks:
+        ```bash
+        bd create --title="Fix {GUARD_NAME} violation in <file>" --type=task --priority=3
+        ```
+
+      acceptance: "All violations cataloged with classification. Beads tasks filed for FIXABLE_LATER items. Allowlist ready for the guard test."
+      depends_on: ["research-{GUARD_NAME}"]
+      labels: ["atom:scan"]
+
+    # ── Atom 3: Write Guard Test ───────────────────────────────────
+    - id: "write-guard-{GUARD_NAME}"
+      title: "Write guard test for {GUARD_NAME}"
+      description: |
+        Write the structural enforcement test at
+        `tests/unit/test_architecture_{GUARD_NAME}.py`.
+
+        ## Precondition
+
+        Read the design field for scanning strategy and the notes for violation
+        scan results.
+
+        ## Instructions
+
+        1. **Follow the existing structural test pattern**:
+           - Use `ast.parse()` for source-level scanning
+           - Use `inspect` for runtime introspection
+           - Parametrize over files/classes to scan
+           - Include a clear docstring explaining what the guard enforces
+
+        2. **Include the allowlist** as a module-level constant:
+           ```python
+           # Known violations — tracked in beads. This list must SHRINK, never grow.
+           # Each entry links to the beads task that will fix it.
+           KNOWN_VIOLATIONS = {
+               "path/to/file.py:ClassName": "salesagent-xxxx",  # description
+           }
+           ```
+
+        3. **The test should**:
+           - Scan all relevant source files
+           - Flag any violation NOT in the allowlist as a test FAILURE
+           - Pass for violations that ARE in the allowlist (with a comment)
+           - Print a clear message when a new violation is detected
+
+        4. **Run the test**:
+           ```bash
+           uv run pytest tests/unit/test_architecture_{GUARD_NAME}.py -x -v
+           ```
+           It should PASS (all current violations are in the allowlist).
+
+        5. **Verify it catches new violations**:
+           Temporarily add a known-bad pattern to a file and confirm the test
+           fails. Then revert.
+
+      acceptance: "Guard test exists and passes. Known violations are in allowlist. Test catches new violations."
+      depends_on: ["scan-{GUARD_NAME}"]
+      labels: ["atom:write-guard"]
+
+    # ── Atom 4: Mark Known Violations ──────────────────────────────
+    - id: "mark-known-{GUARD_NAME}"
+      title: "Mark known {GUARD_NAME} violations in source"
+      description: |
+        For each known violation in the allowlist, add a FIXME comment in the
+        source code linking to the beads task that will fix it.
+
+        ## Instructions
+
+        1. **Read the allowlist** from the guard test file.
+
+        2. **For each violation**: Add a comment in the source file:
+           ```python
+           # FIXME(salesagent-xxxx): {GUARD_NAME} violation — [description]
+           ```
+           Place the comment on the line above or next to the violation.
+
+        3. **Verify the guard test still passes**:
+           ```bash
+           uv run pytest tests/unit/test_architecture_{GUARD_NAME}.py -x -v
+           ```
+
+        This step is intentionally lightweight — it just connects the allowlist
+        to the source code so developers see the issue in context.
+
+      acceptance: "FIXME comments added for all known violations. Guard test still passes."
+      depends_on: ["write-guard-{GUARD_NAME}"]
+      labels: ["atom:mark-known"]
+
+    # ── Atom 5: Verify ─────────────────────────────────────────────
+    - id: "verify-{GUARD_NAME}"
+      title: "Verify {GUARD_NAME} guard in full quality gate"
+      description: |
+        Run the full quality gate to confirm the {GUARD_NAME} guard integrates
+        cleanly with the existing test suite.
+
+        ## Instructions
+
+        ```bash
+        make quality
+        ```
+
+        If any test fails:
+        - If the new guard test fails: fix the test or update the allowlist
+        - If an existing test fails: the FIXME comments may have introduced a
+          syntax issue — check and fix
+        - If linting fails: fix formatting issues
+
+        The guard must pass as part of `make quality` to be effective.
+
+      acceptance: "make quality passes including the new guard test."
+      depends_on: ["mark-known-{GUARD_NAME}"]
+      labels: ["atom:verify"]
+
+    # ── Atom 6: Commit ─────────────────────────────────────────────
+    - id: "commit-{GUARD_NAME}"
+      title: "Commit {GUARD_NAME} guard"
+      description: |
+        Commit the structural guard test and any FIXME annotations.
+
+        ## Instructions
+
+        1. Check what changed:
+           ```bash
+           git status
+           git diff --stat
+           ```
+
+        2. Stage the guard test and any annotated source files:
+           ```bash
+           git add tests/unit/test_architecture_{GUARD_NAME}.py
+           git add <annotated-source-files>
+           ```
+
+        3. Commit:
+           ```bash
+           git commit -m "feat: add {GUARD_NAME} structural guard test"
+           ```
+
+        4. Verify:
+           ```bash
+           git log -1 --oneline
+           ```
+
+      acceptance: "Git commit exists for {GUARD_NAME} guard."
+      depends_on: ["verify-{GUARD_NAME}"]
+      depends_on_prev_barrier: true
+      labels: ["atom:commit"]
+
+finalize:
+  - id: sync-and-verify
+    title: "Sync beads and verify all {N} guards"
+    description: |
+      Final verification after all {N} guards are created.
+
+      ## Instructions
+
+      1. Sync beads:
+         ```bash
+         bd sync --from-main
+         ```
+
+      2. Run full quality gate:
+         ```bash
+         make quality
+         ```
+
+      3. List all structural guard tests:
+         ```bash
+         ls tests/unit/test_architecture_*.py
+         ```
+
+      4. Verify git state:
+         ```bash
+         git status
+         git log --oneline -10
+         ```
+
+    acceptance: "All {N} guards committed and passing. bd sync done. make quality passes."
+    depends_on_all_barriers: true
+    labels: ["atom:verify"]

@@ -52,7 +52,7 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
     """
     defaults = {
         "buyer_ref": "test-buyer",
-        "brand_manifest": {"name": "Test Brand"},
+        "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
         "packages": [
@@ -170,14 +170,9 @@ class _PatchContext:
         self._p_ctx_mgr.start()
         self.ctx_manager = mock_ctx_mgr.return_value
 
-        # DB session — configure a side_effect-driven scalars chain so different
-        # queries can return different results.
-        # Patched at source because media_buy_create.py uses local imports.
-        self._p_db = patch("src.core.database.database_session.get_db_session")
+        # MediaBuyUoW — mock UoW that provides session via context manager.
+        # Patched at the repository module because media_buy_create.py uses lazy imports.
         self.db_session = MagicMock()
-        self.db_session.__enter__ = MagicMock(return_value=self.db_session)
-        self.db_session.__exit__ = MagicMock(return_value=None)
-        self._p_db.start().return_value = self.db_session
 
         # By default, configure the scalars chain to return products on .all()
         # and currency_limit (then adapter_config) on successive .first() calls.
@@ -191,6 +186,17 @@ class _PatchContext:
         scalars_result.first = first_mock
         self.db_session.scalars.return_value = scalars_result
 
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+        mock_uow.session = self.db_session
+        mock_media_buys = MagicMock()
+        mock_media_buys.get_by_principal.return_value = []  # no duplicate buyer_refs
+        mock_uow.media_buys = mock_media_buys
+
+        self._p_uow = patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow)
+        self._p_uow.start()
+
         return self
 
     def __exit__(self, *args):
@@ -198,7 +204,7 @@ class _PatchContext:
         self._p_setup.stop()
         self._p_principal.stop()
         self._p_ctx_mgr.stop()
-        self._p_db.stop()
+        self._p_uow.stop()
 
 
 # ===========================================================================
@@ -439,16 +445,12 @@ class TestCreativeMissingUrl:
         mock_format_spec.output_format_ids = None  # Not generative
 
         with (
-            patch("src.core.database.database_session.get_db_session") as mock_db,
             patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format,
             patch("src.core.tools.media_buy_create.extract_media_url_and_dimensions") as mock_extract,
         ):
             # DB returns the creative
             session = MagicMock()
-            session.__enter__ = MagicMock(return_value=session)
-            session.__exit__ = MagicMock(return_value=None)
             session.scalars.return_value.all.return_value = [mock_creative]
-            mock_db.return_value = session
 
             # Format spec found (non-generative)
             mock_get_format.return_value = mock_format_spec
@@ -457,7 +459,7 @@ class TestCreativeMissingUrl:
             mock_extract.return_value = (None, None, None)
 
             with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant")
+                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
             assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
@@ -481,22 +483,18 @@ class TestCreativeMissingUrl:
         mock_format_spec.output_format_ids = None
 
         with (
-            patch("src.core.database.database_session.get_db_session") as mock_db,
             patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format,
             patch("src.core.tools.media_buy_create.extract_media_url_and_dimensions") as mock_extract,
         ):
             session = MagicMock()
-            session.__enter__ = MagicMock(return_value=session)
-            session.__exit__ = MagicMock(return_value=None)
             session.scalars.return_value.all.return_value = [mock_creative]
-            mock_db.return_value = session
 
             mock_get_format.return_value = mock_format_spec
             # Has URL but no dimensions
             mock_extract.return_value = ("https://example.com/ad.jpg", None, None)
 
             with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant")
+                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
             assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
@@ -675,9 +673,11 @@ class TestInlineCreativesProcessedBeforeApproval:
                             "creative_id": "inline_creative_1",
                             "name": "Test Ad",
                             "format_id": {
-                                "agent_url": "https://creative.example.com",
+                                "agent_url": "https://creative.example.com/",
                                 "id": "display_300x250_image",
                             },
+                            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
+                            "variants": [],  # Required in adcp 3.6.0
                         }
                     ],
                 },
@@ -749,22 +749,18 @@ class TestMultipleInvalidCreativesAccumulated:
         mock_format_spec.output_format_ids = None  # Non-generative
 
         with (
-            patch("src.core.database.database_session.get_db_session") as mock_db,
             patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format,
             patch("src.core.tools.media_buy_create.extract_media_url_and_dimensions") as mock_extract,
         ):
             session = MagicMock()
-            session.__enter__ = MagicMock(return_value=session)
-            session.__exit__ = MagicMock(return_value=None)
             session.scalars.return_value.all.return_value = creatives
-            mock_db.return_value = session
 
             mock_get_format.return_value = mock_format_spec
             # All creatives missing URL and dimensions
             mock_extract.return_value = (None, None, None)
 
             with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant")
+                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
             error_message = str(exc_info.value)
             assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"

@@ -1096,7 +1096,10 @@ class GoogleAdManager(AdServerAdapter):
 
         # Get media buy from database to find GAM order/line item IDs
         with get_db_session() as session:
-            stmt = select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)
+            stmt = select(MediaBuy).where(
+                MediaBuy.media_buy_id == media_buy_id,
+                MediaBuy.tenant_id == self.tenant_id,
+            )
             media_buy = session.scalars(stmt).first()
 
             if not media_buy:
@@ -1435,11 +1438,10 @@ class GoogleAdManager(AdServerAdapter):
 
         # Handle package budget updates
         if action == "update_package_budget" and package_id and budget is not None:
-            from sqlalchemy import select
             from sqlalchemy.orm import attributes
 
             from src.core.database.database_session import get_db_session
-            from src.core.database.models import MediaPackage
+            from src.core.database.repositories.media_buy import MediaBuyRepository
 
             # Validate budget is positive (security: prevent negative/zero budgets)
             if budget <= 0:
@@ -1456,20 +1458,11 @@ class GoogleAdManager(AdServerAdapter):
 
             self.log(f"[GAM] Updating package {package_id} budget to {budget} (with delivery validation)")
 
-            with get_db_session() as session:
-                # Security: Join with MediaBuy for tenant isolation
-                from src.core.database.models import MediaBuy as MediaBuyModel
+            assert self.tenant_id is not None, "tenant_id required for DB operations"
 
-                stmt = (
-                    select(MediaPackage)
-                    .join(MediaBuyModel, MediaPackage.media_buy_id == MediaBuyModel.media_buy_id)
-                    .where(
-                        MediaPackage.package_id == package_id,
-                        MediaPackage.media_buy_id == media_buy_id,
-                        MediaBuyModel.tenant_id == self.tenant_id,
-                    )
-                )
-                media_package = session.scalars(stmt).first()
+            with get_db_session() as session:
+                repo = MediaBuyRepository(session, self.tenant_id)
+                media_package = repo.get_package(media_buy_id, package_id)
 
                 if not media_package:
                     self.log(f"[red]Package {package_id} not found for media buy {media_buy_id}[/red]")
@@ -1565,10 +1558,10 @@ class GoogleAdManager(AdServerAdapter):
 
         # Handle pause/resume actions
         if action in ["pause_package", "resume_package", "pause_media_buy", "resume_media_buy"]:
-            from sqlalchemy import select
-
             from src.core.database.database_session import get_db_session
-            from src.core.database.models import MediaPackage
+            from src.core.database.repositories.media_buy import MediaBuyRepository
+
+            assert self.tenant_id is not None, "tenant_id required for DB operations"
 
             # Determine if we're pausing or resuming
             is_pause = action.startswith("pause_")
@@ -1589,19 +1582,8 @@ class GoogleAdManager(AdServerAdapter):
                     )
 
                 with get_db_session() as session:
-                    # Security: Join with MediaBuy for tenant isolation
-                    from src.core.database.models import MediaBuy as MediaBuyModel
-
-                    stmt = (
-                        select(MediaPackage)
-                        .join(MediaBuyModel, MediaPackage.media_buy_id == MediaBuyModel.media_buy_id)
-                        .where(
-                            MediaPackage.package_id == package_id,
-                            MediaPackage.media_buy_id == media_buy_id,
-                            MediaBuyModel.tenant_id == self.tenant_id,
-                        )
-                    )
-                    media_package = session.scalars(stmt).first()
+                    repo = MediaBuyRepository(session, self.tenant_id)
+                    media_package = repo.get_package(media_buy_id, package_id)
 
                     if not media_package:
                         return UpdateMediaBuyError(
@@ -1666,15 +1648,8 @@ class GoogleAdManager(AdServerAdapter):
             # Media buy-level actions (pause/resume all packages)
             elif action in ["pause_media_buy", "resume_media_buy"]:
                 with get_db_session() as session:
-                    # Security: Join with MediaBuy for tenant isolation
-                    from src.core.database.models import MediaBuy as MediaBuyModel
-
-                    stmt = (
-                        select(MediaPackage)
-                        .join(MediaBuyModel, MediaPackage.media_buy_id == MediaBuyModel.media_buy_id)
-                        .where(MediaPackage.media_buy_id == media_buy_id, MediaBuyModel.tenant_id == self.tenant_id)
-                    )
-                    packages = session.scalars(stmt).all()
+                    repo = MediaBuyRepository(session, self.tenant_id)
+                    packages = repo.get_packages(media_buy_id)
 
                     if not packages:
                         return UpdateMediaBuyError(

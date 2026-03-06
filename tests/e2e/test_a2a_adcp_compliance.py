@@ -319,7 +319,7 @@ class TestA2AAdCPCompliance:
             "get_products",
             {
                 "brief": "Video advertising for sports content",
-                "brand_manifest": {"name": "Athletic apparel brand"},
+                "brand": {"domain": "testbrand.com"},
                 "context": {"e2e": "get_products"},
             },
         )
@@ -366,7 +366,7 @@ class TestA2AAdCPCompliance:
         # Define skill tests
         # Note: signals skills removed - should come from dedicated signals agents
         skill_tests = [
-            ("get_products", {"brief": "Display ads", "brand_manifest": {"name": "Test brand"}}),
+            ("get_products", {"brief": "Display ads", "brand": {"domain": "testbrand.com"}}),
             (
                 "create_media_buy",
                 {

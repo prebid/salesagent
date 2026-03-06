@@ -811,21 +811,21 @@ class TestCreativeLifecycleMCP:
         assert response.query_summary.total_matching == 25
         assert response.query_summary.returned == 10
         assert response.pagination.has_more is True
-        assert response.pagination.current_page == 1
+        assert response.pagination.total_count == 25
 
         # Test second page
         response = core_list_creatives_tool(page=2, limit=10, identity=identity)
         assert len(response.creatives) == 10
         assert response.query_summary.returned == 10
         assert response.pagination.has_more is True
-        assert response.pagination.current_page == 2
+        assert response.pagination.total_count == 25
 
         # Test last page
         response = core_list_creatives_tool(page=3, limit=10, identity=identity)
         assert len(response.creatives) == 5
         assert response.query_summary.returned == 5
         assert response.pagination.has_more is False
-        assert response.pagination.current_page == 3
+        assert response.pagination.total_count == 25
 
         # Test name sorting ascending
         response = core_list_creatives_tool(sort_by="name", sort_order="asc", limit=5, identity=identity)
@@ -863,6 +863,7 @@ class TestCreativeLifecycleMCP:
             # Create assignment for only one creative
             assignment = CreativeAssignment(
                 tenant_id=self.test_tenant_id,
+                principal_id=self.test_principal_id,
                 assignment_id=str(uuid.uuid4()),
                 creative_id="assignment_test_1",
                 media_buy_id=self.test_media_buy_id,
@@ -998,8 +999,9 @@ class TestCreativeLifecycleMCP:
         )
 
         with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format):
-            with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call(packages, self.test_tenant_id)
+            with get_db_session() as session:
+                with pytest.raises(AdCPValidationError) as exc_info:
+                    _validate_creatives_before_adapter_call(packages, self.test_tenant_id, session=session)
 
             error_msg = str(exc_info.value).lower()
             assert "validate_test_no_url" in error_msg
@@ -1145,7 +1147,7 @@ class TestCreativeLifecycleMCP:
             # Call create_media_buy with packages containing creative_ids
             response = await create_media_buy_raw(
                 buyer_ref="test_buyer",
-                brand_manifest={"name": "Test Campaign"},
+                brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=datetime.now(UTC) + timedelta(days=1),
                 end_time=datetime.now(UTC) + timedelta(days=30),

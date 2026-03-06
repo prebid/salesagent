@@ -95,7 +95,7 @@ class TestCreateMediaBuyEndpoint:
             "/api/v1/media-buys",
             json={
                 "buyer_ref": "buyer1",
-                "brand_manifest": {"name": "Test"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": [{"product_id": "p1", "budget": {"amount": 100, "currency": "USD"}}],
                 "start_time": "2026-04-01T00:00:00Z",
                 "end_time": "2026-04-30T00:00:00Z",

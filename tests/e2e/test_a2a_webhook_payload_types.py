@@ -206,7 +206,7 @@ class TestA2AWebhookPayloadTypes:
                                     "total_budget": 5000.0,
                                     "start_time": "2025-03-01T00:00:00Z",
                                     "end_time": "2025-03-31T23:59:59Z",
-                                    "brand_manifest": {"name": "Webhook Type Test Brand"},
+                                    "brand": {"domain": "testbrand.com"},
                                     "context": {"e2e": "webhook_completed_test"},
                                 },
                             }
@@ -315,7 +315,7 @@ class TestA2AWebhookPayloadTypes:
                                     "total_budget": 50000.0,
                                     "start_time": "2025-04-01T00:00:00Z",
                                     "end_time": "2025-04-30T23:59:59Z",
-                                    "brand_manifest": {"name": "Webhook Submitted Test Brand"},
+                                    "brand": {"domain": "testbrand.com"},
                                     "context": {"e2e": "webhook_submitted_test"},
                                 },
                             }
@@ -414,7 +414,7 @@ class TestA2AWebhookPayloadTypes:
                                     "total_budget": 8000.0,
                                     "start_time": "2025-05-01T00:00:00Z",
                                     "end_time": "2025-05-31T23:59:59Z",
-                                    "brand_manifest": {"name": "Payload Validation Test"},
+                                    "brand": {"domain": "testbrand.com"},
                                 },
                             }
                         }

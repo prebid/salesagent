@@ -19,6 +19,7 @@ def _process_assignments(
     results: list[SyncCreativeResult],
     tenant: dict[str, Any],
     validation_mode: str,
+    principal_id: str | None = None,
 ) -> list:
     """Process creative-to-package assignments and update results in-place.
 
@@ -56,6 +57,7 @@ def _process_assignments(
                     # Note: We need to join with MediaBuy to verify tenant_id
                     from sqlalchemy import join
 
+                    # FIXME(salesagent-rva2): migrate to MediaBuyRepository.get_package()
                     package_stmt = (
                         select(MediaPackage, MediaBuy)
                         .select_from(join(MediaPackage, MediaBuy, MediaPackage.media_buy_id == MediaBuy.media_buy_id))
@@ -188,6 +190,7 @@ def _process_assignments(
                             media_buy_id=media_buy_id,
                             package_id=actual_package_id,  # Use resolved package_id
                             creative_id=creative_id,
+                            principal_id=principal_id,
                             weight=100,
                             created_at=datetime.now(UTC),
                         )

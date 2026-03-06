@@ -88,7 +88,7 @@ class TestA2AMessageFieldValidation:
             end_date = start_date + timedelta(days=30)
 
             params = {
-                "brand_manifest": {"name": "Test Campaign"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": [
                     {
                         "buyer_ref": f"pkg_{sample_products[0]}",
@@ -152,7 +152,7 @@ class TestA2AMessageFieldValidation:
         """
         with mock_auth_context(handler):
             params = {
-                "brand_manifest": {"name": "Test product search"},
+                "brand": {"domain": "testbrand.com"},
                 "brief": "Looking for display ads",
                 "adcp_version": "3.0",
             }

@@ -1,0 +1,600 @@
+name: integration-from-stub
+description: >
+  Derive integration tests from existing unit test xfails and UNSPECIFIED stubs.
+  Each xfail/stub defines the expected behavior (core invariant). The agent writes
+  an integration test with real PostgreSQL, fixes production code if it fails, then
+  reconciles the unit test (removes xfail or marks as unit-only).
+
+variables:
+  ENTITY_NAMES:
+    description: "Space-separated entity names (e.g., creative media-buy delivery)"
+    required: true
+
+labels:
+  - "mol:integration-from-stub"
+
+iterate:
+  over: "ENTITY_NAMES"
+  item_var: "ENTITY_NAME"
+  all_var: "ALL_ENTITIES"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # -- Atom 1: Catalog Stubs ------------------------------------------------
+    - id: "catalog-{ENTITY_NAME}"
+      title: "Catalog xfail and UNSPECIFIED stubs for {ENTITY_NAME}"
+      description: |
+        Read the entity unit test suite and catalog all stubs that need
+        integration tests.
+
+        ## Instructions
+
+        1. **Read the unit test suite**:
+           ```bash
+           cat tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           ```
+           (Where {ENTITY_NAME_UNDERSCORE} is {ENTITY_NAME} with hyphens -> underscores)
+
+        2. **Catalog xfail tests** (highest priority):
+           For each `@pytest.mark.xfail` test, extract:
+           - Test name
+           - xfail reason
+           - Expected behavior from the test body + docstring
+           - Obligation ID (if present)
+           - Whether reason says "requires integration test" (Bucket A)
+             or "not yet implemented" (Bucket B — skip, handled separately)
+
+        3. **Catalog UNSPECIFIED tests** (secondary priority):
+           For each test with `Spec: UNSPECIFIED` in docstring, extract:
+           - Test name
+           - Expected behavior
+           - Whether it tests DB-dependent behavior (serialization roundtrip,
+             cross-tenant isolation, real adapter flow)
+
+        4. **Check existing integration tests**:
+           ```bash
+           ls tests/integration/test_{ENTITY_NAME_UNDERSCORE}*.py 2>/dev/null
+           ls tests/integration_v2/test_{ENTITY_NAME_UNDERSCORE}*.py 2>/dev/null
+           ```
+           Note which scenarios already have integration coverage.
+
+        5. **Select batch**: Pick all Bucket A xfails + up to 10 high-value
+           UNSPECIFIED tests that exercise DB-dependent paths.
+
+        ## Store Catalog
+
+        ```bash
+        bd update {ENTITY_NAME}-integration --design "## Core Invariant
+        Each stub's expected behavior is absolute truth. Integration tests
+        must verify the SAME behavior with real PostgreSQL. If the integration
+        test fails, fix production code — never adjust the expected behavior.
+
+        ## Batch: {ENTITY_NAME}
+
+        ### Bucket A xfails (requires real DB)
+        | # | Unit Test | Obligation | Expected Behavior | xfail Reason |
+        |---|-----------|-----------|-------------------|-------------|
+        [list each]
+
+        ### UNSPECIFIED (DB-dependent subset)
+        | # | Unit Test | Expected Behavior | Why DB needed |
+        |---|-----------|-------------------|--------------|
+        [list each]
+
+        ### Already covered in integration/
+        [list any existing coverage]"
+        ```
+
+      acceptance: "All xfails and UNSPECIFIED stubs cataloged. Batch selected."
+      labels: ["atom:catalog"]
+
+    # -- Atom 2: Review Batch -------------------------------------------------
+    - id: "review-{ENTITY_NAME}"
+      title: "Review integration test plan for {ENTITY_NAME}"
+      description: |
+        Architect review of the integration test batch.
+
+        ## Review Criteria
+
+        1. **Stub fidelity**: Does each planned integration test match the
+           unit test stub's expected behavior exactly?
+        2. **Fixture design**: Are the DB fixtures minimal and reusable?
+           Use existing `integration_db` fixture. Don't over-setup.
+        3. **Batch scope**: Reasonable size (5-15 tests per entity)?
+        4. **Bucket classification**: Are Bucket A vs B correctly separated?
+           Bucket B stubs should NOT be in this batch.
+        5. **Existing coverage**: No duplicates with existing integration tests.
+
+        ## Write Review
+
+        ```bash
+        bd update {ENTITY_NAME}-integration --append-notes "## Review
+        - [RATING] Finding: [description]
+        ...
+        Overall: [ALL_LOW | NEEDS_REFINEMENT | NEEDS_USER_INPUT]"
+        ```
+
+      acceptance: "Review written with rated findings."
+      depends_on: ["catalog-{ENTITY_NAME}"]
+      labels: ["atom:review", "atom:gate"]
+
+    # -- Atom 3: Triage -------------------------------------------------------
+    - id: "triage-{ENTITY_NAME}"
+      title: "Triage review for {ENTITY_NAME} integration batch"
+      description: |
+        Read the review and decide next steps. This is a TRIAGE atom.
+
+        ### If ALL_LOW:
+        Note "Clean review — proceeding to implement." Close this atom.
+
+        ### If NEEDS_REFINEMENT:
+        Update the batch plan per findings. Close this atom.
+
+        ### If NEEDS_USER_INPUT:
+        Update notes: "## BLOCKED: User Input Required"
+        Leave this atom OPEN.
+
+      acceptance: "Verdict acted on."
+      depends_on: ["review-{ENTITY_NAME}"]
+      labels: ["atom:triage"]
+
+    # -- Atom 4: Architect Integration Tests -----------------------------------
+    - id: "architect-{ENTITY_NAME}"
+      title: "Architect integration test design for {ENTITY_NAME}"
+      description: |
+        Analyze production code against documented architecture principles
+        and design integration tests that validate BOTH the stub's expected
+        behavior AND architectural compliance.
+
+        ## Why This Atom Exists
+
+        Integration tests are the first place where real code paths execute
+        end-to-end. This makes them the natural place to catch architecture
+        violations that unit tests (with mocks) cannot see. The architect
+        must evaluate each test scenario against the documented layer
+        boundaries and error handling contracts — NOT just copy whatever
+        the existing code does.
+
+        **CRITICAL**: Do NOT default to "match existing patterns." Existing
+        code may violate the architecture. When it does, the architect must
+        flag the violation as a finding that needs discussion, not silently
+        encode it into the integration test.
+
+        ## Required Reading (before writing any plan)
+
+        Read these documents in order. They define the architecture:
+
+        1. **CLAUDE.md** — 7 critical patterns (schema inheritance, route
+           conflicts, PostgreSQL, nested serialization, transport boundary,
+           script_root, environment validation)
+
+        2. **docs/development/structural-guards.md** — 6 AST-enforced
+           invariants. These are non-negotiable constraints.
+
+        3. **docs/code-reviews/00-migration-summary.md** — 11 critical +
+           11 high issues found during migration review. Check which are
+           relevant to {ENTITY_NAME} and whether the integration tests
+           should exercise them.
+
+        4. **docs/code-reviews/01-schema-model-layer.md** — Schema and
+           model layer constraints. Relevant for: schema inheritance,
+           model_dump behavior, DB model relationships, type safety.
+
+        5. **docs/code-reviews/02-api-boundary-layer.md** — API boundary
+           constraints. Relevant for: field propagation, _impl contracts,
+           wrapper completeness, error translation.
+
+        6. **docs/code-reviews/04-adapter-layer.md** — Adapter layer
+           contracts. Relevant for: adapter interface compliance, error
+           handling, dry-run semantics.
+
+        7. **docs/development/architecture.md** — System architecture,
+           data flow, multi-tenant isolation, authentication flow.
+
+        ## Architecture Analysis (per test scenario)
+
+        For each cataloged stub, answer these questions:
+
+        ### Layer Analysis
+
+        1. **Which layer does this test exercise?**
+           - Schema/model layer (Pydantic validation, model_dump roundtrip)
+           - Business logic layer (_impl function, DB queries)
+           - Transport boundary (wrapper → _impl → response)
+           - Adapter layer (adapter method calls, error handling)
+           - Cross-cutting (auth, tenant isolation, audit)
+
+        2. **What are the layer boundaries crossed?**
+           Map the exact call chain: wrapper → _impl → DB → adapter → response.
+           At each boundary, verify:
+           - Are types correct? (Pattern #1: schema inheritance)
+           - Are all fields forwarded? (Pattern #5: no silent drops)
+           - Is error handling correct? (AdCPError not ToolError in _impl)
+           - Is identity resolved correctly? (ResolvedIdentity not Context)
+
+        3. **Does the existing code violate any documented constraint?**
+           Cross-reference against the code review findings (00-migration-summary).
+           If a code path for this stub touches a known issue (CRIT-1 through
+           CRIT-11, H-1 through H-11), document it as a finding:
+
+           ```
+           FINDING: test_X exercises code path at media_buy_delivery.py:390
+           which has CRIT-4 (dead error handler — raise e before logger).
+           The integration test SHOULD verify partial failure tolerance
+           (continue with remaining buys), but the current code will raise.
+           Decision needed: fix CRIT-4 first, or xfail the integration test?
+           ```
+
+        ### Error Handling Analysis
+
+        For each code path, trace what happens on failure:
+        - Does _impl raise AdCPError subclasses? (not ToolError, not bare Exception)
+        - Does the adapter layer handle external failures gracefully?
+        - Are DB transactions rolled back on failure? (atomicity)
+        - Are partial failures handled correctly? (continue vs abort)
+
+        If the existing error handling violates the architecture (e.g., bare
+        `raise e` instead of catch-and-continue, or ToolError in _impl),
+        document it as a finding — do NOT design the integration test to
+        match the broken behavior.
+
+        ### Data Flow Analysis
+
+        For each code path, trace the data from request to database:
+        - Request fields → Pydantic model → model_dump → DB columns
+        - DB columns → model → Pydantic response → model_dump → JSON
+        - Are any fields lost in the roundtrip? (known issue: Pattern #4)
+        - Are nested models serialized correctly? (model_dump override needed?)
+
+        ### Fixture Design
+
+        Based on the layer analysis, design fixtures:
+
+        ```
+        @pytest.fixture(scope="module")
+        def base_state(integration_db):
+            """Minimum viable DB state for {ENTITY_NAME} integration tests.
+            Sets up: tenant, principal, currency_limit (USD),
+            property_tag (all_inventory), product with format specs.
+            """
+            ...
+
+        @pytest.fixture
+        def entity_state(base_state):
+            """Extends base_state with entity-specific state."""
+            ...
+        ```
+
+        Design principles:
+        - module-scope for expensive setup (tenant, products)
+        - function-scope for test-specific state
+        - Factories for variable test data
+        - Check existing integration fixtures first:
+          ```bash
+          grep -r "@pytest.fixture" tests/integration/conftest.py tests/integration/test_*.py | head -20
+          ```
+        - Do NOT copy fixture patterns blindly — verify they match the
+          architecture (e.g., do they use SQLAlchemy 2.0 select()?)
+
+        ### Adapter Strategy
+
+        Integration tests use real DB but typically mock the adapter:
+        - **Mock adapter entirely**: Most tests. Use MockAdapter class.
+        - **Mock adapter partially**: Atomicity tests need real error paths.
+        - **Mock adapter with injection**: Tests that verify adapter receives
+          correct types at the boundary.
+
+        For each test, document: what does the adapter see? Verify that
+        the adapter receives the correct types (not dicts where Pydantic
+        models are expected, per CRIT-8 finding).
+
+        ## Store Plan
+
+        ```bash
+        bd update {ENTITY_NAME}-integration --append-notes "## Architecture Plan
+
+        ### Architecture Findings
+        [List any code paths that violate documented constraints.
+        For each: file:line, which constraint, what the test should expect
+        vs what the code currently does, recommended action]
+
+        ### Layer Map
+        [For each test: which layers are crossed, which boundaries verified]
+
+        ### Fixture Hierarchy
+        [Diagram with scope and what each sets up]
+
+        ### Adapter Strategy
+        [Per-test mock approach]
+
+        ### Test Plans
+        | # | Test | Layers | Code Path | Assertion | Arch Check |
+        |---|------|--------|-----------|-----------|------------|
+        | 1 | test_x | biz+db | _impl:L42→DB | row exists | #3,#5 OK |
+        | 2 | test_y | biz+adapter | _impl:L90→adapter | error raised | CRIT-4 ⚠ |
+        [repeat for each test]
+
+        ### Risks and Decisions Needed
+        - [issues that need human input before proceeding]
+        - [code paths where architecture and existing code disagree]"
+        ```
+
+      acceptance: "Architecture docs read. Layer boundaries mapped per test. Findings documented for any code that violates documented constraints. Fixture hierarchy designed. Test-by-test plan with architecture compliance notes."
+      depends_on: ["triage-{ENTITY_NAME}"]
+      labels: ["atom:architect"]
+
+    # -- Atom 5: Write Integration Tests --------------------------------------
+    - id: "write-integration-{ENTITY_NAME}"
+      title: "Write integration tests for {ENTITY_NAME}"
+      description: |
+        Write integration tests following the architecture plan from the
+        previous atom. Do NOT redesign fixtures or deviate from the plan
+        without documenting why.
+
+        ## Iron Rule: Stub Intent Is Absolute Truth
+
+        The unit test stub defines WHAT to test. Your job is to test the
+        SAME behavior with real database. If the integration test fails,
+        the production code is wrong — not the stub.
+
+        ## Transport Parity Invariant
+
+        Every behavioral test MUST verify identical behavior across all three
+        transports: MCP, A2A, and REST. Use parametrize or test explicitly
+        through all 3 entry points. If behavior differs, the bug is in the
+        wrapper — fix the wrapper, not the test.
+        See `docs/development/architecture.md` "Transport Parity Invariant".
+
+        ## Prerequisites
+
+        Read the architecture plan from notes. It contains:
+        - Fixture hierarchy (what to create, what scope)
+        - Adapter mocking strategy
+        - Test-by-test implementation plan with code path references
+
+        ## Instructions
+
+        1. **Create the integration test file**:
+           `tests/integration/test_{ENTITY_NAME_UNDERSCORE}_v3.py`
+
+           Use the `_v3` suffix to distinguish from any existing integration
+           tests written before the v3.6 migration.
+
+        2. **Implement fixtures first**:
+           Follow the architecture plan's fixture hierarchy exactly.
+           Use existing integration test patterns as reference:
+           ```bash
+           ls tests/integration/conftest.py tests/integration/test_*.py
+           ```
+
+        3. **For each Bucket A xfail**, write an integration test:
+           - Read the unit test body to understand the assertion
+           - Write the equivalent with real DB fixtures per the plan
+           - Use `@pytest.mark.requires_db` and `integration_db` fixture
+           - Same obligation ID in docstring
+           - Same assertion logic, real objects instead of mocks
+
+        4. **For each selected UNSPECIFIED test**, write an integration test:
+           - Focus on DB-dependent behavior (roundtrips, isolation, cascades)
+           - Skip pure schema validation (already covered by unit tests)
+
+        5. **Run and check**:
+           ```bash
+           make test-stack-up
+           source .test-stack.env
+           uv run pytest tests/integration/test_{ENTITY_NAME_UNDERSCORE}_v3.py -x -v
+           ```
+
+        6. **Categorize results**:
+           - PASSES: behavior works end-to-end (good!)
+           - FAILS with AssertionError: production code bug (fix in next atom)
+           - FAILS with setup error: fixture needs work (fix the fixture)
+
+        ## Record Progress
+
+        ```bash
+        bd update {ENTITY_NAME}-integration --append-notes "## Integration Tests Written
+        - Tests written: N
+        - Passing: N
+        - Failing (prod bug): N [list each with failure reason]
+        - Failing (fixture): N [list each]"
+        ```
+
+      acceptance: "All batch stubs have integration test equivalents. Results categorized."
+      depends_on: ["architect-{ENTITY_NAME}"]
+      depends_on_prev_barrier: true
+      labels: ["atom:write-integration"]
+
+    # -- Atom 5: Fix Production Code ------------------------------------------
+    - id: "fix-green-{ENTITY_NAME}"
+      title: "Fix production code for {ENTITY_NAME} integration tests"
+      description: |
+        Make failing integration tests pass by fixing production code.
+
+        ## Prerequisites
+
+        Read the integration test results from notes. Know which tests fail
+        and why.
+
+        ## Iron Rule
+
+        If an integration test fails, the production code is wrong. Do NOT
+        adjust the test to match current behavior. The stub defined the
+        expected behavior and it was verified against the spec.
+
+        ## Workflow
+
+        For each failing integration test:
+
+        1. **Understand the failure**: What assertion fails? What's expected
+           vs actual?
+        2. **Trace the code path**: Follow the real execution (no mocks) to
+           find where behavior diverges from the stub's expectation
+        3. **Apply minimal fix**: Fix production code. Don't over-engineer.
+        4. **Verify**:
+           ```bash
+           source .test-stack.env
+           uv run pytest tests/integration/test_{ENTITY_NAME_UNDERSCORE}_v3.py::test_name -x -v
+           ```
+        5. **Check no regressions**:
+           ```bash
+           uv run pytest tests/integration/test_{ENTITY_NAME_UNDERSCORE}_v3.py -x -v
+           make quality
+           ```
+
+        ## When Unit Tests Break
+
+        If production code changes break unit tests:
+        1. STOP. Check the Core Invariant.
+        2. If the unit test mocks hide the real behavior, update the mock
+           setup to match reality — but keep the assertion unchanged.
+        3. If the assertion itself is wrong, document why and fix it.
+
+      acceptance: "All integration tests pass. make quality passes. No unit test regressions."
+      depends_on: ["write-integration-{ENTITY_NAME}"]
+      labels: ["atom:fix-green"]
+
+    # -- Atom 6: Reconcile xfails ---------------------------------------------
+    - id: "reconcile-{ENTITY_NAME}"
+      title: "Reconcile xfails for {ENTITY_NAME}"
+      description: |
+        Now that integration tests pass, reconcile the unit test xfails.
+
+        ## Instructions
+
+        For each Bucket A xfail that now has a passing integration test:
+
+        1. **Check if the unit test also passes now** (prod code was fixed):
+           ```bash
+           uv run pytest tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py::test_name -x -v
+           ```
+
+        2. **If unit test passes**: Remove `@pytest.mark.xfail`. It's now
+           a real test with both unit and integration coverage.
+
+        3. **If unit test still fails** (because mocks don't reflect the
+           fixed behavior): Update the mock setup so the unit test passes
+           too. Keep the assertion unchanged — only fix the mock wiring.
+
+        4. **If unit test can't work as a unit test** (inherently needs DB):
+           Remove the xfail, mark as `@pytest.mark.skip(reason="covered by
+           integration test: test_{name} in test_{entity}_v3.py")`.
+
+        ## Verify
+
+        ```bash
+        make quality
+        source .test-stack.env
+        uv run pytest tests/integration/test_{ENTITY_NAME_UNDERSCORE}_v3.py -v
+        ```
+
+        ## Record
+
+        ```bash
+        bd update {ENTITY_NAME}-integration --append-notes "## xfail Reconciliation
+        - xfails removed (now passing): N
+        - xfails removed (mock updated): N
+        - xfails converted to skip (integration-only): N
+        - xfails remaining (Bucket B, not this batch): N"
+        ```
+
+      acceptance: "All Bucket A xfails reconciled. Remaining xfails are Bucket B only."
+      depends_on: ["fix-green-{ENTITY_NAME}"]
+      labels: ["atom:reconcile"]
+
+    # -- Atom 7: Verify -------------------------------------------------------
+    - id: "verify-{ENTITY_NAME}"
+      title: "Verify {ENTITY_NAME} integration batch"
+      description: |
+        Full verification of the integration test batch.
+
+        ## Instructions
+
+        1. Run full quality gate:
+           ```bash
+           make quality
+           ```
+
+        2. Run integration tests:
+           ```bash
+           source .test-stack.env
+           uv run pytest tests/integration/test_{ENTITY_NAME_UNDERSCORE}_v3.py -v
+           ```
+
+        3. Count remaining xfails:
+           ```bash
+           grep -c "xfail" tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           ```
+
+        4. Update notes:
+           ```bash
+           bd update {ENTITY_NAME}-integration --append-notes "## Batch Complete
+           - Integration tests: N passing
+           - xfails removed: N
+           - xfails remaining (Bucket B): N
+           - Production code fixes: N files"
+           ```
+
+      acceptance: "make quality passes. Integration tests pass. xfail count reconciled."
+      depends_on: ["reconcile-{ENTITY_NAME}"]
+      labels: ["atom:verify"]
+
+    # -- Atom 8: Commit -------------------------------------------------------
+    - id: "commit-{ENTITY_NAME}"
+      title: "Commit {ENTITY_NAME} integration tests"
+      description: |
+        Commit the integration tests and any production code fixes.
+
+        ## Instructions
+
+        1. Check what changed:
+           ```bash
+           git status
+           git diff --stat
+           ```
+
+        2. Stage files:
+           ```bash
+           git add tests/integration/test_{ENTITY_NAME_UNDERSCORE}_v3.py
+           git add tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           git add <production-code-files>
+           ```
+
+        3. Commit:
+           ```bash
+           git commit -m "test: add integration tests for {ENTITY_NAME} (N xfails resolved)"
+           ```
+
+      acceptance: "Git commit exists for {ENTITY_NAME} integration batch."
+      depends_on: ["verify-{ENTITY_NAME}"]
+      labels: ["atom:commit"]
+
+finalize:
+  - id: integration-report
+    title: "Integration test report for all {N} entities"
+    description: |
+      Final verification after all {N} entity integration batches.
+
+      ## Instructions
+
+      1. Run full suite:
+         ```bash
+         ./run_all_tests.sh
+         ```
+
+      2. Count remaining xfails:
+         ```bash
+         for f in tests/unit/test_creative.py tests/unit/test_media_buy.py tests/unit/test_delivery.py; do
+           xfails=$(grep -c "xfail" "$f" 2>/dev/null || echo 0)
+           echo "$f: $xfails xfails remaining"
+         done
+         ```
+
+      3. Sync beads:
+         ```bash
+         bd sync
+         ```
+
+    acceptance: "All {N} entities have integration tests. ./run_all_tests.sh passes. xfail count reported."
+    depends_on_all_barriers: true
+    labels: ["atom:verify"]

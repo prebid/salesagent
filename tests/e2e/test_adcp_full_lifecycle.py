@@ -51,7 +51,7 @@ class TestAdCPFullLifecycle:
             products_result = await client.call_tool(
                 "get_products",
                 {
-                    "brand_manifest": {"name": "Test Brand"},
+                    "brand": {"domain": "testbrand.com"},
                     "brief": "display advertising",
                     "context": {"e2e": "full_lifecycle"},
                 },
@@ -84,7 +84,7 @@ class TestAdCPFullLifecycle:
                 total_budget=5000.0,
                 start_time=start_time,
                 end_time=end_time,
-                brand_manifest={"name": "Lifecycle Test Brand"},
+                brand={"domain": "testbrand.com"},
                 pricing_option_id=pricing_option_id,
                 context={"e2e": "full_lifecycle_create"},
             )

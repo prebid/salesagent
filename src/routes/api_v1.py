@@ -56,14 +56,14 @@ def _handle_tool_error(e: ToolError) -> JSONResponse:
 
 class GetProductsBody(BaseModel):
     brief: str = ""
-    brand_manifest: dict[str, Any] | None = None
+    brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     filters: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
 class CreateMediaBuyBody(BaseModel):
     buyer_ref: str
-    brand_manifest: dict[str, Any] | None = None
+    brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     packages: list[dict[str, Any]] = []
     start_time: str | None = None
     end_time: str | None = None
@@ -136,7 +136,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     """Get available products matching the brief (auth-optional discovery skill)."""
     req = products_module.create_get_products_request(
         brief=body.brief,
-        brand_manifest=body.brand_manifest,
+        brand=body.brand,
         filters=body.filters,
     )
 
@@ -198,7 +198,7 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
     try:
         response = await media_buy_create_module.create_media_buy_raw(
             buyer_ref=body.buyer_ref,
-            brand_manifest=body.brand_manifest,
+            brand=body.brand,
             packages=body.packages,
             start_time=body.start_time,
             end_time=body.end_time,

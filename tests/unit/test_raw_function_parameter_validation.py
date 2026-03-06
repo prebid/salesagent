@@ -125,10 +125,9 @@ class TestRawFunctionParameterValidation:
         sig = inspect.signature(create_get_products_request)
         params = list(sig.parameters.keys())
 
-        # This test documents what we expect the signature to be
-        # If this fails, it means the helper changed and we need to update callers
+        # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
         # Note: promoted_offering removed per adcp v1.2.1 migration
-        expected_params = ["brief", "brand_manifest", "filters", "context"]
+        expected_params = ["brief", "brand", "filters", "property_list", "context"]
 
         assert params == expected_params, (
             f"create_get_products_request signature changed!\n"
@@ -158,8 +157,8 @@ class TestRawFunctionParameterValidation:
                             passed_params = {kw.arg for kw in child.keywords}
 
                             # These are the ONLY valid parameters for create_get_products_request
-                            # Note: promoted_offering kept for backwards compatibility
-                            valid_params = {"brief", "promoted_offering", "brand_manifest", "filters"}
+                            # adcp 3.6.0: brand_manifest removed, only 'brand' (BrandReference)
+                            valid_params = {"brief", "brand", "filters"}
 
                             invalid = passed_params - valid_params
                             assert not invalid, (
@@ -196,8 +195,8 @@ class TestHelperFunctionDocumentation:
 
         # Verify create_get_products_request (the one that caused the bug)
         assert "create_get_products_request" in signatures
-        # Note: promoted_offering removed per adcp v1.2.1 migration
-        expected = ["brief", "brand_manifest", "filters", "context"]
+        # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
+        expected = ["brief", "brand", "filters", "property_list", "context"]
         actual = signatures["create_get_products_request"]
         assert actual == expected, (
             f"create_get_products_request signature changed!\n"

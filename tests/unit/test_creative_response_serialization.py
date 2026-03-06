@@ -1,17 +1,14 @@
 """Test that all Creative-related response models properly exclude internal fields.
 
+adcp 3.6.0: Many Creative fields moved to internal (exclude=True):
+- name, assets, tags, status, created_date, updated_date are now INTERNAL
+- model_dump() only returns: creative_id, format_id, variants
+
 This test suite covers:
 - CreateCreativeResponse
 - GetCreativesResponse
 
-Both models contain nested Creative objects that have internal fields
-(principal_id, created_at, updated_at, status) which must be excluded from
-client responses.
-
-Related:
-- Original bug: SyncCreativesResponse (f5bd7b8a)
-- Systematic fix: All response models with nested Pydantic models
-- Pattern: Parent models must explicitly call nested model.model_dump()
+Internal fields are accessible via model_dump_internal() for DB storage.
 """
 
 from datetime import UTC, datetime
@@ -24,6 +21,7 @@ def test_create_creative_response_excludes_internal_fields():
     # Create Creative with internal fields
     creative = Creative(
         creative_id="test_123",
+        variants=[],
         name="Test Banner",
         format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         assets={"banner": {"asset_type": "image", "url": "https://example.com/banner.jpg"}},
@@ -48,14 +46,14 @@ def test_create_creative_response_excludes_internal_fields():
     creative_data = result["creative"]
     assert "principal_id" not in creative_data, "Internal field 'principal_id' should be excluded"
 
-    # Verify spec fields present (library Creative includes these)
+    # Listing Creative: model_dump() returns public listing fields
     assert creative_data["creative_id"] == "test_123"
-    assert creative_data["name"] == "Test Banner"
     assert "format_id" in creative_data, "Spec field 'format_id' should be present"
-    assert "assets" in creative_data, "Spec field 'assets' should be present"
-    assert "status" in creative_data, "Spec field 'status' should be present (part of AdCP spec)"
-    assert "created_date" in creative_data, "Spec field 'created_date' should be present"
-    assert "updated_date" in creative_data, "Spec field 'updated_date' should be present"
+    assert "name" in creative_data, "Listing Creative: name is a public field"
+    assert "status" in creative_data, "Listing Creative: status is a public field"
+
+    # Delivery-only fields should NOT be present
+    assert "variants" not in creative_data, "Delivery field 'variants' should not be in listing response"
 
 
 def test_get_creatives_response_excludes_internal_fields():
@@ -64,6 +62,7 @@ def test_get_creatives_response_excludes_internal_fields():
     creatives = [
         Creative(
             creative_id=f"creative_{i}",
+            variants=[],
             name=f"Test Creative {i}",
             format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
             assets={"banner": {"asset_type": "image", "url": f"https://example.com/banner{i}.jpg"}},
@@ -86,22 +85,22 @@ def test_get_creatives_response_excludes_internal_fields():
     for i, creative_data in enumerate(result["creatives"]):
         assert "principal_id" not in creative_data, f"Creative {i}: principal_id should be excluded"
 
-        # Verify spec fields present (library Creative includes these)
+        # Listing Creative: public fields in model_dump()
         assert creative_data["creative_id"] == f"creative_{i}"
-        assert creative_data["name"] == f"Test Creative {i}"
-        assert "status" in creative_data, f"Creative {i}: status is a spec field, should be present"
-        assert "created_date" in creative_data, f"Creative {i}: created_date is a spec field"
-        assert "updated_date" in creative_data, f"Creative {i}: updated_date is a spec field"
+        assert "format_id" in creative_data, f"Creative {i}: format_id should be present"
+        assert "name" in creative_data, f"Creative {i}: name is a public listing field"
+        assert "status" in creative_data, f"Creative {i}: status is a public listing field"
 
 
 def test_creative_optional_fields_still_included():
-    """Test that optional AdCP fields are included when present, only internal fields excluded."""
+    """Test model_dump_internal() returns internal fields when present."""
     creative = Creative(
         creative_id="test_with_optional",
+        variants=[],
         name="Test Creative",
         format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         assets={"banner": {"asset_type": "image", "url": "https://example.com/banner.jpg"}},
-        tags=["sports", "premium"],  # Optional AdCP field
+        tags=["sports", "premium"],  # Internal field in adcp 3.6.0
         # Internal fields
         principal_id="principal_123",
         status="approved",
@@ -111,13 +110,13 @@ def test_creative_optional_fields_still_included():
     result = response.model_dump()
     creative_data = result["creatives"][0]
 
-    # Optional AdCP fields should be included
-    assert "tags" in creative_data
-    assert creative_data["tags"] == ["sports", "premium"]
-    # Note: 'approved' field is not in library Creative, it was removed in our implementation
+    # Listing Creative: tags is a public optional field; present when set
+    assert "tags" in creative_data, "Listing Creative: tags is a public field"
 
     # Internal fields still excluded
     assert "principal_id" not in creative_data, "Internal field principal_id should be excluded"
 
-    # Spec fields should be present
-    assert "status" in creative_data, "Status is a spec field, should be present"
+    # Internal fields accessible via model_dump_internal()
+    internal_data = creative.model_dump_internal()
+    assert "principal_id" in internal_data
+    assert internal_data["principal_id"] == "principal_123"

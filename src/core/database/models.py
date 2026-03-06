@@ -277,6 +277,20 @@ class Product(Base, JSONValidatorMixin):
     # Type hint: reporting capabilities dict
     reporting_capabilities: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
+    # AdCP 3.6.0 product fields
+    property_targeting_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    signal_targeting_allowed: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    # Type hint: CatalogMatch object (matching criteria for product catalogs)
+    catalog_match: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: list of CatalogType enum values
+    catalog_types: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: ConversionTracking object (conversion measurement config)
+    conversion_tracking: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: list of DataProviderSignalSelector objects
+    data_provider_signals: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: DeliveryForecast object (delivery predictions)
+    forecast: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+
     # Dynamic product fields
     # Type hint: whether this product is a dynamic template that generates variants
     is_dynamic: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -705,10 +719,8 @@ class Creative(Base):
     __tablename__ = "creatives"
 
     creative_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(
-        String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
-    )
-    principal_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
     format: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -758,12 +770,11 @@ class CreativeReview(Base):
     __tablename__ = "creative_reviews"
 
     review_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    creative_id: Mapped[str] = mapped_column(
-        String(100), ForeignKey("creatives.creative_id", ondelete="CASCADE"), nullable=False
-    )
+    creative_id: Mapped[str] = mapped_column(String(100), nullable=False)
     tenant_id: Mapped[str] = mapped_column(
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
+    principal_id: Mapped[str] = mapped_column(String(100), nullable=False)
 
     # Review metadata
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -785,9 +796,14 @@ class CreativeReview(Base):
 
     # Relationships
     creative = relationship("Creative", back_populates="reviews")
-    tenant = relationship("Tenant")
+    tenant = relationship("Tenant", overlaps="creative,reviews")
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["creative_id", "tenant_id", "principal_id"],
+            ["creatives.creative_id", "creatives.tenant_id", "creatives.principal_id"],
+            ondelete="CASCADE",
+        ),
         Index("ix_creative_reviews_creative_id", "creative_id"),
         Index("ix_creative_reviews_tenant_id", "tenant_id"),
         Index("ix_creative_reviews_reviewed_at", "reviewed_at"),
@@ -811,6 +827,7 @@ class CreativeAssignment(Base):
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
     creative_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    principal_id: Mapped[str] = mapped_column(String(100), nullable=False)
     media_buy_id: Mapped[str] = mapped_column(String(100), nullable=False)
     package_id: Mapped[str] = mapped_column(String(100), nullable=False)
     weight: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
@@ -822,7 +839,10 @@ class CreativeAssignment(Base):
     tenant = relationship("Tenant")
 
     __table_args__ = (
-        ForeignKeyConstraint(["creative_id"], ["creatives.creative_id"]),
+        ForeignKeyConstraint(
+            ["creative_id", "tenant_id", "principal_id"],
+            ["creatives.creative_id", "creatives.tenant_id", "creatives.principal_id"],
+        ),
         ForeignKeyConstraint(["media_buy_id"], ["media_buys.media_buy_id"]),
         Index("idx_creative_assignments_tenant", "tenant_id"),
         Index("idx_creative_assignments_creative", "creative_id"),
@@ -869,6 +889,7 @@ class MediaBuy(Base):
         overlaps="media_buys,tenant",
     )
     strategy = relationship("Strategy", back_populates="media_buys")
+    packages = relationship("MediaPackage", back_populates="media_buy", cascade="all, delete-orphan")
     # Removed tasks and context relationships - using ObjectWorkflowMapping instead
 
     __table_args__ = (
@@ -931,6 +952,9 @@ class MediaPackage(Base):
 
     # Full package configuration (includes all AdCP fields + internal fields)
     package_config: Mapped[dict] = mapped_column(JSONType, nullable=False)
+
+    # Relationships
+    media_buy = relationship("MediaBuy", back_populates="packages")
 
     __table_args__ = (
         Index("idx_media_packages_media_buy", "media_buy_id"),

@@ -79,39 +79,3 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
     except Exception as e:
         logger.error(f"[AUTH] Database error during principal lookup: {e}", exc_info=True)
         return None, None
-
-
-def get_principal_object(principal_id: str) -> Principal | None:
-    """Get the Principal object with platform mappings using retry logic.
-
-    Args:
-        principal_id: The principal ID to look up
-
-    Returns:
-        Principal object or None if not found
-    """
-    if not principal_id:
-        return None
-
-    def _get_principal_object(session):
-        from src.core.schemas import Principal as PrincipalSchema
-
-        # Query the database for the principal
-        stmt = select(Principal).filter_by(principal_id=principal_id)
-        db_principal = session.scalars(stmt).first()
-
-        if db_principal:
-            # Convert to Pydantic model
-            return PrincipalSchema(
-                principal_id=db_principal.principal_id,
-                name=db_principal.name,
-                platform_mappings=db_principal.platform_mappings or {},
-            )
-
-        return None
-
-    try:
-        return execute_with_retry(_get_principal_object)
-    except Exception as e:
-        logger.error(f"[AUTH] Database error during principal object lookup: {e}", exc_info=True)
-        return None

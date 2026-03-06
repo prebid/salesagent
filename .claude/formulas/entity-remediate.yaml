@@ -1,0 +1,470 @@
+name: entity-remediate
+description: >
+  Systematically fill test stubs in entity test suites. Works batch-by-batch:
+  check the entity suite exists (hard gate), plan which stubs to implement,
+  write failing tests (TDD red), fix production code (TDD green), verify.
+  The pre-check atom enforces that /surface was run first.
+
+variables:
+  ENTITY_NAMES:
+    description: "Space-separated entity names to remediate (e.g., creative media-buy delivery)"
+    required: true
+
+labels:
+  - "mol:entity-remediate"
+
+iterate:
+  over: "ENTITY_NAMES"
+  item_var: "ENTITY_NAME"
+  all_var: "ALL_ENTITIES"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # ── Atom 1: Pre-Check (Hard Gate) ──────────────────────────────
+    - id: "pre-check-{ENTITY_NAME}"
+      title: "Pre-check entity suite for {ENTITY_NAME}"
+      description: |
+        **HARD GATE**: Verify the entity test suite exists before proceeding.
+        If it doesn't exist, STOP and suggest running /surface first.
+
+        ## Instructions
+
+        1. **Convert entity name to test file path**:
+           Replace hyphens with underscores: {ENTITY_NAME} → test_{underscored}.py
+
+        2. **Check if the entity test suite exists**:
+           ```bash
+           ls tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           ```
+           (Where {ENTITY_NAME_UNDERSCORE} is {ENTITY_NAME} with hyphens → underscores)
+
+        3. **If the file does NOT exist**:
+           ```
+           ┌─────────────────────────────────────────────────────────┐
+           │  STOP: No entity test suite for {ENTITY_NAME}.         │
+           │                                                         │
+           │  Run `/surface {ENTITY_NAME}` first to create the      │
+           │  test surface map with obligations and stubs.           │
+           │                                                         │
+           │  Remediation requires a surface to remediate against.   │
+           └─────────────────────────────────────────────────────────┘
+           ```
+           Leave this atom OPEN. Do NOT proceed to subsequent atoms.
+
+        4. **If the file EXISTS**, assess the current state:
+           ```bash
+           # Count total tests, stubs, and real tests
+           TOTAL=$(grep -c "def test_" tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py)
+           STUBS=$(grep -c "@pytest.mark.skip" tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py)
+           REAL=$((TOTAL - STUBS))
+           echo "Entity: {ENTITY_NAME} — $REAL real / $STUBS stubs / $TOTAL total"
+           ```
+
+        5. **If no stubs remain** (all tests are real):
+           Note "Entity {ENTITY_NAME} is fully remediated — 0 stubs remaining."
+           Close this atom and all subsequent atoms can be skipped.
+
+        6. **Record state**:
+           ```bash
+           bd update {ENTITY_NAME}-remediate --append-notes "## Pre-Check: {ENTITY_NAME}
+           - Suite: tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           - Total tests: N
+           - Real tests: N
+           - Stubs remaining: N
+           - Coverage: X%"
+           ```
+
+      acceptance: "Entity test suite verified to exist. Stub count recorded. If no suite exists, atom left OPEN with STOP message."
+      labels: ["atom:pre-check", "atom:gate"]
+
+    # ── Atom 2: Plan Batch ─────────────────────────────────────────
+    - id: "plan-batch-{ENTITY_NAME}"
+      title: "Plan remediation batch for {ENTITY_NAME}"
+      description: |
+        Select which stubs to implement in this batch and create an
+        implementation plan.
+
+        ## Instructions
+
+        1. **Read the entity test suite** and list all stubs:
+           ```bash
+           grep -n "@pytest.mark.skip" tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           ```
+
+        2. **Read stub docstrings** to understand priorities:
+           - P0 stubs first (data integrity)
+           - P1 stubs next (API contract)
+           - Group related stubs (e.g., all schema validation stubs together)
+
+        3. **Check for related beads bugs**:
+           ```bash
+           bd list --status=open
+           ```
+           If any open bugs relate to {ENTITY_NAME}, include their test stubs
+           in this batch for efficiency.
+
+        4. **Select batch** (recommended: 5-15 stubs per batch):
+           - Too few = too many molecules
+           - Too many = too much to implement at once
+
+        5. **For each stub in the batch**, plan the test:
+           - What function/class does it test?
+           - What setup (fixtures, mocks) is needed?
+           - What assertion proves the behavior?
+           - Does implementing this test require production code changes?
+
+        ## Store Plan
+
+        ```bash
+        bd update {ENTITY_NAME}-remediate --design "## Core Invariant
+        [The entity's primary architectural principle — e.g., 'Product schema
+        extends adcp.Product, never duplicates fields']
+
+        ## Batch Plan
+        Batch size: N stubs
+
+        ### Stub 1: test_name
+        - Obligation: [ID]
+        - Tests: [function/class]
+        - Setup: [fixtures needed]
+        - Assertion: [what to assert]
+        - Code changes needed: [yes/no — if yes, what]
+
+        [repeat for each stub in batch]
+
+        ## Related Bugs
+        - salesagent-xxxx: [description] — stub [test_name] covers this"
+        ```
+
+      acceptance: "Batch selected with implementation plan for each stub. Related bugs identified."
+      depends_on: ["pre-check-{ENTITY_NAME}"]
+      labels: ["atom:plan"]
+
+    # ── Atom 3: Architect Review ───────────────────────────────────
+    - id: "review-{ENTITY_NAME}"
+      title: "Review batch plan for {ENTITY_NAME}"
+      description: |
+        Architect review of the batch remediation plan for {ENTITY_NAME}.
+
+        ## Precondition
+
+        Read the design field for the batch plan.
+
+        ## Review Criteria
+
+        1. **Batch scope**: Is the batch reasonably sized (5-15 stubs)?
+        2. **Test quality**: Are the planned assertions specific enough?
+           "asserts it works" is bad. "asserts response contains buyer_ref field" is good.
+        3. **Code changes**: If production code changes are needed, are they
+           minimal and well-scoped?
+        4. **Bug alignment**: Do the related bugs match the stubs correctly?
+        5. **Priority order**: Are P0 items before P1?
+        6. **Core Invariant**: Does the invariant correctly capture the entity's
+           primary architectural principle?
+
+        ## Write Review
+
+        ```bash
+        bd update {ENTITY_NAME}-remediate --append-notes "## Architect Review
+        - [RATING] Finding: [description]. Suggestion: [what to do]
+        ...
+
+        Overall: [ALL_LOW | NEEDS_REFINEMENT | NEEDS_USER_INPUT]"
+        ```
+
+      acceptance: "Review written with rated findings and overall verdict."
+      depends_on: ["plan-batch-{ENTITY_NAME}"]
+      labels: ["atom:review", "atom:gate"]
+
+    # ── Atom 4: Triage ─────────────────────────────────────────────
+    - id: "triage-{ENTITY_NAME}"
+      title: "Triage review for {ENTITY_NAME} batch"
+      description: |
+        Read the architect review and decide next steps.
+        This is a TRIAGE atom — it routes, not executes.
+
+        ## Instructions
+
+        1. Read the "## Architect Review" section in notes
+        2. Check the overall verdict:
+
+        ### If ALL_LOW:
+        Note "Clean review — proceeding to implement."
+        Close this atom.
+
+        ### If NEEDS_REFINEMENT:
+        Update the batch plan per MEDIUM findings.
+        Note what changed. Close this atom.
+
+        ### If NEEDS_USER_INPUT:
+        Update notes: "## BLOCKED: User Input Required"
+        Leave this atom OPEN.
+
+      acceptance: "Verdict acted on."
+      depends_on: ["review-{ENTITY_NAME}"]
+      labels: ["atom:triage"]
+
+    # ── Atom 5: Implement Red (Write Failing Tests) ────────────────
+    - id: "implement-red-{ENTITY_NAME}"
+      title: "Implement failing tests for {ENTITY_NAME} batch"
+      description: |
+        Convert stubs into real failing tests (TDD red step). The tests must
+        FAIL because the production code doesn't yet satisfy them.
+
+        ## Iron Rule: Stubs Are Absolute Truth
+
+        **You MUST NOT drop, skip, or question any stub's expected behavior.**
+        Stubs were created by /surface and verified by /verify-spec. Those
+        phases already confirmed the expected behavior against the spec and
+        business rules. Your job is to IMPLEMENT the stub, not judge it.
+
+        If you cannot make a stub pass:
+        - Mark it `@pytest.mark.xfail(reason="...")` with a clear reason
+        - NEVER remove the stub or revert it to @pytest.mark.skip
+        - NEVER conclude "the stub is wrong because the code doesn't do this"
+
+        The code is what's wrong, not the stub.
+
+        ## Prerequisites
+
+        Read the batch plan from the design field.
+
+        ## Instructions
+
+        For each stub in the batch:
+
+        1. **Remove the @pytest.mark.skip decorator**
+        2. **Write the test implementation**:
+           - Follow the plan (setup, assertions)
+           - Use existing fixtures from the entity test suite
+           - Follow CLAUDE.md testing patterns
+           - **Transport Parity Invariant**: Every behavioral test MUST verify
+             identical behavior across MCP, A2A, and REST. Use parametrize or
+             test through all 3 entry points. See `docs/development/architecture.md`.
+        3. **Run and confirm it fails for the RIGHT reason**:
+           ```bash
+           uv run pytest tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py::test_name -x -v
+           ```
+           - AssertionError = right reason (behavior doesn't exist yet)
+           - ImportError/NameError = wrong reason (test has a bug, fix the test)
+           - Test passes = behavior already exists (note this and move on)
+
+        4. **For stubs that already pass** (behavior exists but wasn't tested):
+           This is fine — the test was a GAP that's now a real test. Keep it.
+
+        5. **For stubs you cannot implement** (missing infrastructure, unbuilt
+           feature, needs integration test):
+           - Write the test body with the correct assertions
+           - Mark with `@pytest.mark.xfail(reason="<why it can't pass yet>")`
+           - The xfail reason must explain what's MISSING, not claim the
+             stub is wrong
+
+        ## Important
+
+        Do NOT fix production code in this atom. Only write tests.
+        Tests should fail because the behavior is wrong/missing, not because
+        the test is broken.
+
+        ## Record Progress
+
+        ```bash
+        bd update {ENTITY_NAME}-remediate --append-notes "## Red Step Results
+        - Stubs implemented: N
+        - Failing (expected): N
+        - Already passing: N
+        - Marked xfail: N
+        - Test bugs fixed: N
+
+        ## Failing Tests
+        - test_name: [failure reason — e.g., 'AssertionError: missing brand field']
+        [repeat]
+
+        ## xfail Tests
+        - test_name: [reason — e.g., 'buyer_ref uniqueness validation not yet implemented']
+        [repeat]"
+        ```
+
+      acceptance: "ALL batch stubs converted to real tests or xfail. ZERO stubs dropped. Failing tests documented with failure reasons."
+      depends_on: ["triage-{ENTITY_NAME}"]
+      depends_on_prev_barrier: true
+      labels: ["atom:implement-red"]
+
+    # ── Atom 6: Fix Green (Make Tests Pass) ────────────────────────
+    - id: "fix-green-{ENTITY_NAME}"
+      title: "Fix production code for {ENTITY_NAME} batch"
+      description: |
+        Make the failing tests pass by fixing production code (TDD green step).
+
+        ## Prerequisites
+
+        Read the red step results from notes. Know which tests are failing
+        and why. Also note which tests are marked xfail.
+
+        ## Workflow
+
+        For each failing test:
+
+        1. **Understand the failure**: What assertion fails? What's the
+           expected vs actual behavior?
+
+        2. **Invariant check**: Re-read the Core Invariant from the design
+           field. Does the fix maintain it?
+
+        3. **Apply minimal fix**: Fix the production code to make the test
+           pass. Don't over-engineer.
+
+        4. **Verify**:
+           ```bash
+           uv run pytest tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py::test_name -x -v
+           ```
+
+        5. **Check no regressions**:
+           ```bash
+           uv run pytest tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py -x -v
+           ```
+
+        After all fixes:
+        ```bash
+        make quality
+        ```
+
+        ## Handling xfail Tests
+
+        Tests marked xfail from the red step represent behavior the stub
+        requires but the implementation doesn't yet support. For each xfail:
+
+        1. **Try to implement the missing behavior** if it's a reasonable
+           production code change (validation, error handling, field forwarding)
+        2. **If you can make it pass**: remove the xfail marker, it's now green
+        3. **If the fix is too large or risky**: leave xfail in place, file a
+           beads bug describing what's missing:
+           ```bash
+           bd create --title="Missing: <behavior>" --type=bug --priority=2 \
+             --description="Test test_name expects <behavior> but implementation lacks it. xfail in test_{ENTITY_NAME_UNDERSCORE}.py."
+           ```
+        4. **NEVER remove an xfail test**. It stays until the behavior is implemented.
+
+        ## When Existing Tests Fail
+
+        If your production code changes break OTHER tests:
+
+        1. **STOP. Do NOT modify the failing tests.**
+        2. Check the Core Invariant — did you violate it?
+        3. If YES → narrow the fix
+        4. If NO → document why the test is wrong, then fix it
+
+        ## Close Related Bugs
+
+        If any stubs in this batch correspond to known beads bugs:
+        ```bash
+        bd close <bug-id> --reason="Fixed as part of {ENTITY_NAME} remediation"
+        ```
+
+      acceptance: "All failing tests now pass or are xfail with beads issues. make quality passes. No stubs dropped. Related bugs closed."
+      depends_on: ["implement-red-{ENTITY_NAME}"]
+      labels: ["atom:fix-green"]
+
+    # ── Atom 7: Verify ─────────────────────────────────────────────
+    - id: "verify-{ENTITY_NAME}"
+      title: "Verify {ENTITY_NAME} remediation batch"
+      description: |
+        Full verification of the remediation batch.
+
+        ## Instructions
+
+        1. Run full quality gate:
+           ```bash
+           make quality
+           ```
+
+        2. Count remaining stubs:
+           ```bash
+           STUBS=$(grep -c "@pytest.mark.skip" tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py)
+           echo "Remaining stubs: $STUBS"
+           ```
+
+        3. Update notes with final state:
+           ```bash
+           bd update {ENTITY_NAME}-remediate --append-notes "## Batch Complete
+           - Tests implemented: N
+           - Production code changes: N files
+           - Bugs closed: N
+           - Remaining stubs: N"
+           ```
+
+      acceptance: "make quality passes. Remaining stubs counted. Batch summary written."
+      depends_on: ["fix-green-{ENTITY_NAME}"]
+      labels: ["atom:verify"]
+
+    # ── Atom 8: Commit ─────────────────────────────────────────────
+    - id: "commit-{ENTITY_NAME}"
+      title: "Commit {ENTITY_NAME} remediation batch"
+      description: |
+        Commit the remediation work for {ENTITY_NAME}.
+
+        ## Instructions
+
+        1. Check what changed:
+           ```bash
+           git status
+           git diff --stat
+           ```
+
+        2. **Test change review**: If existing test files were modified
+           (beyond the entity suite itself):
+           ```bash
+           git diff --name-only -- 'tests/'
+           ```
+           Review each change against the Core Invariant.
+
+        3. Stage files:
+           ```bash
+           git add tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           git add <production-code-files>
+           ```
+
+        4. Commit:
+           ```bash
+           git commit -m "fix: remediate {ENTITY_NAME} test suite (N stubs → real tests)"
+           ```
+
+        5. Verify:
+           ```bash
+           git log -1 --oneline
+           ```
+
+      acceptance: "Git commit exists for {ENTITY_NAME} remediation batch."
+      depends_on: ["verify-{ENTITY_NAME}"]
+      labels: ["atom:commit"]
+
+finalize:
+  - id: sync-and-verify
+    title: "Sync and verify all {N} entity remediations"
+    description: |
+      Final verification after all {N} entity remediation batches.
+
+      ## Instructions
+
+      1. Sync beads:
+         ```bash
+         bd sync --from-main
+         ```
+
+      2. Count remaining stubs across all entities:
+         ```bash
+         for f in tests/unit/test_*.py; do
+           stubs=$(grep -c "@pytest.mark.skip" "$f" 2>/dev/null || echo 0)
+           if [ "$stubs" -gt 0 ]; then
+             echo "$f: $stubs stubs remaining"
+           fi
+         done
+         ```
+
+      3. Run full quality gate:
+         ```bash
+         make quality
+         ```
+
+    acceptance: "All {N} entities remediated. bd sync done. make quality passes."
+    depends_on_all_barriers: true
+    labels: ["atom:verify"]

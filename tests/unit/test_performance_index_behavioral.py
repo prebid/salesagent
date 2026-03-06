@@ -72,6 +72,7 @@ def _patch_happy_path(
     audit logger for assertions.
     """
     from contextlib import ExitStack
+    from unittest.mock import Mock
 
     stack = ExitStack()
     mocks: dict = {}
@@ -86,6 +87,18 @@ def _patch_happy_path(
     mock_principal = MagicMock()
     mock_principal.principal_id = principal_id
     mocks["principal"] = mock_principal
+
+    # Mock MediaBuyUoW to prevent real DB connections
+    mock_uow = MagicMock()
+    mock_uow.media_buys = MagicMock()
+    mock_uow.__enter__ = Mock(return_value=mock_uow)
+    mock_uow.__exit__ = Mock(return_value=False)
+    stack.enter_context(
+        patch(
+            "src.core.tools.performance.MediaBuyUoW",
+            return_value=mock_uow,
+        )
+    )
 
     stack.enter_context(
         patch(
@@ -253,14 +266,25 @@ class TestHighRiskMCP:
 
         Covers: #26 T-UC-009-ext-a-mcp
         """
+        from unittest.mock import Mock
+
         from src.core.tools.performance import _update_performance_index_impl
 
         identity = _make_identity()
+
+        mock_uow = MagicMock()
+        mock_uow.media_buys = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
 
         with (
             patch(
                 "src.core.helpers.context_helpers.ensure_tenant_context",
                 return_value={"tenant_id": "tenant_1"},
+            ),
+            patch(
+                "src.core.tools.performance.MediaBuyUoW",
+                return_value=mock_uow,
             ),
             patch(
                 "src.core.tools.performance._verify_principal",
@@ -436,6 +460,8 @@ class TestErrorPaths:
     # E3 ---------------------------------------------------------------
     def test_identity_no_principal_id_raises_auth_error(self):
         """E3: identity with principal_id=None raises AdCPAuthenticationError after _verify_principal."""
+        from unittest.mock import Mock
+
         from src.core.tools.performance import _update_performance_index_impl
 
         identity = ResolvedIdentity(
@@ -445,8 +471,16 @@ class TestErrorPaths:
             protocol="mcp",
         )
 
+        mock_uow = MagicMock()
+        mock_uow.media_buys = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+
         # _verify_principal will raise AdCPAuthenticationError for None principal_id
-        with pytest.raises(AdCPAuthenticationError):
+        with (
+            patch("src.core.tools.performance.MediaBuyUoW", return_value=mock_uow),
+            pytest.raises(AdCPAuthenticationError),
+        ):
             _update_performance_index_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
@@ -456,11 +490,19 @@ class TestErrorPaths:
     # E4 ---------------------------------------------------------------
     def test_principal_not_found_raises_not_found_error(self):
         """E4: get_principal_object returns None raises AdCPNotFoundError."""
+        from unittest.mock import Mock
+
         from src.core.tools.performance import _update_performance_index_impl
 
         identity = _make_identity()
 
+        mock_uow = MagicMock()
+        mock_uow.media_buys = MagicMock()
+        mock_uow.__enter__ = Mock(return_value=mock_uow)
+        mock_uow.__exit__ = Mock(return_value=False)
+
         with (
+            patch("src.core.tools.performance.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.performance._verify_principal", return_value=None),
             patch("src.core.tools.performance.get_principal_object", return_value=None),
         ):

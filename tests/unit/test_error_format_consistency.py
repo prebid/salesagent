@@ -34,7 +34,7 @@ class TestMCPErrorShapes:
         with pytest.raises((AdCPValidationError, ToolError)) as exc_info:
             await create_media_buy(
                 buyer_ref="test_buyer",
-                brand_manifest={"name": "Test"},
+                brand={"domain": "test.com"},
                 packages=[],  # Empty but present; validation will catch the issue
                 start_time="2026-01-01T00:00:00Z",
                 end_time="2026-02-01T00:00:00Z",
@@ -54,7 +54,7 @@ class TestMCPErrorShapes:
         with pytest.raises((AdCPValidationError, ToolError, ValidationError)):
             await create_media_buy(
                 buyer_ref="test_buyer",
-                brand_manifest=12345,  # Wrong type: should be dict or str
+                brand={"invalid_key": "no_domain"},  # Wrong structure: missing required 'domain' field
                 packages="not_a_list",  # Wrong type: should be list
                 start_time="2026-01-01T00:00:00Z",
                 end_time="2026-02-01T00:00:00Z",
@@ -70,7 +70,7 @@ class TestMCPErrorShapes:
         # Build a minimal valid request
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer",
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
@@ -92,7 +92,7 @@ class TestMCPErrorShapes:
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer",
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
@@ -134,7 +134,7 @@ class TestA2AErrorShapes:
         with pytest.raises(ServerError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
-                parameters={"brand_manifest": {"name": "Test"}},
+                parameters={"brand": {"domain": "testbrand.com"}},
                 identity=None,
             )
 
@@ -172,7 +172,7 @@ class TestA2AErrorShapes:
         with pytest.raises(ServerError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
-                parameters={"brand_manifest": {"name": "Test"}},
+                parameters={"brand": {"domain": "testbrand.com"}},
                 identity=invalid_identity,
             )
 
@@ -186,7 +186,7 @@ class TestA2AErrorShapes:
         )
 
         result = await self.handler._handle_create_media_buy_skill(
-            parameters={"brand_manifest": {"name": "Test"}},
+            parameters={"brand": {"domain": "testbrand.com"}},
             identity=mock_identity,
         )
 
@@ -209,7 +209,7 @@ class TestA2AErrorShapes:
         # Provide all required params but with invalid types
         result = await self.handler._handle_create_media_buy_skill(
             parameters={
-                "brand_manifest": {"name": "Test"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": "not_a_list",  # Invalid type
                 "start_time": "2026-01-01T00:00:00Z",
                 "end_time": "2026-02-01T00:00:00Z",
@@ -334,7 +334,7 @@ class TestCrossTransportErrorConsistency:
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer",
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
@@ -352,7 +352,7 @@ class TestCrossTransportErrorConsistency:
         try:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
-                parameters={"brand_manifest": {"name": "Test"}},
+                parameters={"brand": {"domain": "testbrand.com"}},
                 identity=None,
             )
         except ServerError as e:
@@ -382,7 +382,7 @@ class TestCrossTransportErrorConsistency:
         try:
             CreateMediaBuyRequest(
                 buyer_ref="test_buyer",
-                brand_manifest=12345,  # Invalid type triggers ValidationError
+                brand={"invalid_key": "no_domain"},  # Missing required 'domain' field triggers ValidationError
                 packages=[],
                 start_time="2026-01-01T00:00:00Z",
                 end_time="2026-02-01T00:00:00Z",
@@ -396,7 +396,7 @@ class TestCrossTransportErrorConsistency:
         )
 
         a2a_result = await self.handler._handle_create_media_buy_skill(
-            parameters={"brand_manifest": {"name": "Test"}},
+            parameters={"brand": {"domain": "testbrand.com"}},
             identity=mock_identity,
         )
 
@@ -408,7 +408,12 @@ class TestCrossTransportErrorConsistency:
 
         # Both identify validation/parameter issues
         if mcp_error_message:
-            assert "brand_manifest" in mcp_error_message.lower() or "validation" in mcp_error_message.lower()
+            # Error should mention brand or domain validation issue
+            assert (
+                "brand" in mcp_error_message.lower()
+                or "domain" in mcp_error_message.lower()
+                or "validation" in mcp_error_message.lower()
+            )
 
         # A2A error identifies missing params
         a2a_error_msg = a2a_result["errors"][0]["message"]
@@ -428,7 +433,7 @@ class TestCrossTransportErrorConsistency:
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer",
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
@@ -524,8 +529,8 @@ class TestCrossTransportErrorConsistency:
         error_dict = {
             "success": False,
             "message": "Missing required AdCP parameters: ['packages', 'start_time', 'end_time']",
-            "required_parameters": ["brand_manifest", "packages", "start_time", "end_time"],
-            "received_parameters": ["brand_manifest"],
+            "required_parameters": ["brand", "packages", "start_time", "end_time"],
+            "received_parameters": ["brand"],
             "errors": [
                 {
                     "code": "validation_error",

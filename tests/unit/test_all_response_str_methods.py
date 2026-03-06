@@ -158,6 +158,7 @@ class TestResponseStrMethods:
         """ListCreativesResponse generates message dynamically from query_summary."""
         creative = Creative(
             creative_id="cr1",
+            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
@@ -174,7 +175,7 @@ class TestResponseStrMethods:
         )
         resp = ListCreativesResponse(
             query_summary=QuerySummary(total_matching=1, returned=1),
-            pagination=Pagination(limit=10, offset=0, has_more=False),
+            pagination=Pagination(has_more=False),
             creatives=[creative],
         )
         assert str(resp) == "Found 1 creative."

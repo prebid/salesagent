@@ -218,8 +218,8 @@ class TestFunctionCallIntegration:
         )
 
         # Create minimal AdCP-compliant request
-        # Library BrandManifest requires 'name' field
-        request = GetProductsRequest(brief="test product search", brand_manifest={"name": "Test Brand"})
+        # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
+        request = GetProductsRequest(brief="test product search", brand={"domain": "testbrand.com"})
 
         # This should not fail with import/call errors
         # We're not testing the business logic, just that the function can be called

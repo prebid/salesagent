@@ -442,7 +442,14 @@ class TestGenerativeCreatives:
     @patch("src.core.creative_agent_registry.get_creative_agent_registry")
     @patch("src.core.config.get_config")
     def test_promoted_offerings_extraction(self, mock_get_config, mock_get_registry):
-        """Test that promoted_offerings are extracted from assets."""
+        """Test that promoted_offerings are passed to build_creative when available.
+
+        Note: In adcp v3.6, PromotedOfferings is no longer a valid asset type
+        in the CreativeAsset.assets dict (which only accepts ImageAsset, TextAsset,
+        etc.). The promoted_offerings extraction from assets is a legacy path.
+        This test verifies build_creative is still called and receives
+        promoted_offerings=None when not present in assets.
+        """
         mock_config = MagicMock()
         mock_config.gemini_api_key = "test-key"
         mock_get_config.return_value = mock_config
@@ -467,10 +474,9 @@ class TestGenerativeCreatives:
         sync_fn = self._import_sync_creatives()
         context = MockContext()
 
-        promoted_offerings_data = {
-            "brand_manifest": "https://example.com/brand-manifest.json",
-        }
-
+        # In adcp v3.6, promoted_offerings cannot be placed in assets dict
+        # (only standard asset types like TextAsset, ImageAsset are allowed).
+        # Test that build_creative is called without promoted_offerings.
         sync_fn(
             ctx=context,
             creatives=[
@@ -483,14 +489,14 @@ class TestGenerativeCreatives:
                     },
                     "assets": {
                         "message": {"content": "Test message"},
-                        "promoted_offerings": promoted_offerings_data,
                     },
                 }
             ],
         )
 
         call_args = mock_registry.build_creative.call_args
-        # promoted_offerings is passed as a typed PromotedOfferings model after parsing
+        # build_creative should still be called for generative formats
+        assert call_args is not None, "build_creative should have been called"
+        # promoted_offerings is None when not present in assets
         po = call_args[1]["promoted_offerings"]
-        assert type(po).__name__ == "PromotedOfferings"
-        assert str(po.brand_manifest.root) == "https://example.com/brand-manifest.json"
+        assert po is None

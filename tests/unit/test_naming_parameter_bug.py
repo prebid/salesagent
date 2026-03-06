@@ -31,7 +31,7 @@ class TestBuildOrderNameContextParameters:
         """
         request = MagicMock()
         request.buyer_ref = "TEST-001"
-        request.brand_manifest = MagicMock(name="Test Brand")
+        request.brand = MagicMock(domain="testbrand.com")
         request.get_total_budget.return_value = 1000
         request.packages = []
 
@@ -48,7 +48,7 @@ class TestBuildOrderNameContextParameters:
         """Passing gemini_key as keyword argument works correctly."""
         request = MagicMock()
         request.buyer_ref = "TEST-001"
-        request.brand_manifest = MagicMock(name="Test Brand")
+        request.brand = MagicMock(domain="testbrand.com")
         request.get_total_budget.return_value = 1000
         request.packages = []
 

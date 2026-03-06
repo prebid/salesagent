@@ -1,0 +1,428 @@
+name: entity-test-surface
+description: >
+  Map the complete test surface for domain entities by cross-referencing
+  test-obligations files with existing tests. Produces one canonical test
+  module per entity (tests/unit/test_{entity}.py) containing real tests for
+  covered scenarios and @pytest.mark.skip stubs for gaps. Every obligation
+  maps to exactly one test — no gaps left unmapped.
+
+variables:
+  ENTITY_NAMES:
+    description: "Space-separated entity names (e.g., creative media-buy delivery product pricing-option)"
+    required: true
+
+labels:
+  - "mol:entity-test-surface"
+
+iterate:
+  over: "ENTITY_NAMES"
+  item_var: "ENTITY_NAME"
+  all_var: "ALL_ENTITIES"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # ── Atom 1: Gather Obligations ─────────────────────────────────
+    - id: "gather-obligations-{ENTITY_NAME}"
+      title: "Gather test obligations for {ENTITY_NAME}"
+      description: |
+        Read all test-obligation files relevant to the {ENTITY_NAME} entity
+        and extract every testable scenario.
+
+        ## Entity → Obligations File Mapping
+
+        | Entity Name | Primary Files | Cross-Cutting |
+        |------------|--------------|---------------|
+        | product | UC-001-discover-available-inventory.md | business-rules.md, constraints.md |
+        | media-buy | UC-002-create-media-buy.md, UC-003-update-media-buy.md | business-rules.md, constraints.md |
+        | delivery | UC-004-deliver-media-buy-metrics.md | business-rules.md |
+        | creative-formats | UC-005-discover-creative-formats.md | constraints.md |
+        | creative | BR-UC-006-sync-creatives.md | business-rules.md, constraints.md |
+        | properties | BR-UC-007-list-authorized-properties.md | business-rules.md |
+        | audience-signals | BR-UC-008-manage-audience-signals.md | business-rules.md |
+        | performance | BR-UC-009-update-performance-index.md | business-rules.md |
+        | capabilities | BR-UC-010-discover-seller-capabilities.md | |
+        | accounts | BR-UC-011-manage-accounts.md | business-rules.md |
+        | content-standards | BR-UC-012-manage-content-standards.md | business-rules.md |
+        | property-lists | BR-UC-013-manage-property-lists.md | business-rules.md |
+        | pricing-option | (none — cross-cutting only) | business-rules.md, constraints.md |
+        | transport-boundary | (none — architecture invariants) | |
+
+        Files are at: `docs/test-obligations/`
+
+        ## Instructions
+
+        1. **Read the primary obligations file(s)** for {ENTITY_NAME}
+        2. **Read cross-cutting files** (business-rules.md, constraints.md)
+           and extract sections relevant to {ENTITY_NAME}
+        3. **For each scenario/obligation found**, record:
+           - Obligation ID (e.g., UC-001-S01, BR-012)
+           - Description (one sentence: what behavior is being tested)
+           - Priority: P0 (data integrity), P1 (API contract), P2 (business rule), P3 (edge case)
+           - Test type: unit / integration / e2e
+        4. **For transport-boundary entity**: Instead of obligations files,
+           derive scenarios from the #1050/#1066 architecture principles:
+           - All _impl functions accept ResolvedIdentity
+           - No ToolError in _impl
+           - No transport imports in _impl
+           - Version compat applied only at boundary
+           - Error handling at framework level
+
+        ## Store Findings
+
+        ```bash
+        bd update {ENTITY_NAME}-surface --append-notes "## Test Obligations for {ENTITY_NAME}
+        - Source files: [list of obligations files read]
+        - Total obligations: N
+
+        ## Obligations
+        | ID | Description | Priority | Type |
+        |----|------------|----------|------|
+        | UC-001-S01 | [description] | P0 | unit |
+        [repeat for every obligation]"
+        ```
+
+        ## Gate
+
+        ```bash
+        bd label add {ENTITY_NAME}-surface obligations:gathered
+        ```
+
+      acceptance: "All obligations extracted from source files. Each has ID, description, priority, type. obligations:gathered label added."
+      labels: ["atom:gather"]
+
+    # ── Atom 2: Audit Existing Tests ───────────────────────────────
+    - id: "audit-existing-{ENTITY_NAME}"
+      title: "Audit existing tests for {ENTITY_NAME}"
+      description: |
+        Cross-reference every obligation from the previous atom with existing
+        tests in the salesagent test suite.
+
+        ## Precondition
+
+        Read the obligations list from the bead notes. Verify
+        `obligations:gathered` label is present.
+
+        ## Instructions
+
+        1. **Search for existing tests** related to {ENTITY_NAME}:
+           ```bash
+           # Search by entity name and related keywords
+           grep -r "test.*{ENTITY_NAME}" tests/ --include="*.py" -l
+           ```
+           Also search for variant names (e.g., for "media-buy" search
+           "media_buy", "mediabuy", "order", "create_media_buy").
+
+        2. **For each obligation**, classify existing coverage:
+
+           - **COVERED**: Existing test verifies this exact behavior.
+             Record: `file.py::test_name` and whether the test is correct.
+           - **PARTIAL**: Test exists but misses assertions or edge cases.
+             Record: what's missing.
+           - **GAP**: No existing test covers this behavior.
+             Record: which test file it should go in.
+           - **WRONG**: Existing test asserts INCORRECT behavior (e.g.,
+             asserts a field is required when the spec says optional).
+             Record: the wrong assertion and what it should be.
+
+        3. **Check for tests in wrong locations**: Look for scattered
+           bug-named test files that actually test {ENTITY_NAME} behavior:
+           ```bash
+           grep -r "def test.*{ENTITY_NAME}" tests/unit/ --include="*.py"
+           ```
+           These are candidates for porting into the canonical entity suite.
+
+        4. **Summarize the coverage picture**.
+
+        ## Store Findings
+
+        ```bash
+        bd update {ENTITY_NAME}-surface --append-notes "## Coverage Audit
+        - COVERED: N obligations
+        - PARTIAL: N obligations
+        - GAP: N obligations
+        - WRONG: N obligations
+
+        ## Coverage Detail
+        | Obligation ID | Status | Existing Test | Notes |
+        |--------------|--------|---------------|-------|
+        | UC-001-S01 | COVERED | test_products.py::test_list | correct |
+        | UC-001-S02 | GAP | — | needs unit test for filtering |
+        | UC-001-S03 | WRONG | test_bug_fix.py::test_x | asserts wrong default |
+        [repeat]
+
+        ## Portable Tests (from bug-named files)
+        - test_creative_format_validation_bug.py::test_format_id_validation → port to test_{ENTITY_NAME}.py
+        [repeat]"
+        ```
+
+      acceptance: "Every obligation has a coverage classification. Portable tests identified. Audit complete."
+      depends_on: ["gather-obligations-{ENTITY_NAME}"]
+      labels: ["atom:audit"]
+
+    # ── Atom 3: Architect Review ───────────────────────────────────
+    - id: "review-{ENTITY_NAME}"
+      title: "Review test surface for {ENTITY_NAME}"
+      description: |
+        Architect review of the obligations gathering and coverage audit for
+        the {ENTITY_NAME} entity.
+
+        ## Precondition
+
+        Read the bead notes. Verify both obligations list and coverage audit
+        are present.
+
+        ## Review Criteria
+
+        1. **Obligation completeness**: Were all relevant scenarios extracted
+           from the obligations files? Spot-check 2-3 by reading the source.
+        2. **Coverage accuracy**: Were COVERED/GAP classifications correct?
+           Spot-check 2-3 by reading the actual test code.
+        3. **WRONG classifications**: Are the "wrong" tests truly wrong, or is
+           the obligation itself inaccurate?
+        4. **Priority assignments**: Are P0 items truly data integrity issues?
+        5. **Scope**: Is the obligations list reasonable in size? If > 100
+           obligations, should some be deferred?
+
+        ## Rate Each Finding
+
+        - **LOW**: Minor suggestion
+        - **MEDIUM**: Real concern, agent can resolve
+        - **HIGH**: Fundamental issue, user input required
+
+        ## Write Review
+
+        ```bash
+        bd update {ENTITY_NAME}-surface --append-notes "## Architect Review
+        - [RATING] Finding: [description]. Suggestion: [what to do]
+        ...
+
+        Overall: [ALL_LOW | NEEDS_REFINEMENT | NEEDS_USER_INPUT]"
+        ```
+
+      acceptance: "Review written with rated findings and overall verdict."
+      depends_on: ["audit-existing-{ENTITY_NAME}"]
+      labels: ["atom:review", "atom:gate"]
+
+    # ── Atom 4: Triage ─────────────────────────────────────────────
+    - id: "triage-{ENTITY_NAME}"
+      title: "Triage review for {ENTITY_NAME} surface"
+      description: |
+        Read the architect review and decide next steps.
+        This is a TRIAGE atom — it routes, not executes.
+
+        ## Instructions
+
+        1. Read the "## Architect Review" section in notes
+        2. Check the overall verdict:
+
+        ### If ALL_LOW:
+        Note "Clean review — proceeding to generate suite."
+        Close this atom.
+
+        ### If NEEDS_REFINEMENT (has MEDIUM findings):
+        Update the obligations list or coverage audit per MEDIUM findings.
+        Note what changed. Close this atom.
+
+        ### If NEEDS_USER_INPUT (has HIGH findings):
+        Update notes: "## BLOCKED: User Input Required"
+        Leave this atom OPEN.
+
+      acceptance: "Verdict acted on."
+      depends_on: ["review-{ENTITY_NAME}"]
+      labels: ["atom:triage"]
+
+    # ── Atom 5: Generate Entity Test Suite ─────────────────────────
+    - id: "generate-suite-{ENTITY_NAME}"
+      title: "Generate test suite for {ENTITY_NAME}"
+      description: |
+        Create the canonical entity test suite at
+        `tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py` where
+        {ENTITY_NAME_UNDERSCORE} is {ENTITY_NAME} with hyphens replaced
+        by underscores.
+
+        ## Precondition
+
+        Read the bead notes. You need:
+        - The full obligations list with priorities
+        - The coverage audit with COVERED/PARTIAL/GAP/WRONG classifications
+        - Any review refinements
+
+        ## Test File Structure
+
+        ```python
+        """Entity test suite: {ENTITY_NAME}
+
+        Canonical test module for {ENTITY_NAME} domain behavior.
+        Maps to test-obligations files: [list source files].
+
+        Coverage: X/Y obligations implemented, Z stubs remaining.
+        """
+
+        import pytest
+
+        # ── Group 1: [Obligation group name, e.g., "Schema Compliance"] ──
+
+        class TestEntityNameSchemaCompliance:
+            \"\"\"[Group description]\"\"\"
+
+            def test_obligation_id_description(self):
+                \"\"\"[Obligation ID]: [Full description from obligations list].\"\"\"
+                # REAL TEST — ported from test_existing.py::test_name
+                ...
+
+            @pytest.mark.skip(reason="STUB: [Obligation ID] — [description]")
+            def test_obligation_id_description_stub(self):
+                \"\"\"[Obligation ID]: [Full description].
+
+                Priority: P1
+                Type: unit
+                Source: UC-001-S02
+                \"\"\"
+                pass
+
+        # ── Group 2: [Next group] ──
+        ...
+        ```
+
+        ## Instructions
+
+        1. **Convert entity name**: Replace hyphens with underscores for the
+           filename. "media-buy" → "test_media_buy.py"
+
+        2. **Group obligations** by logical category (schema compliance,
+           lifecycle, validation, error handling, etc.)
+
+        3. **For COVERED obligations**: Port the existing test into this file.
+           - Copy the test implementation (adapt imports if needed)
+           - Add a comment: `# Ported from test_old_file.py::test_name`
+           - Do NOT delete the original (it stays until subsumed)
+
+        4. **For PARTIAL obligations**: Port what exists, add a TODO comment
+           for the missing assertions.
+
+        5. **For GAP obligations**: Write a stub with @pytest.mark.skip:
+           - The skip reason must include the obligation ID
+           - The docstring must include: priority, type, source
+           - The test name must describe the BEHAVIOR, not a bug
+
+        6. **For WRONG obligations**: Write the CORRECT test as a stub
+           (skip reason: "STUB: replaces wrong assertion in test_old.py")
+
+        7. **Run the suite**:
+           ```bash
+           uv run pytest tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py -v
+           ```
+           - Real tests should PASS
+           - Stubs should show as SKIPPED (not failed)
+
+        8. **Count and document**:
+           ```bash
+           # Count implemented vs stubs
+           grep -c "def test_" tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           grep -c "@pytest.mark.skip" tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           ```
+
+        ## Quality Rules
+
+        - Every obligation maps to exactly one test (real or stub)
+        - Test names describe behavior: `test_create_media_buy_rejects_missing_brand`
+        - NOT: `test_bug_fix_123`, `test_v2_compat`, `test_regression`
+        - Classes group by concern, not by obligation file
+        - Stubs include enough context to implement without re-reading obligations
+
+      acceptance: "Entity test suite exists. All obligations mapped. Real tests pass. Stubs skip. No obligation left unmapped."
+      depends_on: ["triage-{ENTITY_NAME}"]
+      depends_on_prev_barrier: true
+      labels: ["atom:generate"]
+
+    # ── Atom 6: Verify ─────────────────────────────────────────────
+    - id: "verify-{ENTITY_NAME}"
+      title: "Verify {ENTITY_NAME} suite in quality gate"
+      description: |
+        Run the full quality gate to confirm the entity test suite integrates
+        cleanly.
+
+        ## Instructions
+
+        ```bash
+        make quality
+        ```
+
+        Verify:
+        - The new test file passes (real tests pass, stubs skip)
+        - No existing tests broken
+        - Linting/formatting clean
+
+      acceptance: "make quality passes including the new entity test suite."
+      depends_on: ["generate-suite-{ENTITY_NAME}"]
+      labels: ["atom:verify"]
+
+    # ── Atom 7: Commit ─────────────────────────────────────────────
+    - id: "commit-{ENTITY_NAME}"
+      title: "Commit {ENTITY_NAME} test suite"
+      description: |
+        Commit the entity test suite.
+
+        ## Instructions
+
+        1. Check what changed:
+           ```bash
+           git status
+           git diff --stat
+           ```
+
+        2. Stage the new test file:
+           ```bash
+           git add tests/unit/test_{ENTITY_NAME_UNDERSCORE}.py
+           ```
+           (Where {ENTITY_NAME_UNDERSCORE} is {ENTITY_NAME} with hyphens → underscores)
+
+        3. Commit:
+           ```bash
+           git commit -m "feat: add {ENTITY_NAME} entity test suite (obligations surface map)"
+           ```
+
+        4. Verify:
+           ```bash
+           git log -1 --oneline
+           ```
+
+      acceptance: "Git commit exists for {ENTITY_NAME} entity test suite."
+      depends_on: ["verify-{ENTITY_NAME}"]
+      labels: ["atom:commit"]
+
+finalize:
+  - id: surface-report
+    title: "Generate surface coverage report"
+    description: |
+      Generate a summary of the entity test surface across all {N} entities.
+
+      ## Instructions
+
+      1. Count coverage across all entity suites:
+         ```bash
+         for f in tests/unit/test_product.py tests/unit/test_media_buy.py \
+                  tests/unit/test_creative.py tests/unit/test_delivery.py \
+                  tests/unit/test_pricing_option.py; do
+           if [ -f "$f" ]; then
+             total=$(grep -c "def test_" "$f" 2>/dev/null || echo 0)
+             stubs=$(grep -c "@pytest.mark.skip" "$f" 2>/dev/null || echo 0)
+             real=$((total - stubs))
+             echo "$f: $real real / $stubs stubs / $total total"
+           fi
+         done
+         ```
+
+      2. Sync beads:
+         ```bash
+         bd sync --from-main
+         ```
+
+      3. Run full quality gate:
+         ```bash
+         make quality
+         ```
+
+    acceptance: "All {N} entity suites committed. Coverage summary generated. make quality passes."
+    depends_on_all_barriers: true
+    labels: ["atom:verify"]

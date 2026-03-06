@@ -68,7 +68,7 @@ def test_create_media_buy_request_with_axe_segments():
     from datetime import datetime
 
     request = CreateMediaBuyRequest(
-        brand_manifest="https://example.com/manifest.json",
+        brand={"domain": "example.com"},
         buyer_ref="buyer_test_001",
         start_time=datetime(2025, 1, 15, 0, 0, 0, tzinfo=UTC),
         end_time=datetime(2025, 2, 15, 23, 59, 59, tzinfo=UTC),

@@ -225,13 +225,14 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
     # Extract dimensions from FormatId parameters (AdCP 2.5 format templates)
     # This is the primary source of truth for parameterized formats
     format_id_obj = creative.format_id
-    if format_id_obj.width is not None:
-        asset["width"] = format_id_obj.width
-    if format_id_obj.height is not None:
-        asset["height"] = format_id_obj.height
-    if format_id_obj.duration_ms is not None:
-        # Convert to seconds for adapter compatibility
-        asset["duration"] = format_id_obj.duration_ms / 1000.0
+    if format_id_obj is not None:
+        if format_id_obj.width is not None:
+            asset["width"] = format_id_obj.width
+        if format_id_obj.height is not None:
+            asset["height"] = format_id_obj.height
+        if format_id_obj.duration_ms is not None:
+            # Convert to seconds for adapter compatibility
+            asset["duration"] = format_id_obj.duration_ms / 1000.0
 
     # Extract data from assets dict (AdCP v1 spec)
     assets_dict = creative.assets if isinstance(creative.assets, dict) else {}
@@ -519,7 +520,7 @@ def process_and_upload_package_creatives(
         - uploaded_ids_by_product: Mapping of product_id -> uploaded creative IDs
 
     Raises:
-        AdCPAdapterError: If creative upload fails for any package (CREATIVES_UPLOAD_FAILED)
+        ToolError: If creative upload fails for any package (CREATIVES_UPLOAD_FAILED)
 
     Example:
         >>> packages = [PackageRequest(product_id="p1", creatives=[creative1, creative2])]
@@ -585,6 +586,7 @@ def process_and_upload_package_creatives(
         except Exception as e:
             error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"
             logger.error(error_msg)
+            # Re-raise as ToolError for consistent error handling
             raise AdCPAdapterError(error_msg, details={"error_code": "CREATIVES_UPLOAD_FAILED"}) from e
 
     return updated_packages, uploaded_by_product

@@ -298,6 +298,7 @@ class TestAdapterAssetConversion:
         """Display creative gets width/height from format_id parameters."""
         creative = Creative(
             creative_id="cr_123",
+            variants=[],
             name="Test Banner",
             format_id=FormatId(
                 agent_url="https://creative.example.com",
@@ -323,6 +324,7 @@ class TestAdapterAssetConversion:
         """Video creative gets duration_ms from format_id parameters."""
         creative = Creative(
             creative_id="cr_456",
+            variants=[],
             name="Test Video",
             format_id=FormatId(
                 agent_url="https://creative.example.com",
@@ -349,6 +351,7 @@ class TestAdapterAssetConversion:
         """Template format without parameters doesn't add dimensions."""
         creative = Creative(
             creative_id="cr_789",
+            variants=[],
             name="Test Creative",
             format_id=FormatId(
                 agent_url="https://creative.example.com",
@@ -371,6 +374,7 @@ class TestAdapterAssetConversion:
         """Leaderboard (728x90) dimensions are extracted correctly."""
         creative = Creative(
             creative_id="cr_leaderboard",
+            variants=[],
             name="Leaderboard Ad",
             format_id=FormatId(
                 agent_url="https://creative.example.com",
@@ -493,14 +497,16 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
         assert fmt.get_primary_dimensions() is None
 
     def test_works_with_library_format_id(self):
-        """get_primary_dimensions works with adcp library FormatId (not just SchemasFormatId).
+        """get_primary_dimensions must work when format_id is library FormatId (not our subclass).
 
-        Regression test for PR #1079: the old code called format_id.get_dimensions()
-        which only exists on the custom FormatId subclass, not on adcp.types.FormatId.
+        Bug #1067: When formats come from the creative agent, they are deserialized
+        with the library's FormatId which lacks get_dimensions(). This caused a 500
+        error on the New Product page.
         """
+        # Use the library FormatId directly (as happens when deserializing from creative agent)
         fmt = Format(
             format_id=FormatId(
-                agent_url="https://creative.example.com",
+                agent_url="https://creative.adcontextprotocol.org",
                 id="display_static",
                 width=300,
                 height=250,
@@ -509,6 +515,18 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
             type="display",
         )
         assert fmt.get_primary_dimensions() == (300, 250)
+
+    def test_works_with_library_format_id_no_dimensions(self):
+        """get_primary_dimensions returns None with library FormatId that has no dimensions."""
+        fmt = Format(
+            format_id=FormatId(
+                agent_url="https://creative.adcontextprotocol.org",
+                id="video_hosted",
+            ),
+            name="Hosted Video",
+            type="video",
+        )
+        assert fmt.get_primary_dimensions() is None
 
     def test_falls_back_to_renders(self):
         """Falls back to renders when format_id has no dimensions."""

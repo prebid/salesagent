@@ -10,25 +10,22 @@ import time
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from adcp import BrandManifest, FormatId, ProductFilters
+from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
-from adcp.types import PushNotificationConfig
+from adcp.types import PropertyListReference, PushNotificationConfig
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
-from sqlalchemy import select
-
-# Imports for implementation
-from sqlalchemy.orm import joinedload
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import create_get_products_request
+from src.core.schema_helpers import create_get_products_request, to_brand_reference
 from src.core.schemas import (
     GetProductsResponse,
     Product,  # Extends library Product
@@ -116,6 +113,86 @@ def get_recommended_cpm(product: Product) -> float | None:
 from src.core.product_conversion import convert_product_model_to_schema
 
 
+def extract_product_property_ids(
+    publisher_properties: list,
+) -> set[str] | None:
+    """Extract property IDs from a product's publisher_properties list.
+
+    Args:
+        publisher_properties: List of PublisherPropertySelector objects.
+
+    Returns:
+        Set of property ID strings, or None if any selector is selection_type="all"
+        (meaning the product covers all properties). Returns empty set for empty input.
+    """
+    if not publisher_properties:
+        return set()
+
+    property_ids: set[str] = set()
+    for selector in publisher_properties:
+        inner = selector.root
+        if inner.selection_type == "all":
+            # Product covers ALL properties for this domain
+            return None
+        elif inner.selection_type == "by_id":
+            for pid in inner.property_ids:
+                property_ids.add(pid.root)
+        # by_tag: we don't resolve tags to IDs here; tags are excluded from matching
+
+    return property_ids
+
+
+def should_include_product_for_property_list(
+    product: Any,
+    allowed_properties: set[str],
+) -> bool:
+    """Determine if a product should be included based on property list filtering.
+
+    Args:
+        product: Product object with publisher_properties and property_targeting_allowed.
+        allowed_properties: Set of allowed property ID strings from the buyer's property list.
+
+    Returns:
+        True if the product should be included, False otherwise.
+    """
+    product_property_ids = extract_product_property_ids(product.publisher_properties)
+
+    # None means product has selection_type="all" — always include
+    if product_property_ids is None:
+        return True
+
+    # No property IDs on the product — exclude (can't determine overlap)
+    if not product_property_ids:
+        return False
+
+    intersection = product_property_ids & allowed_properties
+    if not intersection:
+        return False
+
+    if not product.property_targeting_allowed:
+        # Strict: ALL product properties must be in allowed set
+        return product_property_ids <= allowed_properties
+
+    # Permissive: any intersection is enough
+    return True
+
+
+def filter_products_by_property_list(
+    products: list,
+    allowed_properties: set[str],
+) -> list:
+    """Filter a list of products based on allowed property IDs.
+
+    Args:
+        products: List of product objects.
+        allowed_properties: Set of allowed property ID strings.
+
+    Returns:
+        Filtered list of products that match the property list criteria.
+    """
+    return [p for p in products if should_include_product_for_property_list(p, allowed_properties)]
+
+
 async def _get_products_impl(
     req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
 ) -> GetProductsResponse:
@@ -132,6 +209,10 @@ async def _get_products_impl(
         GetProductsResponse containing matching products
     """
     start_time = time.time()
+
+    # Require at least one search criterion (brief, brand, or filters)
+    if not req.brief and not req.brand and not req.filters:
+        raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
 
     # Extract identity fields
     if identity is None:
@@ -159,23 +240,14 @@ async def _get_products_impl(
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
-    # Unwrap BrandManifestReference (RootModel[BrandManifest | AnyUrl]) to inner value.
-    # After unwrapping, brand_manifest_unwrapped is BrandManifest, AnyUrl, or None.
-    brand_manifest_unwrapped: Any = None
-    if req.brand_manifest:
-        brand_manifest_unwrapped = req.brand_manifest.root
-
-    # Extract offering text from brand_manifest (BrandManifest | AnyUrl)
+    # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
+    # req.brand is BrandReference | None after Pydantic parsing.
+    # to_brand_reference handles both dict and model (defensive for mock callers).
     offering = None
-    if brand_manifest_unwrapped:
-        if isinstance(brand_manifest_unwrapped, BrandManifest):
-            if brand_manifest_unwrapped.name:
-                offering = brand_manifest_unwrapped.name
-            elif brand_manifest_unwrapped.url:
-                offering = f"Brand at {brand_manifest_unwrapped.url}"
-        else:
-            # AnyUrl — use the URL string
-            offering = f"Brand at {brand_manifest_unwrapped}"
+    brand_ref = to_brand_reference(req.brand) if req.brand else None
+    if brand_ref:
+        if brand_ref.domain:
+            offering = f"Brand at {brand_ref.domain}"
 
     # Check brand_manifest_policy from tenant settings
     brand_manifest_policy = tenant.get("brand_manifest_policy", "require_auth")
@@ -232,8 +304,8 @@ async def _get_products_impl(
             try:
                 policy_result = await policy_service.check_brief_compliance(
                     brief=brief_text,
-                    promoted_offering=offering,  # Use extracted offering from brand_manifest
-                    brand_manifest=brand_manifest_unwrapped,
+                    promoted_offering=offering,  # Use extracted offering from brand
+                    brand_manifest=None,  # adcp 3.6.0: brand_manifest replaced by brand; policy service still accepts None
                     tenant_policies=tenant_policies if tenant_policies else None,
                 )
 
@@ -280,6 +352,7 @@ async def _get_products_impl(
     if policy_result and policy_result.status == PolicyStatus.BLOCKED:
         # Always block if policy says blocked
         logger.warning(f"Brief blocked by policy: {policy_result.reason}")
+        # Raise ToolError to properly signal failure to client
         raise AdCPAuthorizationError(
             policy_result.reason or "Blocked by policy", details={"error_code": "POLICY_VIOLATION"}
         )
@@ -319,19 +392,12 @@ async def _get_products_impl(
             details={"error_code": "POLICY_VIOLATION"},
         )
 
-    # Query products directly from database
-    # This replaces the product_catalog_providers abstraction with simple direct access
-    from src.core.database.models import Product as ProductModel
+    # Query products via ProductRepository (tenant-scoped, eager-loaded)
+    from src.core.database.repositories.product import ProductRepository
 
     with get_db_session() as db_session:
-        stmt = (
-            select(ProductModel)
-            .options(joinedload(ProductModel.pricing_options), joinedload(ProductModel.tenant))
-            .filter_by(tenant_id=tenant["tenant_id"])
-            .order_by(ProductModel.product_id)
-        )
-        result = db_session.execute(stmt).unique()
-        db_products = list(result.scalars().all())
+        product_repo = ProductRepository(db_session, tenant["tenant_id"])
+        db_products = product_repo.get_all_for_tenant()
 
         # Convert database Product models to AdCP Product schema
         products = []
@@ -383,6 +449,28 @@ async def _get_products_impl(
                 logger.debug(f"Product {product.product_id} hidden from anonymous user (has access restrictions)")
         products = filtered_by_access
         logger.info(f"[GET_PRODUCTS] After anonymous access filtering: {len(products)} products")
+
+    # Filter products by buyer property list (if provided)
+    # Use isinstance check to safely handle mock objects in tests
+    _property_list_ref = getattr(req, "property_list", None)
+    if isinstance(_property_list_ref, PropertyListReference):
+        try:
+            from src.core.property_list_resolver import resolve_property_list
+
+            allowed_property_ids = await resolve_property_list(_property_list_ref)
+            allowed_set = set(allowed_property_ids)
+            products = filter_products_by_property_list(products, allowed_set)
+            logger.info(
+                f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
+                f"(allowed {len(allowed_set)} properties)"
+            )
+        except Exception as e:
+            from src.core.exceptions import AdCPAdapterError
+
+            if isinstance(e, AdCPAdapterError):
+                raise
+            logger.error(f"Property list resolution failed: {e}")
+            raise AdCPValidationError(f"Failed to resolve property list: {e}") from e
 
     # Generate dynamic product variants from signals agents
     try:
@@ -545,7 +633,7 @@ async def _get_products_impl(
                 # Check if product has channels field
                 product_channels: set[str] = set()
                 if product.channels:
-                    product_channels = {c.lower() for c in product.channels}
+                    product_channels = {c.value.lower() for c in product.channels}
 
                 # Extract channel values from filter (enum values)
                 request_channels: set[str] = set()
@@ -735,7 +823,7 @@ async def _get_products_impl(
             "product_count": len(eligible_products),
             "brief_length": len(brief_text),
             "has_filters": req.filters is not None,
-            "has_brand_manifest": brand_manifest_unwrapped is not None,
+            "has_brand": req.brand is not None,
             "elapsed_ms": elapsed_ms,
         },
     )
@@ -744,23 +832,25 @@ async def _get_products_impl(
 
 
 async def get_products(
-    brand_manifest: BrandManifest | None = None,
+    brand: BrandReference | None = None,
     brief: str = "",
     adcp_version: str = "1.0.0",
     filters: ProductFilters | None = None,
+    property_list: dict | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
 ):
     """Get available products matching the brief.
 
-    MCP tool wrapper aligned with adcp v1.2.1 spec.
+    MCP tool wrapper aligned with adcp v3.6.0 spec.
 
     Args:
-        brand_manifest: Brand information following AdCP BrandManifest schema
+        brand: Brand reference per adcp 3.6.0. Example: BrandReference(domain="acme.com")
         brief: Brief description of the advertising campaign or requirements (optional)
         adcp_version: Client's AdCP version (default: 1.0.0). V3+ clients get clean responses.
         filters: Structured filters for product discovery (optional)
+        property_list: Property list reference for filtering by buyer's property list (optional)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
         push_notification_config: Optional webhook configuration (accepted, ignored by this operation)
@@ -772,14 +862,16 @@ async def get_products(
     try:
         req = create_get_products_request(
             brief=brief,
-            brand_manifest=brand_manifest,
+            brand=brand,
             filters=filters,
+            property_list=property_list,
             context=context,
         )
 
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
     except ValueError as e:
+        # Convert ValueError from helper to ToolError with clear message
         raise AdCPValidationError(f"Invalid get_products request: {e}") from e
 
     # Read identity pre-resolved by MCPAuthMiddleware
@@ -800,9 +892,10 @@ async def get_products(
 
 async def get_products_raw(
     brief: str,
-    brand_manifest: dict[str, Any] | None = None,
+    brand: dict[str, Any] | BrandReference | None = None,
     min_exposures: int | None = None,
     filters: dict | None = None,
+    property_list: dict | None = None,
     strategy_id: str | None = None,
     context: dict | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
@@ -816,10 +909,11 @@ async def get_products_raw(
 
     Args:
         brief: Brief description of the advertising campaign or requirements
-        brand_manifest: Brand information as dict following AdCP BrandManifest schema.
-                       Example: {"name": "Acme", "url": "https://acme.com"}
+        brand: Brand reference per adcp 3.6.0 (BrandReference or dict with domain).
+               Dict is accepted since A2A passes JSON-deserialized dicts.
         min_exposures: Minimum impressions needed for measurement validity (optional)
         filters: Structured filters for product discovery (optional)
+        property_list: Property list reference for filtering by buyer's property list (optional)
         strategy_id: Optional strategy ID for linking operations (optional)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
@@ -837,8 +931,9 @@ async def get_products_raw(
     # Create request object - adcp library validates schema
     req = create_get_products_request(
         brief=brief or "",
-        brand_manifest=brand_manifest,
+        brand=brand,
         filters=filters,
+        property_list=property_list,
         context=context,
     )
 
@@ -855,10 +950,7 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
     Returns:
         List of Product objects with full pricing options
     """
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-
-    from src.core.database.models import Product as ModelProduct
+    from src.core.database.repositories.product import ProductRepository
 
     if tenant_id is None:
         from src.core.config_loader import get_current_tenant
@@ -866,20 +958,12 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
         tenant_id = get_current_tenant()["tenant_id"]
 
     with get_db_session() as session:
-        stmt = (
-            select(ModelProduct)
-            .filter_by(tenant_id=tenant_id)
-            .options(
-                selectinload(ModelProduct.pricing_options),
-                selectinload(ModelProduct.inventory_profile),  # Avoid N+1 query
-                selectinload(ModelProduct.tenant),  # For publisher_domain resolution
-            )
-        )
-        products = session.scalars(stmt).all()
+        product_repo = ProductRepository(session, tenant_id)
+        db_products = product_repo.get_all_for_tenant()
 
         # Use convert_product_model_to_schema for consistency
         loaded_products = []
-        for product in products:
+        for product in db_products:
             loaded_products.append(convert_product_model_to_schema(product))
 
     return loaded_products

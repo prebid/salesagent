@@ -37,14 +37,23 @@ def _create_mock_format(format_id_str: str, name: str, format_type: FormatType, 
     """Create a single mock format with proper typing for testing."""
     from adcp.types.generated_poc.core.format import Assets5
 
-    assets: list[Assets | Assets5] = [
-        Assets(
+    # adcp 3.6.0: Assets classes are type-discriminated with Literal asset_type fields.
+    # Assets = image, Assets5 = video. Pass asset_type as plain string (not enum).
+    if asset_type == "video":
+        asset_item: Assets | Assets5 = Assets5(
             item_type="individual",
             asset_id="primary",
-            asset_type=AssetType(asset_type),
+            asset_type="video",
             required=True,
         )
-    ]
+    else:
+        asset_item = Assets(
+            item_type="individual",
+            asset_id="primary",
+            asset_type="image",
+            required=True,
+        )
+    assets: list[Assets | Assets5] = [asset_item]
     # Use Format (our extended class) instead of AdcpFormat to include is_standard field
     # Explicitly pass None for optional internal fields to satisfy mypy
     return Format(

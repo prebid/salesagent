@@ -13,6 +13,64 @@ variables:
 labels:
   - "mol:task-execute"
 
+# ── Setup (runs once before any task iteration) ──────────────────
+setup:
+  - id: "baseline"
+    title: "Establish baseline — zero failures"
+    description: |
+      Run the full quality suite BEFORE any code changes. This establishes the
+      clean slate. Every failure after this point belongs to you.
+
+      ## Instructions
+
+      1. **Run quality gate**:
+         ```bash
+         make quality 2>&1 | tail -5
+         ```
+         Record the exact pass count (e.g., "2973 passed").
+
+      2. **Start agent DB for integration tests**:
+         ```bash
+         eval $(.claude/skills/agent-db/agent-db.sh up)
+         ```
+
+      3. **Run integration tests**:
+         ```bash
+         scripts/run-test.sh tests/integration/ -x -q 2>&1 | tail -5
+         ```
+         Record the exact pass count.
+
+      4. **Run integration_v2 tests**:
+         ```bash
+         scripts/run-test.sh tests/integration_v2/ -x -q 2>&1 | tail -5
+         ```
+         Record the exact pass count.
+
+      ## Gate — HARD STOP on any failure
+
+      If ANY test fails in the baseline:
+      - Do NOT proceed to the next atom.
+      - Do NOT classify failures as "pre-existing" or "from another agent."
+      - Report the exact failures and leave this atom OPEN.
+
+      You are in an isolated worktree. If the baseline fails, your environment
+      setup is wrong (missing `uv sync`, wrong DB, stale cache). Fix it or stop.
+
+      ## Record Baseline
+
+      Write the counts to the epic so the finalize atom can compare:
+
+      ```bash
+      bd update {EPIC_ID} --append-notes "## Baseline (pre-change)
+      - make quality: [N] passed, 0 failed
+      - integration: [N] passed, 0 failed
+      - integration_v2: [N] passed, 0 failed
+      - Total: [sum] passed, 0 failed"
+      ```
+
+    acceptance: "All three gates pass with zero failures. Exact counts recorded in epic notes."
+    labels: ["atom:baseline"]
+
 iterate:
   over: "TASK_IDS"
   item_var: "TASK_ID"
@@ -112,6 +170,7 @@ iterate:
         Do NOT close this atom if blocked — leave it open.
 
       acceptance: "Task has research:complete label. Notes contain Findings + Relevant Code sections. Design contains Core Invariant + Implementation Plan."
+      depends_on: ["baseline"]
       labels: ["atom:research"]
 
     # ── Atom 2: Architect Review ──────────────────────────────────
@@ -244,9 +303,36 @@ iterate:
            the key behavior that this task adds or changes. What should be true
            after implementation that isn't true now?
 
-        2. **Choose test location**:
-           - Unit test: `tests/unit/test_<area>.py` (most common)
-           - Integration test: `tests/integration/test_<area>.py` (if DB-dependent)
+        2. **Choose test level — default to integration**:
+
+           **The default test level is integration** (`tests/integration/`). A test
+           that runs against a real PostgreSQL database with real ORM models catches
+           bugs that mocked unit tests miss entirely.
+
+           Only use unit tests (`tests/unit/`) when ALL of these are true:
+           - The function is pure computation (no DB, no I/O, no side effects)
+           - The logic being tested is complex enough to warrant a focused test
+           - Mocking the DB would make the test meaningless (e.g., the bug IS in
+             how data flows through the DB layer)
+
+           If in doubt, write an integration test.
+
+           **Entity-suite-aware placement** (within your chosen level):
+           - **First, check for an entity test suite**:
+             ```bash
+             ls tests/unit/test_product.py tests/unit/test_media_buy.py \
+                tests/unit/test_creative.py tests/unit/test_delivery.py \
+                tests/unit/test_pricing_option.py tests/unit/test_properties.py \
+                tests/unit/test_creative_formats.py tests/unit/test_capabilities.py \
+                tests/unit/test_performance.py tests/unit/test_audience_signals.py \
+                2>/dev/null
+             ```
+           - If the affected entity has a suite, add your test THERE as a
+             new method in the appropriate test class.
+           - If no entity suite exists, note in the task:
+             "No entity test suite for {entity}. Consider running /surface {entity}."
+           - **Fallback**: `tests/unit/test_<area>.py` (existing file) or
+             `tests/integration/test_<area>.py` (if DB-dependent)
            - Follow existing test file organization
 
         3. **Write the failing test**:
@@ -254,17 +340,61 @@ iterate:
            - One test per distinct behavior change
            - Use descriptive test names: `test_<what>_<when>_<expected>`
            - Follow existing test patterns in the same file
+           - **Transport Parity Invariant**: Every behavioral test MUST verify
+             identical behavior across all three transports (MCP, A2A, REST).
+             Use `@pytest.mark.parametrize("transport", ["mcp", "a2a", "rest"])`
+             or explicitly test the same scenario through all 3 entry points.
+             If behavior differs between transports, the bug is in the wrapper.
+             See `docs/development/architecture.md` "Transport Parity Invariant".
+           - **Use factories for test data** (CLAUDE.md Pattern #8):
+             - Import from `tests.helpers.adcp_factories` — never inline-construct
+               ORM models or Pydantic schemas with manual field plucking
+             - Available: `create_test_db_product`, `create_test_package_request`,
+               `create_test_creative_asset`, `create_test_brand_manifest`,
+               `create_test_media_buy_request_dict`, etc.
+             - See `tests/helpers/adcp_factories.py` for full list
+             - For DB fixtures: use conftest.py fixtures, never inline `session.add()`
 
-        4. **Run and confirm it fails for the RIGHT reason**:
+        4. **Factory check**: Verify your test uses factories:
            ```bash
-           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           uv run python .pre-commit-hooks/check_test_factories.py tests/<level>/test_<area>.py
+           ```
+           If this reports suggestions for your NEW code, refactor to use factories.
+
+        5. **Run and confirm it fails for the RIGHT reason**:
+           ```bash
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v
            ```
            - ImportError or NameError = wrong reason (test has a bug)
            - AssertionError with clear message = right reason (behavior doesn't exist yet)
            - If the test already passes: the behavior already exists. Document this
              and consider whether additional edge case tests are needed.
 
-        5. **For refactors/rewrites** (behavior should NOT change):
+        ## BANNED Patterns
+
+        - **`pytest.mark.xfail` is BANNED.** xfail suppresses failure — the test
+          suite stays green. A regression test must produce a HARD FAILURE: pytest
+          exit code 1, "FAILED" in the output. xfail is NOT failing.
+
+        - **AST-scanning / source-code pattern tests are BANNED.** Regression tests
+          must call the actual function (`_impl`, factory, schema constructor) and
+          assert behavioral output. If the bug were re-introduced through a
+          different code construct, the test must still catch it. Tests that use
+          `ast.parse`, `grep`, or regex on source files are structural guards
+          (use /guard for those), NOT regression tests.
+
+        ## Verification: Paste the FAILED Output
+
+        After running the test, paste the LAST 5 LINES of pytest output into
+        the bead notes. You MUST see the word "FAILED" and a non-zero exit.
+        If you see "passed", "xfailed", or "xpassed", your test is wrong.
+
+        ```bash
+        scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v 2>&1 | tail -5
+        # You MUST see "FAILED" — if you see "passed", rewrite the test
+        ```
+
+        6. **For refactors/rewrites** (behavior should NOT change):
            - Verify existing tests pass BEFORE your changes:
              ```bash
              uv run pytest tests/unit/test_<area>.py -x -v
@@ -322,7 +452,7 @@ iterate:
 
         1. **Verify the regression test still fails** (from the write-test atom):
            ```bash
-           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v
            ```
            If the test now passes (e.g., someone else implemented it), note this
            and close the atom.
@@ -339,11 +469,13 @@ iterate:
            - Follow existing codebase conventions found in research
            - Don't add extras not covered by tests
 
-        2. **Verify**:
+        2. **Verify (red → green)**:
+           Run the SAME test that FAILED in the write-test atom:
            ```bash
-           uv run pytest tests/unit/test_<area>.py::test_<name> -x -v
+           scripts/run-test.sh tests/<level>/test_<area>.py::test_<name> -x -v 2>&1 | tail -5
+           # You MUST see "passed" — if you see "FAILED", your fix didn't work
            ```
-           The previously failing test must now pass.
+           If the test still fails, do NOT mark it xfail and move on. Fix the code.
 
         3. **Refactor**: With passing tests as safety net
            - Remove duplication, improve naming, simplify logic
@@ -450,6 +582,53 @@ iterate:
 
 # ── Finalize (after all tasks) ────────────────────────────────────
 finalize:
+  - id: verify-no-regression
+    title: "Verify zero regressions vs baseline"
+    description: |
+      Compare final test results against the baseline recorded in the setup atom.
+      This is the clean slate verification — you must return what you received.
+
+      ## Instructions
+
+      1. **Read the baseline** from the epic:
+         ```bash
+         bd show {EPIC_ID}
+         ```
+         Find the "## Baseline (pre-change)" section. Note the exact counts.
+
+      2. **Run the full test suite** (MANDATORY — this is the only correct way):
+         ```bash
+         ./run_all_tests.sh
+         ```
+         This starts Docker, runs all 5 suites (unit, integration, integration_v2,
+         e2e, ui) via tox, and tears down. Do NOT substitute with individual pytest
+         commands — `./run_all_tests.sh` is the single source of truth.
+
+      3. **Compare counts**:
+         - Passes must be >= baseline (new tests are expected)
+         - Failures must be exactly 0
+         - Any new failure means YOUR changes broke something — fix it
+
+      4. **Record final results**:
+         ```bash
+         bd update {EPIC_ID} --append-notes "## Final (post-change)
+         - make quality: [N] passed, 0 failed (baseline: [N])
+         - integration: [N] passed, 0 failed (baseline: [N])
+         - integration_v2: [N] passed, 0 failed (baseline: [N])
+         - Delta: +[N] new tests, 0 regressions"
+         ```
+
+      ## HARD STOP
+
+      If ANY gate has failures that were not in the baseline:
+      - Do NOT close this atom.
+      - Do NOT commit.
+      - Fix the regressions first, then re-run this atom.
+
+    acceptance: "All three gates pass. Zero regressions vs baseline. Final counts recorded in epic notes."
+    depends_on_all_barriers: true
+    labels: ["atom:verify-regression"]
+
   - id: sync-and-verify
     title: "Sync beads and verify clean state"
     description: |
@@ -474,11 +653,6 @@ finalize:
          git log --oneline -20
          ```
 
-      4. Final quality check:
-         ```bash
-         make quality
-         ```
-
-    acceptance: "All {N} tasks closed. bd sync done. make quality passes. git clean."
-    depends_on_all_barriers: true
+    acceptance: "All {N} tasks closed. bd sync done. git clean."
+    depends_on: ["verify-no-regression"]
     labels: ["atom:verify"]

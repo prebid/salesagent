@@ -7,7 +7,7 @@ Supports variable substitution with fallback syntax:
 - {campaign_name|brand_name} - Use campaign_name, fall back to brand_name
 - {date_range} - Formatted date range (e.g., "Oct 7-14, 2025")
 - {month_year} - Month and year (e.g., "Oct 2025")
-- {brand_name} - Brand from brand_manifest
+- {brand_name} - Brand from brand reference
 - {buyer_ref} - Buyer's reference ID
 - {auto_name} - AI-generated name from full context (requires AI configuration)
 - {product_name} - Product name (for line items)
@@ -46,17 +46,15 @@ def format_month_year(start_time: datetime) -> str:
 
 
 def _extract_brand_name(request) -> str | None:
-    """Extract brand name from request's brand_manifest."""
-    if not hasattr(request, "brand_manifest") or not request.brand_manifest:
+    """Extract brand name from request's brand (BrandReference)."""
+    if not hasattr(request, "brand") or not request.brand:
         return None
 
-    manifest = request.brand_manifest
-    if isinstance(manifest, str):
-        return manifest
-    elif hasattr(manifest, "name"):
-        return manifest.name
-    elif isinstance(manifest, dict):
-        return manifest.get("name")
+    brand = request.brand
+    if hasattr(brand, "domain"):
+        return brand.domain
+    elif isinstance(brand, dict):
+        return brand.get("domain")
     return None
 
 
@@ -135,12 +133,8 @@ def generate_auto_name(
                         break
             budget_info = f"${budget_amount:,.2f} {currency}"
 
-        # Extract objectives from brand_manifest
+        # BrandReference has no campaign_objectives; pass None
         objectives = None
-        if hasattr(request, "brand_manifest") and request.brand_manifest:
-            manifest = request.brand_manifest
-            if hasattr(manifest, "campaign_objectives") and manifest.campaign_objectives:
-                objectives = manifest.campaign_objectives
 
         # Run async agent — handle both sync and async calling contexts
         from src.core.validation_helpers import run_async_in_sync_context
@@ -258,7 +252,7 @@ def build_order_name_context(
         tenant_gemini_key=tenant_gemini_key,
     )
 
-    # Extract brand name from brand_manifest
+    # Extract brand name from brand (BrandReference)
     brand_name = _extract_brand_name(request)
 
     # campaign_name is no longer on CreateMediaBuyRequest per AdCP spec

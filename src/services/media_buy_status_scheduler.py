@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.repositories import MediaBuyRepository
 
 logger = logging.getLogger(__name__)
 
@@ -80,11 +81,12 @@ class MediaBuyStatusScheduler:
 
         try:
             with get_db_session() as session:
-                # Find media buys that need status updates
+                # Find media buys that need status updates (cross-tenant scheduler query)
                 # 1. pending_activation or scheduled -> should become active if start_time passed
                 # 2. active -> should become completed if end_time passed
-                stmt = select(MediaBuy).where(MediaBuy.status.in_(["pending_activation", "scheduled", "active"]))
-                media_buys = session.scalars(stmt).all()
+                media_buys = MediaBuyRepository.get_all_by_statuses(
+                    session, ["pending_activation", "scheduled", "active"]
+                )
 
                 for media_buy in media_buys:
                     new_status = self._compute_new_status(media_buy, now, session)

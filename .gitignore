@@ -135,4 +135,7 @@ test-results/
 .claude/research/
 .claude/settings.local.json
 .claude/agent-memory/
+.claude/agents/review-*.md
+.claude/commands/code-review.md
+.claude/skills/code-review/
 .perles/

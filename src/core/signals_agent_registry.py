@@ -34,6 +34,7 @@ from typing import Any
 from adcp import ADCPMultiAgentClient, AgentConfig, GetSignalsRequest, PlatformDestination, Protocol
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import DeliverTo
+from adcp.types.generated_poc.signals.get_signals_request import GetSignalsRequest1
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,7 @@ class SignalsAgentRegistry:
             # Per AdCP spec v2.9.0, deliver_to requires countries and deployments arrays
             # deployments requires at least 1 item - use a generic "all platforms" deployment
             deliver_to = DeliverTo(
-                countries=[],  # Empty = all countries
+                countries=["US"],  # Default to US; empty list is not allowed per adcp 3.6.0 MinLen(1)
                 deployments=[
                     PlatformDestination(
                         type="platform",  # Generic platform destination
@@ -196,10 +197,12 @@ class SignalsAgentRegistry:
                 ],
             )
 
-            # Create typed request (AdCP v2.2.0 format)
+            # Create typed request (adcp 3.6.0: GetSignalsRequest is RootModel[...], wrap inner)
             request = GetSignalsRequest(
-                signal_spec=signal_spec,
-                deliver_to=deliver_to,
+                root=GetSignalsRequest1(
+                    signal_spec=signal_spec,
+                    deliver_to=deliver_to,
+                )
             )
 
             logger.info(f"[TIMING] Calling agent {agent.name} for tenant {tenant_id}, brief: {brief[:50]}...")

@@ -166,7 +166,6 @@ class TestCrossPrincipalSecurity:
         with pytest.raises(PermissionError, match="does not own media buy"):
             req = UpdateMediaBuyRequest(
                 media_buy_id="media_buy_a",  # Owned by Principal A!
-                buyer_ref="hacked_by_b",
             )
             _update_media_buy_impl(req=req, identity=identity_b)
 

@@ -266,8 +266,10 @@ def _list_creative_formats_impl(
 
     # Filter by asset_types - formats must support at least one of the requested types
     if req.asset_types:
-        # Normalize requested asset types to string values for comparison
-        requested_types = {str(at) for at in req.asset_types}
+        # Normalize requested asset types to string values for comparison.
+        # adcp 3.6.0: req.asset_types contains AssetContentType enums; use .value to get string.
+        # Format assets now use plain string literals, so must compare using .value not str(enum).
+        requested_types = {at.value if hasattr(at, "value") else str(at) for at in req.asset_types}
         formats = [f for f in formats if get_format_asset_types(f) & requested_types]
 
     # Filter by dimension constraints
@@ -284,7 +286,7 @@ def _list_creative_formats_impl(
 
     # Sort formats by type and name for consistent ordering
     # Use .value to convert enum to string for sorting (enums don't support < comparison)
-    formats.sort(key=lambda f: (f.type.value, f.name))
+    formats.sort(key=lambda f: (f.type.value if f.type is not None else "", f.name))
 
     # Ensure backward compatibility: populate both assets and assets_required
     # This allows old clients (using assets_required) and new clients (using assets) to work
@@ -302,7 +304,7 @@ def _list_creative_formats_impl(
             "format_count": len(formats),
             "standard_formats": len([f for f in formats if f.is_standard]),
             "custom_formats": len([f for f in formats if not f.is_standard]),
-            "format_types": list({f.type.value for f in formats}),
+            "format_types": list({f.type.value for f in formats if f.type is not None}),
         },
     )
 

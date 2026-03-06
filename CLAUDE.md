@@ -46,6 +46,25 @@ PR titles should use one of these prefixes:
 
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
+### Structural Guards (Automated Architecture Enforcement)
+Seven AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+
+| Guard | Enforces | Test File |
+|-------|----------|-----------|
+| No ToolError in _impl | `_impl` raises AdCPError, never ToolError | `test_no_toolerror_in_impl.py` |
+| Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
+| ResolvedIdentity in _impl | `_impl` accepts ResolvedIdentity, not Context | `test_impl_resolved_identity.py` |
+| Schema inheritance | Schemas extend adcp library base types | `test_architecture_schema_inheritance.py` |
+| Boundary completeness | MCP/A2A wrappers pass all _impl parameters | `test_architecture_boundary_completeness.py` |
+| Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
+| No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
+| Repository pattern | No `get_db_session()` in `_impl`; no inline `session.add()` in tests | `test_architecture_repository_pattern.py` |
+
+**Rules for guards:**
+- Allowlists can only shrink — never add new violations, fix them instead
+- Every allowlisted violation has a `# FIXME(salesagent-xxxx)` comment at the source location
+- When you fix a violation, remove it from the allowlist (the stale-entry test will remind you)
+
 ---
 
 ## 🚨 Critical Architecture Patterns
@@ -54,7 +73,7 @@ PR titles should use one of these prefixes:
 **MANDATORY**: Use `adcp` library schemas via inheritance, never duplicate.
 
 ```python
-from adcp.types import Product as LibraryProduct
+from adcp.types import Product as LibraryProduct  # Library* alias convention
 
 class Product(LibraryProduct):
     """Extends library Product with internal-only fields."""
@@ -62,10 +81,12 @@ class Product(LibraryProduct):
 ```
 
 **Rules:**
-- Extend library schemas for domain objects needing internal fields
-- Mark internal fields with `exclude=True`
+- Import library types with `Library*` alias: `from adcp.types import X as LibraryX`
+- Extend with inheritance — don't copy fields from the parent class
+- Only redeclare parent fields when needed for nested serialization (Pattern #4)
+- Mark internal-only fields with `exclude=True`
 - Run `pytest tests/unit/test_adcp_contract.py` before commit
-- Never bypass `--no-verify` without manual schema validation
+- **Enforced by:** `test_architecture_schema_inheritance.py`
 
 ### 2. Flask: Prevent Route Conflicts
 **Pre-commit hook detects duplicate routes** - Run manually: `uv run python .pre-commit-hooks/check_route_conflicts.py`
@@ -74,12 +95,54 @@ When adding routes:
 - Search existing: `grep -r "@.*route.*your/path"`
 - Deprecate properly with early return, not comments
 
-### 3. Database: PostgreSQL Only
+### 3. Database: Repository Pattern + ORM-First
 **No SQLite support** - Production uses PostgreSQL exclusively.
 
+**ORM-first access (MANDATORY):**
+- All DB reads and writes go through SQLAlchemy ORM models via repository classes
+- Never construct ORM models with raw kwargs scattered in `_impl` functions — use model factory methods or repository `create_from_*()` methods
+- Never pass `json.dumps()` to `JSONType` columns — the column type handles serialization
+- Use SQLAlchemy relationships and cascading — they exist to manage parent/child persistence atomically
 - Use `JSONType` for all JSON columns (not plain `JSON`)
 - Use SQLAlchemy 2.0 patterns: `select()` + `scalars()`, not `query()`
+- Cast IDs at the boundary: JSON gives you strings, but Integer PK columns need `int` values. Write `int(x)` before passing to `.in_()` or `filter_by()`
 - All tests require PostgreSQL: `./run_all_tests.sh` runs Docker + tox (JSON reports in `test-results/`)
+- **Exception:** Bulk imports and complex reporting queries may use Core SQL/raw SQL for performance. Regular CRUD operations are never an exception.
+- **Enforced by:** `test_architecture_query_type_safety.py`, `test_architecture_repository_pattern.py`
+
+**Repository pattern:**
+```python
+# CORRECT: repository encapsulates data access
+class MediaBuyRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def get_by_id(self, media_buy_id: str, tenant_id: str) -> MediaBuy | None:
+        return self.session.scalars(
+            select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant_id)
+        ).first()
+
+    def create_from_request(self, req: CreateMediaBuyRequest, identity: ResolvedIdentity) -> MediaBuy:
+        media_buy = MediaBuy.from_request(req, identity)
+        self.session.add(media_buy)
+        return media_buy
+```
+
+```python
+# WRONG: inline session management and raw model construction in business logic
+def _create_media_buy_impl(req, identity):
+    with get_db_session() as session:
+        mb = MediaBuy(
+            media_buy_id=generate_id(),
+            buyer_ref=req.buyer_ref,      # manual field plucking
+            tenant_id=tenant["tenant_id"], # from a dict, not even a model
+            status="pending_approval",     # magic string
+            ...
+        )
+        session.add(mb)
+```
+
+**`_impl` functions should not contain `get_db_session()` calls.** Data access belongs in the repository layer. `_impl` functions receive repositories (or use them via dependency injection) and call typed methods.
 
 ### 4. Pydantic: Explicit Nested Serialization
 Parent models must override `model_dump()` to serialize nested children:
@@ -97,24 +160,46 @@ class GetCreativesResponse(AdCPBaseModel):
 
 **Why**: Pydantic doesn't auto-call custom `model_dump()` on nested models.
 
-### 5. MCP/A2A: Shared Implementations
-All tools use shared `_tool_name_impl()` function called by both MCP and A2A paths.
+### 5. Transport Boundary: Layer Separation
+All tools have two layers: **transport wrappers** (MCP, A2A, REST) and **business logic** (`_impl` functions). The layers have strict responsibilities.
 
+**`_impl` functions** (business logic layer):
 ```python
-# main.py
-def _create_media_buy_impl(...) -> CreateMediaBuyResponse:
-    # Real implementation
-    return response
-
-@mcp.tool()
-def create_media_buy(...) -> CreateMediaBuyResponse:
-    return _create_media_buy_impl(...)
-
-# tools.py
-def create_media_buy_raw(...) -> CreateMediaBuyResponse:
-    from src.core.main import _create_media_buy_impl
-    return _create_media_buy_impl(...)
+async def _create_media_buy_impl(
+    req: CreateMediaBuyRequest,
+    push_notification_config: dict | None = None,
+    identity: ResolvedIdentity | None = None,    # NOT Context/ToolContext
+) -> CreateMediaBuyResult:
+    # Business logic only — no transport awareness
+    ...
 ```
+
+**Transport wrappers** (boundary layer):
+```python
+# MCP wrapper — resolves identity, forwards ALL params to _impl
+@mcp.tool()
+async def create_media_buy(ctx: Context, ...) -> CreateMediaBuyResponse:
+    identity = resolve_identity(ctx.http.headers, protocol="mcp")
+    return await _create_media_buy_impl(req=req, identity=identity, ...)
+
+# A2A wrapper — same contract, different transport
+async def create_media_buy_raw(...) -> CreateMediaBuyResponse:
+    identity = resolve_identity(headers, protocol="a2a")
+    return await _create_media_buy_impl(req=req, identity=identity, ...)
+```
+
+**Rules for `_impl` functions:**
+- Accept `ResolvedIdentity`, never `Context`, `ToolContext`, or raw headers
+- Raise `AdCPError` subclasses, never `ToolError` (that's transport-specific)
+- Zero imports from `fastmcp`, `a2a`, `starlette`, or `fastapi`
+- No auth extraction or tenant resolution — that's the wrapper's job
+
+**Rules for transport wrappers:**
+- Call `resolve_identity()` to create `ResolvedIdentity` before calling `_impl`
+- Forward **every** `_impl` parameter — don't silently drop any
+- Catch `AdCPError` and translate to transport-appropriate error format
+
+**Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
 
 ### 6. JavaScript: Use request.script_root
 **All JS must support reverse proxy deployments:**
@@ -130,6 +215,43 @@ Never hardcode `/api/endpoint` - breaks with nginx prefix.
 ### 7. Schema Validation: Environment-Based
 - **Production**: `ENVIRONMENT=production` → `extra="ignore"` (forward compatible)
 - **Development/CI**: Default → `extra="forbid"` (strict validation)
+
+### 8. Test Fixtures: Factory-Based, Not Inline
+**MANDATORY for new integration tests:** Use `polyfactory` factories for test data, not inline `session.add()` boilerplate.
+
+```python
+# CORRECT: factory creates ORM instance with sane defaults
+from tests.factories import TenantFactory, MediaBuyFactory
+
+@pytest.fixture
+def sample_tenant(integration_db):
+    return TenantFactory.create_sync()
+
+@pytest.fixture
+def sample_media_buy(sample_tenant, sample_principal):
+    return MediaBuyFactory.create_sync(
+        tenant_id=sample_tenant.tenant_id,
+        principal_id=sample_principal.principal_id,
+    )
+```
+
+```python
+# WRONG: 20 lines of manual model construction in every test
+with get_db_session() as session:
+    tenant = Tenant(tenant_id="test", name="Test", subdomain="test", ...)
+    session.add(tenant)
+    currency = CurrencyLimit(tenant_id="test", ...)
+    session.add(currency)
+    prop = PropertyTag(tenant_id="test", ...)
+    session.add(prop)
+    session.commit()
+```
+
+**Rules:**
+- Shared fixtures (tenant, principal, products) defined once in `conftest.py` using factories
+- Test-specific data uses factory overrides, not copy-pasted setup blocks
+- Factories live in `tests/factories/` — ORM factories and Pydantic schema factories
+- Never `session.add()` in test bodies — use factories or fixtures that use factories
 
 ---
 

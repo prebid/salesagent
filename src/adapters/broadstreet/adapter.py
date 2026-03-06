@@ -199,16 +199,16 @@ class BroadstreetAdapter(AdServerAdapter):
             media_buy_id: Media buy ID
             advertisement_ids: List of Broadstreet advertisement IDs
         """
-        from sqlalchemy import select
         from sqlalchemy.orm import attributes
 
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaPackage as DBMediaPackage
+        from src.core.database.repositories.media_buy import MediaBuyRepository
 
         try:
+            assert self.tenant_id is not None, "tenant_id required for DB operations"
             with get_db_session() as session:
-                stmt = select(DBMediaPackage).where(DBMediaPackage.media_buy_id == media_buy_id)
-                packages = session.scalars(stmt).all()
+                repo = MediaBuyRepository(session, self.tenant_id)
+                packages = repo.get_packages(media_buy_id)
 
                 for pkg in packages:
                     existing_ids = pkg.package_config.get("broadstreet_advertisement_ids", [])
@@ -735,11 +735,10 @@ class BroadstreetAdapter(AdServerAdapter):
         Returns:
             Update response
         """
-        from sqlalchemy import select
         from sqlalchemy.orm import attributes
 
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaPackage as DBMediaPackage
+        from src.core.database.repositories.media_buy import MediaBuyRepository
 
         self.log(
             f"Broadstreet.update_media_buy for '{media_buy_id}' with action '{action}'",
@@ -757,6 +756,8 @@ class BroadstreetAdapter(AdServerAdapter):
                 ],
             )
 
+        assert self.tenant_id is not None, "tenant_id required for DB operations"
+
         is_pause = action in ("pause_media_buy", "pause_package")
         is_resume = action in ("resume_media_buy", "resume_package")
 
@@ -765,8 +766,8 @@ class BroadstreetAdapter(AdServerAdapter):
             action_verb = "Pausing" if is_pause else "Resuming"
 
             with get_db_session() as session:
-                stmt = select(DBMediaPackage).where(DBMediaPackage.media_buy_id == media_buy_id)
-                db_packages = session.scalars(stmt).all()
+                repo = MediaBuyRepository(session, self.tenant_id)
+                db_packages = repo.get_packages(media_buy_id)
 
                 if not db_packages:
                     return UpdateMediaBuyError(
@@ -841,11 +842,8 @@ class BroadstreetAdapter(AdServerAdapter):
             action_verb = "Pausing" if is_pause else "Resuming"
 
             with get_db_session() as session:
-                stmt = select(DBMediaPackage).where(
-                    DBMediaPackage.package_id == package_id,
-                    DBMediaPackage.media_buy_id == media_buy_id,
-                )
-                db_package = session.scalars(stmt).first()
+                repo = MediaBuyRepository(session, self.tenant_id)
+                db_package = repo.get_package(media_buy_id, package_id)
 
                 if not db_package:
                     return UpdateMediaBuyError(
@@ -918,11 +916,8 @@ class BroadstreetAdapter(AdServerAdapter):
                 )
 
             with get_db_session() as session:
-                stmt = select(DBMediaPackage).where(
-                    DBMediaPackage.package_id == package_id,
-                    DBMediaPackage.media_buy_id == media_buy_id,
-                )
-                db_package = session.scalars(stmt).first()
+                repo = MediaBuyRepository(session, self.tenant_id)
+                db_package = repo.get_package(media_buy_id, package_id)
 
                 if not db_package:
                     return UpdateMediaBuyError(
@@ -978,11 +973,8 @@ class BroadstreetAdapter(AdServerAdapter):
                 )
 
             with get_db_session() as session:
-                stmt = select(DBMediaPackage).where(
-                    DBMediaPackage.package_id == package_id,
-                    DBMediaPackage.media_buy_id == media_buy_id,
-                )
-                db_package = session.scalars(stmt).first()
+                repo = MediaBuyRepository(session, self.tenant_id)
+                db_package = repo.get_package(media_buy_id, package_id)
 
                 if not db_package:
                     return UpdateMediaBuyError(

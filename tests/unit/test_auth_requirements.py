@@ -108,7 +108,7 @@ class TestAuthenticationRequirements:
         # Construct spec-compliant request at the test boundary (matches refactored _impl signature)
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer",
-            brand_manifest={"name": "Test Brand"},
+            brand={"domain": "testbrand.com"},
             packages=[
                 {
                     "buyer_ref": "pkg1",
@@ -135,6 +135,8 @@ class TestAuthenticationRequirements:
 
     def test_update_media_buy_requires_authentication(self):
         """update_media_buy must reject requests without authentication."""
+        from unittest.mock import MagicMock
+
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_update import _verify_principal
 
@@ -142,8 +144,9 @@ class TestAuthenticationRequirements:
         no_auth_identity = ResolvedIdentity(
             principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="rest"
         )
+        # repo is not accessed when principal_id is None (early exit)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _verify_principal(media_buy_id="test_buy", context=no_auth_identity)
+            _verify_principal(media_buy_id="test_buy", context=no_auth_identity, repo=MagicMock())
 
         error_msg = str(exc_info.value)
         assert "Authentication required" in error_msg
@@ -151,6 +154,8 @@ class TestAuthenticationRequirements:
 
     def test_update_media_buy_with_invalid_auth(self):
         """update_media_buy must reject requests with invalid auth."""
+        from unittest.mock import MagicMock
+
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_update import _verify_principal
 
@@ -159,8 +164,9 @@ class TestAuthenticationRequirements:
             principal_id=None, tenant_id="test_tenant", tenant={"tenant_id": "test_tenant"}, protocol="rest"
         )
 
+        # repo is not accessed when principal_id is None (early exit)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _verify_principal(media_buy_id="test_buy", context=invalid_identity)
+            _verify_principal(media_buy_id="test_buy", context=invalid_identity, repo=MagicMock())
 
         assert "Authentication required" in str(exc_info.value)
 
@@ -274,14 +280,17 @@ class TestAuthenticationErrorMessages:
 
     def test_update_media_buy_error_message_actionable(self):
         """Error message should be actionable for developers."""
+        from unittest.mock import MagicMock
+
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_update import _verify_principal
 
         no_auth = ResolvedIdentity(
             principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="rest"
         )
+        # repo is not accessed when principal_id is None (early exit)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _verify_principal(media_buy_id="test", context=no_auth)
+            _verify_principal(media_buy_id="test", context=no_auth, repo=MagicMock())
 
         error_msg = str(exc_info.value)
         # Should explain what's missing

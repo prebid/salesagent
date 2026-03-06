@@ -26,9 +26,10 @@ from src.core.schemas import (
 )
 
 # Minimal valid data for constructing test models
+# adcp 3.6.0: brand replaced brand_manifest
 _VALID_CMR_DATA = {
     "buyer_ref": "test-123",
-    "brand_manifest": {"name": "Test Product"},
+    "brand": {"domain": "testproduct.com"},
     "packages": [
         {
             "buyer_ref": "pkg_1",
@@ -68,6 +69,7 @@ class TestBuyerModelRejectsExtraInDev:
         with pytest.raises(ValidationError, match="bogus"):
             Creative(
                 creative_id="c_1",
+                variants=[],
                 name="Test",
                 format_id={"agent_url": "https://example.com", "id": "display/banner"},
                 bogus="injected",
@@ -134,7 +136,7 @@ class TestInternalModelsRejectExtra:
         with pytest.raises(ValidationError, match="unknown_field"):
             GetProductsRequest(
                 brief="test",
-                brand_manifest={"name": "test"},
+                brand={"domain": "test.com"},
                 unknown_field="should_fail",
             )
 

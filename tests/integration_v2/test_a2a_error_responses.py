@@ -11,7 +11,7 @@ through the A2A wrapper layer, including:
 
 import logging
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from a2a.types import Message, MessageSendParams, Task
@@ -142,16 +142,6 @@ class TestA2AErrorPropagation:
             }
 
     @pytest.fixture
-    def mock_identity(self, test_tenant, test_principal):
-        """Build ResolvedIdentity from real test DB fixtures."""
-        return ResolvedIdentity(
-            principal_id=test_principal["principal_id"],
-            tenant_id=test_tenant["tenant_id"],
-            tenant=test_tenant,
-            protocol="a2a",
-        )
-
-    @pytest.fixture
     def handler(self):
         """Create A2A handler instance."""
         return AdCPRequestHandler()
@@ -179,141 +169,159 @@ class TestA2AErrorPropagation:
 
         return {}
 
-    async def test_create_media_buy_validation_error_includes_errors_field(
-        self, handler, test_tenant, test_principal, mock_identity
-    ):
+    async def test_create_media_buy_validation_error_includes_errors_field(self, handler, test_tenant, test_principal):
         """Test that validation errors include errors field in A2A response."""
-        # Mock authentication
+        identity = ResolvedIdentity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-            # Create message with INVALID parameters (missing required fields)
-            skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
-                # Missing: packages, budget, start_time, end_time
-            }
-            message = self.create_message_with_skill("create_media_buy", skill_params)
-            params = MessageSendParams(message=message)
+        from src.core.config_loader import set_current_tenant
 
-            # Process the message - should return error
-            result = await handler.on_message_send(params)
+        set_current_tenant(test_tenant)
 
-            # Verify task result structure
-            assert isinstance(result, Task)
-            assert result.artifacts is not None
-            assert len(result.artifacts) > 0
+        # Create message with INVALID parameters (missing required fields)
+        skill_params = {
+            "brand": {"domain": "testbrand.com"},
+            # Missing: packages, budget, start_time, end_time
+        }
+        message = self.create_message_with_skill("create_media_buy", skill_params)
+        params = MessageSendParams(message=message)
 
-            # Extract response data from artifact (handles TextPart + DataPart structure)
-            artifact = result.artifacts[0]
-            artifact_data = self.extract_data_from_artifact(artifact)
+        # Process the message - should return error
+        result = await handler.on_message_send(params)
 
-            # CRITICAL ASSERTIONS: Error propagation
-            assert "success" in artifact_data, "Response must include 'success' field"
-            assert artifact_data["success"] is False, "success must be False when errors present"
-            assert "errors" in artifact_data, "Response must include 'errors' field"
-            assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
+        # Verify task result structure
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
 
-            # Verify error structure
-            error = artifact_data["errors"][0]
-            assert "message" in error, "Error must include message"
-            assert "Missing required AdCP parameters" in error["message"]
+        # Extract response data from artifact (handles TextPart + DataPart structure)
+        artifact = result.artifacts[0]
+        artifact_data = self.extract_data_from_artifact(artifact)
+
+        # CRITICAL ASSERTIONS: Error propagation
+        assert "success" in artifact_data, "Response must include 'success' field"
+        assert artifact_data["success"] is False, "success must be False when errors present"
+        assert "errors" in artifact_data, "Response must include 'errors' field"
+        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
+
+        # Verify error structure
+        error = artifact_data["errors"][0]
+        assert "message" in error, "Error must include message"
+        assert "Missing required AdCP parameters" in error["message"]
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
         """Test that authentication errors include errors field in A2A response."""
-        # Mock authentication with INVALID principal
-        handler._get_auth_token = MagicMock(return_value="invalid_token")
-
-        mock_invalid_identity = ResolvedIdentity(
+        # Mock identity with non-existent principal — simulates resolved but invalid principal
+        identity = ResolvedIdentity(
             principal_id="nonexistent_principal",
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
+            auth_token="invalid_token",
             protocol="a2a",
         )
+        handler._get_auth_token = MagicMock(return_value="invalid_token")
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_invalid_identity):
-            # Create valid message structure
-            start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
-            end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
+        from src.core.config_loader import set_current_tenant
 
-            skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
-                "packages": [
-                    create_test_package_request_dict(
-                        buyer_ref="pkg_1",
-                        product_id="a2a_error_product",
-                        pricing_option_id="cpm_usd_fixed",
-                        budget=10000.0,
-                    )
-                ],
-                "start_time": start_time,
-                "end_time": end_time,
-            }
-            message = self.create_message_with_skill("create_media_buy", skill_params)
-            params = MessageSendParams(message=message)
+        set_current_tenant(test_tenant)
 
-            # Process the message - should return auth error
-            result = await handler.on_message_send(params)
+        # Create valid message structure
+        start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+        end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
 
-            # Extract response data from artifact (handles TextPart + DataPart structure)
-            artifact = result.artifacts[0]
-            artifact_data = self.extract_data_from_artifact(artifact)
+        skill_params = {
+            "brand": {"domain": "testbrand.com"},
+            "packages": [
+                create_test_package_request_dict(
+                    buyer_ref="pkg_1",
+                    product_id="a2a_error_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=10000.0,
+                )
+            ],
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+        message = self.create_message_with_skill("create_media_buy", skill_params)
+        params = MessageSendParams(message=message)
 
-            # CRITICAL ASSERTIONS: Error propagation for auth failures
-            assert artifact_data["success"] is False, "success must be False for auth errors"
-            assert "errors" in artifact_data, "Response must include 'errors' field for auth errors"
-            assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
+        # Process the message - should return auth error
+        result = await handler.on_message_send(params)
 
-            # Verify error is about authentication
-            error = artifact_data["errors"][0]
-            assert "code" in error, "Error must include code"
-            assert error["code"] == "authentication_error"
+        # Extract response data from artifact (handles TextPart + DataPart structure)
+        artifact = result.artifacts[0]
+        artifact_data = self.extract_data_from_artifact(artifact)
 
-    async def test_create_media_buy_success_has_no_errors_field(
-        self, handler, test_tenant, test_principal, mock_identity
-    ):
+        # CRITICAL ASSERTIONS: Error propagation for auth failures
+        assert artifact_data["success"] is False, "success must be False for auth errors"
+        assert "errors" in artifact_data, "Response must include 'errors' field for auth errors"
+        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
+
+        # Verify error is about authentication
+        error = artifact_data["errors"][0]
+        assert "code" in error, "Error must include code"
+        assert error["code"] == "authentication_error"
+
+    async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
-        # Mock authentication
+        identity = ResolvedIdentity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-            # Create VALID message
-            start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
-            end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
+        from src.core.config_loader import set_current_tenant
 
-            skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
-                "packages": [
-                    create_test_package_request_dict(
-                        buyer_ref="pkg_1",
-                        product_id="a2a_error_product",
-                        pricing_option_id="cpm_usd_fixed",
-                        budget=10000.0,
-                    )
-                ],
-                "start_time": start_time,
-                "end_time": end_time,
-            }
-            message = self.create_message_with_skill("create_media_buy", skill_params)
-            params = MessageSendParams(message=message)
+        set_current_tenant(test_tenant)
 
-            # Process the message - should succeed
-            result = await handler.on_message_send(params)
+        # Create VALID message
+        start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+        end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
 
-            # Extract response data from artifact (handles TextPart + DataPart structure)
-            artifact = result.artifacts[0]
-            artifact_data = self.extract_data_from_artifact(artifact)
+        skill_params = {
+            "brand": {"domain": "testbrand.com"},
+            "packages": [
+                create_test_package_request_dict(
+                    buyer_ref="pkg_1",
+                    product_id="a2a_error_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=10000.0,
+                )
+            ],
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+        message = self.create_message_with_skill("create_media_buy", skill_params)
+        params = MessageSendParams(message=message)
 
-            # CRITICAL ASSERTIONS: Success response
-            assert artifact_data["success"] is True, "success must be True for successful operation"
-            assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
-                "errors field must be None or empty array for success"
-            )
-            assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
-            assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
+        # Process the message - should succeed
+        result = await handler.on_message_send(params)
 
-    async def test_create_media_buy_response_includes_all_adcp_fields(
-        self, handler, test_tenant, test_principal, mock_identity
-    ):
+        # Extract response data from artifact (handles TextPart + DataPart structure)
+        artifact = result.artifacts[0]
+        artifact_data = self.extract_data_from_artifact(artifact)
+
+        # CRITICAL ASSERTIONS: Success response
+        assert artifact_data["success"] is True, "success must be True for successful operation"
+        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
+            "errors field must be None or empty array for success"
+        )
+        assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
+        assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
+
+    async def test_create_media_buy_response_includes_all_adcp_fields(self, handler, test_tenant, test_principal):
         """Test that A2A response includes all AdCP domain fields (not just cherry-picked ones).
 
         Per AdCP v2.4 spec and PR #113:
@@ -324,57 +332,67 @@ class TestA2AErrorPropagation:
         This test verifies that all domain fields from CreateMediaBuyResponse schema are preserved
         when wrapped by the A2A handler.
         """
-        # Mock authentication
+        identity = ResolvedIdentity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-            # Create valid message
-            start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
-            end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
+        from src.core.config_loader import set_current_tenant
 
-            skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
-                "packages": [
-                    create_test_package_request_dict(
-                        buyer_ref="pkg_1",
-                        product_id="a2a_error_product",
-                        pricing_option_id="cpm_usd_fixed",
-                        budget=10000.0,
-                    )
-                ],
-                "start_time": start_time,
-                "end_time": end_time,
-            }
-            message = self.create_message_with_skill("create_media_buy", skill_params)
-            params = MessageSendParams(message=message)
+        set_current_tenant(test_tenant)
 
-            # Process the message
-            result = await handler.on_message_send(params)
+        # Create valid message
+        start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+        end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
 
-            # Extract response data from artifact (handles TextPart + DataPart structure)
-            artifact = result.artifacts[0]
-            artifact_data = self.extract_data_from_artifact(artifact)
+        skill_params = {
+            "brand": {"domain": "testbrand.com"},
+            "packages": [
+                create_test_package_request_dict(
+                    buyer_ref="pkg_1",
+                    product_id="a2a_error_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=10000.0,
+                )
+            ],
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+        message = self.create_message_with_skill("create_media_buy", skill_params)
+        params = MessageSendParams(message=message)
 
-            # CRITICAL ASSERTIONS: All AdCP domain fields from CreateMediaBuyResponse schema
-            # Required AdCP domain field
-            assert "buyer_ref" in artifact_data, "Must include buyer_ref (AdCP spec required domain field)"
+        # Process the message
+        result = await handler.on_message_send(params)
 
-            # Optional AdCP domain fields that were set (non-None values)
-            assert "media_buy_id" in artifact_data, "Must include media_buy_id (AdCP spec domain field)"
-            assert "packages" in artifact_data, "Must include packages (AdCP spec domain field)"
-            assert "creative_deadline" in artifact_data, "Must include creative_deadline (AdCP spec domain field)"
+        # Extract response data from artifact (handles TextPart + DataPart structure)
+        artifact = result.artifacts[0]
+        artifact_data = self.extract_data_from_artifact(artifact)
 
-            # Per AdCP spec, optional fields with None values should be omitted
-            # errors field should NOT be present for successful operations (no errors)
-            assert "errors" not in artifact_data, "errors field should be omitted when None (AdCP spec compliance)"
+        # CRITICAL ASSERTIONS: All AdCP domain fields from CreateMediaBuyResponse schema
+        # Required AdCP domain field
+        assert "buyer_ref" in artifact_data, "Must include buyer_ref (AdCP spec required domain field)"
 
-            # A2A-specific augmentation fields (added by wrapper layer)
-            assert "success" in artifact_data, "A2A wrapper must add success field"
-            assert "message" in artifact_data, "A2A wrapper must add message field"
+        # Optional AdCP domain fields that were set (non-None values)
+        assert "media_buy_id" in artifact_data, "Must include media_buy_id (AdCP spec domain field)"
+        assert "packages" in artifact_data, "Must include packages (AdCP spec domain field)"
+        assert "creative_deadline" in artifact_data, "Must include creative_deadline (AdCP spec domain field)"
 
-            # Verify success case
-            assert artifact_data["success"] is True, "Success should be True for successful operation"
-            assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
+        # Per AdCP spec, optional fields with None values should be omitted
+        # errors field should NOT be present for successful operations (no errors)
+        assert "errors" not in artifact_data, "errors field should be omitted when None (AdCP spec compliance)"
+
+        # A2A-specific augmentation fields (added by wrapper layer)
+        assert "success" in artifact_data, "A2A wrapper must add success field"
+        assert "message" in artifact_data, "A2A wrapper must add message field"
+
+        # Verify success case
+        assert artifact_data["success"] is True, "Success should be True for successful operation"
+        assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
 
 @pytest.mark.integration
@@ -388,22 +406,20 @@ class TestA2AErrorResponseStructure:
         """Create A2A handler instance."""
         return AdCPRequestHandler()
 
-    @pytest.fixture
-    def mock_identity(self):
-        """Minimal identity for validation error tests (no DB tenant needed)."""
-        return ResolvedIdentity(
+    async def test_error_response_has_consistent_structure(self, integration_db, handler):
+        """Test that all error responses have consistent field structure."""
+        identity = ResolvedIdentity(
             principal_id="test_principal",
-            tenant_id="validation_test",
-            tenant={"tenant_id": "validation_test"},
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
+            auth_token="test_token",
             protocol="a2a",
         )
 
-    async def test_error_response_has_consistent_structure(self, integration_db, handler, mock_identity):
-        """Test that all error responses have consistent field structure."""
-        # Call handler directly with invalid params — identity passed directly
+        # Call handler directly with invalid params
         result = await handler._handle_create_media_buy_skill(
-            parameters={"brand_manifest": {"name": "test"}},
-            identity=mock_identity,  # Missing required fields
+            parameters={"brand": {"domain": "testbrand.com"}},
+            identity=identity,  # Missing required fields
         )
 
         # Verify error response structure
@@ -413,15 +429,23 @@ class TestA2AErrorResponseStructure:
         assert "message" in result, "Error response must have message field"
         assert "required_parameters" in result, "Validation error must list required parameters"
 
-    async def test_errors_field_structure_from_validation_error(self, integration_db, handler, mock_identity):
+    async def test_errors_field_structure_from_validation_error(self, integration_db, handler):
         """Test that validation errors produce properly structured errors field."""
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
+            auth_token="test_token",
+            protocol="a2a",
+        )
+
         # Call with invalid params (missing required fields) - returns immediately without DB
         result = await handler._handle_create_media_buy_skill(
             parameters={
-                "brand_manifest": {"name": "test"},
+                "brand": {"domain": "testbrand.com"},
                 # Missing: packages, budget, start_time, end_time
             },
-            identity=mock_identity,
+            identity=identity,
         )
 
         # Verify this is a validation error response

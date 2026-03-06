@@ -129,7 +129,7 @@ class TestAdCPReferenceImplementation:
             products_result = await client.call_tool(
                 "get_products",
                 {
-                    "brand_manifest": {"name": "Premium Athletic Footwear"},
+                    "brand": {"domain": "testbrand.com"},
                     "brief": "display advertising",
                     "context": {"e2e": "get_products"},
                 },
@@ -173,7 +173,7 @@ class TestAdCPReferenceImplementation:
                 total_budget=5000.0,
                 start_time=start_time,
                 end_time=end_time,
-                brand_manifest={"name": "Nike Air Jordan 2025 Basketball Shoes"},
+                brand={"domain": "testbrand.com"},
                 targeting_overlay={
                     "geo_countries": ["US", "CA"],
                 },

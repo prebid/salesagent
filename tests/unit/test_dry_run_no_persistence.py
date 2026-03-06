@@ -8,7 +8,7 @@ Dry run should:
 
 import uuid
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -94,6 +94,7 @@ class TestUpdateMediaBuyDryRunNoPersistence:
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_manager,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.database.database_session.get_db_session") as mock_db,
         ):
             # Setup mocks
@@ -113,17 +114,18 @@ class TestUpdateMediaBuyDryRunNoPersistence:
                 manual_approval_operations=[],
             )
 
-            # Mock database session for media buy lookup
+            # Mock UoW (provides session and repo)
+            mock_uow = MagicMock()
             mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_media_buy = MagicMock()
-            mock_media_buy.media_buy_id = "mb_existing_123"
-            mock_session.scalars.return_value.first.return_value = mock_media_buy
+            mock_uow.session = mock_session
+            mock_uow.media_buys = MagicMock()
+            mock_uow.__enter__ = Mock(return_value=mock_uow)
+            mock_uow.__exit__ = Mock(return_value=False)
+            mock_uow_cls.return_value = mock_uow
 
             # Execute — impl now accepts identity instead of ctx
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_existing_123",
-                buyer_ref="test-buyer",
                 paused=True,
                 packages=[{"package_id": "pkg_1", "paused": True}],
             )

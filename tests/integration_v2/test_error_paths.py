@@ -163,7 +163,7 @@ class TestCreateMediaBuyErrorPaths:
         # This should return error response, not raise NameError
         response_dict = await create_media_buy_raw(
             po_number="error_test_po",
-            brand_manifest={"name": "Test campaign"},
+            brand={"domain": "testbrand.com"},
             buyer_ref="test_buyer",
             context={"trace_id": "auth-missing-principal"},
             packages=[
@@ -216,7 +216,7 @@ class TestCreateMediaBuyErrorPaths:
         # This should return error response for past start time
         response_dict = await create_media_buy_raw(
             po_number="error_test_po",
-            brand_manifest={"name": "Test campaign"},
+            brand={"domain": "testbrand.com"},
             buyer_ref="test_buyer",
             context={"trace_id": "past-start"},
             packages=[
@@ -264,7 +264,7 @@ class TestCreateMediaBuyErrorPaths:
 
         response_dict = await create_media_buy_raw(
             po_number="error_test_po",
-            brand_manifest={"name": "Test campaign"},
+            brand={"domain": "testbrand.com"},
             buyer_ref="test_buyer",
             packages=[
                 create_test_package_request_dict(
@@ -315,7 +315,7 @@ class TestCreateMediaBuyErrorPaths:
         with pytest.raises((ToolError, AdCPValidationError)) as exc_info:
             await create_media_buy_raw(
                 po_number="error_test_po",
-                brand_manifest={"name": "Test campaign"},
+                brand={"domain": "testbrand.com"},
                 buyer_ref="test_buyer",
                 packages=[
                     create_test_package_request_dict(
@@ -350,7 +350,7 @@ class TestCreateMediaBuyErrorPaths:
 
         response_dict = await create_media_buy_raw(
             po_number="error_test_po",
-            brand_manifest={"name": "Test campaign"},
+            brand={"domain": "testbrand.com"},
             buyer_ref="test_buyer",
             packages=[],  # Empty packages!
             start_time=future_start.isoformat(),

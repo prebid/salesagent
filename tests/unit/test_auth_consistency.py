@@ -229,7 +229,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
             # Should not raise auth error
             req = MagicMock()
             req.brief = "test"
-            req.brand_manifest = None
+            req.brand = None
             req.filters = None
             req.context = None
             try:
@@ -339,7 +339,7 @@ class TestDiscoveryEndpointsInvalidAuth:
 
             req = MagicMock()
             req.brief = "test"
-            req.brand_manifest = None
+            req.brand = None
             req.filters = None
             req.context = None
 

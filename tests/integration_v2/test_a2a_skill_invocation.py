@@ -248,7 +248,7 @@ class TestA2ASkillInvocation:
             # Create explicit skill invocation message
             skill_params = {
                 "brief": "Display advertising for news content",
-                "brand_manifest": {"name": "News media company"},
+                "brand": {"domain": "testbrand.com"},
             }
             message = create_a2a_message_with_skill("get_products", skill_params)
             params = MessageSendParams(message=message)
@@ -303,7 +303,7 @@ class TestA2ASkillInvocation:
             # Create explicit skill invocation message using A2A spec 'input' field
             skill_params = {
                 "brief": "Premium coffee brands",
-                "brand_manifest": {"name": "Wonderstruck Premium Video Ads"},
+                "brand": {"domain": "testbrand.com"},
             }
             message = create_a2a_message_with_skill("get_products", skill_params)
             params = MessageSendParams(message=message)
@@ -366,7 +366,7 @@ class TestA2ASkillInvocation:
             end_date = start_date + timedelta(days=30)
 
             skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": [
                     {
                         "buyer_ref": f"pkg_{sample_products[0]}",
@@ -435,7 +435,7 @@ class TestA2ASkillInvocation:
             end_date = start_date + timedelta(days=30)
 
             skill_params = {
-                "brand_manifest": {"name": "Test Campaign"},
+                "brand": {"domain": "testbrand.com"},
                 "packages": [
                     {
                         "buyer_ref": f"pkg_{sample_products[0]}",
@@ -478,7 +478,7 @@ class TestA2ASkillInvocation:
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
             # Create hybrid message (text + explicit skill)
-            skill_params = {"brief": "Sports video advertising", "brand_manifest": {"name": "Sports brand"}}
+            skill_params = {"brief": "Sports video advertising", "brand": {"domain": "testbrand.com"}}
             message = self.create_message_hybrid(
                 "I need video products for sports content", "get_products", skill_params
             )
@@ -534,7 +534,7 @@ class TestA2ASkillInvocation:
                             kind="data",
                             data={
                                 "skill": "get_products",
-                                "parameters": {"brief": "video ads", "brand_manifest": {"name": "Test Brand Product"}},
+                                "parameters": {"brief": "video ads", "brand": {"domain": "testbrand.com"}},
                             },
                         )
                     ),
@@ -707,7 +707,7 @@ class TestA2ASkillInvocation:
                 end_time=end_date,  # Add end_time for flight days calculation
                 budget=10000.0,
                 currency="USD",
-                raw_request={"brand_manifest": {"name": "Test Brand"}, "packages": []},
+                raw_request={"brand": {"domain": "testbrand.com"}, "packages": []},
             )
             session.add(media_buy)
             session.commit()

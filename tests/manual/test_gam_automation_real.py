@@ -281,7 +281,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Athletic footwear and sports equipment"},
+            brand={"domain": "testbrand.com"},
             po_number="AUTO001",
             total_budget=10.00,
             targeting_overlay=Targeting(),  # $10 test budget
@@ -339,7 +339,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Consumer electronics and smart home devices"},
+            brand={"domain": "testbrand.com"},
             po_number="CONF001",
             total_budget=5.00,
             targeting_overlay=Targeting(),
@@ -398,7 +398,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Outdoor gear and camping equipment"},
+            brand={"domain": "testbrand.com"},
             po_number="MAN001",
             total_budget=7.50,
             targeting_overlay=Targeting(),
@@ -460,7 +460,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Luxury automotive vehicles and accessories"},
+            brand={"domain": "testbrand.com"},
             po_number="GUAR001",
             total_budget=500.00,
             targeting_overlay=Targeting(),
@@ -523,7 +523,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Fitness trackers and wearable technology"},
+            brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE001",
             total_budget=7.50,
             targeting_overlay=Targeting(),
@@ -592,7 +592,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Sustainable fashion and eco-friendly clothing"},
+            brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE002",
             total_budget=20.00,
             targeting_overlay=Targeting(),
@@ -659,7 +659,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Premium pet food and pet care products"},
+            brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE003",
             total_budget=15.00,
             targeting_overlay=Targeting(),
@@ -730,7 +730,7 @@ class GAMAutomationTester:
         )
 
         request = CreateMediaBuyRequest(
-            brand_manifest={"name": "Coffee beans and specialty beverages"},
+            brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE004",
             total_budget=1.00,
             targeting_overlay=Targeting(),

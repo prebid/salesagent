@@ -51,9 +51,13 @@ def _validate_creative_input(
     # Only include AdCP spec fields + internal fields
     schema_data: dict[str, Any] = {
         "creative_id": creative.creative_id or str(uuid.uuid4()),
-        "name": creative.name or "",  # Ensure name is never None
+        "name": creative.name,
         "format_id": creative.format_id,
         "assets": creative.assets or {},  # Required by AdCP v1 spec
+        # adcp 3.6.0: variants is required by Creative schema (list[CreativeVariant]).
+        # CreativeAsset (sync payload) may carry variants as an extra field (extra="allow").
+        # New creatives start with no variants yet (empty list is valid per spec).
+        "variants": getattr(creative, "variants", []) or [],
         # Internal fields (added by sales agent)
         "principal_id": principal_id,
         "created_date": datetime.now(UTC),
@@ -84,6 +88,9 @@ def _validate_creative_input(
 
     # Use validated format (auto-upgraded from string if needed)
     format_value = validated_creative.format
+
+    if format_value is None:
+        raise ValueError(f"Creative format '{creative.format_id}' could not be resolved")
 
     # Validate format exists in creative agent
     agent_url = str(format_value.agent_url)

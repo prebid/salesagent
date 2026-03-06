@@ -143,13 +143,14 @@ class ContextManager(DatabaseManager):
         owner: str,  # principal, publisher, system - who needs to act
         status: str = "pending",  # pending, in_progress, completed, failed, requires_approval
         tool_name: str | None = None,
-        request_data: dict[str, Any] | None = None,
+        request_data: dict[str, Any] | Any | None = None,
         response_data: dict[str, Any] | None = None,
         assigned_to: str | None = None,
         error_message: str | None = None,
         transaction_details: dict[str, Any] | None = None,
         object_mappings: list[dict[str, str]] | None = None,
         initial_comment: str | None = None,
+        request_metadata: dict[str, Any] | None = None,
     ) -> WorkflowStep:
         """Create a workflow step in the database.
 
@@ -159,17 +160,25 @@ class ContextManager(DatabaseManager):
             owner: Who needs to act (principal=advertiser, publisher=seller, system=automated)
             status: Step status
             tool_name: Optional tool name if this is a tool call
-            request_data: Original request data
+            request_data: Original request data (dict or Pydantic model — serialized at this boundary)
             response_data: Response/result data
             assigned_to: Specific user/system if assigned
             error_message: Error message if failed
             transaction_details: Actual API calls made
             object_mappings: List of objects this step relates to [{object_type, object_id, action}]
             initial_comment: Optional initial comment to add
+            request_metadata: Extra metadata to merge into request_data after serialization
 
         Returns:
             The created WorkflowStep object
         """
+        # Serialize Pydantic models at the DB boundary
+        from pydantic import BaseModel
+
+        if isinstance(request_data, BaseModel):
+            request_data = request_data.model_dump(mode="json")
+        if request_metadata and request_data is not None:
+            request_data.update(request_metadata)
         step_id = f"step_{uuid.uuid4().hex[:12]}"
 
         # Initialize comments array with initial comment if provided

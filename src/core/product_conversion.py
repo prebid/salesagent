@@ -22,6 +22,7 @@ from adcp import (
     FlatRatePricingOption,
     VcpmPricingOption,
 )
+from adcp.types._generated import MediaChannel
 from packaging.version import InvalidVersion, Version
 
 # Import our extended Product (includes implementation_config)
@@ -319,12 +320,19 @@ def convert_product_model_to_schema(product_model) -> Product:
     # Note: price_guidance is database metadata, not in AdCP Product schema - omit it
     # Pricing information should be in pricing_options per AdCP spec
 
-    # Filter-related internal fields (not in AdCP spec, but needed for filtering)
-    # These are marked as exclude=True in our extended Product schema
+    # Filter-related internal fields
     if hasattr(product_model, "countries") and product_model.countries:
         product_data["countries"] = product_model.countries
+    # channels: DB stores strings, schema uses MediaChannel enum
     if hasattr(product_model, "channels") and product_model.channels:
-        product_data["channels"] = product_model.channels
+        converted_channels = []
+        for ch in product_model.channels:
+            try:
+                converted_channels.append(MediaChannel(ch))
+            except ValueError:
+                logger.warning("Unknown channel value '%s' in product %s, skipping", ch, product_model.product_id)
+        if converted_channels:
+            product_data["channels"] = converted_channels
 
     if product_model.product_card:
         product_data["product_card"] = product_model.product_card
@@ -337,6 +345,22 @@ def convert_product_model_to_schema(product_model) -> Product:
 
     # Default is_custom to False if not set
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False
+
+    # AdCP 3.6.0 fields — direct attribute access on typed Mapped[] columns
+    if product_model.property_targeting_allowed is not None:
+        product_data["property_targeting_allowed"] = product_model.property_targeting_allowed
+    if product_model.signal_targeting_allowed is not None:
+        product_data["signal_targeting_allowed"] = product_model.signal_targeting_allowed
+    if product_model.catalog_match is not None:
+        product_data["catalog_match"] = product_model.catalog_match
+    if product_model.catalog_types is not None:
+        product_data["catalog_types"] = product_model.catalog_types
+    if product_model.conversion_tracking is not None:
+        product_data["conversion_tracking"] = product_model.conversion_tracking
+    if product_model.data_provider_signals is not None:
+        product_data["data_provider_signals"] = product_model.data_provider_signals
+    if product_model.forecast is not None:
+        product_data["forecast"] = product_model.forecast
 
     # Internal fields (not in AdCP spec, but in our extended Product schema)
     # Use effective_implementation_config to auto-resolve from inventory profile if set

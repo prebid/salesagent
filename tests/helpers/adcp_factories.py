@@ -347,36 +347,35 @@ def create_test_property_dict(
 
 
 def create_test_property(
-    property_type: str = "website",
-    name: str = "Test Property",
-    identifiers: list[dict[str, str]] | None = None,
-    publisher_domain: str = "test.example.com",
+    identifier: str = "test.example.com",
+    type: str = "website",
     **kwargs,
 ) -> Property:
     """Create a test Property object (for full Property validation).
 
+    As of adcp 3.6.0, Property has a simplified schema with:
+    - identifier (REQUIRED): Domain, bundle ID, or other property identifier
+    - type (REQUIRED): One of 'website', 'mobile_app', 'ctv_app', 'desktop_app',
+                       'dooh', 'podcast', 'radio', 'streaming_audio'
+    - primary (optional, default False): Is this the primary property
+    - region (optional): Geographic region
+    - store (optional): App store ('apple', 'google', 'amazon', 'roku', 'samsung', 'lg', 'other')
+
     Args:
-        property_type: Type of property ("website", "app", etc.)
-        name: Human-readable property name
-        identifiers: List of identifier dicts. Defaults to domain identifier
-        publisher_domain: Domain of the publisher
-        **kwargs: Additional optional fields (tags, etc.)
+        identifier: Property identifier (domain, bundle ID, etc.)
+        type: Type of property
+        **kwargs: Additional optional fields (primary, region, store, etc.)
 
     Returns:
         AdCP-compliant Property object
 
     Example:
         prop = create_test_property(
-            property_type="app",
-            identifiers=[{"type": "bundle_id", "value": "com.example.app"}]
+            identifier="com.example.app",
+            type="mobile_app"
         )
     """
-    if identifiers is None:
-        identifiers = [{"type": "domain", "value": publisher_domain}]
-
-    return Property(
-        property_type=property_type, name=name, identifiers=identifiers, publisher_domain=publisher_domain, **kwargs
-    )
+    return Property(identifier=identifier, type=type, **kwargs)
 
 
 def create_test_package(
@@ -589,7 +588,7 @@ def create_test_media_buy_request_dict(
     total_budget: float = 10000.0,
     start_time: str | None = None,
     end_time: str | None = None,
-    brand_manifest: dict[str, Any] | None = None,
+    brand: dict[str, Any] | None = None,
     pricing_option_id: str = "cpm_option_1",
     **kwargs,
 ) -> dict[str, Any]:
@@ -598,6 +597,8 @@ def create_test_media_buy_request_dict(
     Note: Returns a dict instead of CreateMediaBuyRequest object because we have schema
     duplication issues (internal vs adcp library). Dicts work with both.
 
+    As of adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with required domain).
+
     Args:
         buyer_ref: Buyer reference identifier
         product_ids: List of product IDs to create packages from. Defaults to ["test_product"]
@@ -605,7 +606,7 @@ def create_test_media_buy_request_dict(
         total_budget: Total budget for the campaign (divided equally among packages)
         start_time: Campaign start time (ISO string). Defaults to "asap"
         end_time: Campaign end time (ISO string). Defaults to 30 days from now
-        brand_manifest: Brand info dict. Defaults to {"name": "Test Brand", "promoted_offering": "Test Product"}
+        brand: Brand reference dict with required 'domain' field. Defaults to {"domain": "testbrand.com"}
         pricing_option_id: Pricing option ID for all packages. Defaults to "cpm_option_1"
         **kwargs: Additional optional fields (po_number, reporting_webhook, targeting_overlay, etc.)
                   targeting_overlay goes into packages, all others go to top level
@@ -624,7 +625,7 @@ def create_test_media_buy_request_dict(
             total_budget=50000.0,
             start_time="2025-11-01T00:00:00Z",
             end_time="2025-11-30T23:59:59Z",
-            brand_manifest={"name": "Nike", "promoted_offering": "Air Jordan 2025"}
+            brand={"domain": "nike.com"}
         )
     """
 
@@ -637,9 +638,9 @@ def create_test_media_buy_request_dict(
         end_datetime = datetime.now(UTC) + timedelta(days=30)
         end_time = end_datetime.isoformat()
 
-    # Default brand_manifest
-    if brand_manifest is None:
-        brand_manifest = {"name": "Test Brand", "promoted_offering": "Test Product"}
+    # Default brand (BrandReference with required domain field)
+    if brand is None:
+        brand = {"domain": "testbrand.com"}
 
     # Default product_ids
     if product_ids is None:
@@ -662,7 +663,7 @@ def create_test_media_buy_request_dict(
 
     request = {
         "buyer_ref": buyer_ref,
-        "brand_manifest": brand_manifest,
+        "brand": brand,
         "packages": packages,
         "start_time": start_time,
         "end_time": end_time,

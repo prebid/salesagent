@@ -190,16 +190,10 @@ async def test_full_request_flow():
     # This would be an integration test with the actual endpoint
     request = GetProductsRequest(
         brief="Looking to advertise a new smartphone",
-        brand_manifest={"name": "TechCorp - Latest 5G smartphone with advanced features"},
+        brand={"domain": "testbrand.com"},
     )
 
-    # Verify the request has brand_manifest (AdCP v2.2.0 spec field)
-    assert hasattr(request, "brand_manifest")
-    # Library may wrap in BrandManifestReference with BrandManifest in root
-    expected_name = "TechCorp - Latest 5G smartphone with advanced features"
-    if isinstance(request.brand_manifest, dict):
-        assert request.brand_manifest["name"] == expected_name
-    elif hasattr(request.brand_manifest, "name"):
-        assert request.brand_manifest.name == expected_name
-    elif hasattr(request.brand_manifest, "root") and hasattr(request.brand_manifest.root, "name"):
-        assert request.brand_manifest.root.name == expected_name
+    # Verify the request has brand (adcp 3.6.0: BrandReference with domain)
+    assert hasattr(request, "brand")
+    assert request.brand is not None
+    assert request.brand.domain == "testbrand.com"
