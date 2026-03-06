@@ -231,3 +231,108 @@ class TestProductRepositoryGetById:
             product = repo_a.get_by_id(f"prod-{uid}")
 
         assert product is None  # Product belongs to tenant_b, not tenant_a
+
+
+@pytest.mark.requires_db
+class TestProductRepositoryGetByIdWithPricing:
+    """ProductRepository.get_by_id_with_pricing returns a product with pricing_options eagerly loaded."""
+
+    def test_returns_product_with_pricing_loaded(self, integration_db):
+        """Product is returned with pricing_options eagerly loaded and accessible outside session."""
+        from src.core.database.repositories.product import ProductRepository
+
+        uid = uuid.uuid4().hex[:8]
+
+        with get_db_session() as session:
+            tenant = _create_test_tenant(session, uid)
+            _create_test_product(session, tenant.tenant_id, f"prod-{uid}", rate=25.00, pricing_model="cpm")
+            session.commit()
+
+        with get_db_session() as session:
+            repo = ProductRepository(session, f"test-tenant-{uid}")
+            product = repo.get_by_id_with_pricing(f"prod-{uid}")
+
+        # Access pricing_options OUTSIDE the session — must be eager-loaded
+        assert product is not None
+        assert product.product_id == f"prod-{uid}"
+        assert product.pricing_options is not None
+        assert len(product.pricing_options) == 1
+        assert product.pricing_options[0].pricing_model == "cpm"
+        assert float(product.pricing_options[0].rate) == 25.00
+
+    def test_returns_none_for_nonexistent_product(self, integration_db):
+        """Returns None when product ID does not exist in the tenant."""
+        from src.core.database.repositories.product import ProductRepository
+
+        uid = uuid.uuid4().hex[:8]
+
+        with get_db_session() as session:
+            _create_test_tenant(session, uid)
+            session.commit()
+
+        with get_db_session() as session:
+            repo = ProductRepository(session, f"test-tenant-{uid}")
+            product = repo.get_by_id_with_pricing("nonexistent")
+
+        assert product is None
+
+
+@pytest.mark.requires_db
+class TestProductRepositoryListByIds:
+    """ProductRepository.list_by_ids returns products matching the given IDs."""
+
+    def test_returns_matching_products(self, integration_db):
+        """Returns only the products whose IDs are in the input list."""
+        from src.core.database.repositories.product import ProductRepository
+
+        uid = uuid.uuid4().hex[:8]
+
+        with get_db_session() as session:
+            tenant = _create_test_tenant(session, uid)
+            _create_test_product(session, tenant.tenant_id, f"prod-1-{uid}")
+            _create_test_product(session, tenant.tenant_id, f"prod-2-{uid}")
+            _create_test_product(session, tenant.tenant_id, f"prod-3-{uid}")
+            session.commit()
+
+        with get_db_session() as session:
+            repo = ProductRepository(session, f"test-tenant-{uid}")
+            products = repo.list_by_ids([f"prod-1-{uid}", f"prod-3-{uid}"])
+
+        assert len(products) == 2
+        product_ids = {p.product_id for p in products}
+        assert f"prod-1-{uid}" in product_ids
+        assert f"prod-3-{uid}" in product_ids
+        assert f"prod-2-{uid}" not in product_ids
+
+    def test_returns_empty_list_for_empty_input(self, integration_db):
+        """Returns empty list immediately when given an empty ID list."""
+        from src.core.database.repositories.product import ProductRepository
+
+        uid = uuid.uuid4().hex[:8]
+
+        with get_db_session() as session:
+            tenant = _create_test_tenant(session, uid)
+            _create_test_product(session, tenant.tenant_id, f"prod-{uid}")
+            session.commit()
+
+        with get_db_session() as session:
+            repo = ProductRepository(session, f"test-tenant-{uid}")
+            products = repo.list_by_ids([])
+
+        assert products == []
+
+    def test_returns_empty_list_for_nonexistent_ids(self, integration_db):
+        """Returns empty list when none of the IDs exist."""
+        from src.core.database.repositories.product import ProductRepository
+
+        uid = uuid.uuid4().hex[:8]
+
+        with get_db_session() as session:
+            _create_test_tenant(session, uid)
+            session.commit()
+
+        with get_db_session() as session:
+            repo = ProductRepository(session, f"test-tenant-{uid}")
+            products = repo.list_by_ids(["nonexistent-1", "nonexistent-2"])
+
+        assert products == []
