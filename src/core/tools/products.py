@@ -565,7 +565,7 @@ async def _get_products_impl(
                 products,
                 tenant_id=tenant["tenant_id"],
                 country_code=country_code,
-                min_exposures=getattr(req, "min_exposures", None),
+                min_exposures=getattr(req.filters, "min_exposures", None) if req.filters else None,
             )
     except Exception as e:
         logger.warning(f"Failed to enrich products with dynamic pricing: {e}. Using defaults.")
@@ -738,18 +738,22 @@ async def _get_products_impl(
         eligible_products = products
 
     # Apply min_exposures filtering (AdCP PR #79)
-    min_exposures = getattr(req, "min_exposures", None)
+    min_exposures = getattr(req.filters, "min_exposures", None) if req.filters else None
     if min_exposures is not None:
         filtered_products = []
         for product in eligible_products:
             # For guaranteed products, check estimated_exposures
-            if product.delivery_type == "guaranteed":
-                if product.estimated_exposures is not None and product.estimated_exposures >= min_exposures:
+            delivery_type_value = (
+                product.delivery_type.value if hasattr(product.delivery_type, "value") else product.delivery_type
+            )
+            if delivery_type_value == "guaranteed":
+                estimated = getattr(product, "estimated_exposures", None)
+                if estimated is not None and estimated >= min_exposures:
                     filtered_products.append(product)
                 else:
                     logger.info(
                         f"Product {product.product_id} excluded: estimated_exposures "
-                        f"({product.estimated_exposures}) < min_exposures ({min_exposures})"
+                        f"({estimated}) < min_exposures ({min_exposures})"
                     )
             else:
                 # For non-guaranteed, include if recommended CPM is set in price_guidance
