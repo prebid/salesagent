@@ -6,11 +6,14 @@ dispatch mechanism varies.
 
 Covers: UC-006-MAIN-MCP-04 through UC-006-MAIN-MCP-09 (transport-paired)
 Covers: UC-006-GENERATIVE-CREATIVE-BUILD-01 through BUILD-08
+Covers: UC-006-FORMAT-VALIDATION-{ADAPTER,UNREACHABLE,UNKNOWN}-01
+Covers: UC-006-ASSIGNMENT-{PACKAGE-VALIDATION,FORMAT-COMPATIBILITY,RESULT}-*
+Covers: UC-006-EXT-{A,B,D,E,H,I,J}-*
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from adcp.types import CreativeAction
@@ -18,8 +21,8 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
-from src.core.exceptions import AdCPNotFoundError
-from tests.harness import CreativeSyncEnv, Transport, assert_envelope
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
+from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
 
 # All four transports: IMPL, A2A, REST, MCP
 ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
@@ -205,7 +208,7 @@ class TestSyncSavepointIsolationTransport:
 class TestSyncStrictModeAbortTransport:
     """Strict mode aborts the assignment phase on missing package.
 
-    Covers: UC-006-MAIN-MCP-06
+    Covers: UC-006-MAIN-MCP-06, UC-006-ASSIGNMENT-PACKAGE-VALIDATION-02, UC-006-EXT-J-01
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
@@ -257,7 +260,7 @@ class TestSyncLenientModeContinuesTransport:
 class TestSyncFormatValidationTransport:
     """Format validation runs before DB writes — unknown format → failed.
 
-    Covers: UC-006-MAIN-MCP-08
+    Covers: UC-006-MAIN-MCP-08, UC-006-FORMAT-VALIDATION-UNKNOWN-01
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
@@ -652,3 +655,435 @@ class TestGenerativeBuildUserAssetPriority:
             # User-provided assets should be preserved
             assets = db_creative.data.get("assets", {})
             assert "headline" in assets
+
+
+# ---------------------------------------------------------------------------
+# Format Validation Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestFormatValidationAdapter:
+    """Adapter-provided formats skip external agent validation.
+
+    Covers: UC-006-FORMAT-VALIDATION-ADAPTER-01
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_adapter_format_skips_registry(self, integration_db, transport):
+        """Non-HTTP agent_url (adapter://) bypasses registry.get_format check."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_adapter_fmt",
+                        "name": "Adapter Format Creative",
+                        "format_id": {"id": "billboard", "agent_url": "broadstreet://default"},
+                        "assets": {"banner": {"url": "https://example.com/ad.png"}},
+                    }
+                ],
+            )
+
+            assert result.is_success
+            assert_envelope(result, transport)
+            assert len(result.payload.creatives) == 1
+            assert result.payload.creatives[0].action == CreativeAction.created
+
+            # registry.get_format should NOT be called for adapter formats
+            registry = env.mock["registry"].return_value
+            assert not registry.get_format.called, "get_format should not be called for adapter-provided formats"
+
+
+@pytest.mark.requires_db
+class TestFormatValidationUnreachable:
+    """Unreachable creative agent → per-creative failure.
+
+    Covers: UC-006-FORMAT-VALIDATION-UNREACHABLE-01
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_unreachable_agent_fails_creative(self, integration_db, transport):
+        """Network error from registry.get_format → action=failed with 'unreachable'."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            # Override: get_format raises a network error
+            registry_mock = env.mock["registry"].return_value
+            registry_mock.get_format = AsyncMock(side_effect=ConnectionError("Agent unreachable"))
+
+            result = env.call_via(
+                transport,
+                creatives=[_creative(creative_id="c_unreach", name="Unreachable Test")],
+            )
+
+        assert result.is_success  # sync succeeds, individual creative fails
+        assert_envelope(result, transport)
+        assert len(result.payload.creatives) == 1
+        creative_result = result.payload.creatives[0]
+        assert creative_result.action == CreativeAction.failed
+        assert any("unreachable" in e.lower() for e in (creative_result.errors or []))
+
+
+# ---------------------------------------------------------------------------
+# Assignment Validation Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestAssignmentPackageTenantFilter:
+    """Package lookup is tenant-scoped — cross-tenant packages not visible.
+
+    Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-03
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_cross_tenant_package_not_found(self, integration_db, transport):
+        """Package in tenant_a is not visible when syncing as tenant_b."""
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, TenantFactory
+
+        pkg_id = "pkg_cross_tenant"
+
+        with CreativeSyncEnv() as env:
+            # Create the default tenant (test_tenant) + principal
+            env.setup_default_data()
+
+            # Create package in a DIFFERENT tenant
+            other_tenant = TenantFactory(tenant_id="other_tenant")
+            other_mb = MediaBuyFactory(
+                tenant=other_tenant,
+                media_buy_id="mb_other",
+            )
+            MediaPackageFactory(
+                media_buy=other_mb,
+                package_id=pkg_id,
+            )
+            env._commit_factory_data()
+
+            # Sync as test_tenant, referencing other_tenant's package
+            result = env.call_via(
+                transport,
+                creatives=[_creative(creative_id="c_cross", name="Cross Tenant")],
+                assignments={"c_cross": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        assert result.is_success
+        assert_envelope(result, transport)
+        creative_result = result.payload.creatives[0]
+        assert creative_result.assignment_errors is not None
+        assert pkg_id in creative_result.assignment_errors
+
+
+@pytest.mark.requires_db
+class TestAssignmentFormatCompatibility:
+    """Creative format must match product-supported formats.
+
+    Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-03
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_format_mismatch_records_error(self, integration_db, transport):
+        """Creative format not in product.format_ids → assignment_errors."""
+        from tests.factories import (
+            MediaBuyFactory,
+            MediaPackageFactory,
+            PrincipalFactory,
+            ProductFactory,
+            TenantFactory,
+        )
+
+        pkg_id = "pkg_fmt_check"
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Product only supports video_30s format
+            product = ProductFactory(
+                tenant=tenant,
+                product_id="prod_video",
+                format_ids=[{"agent_url": "https://video.agent.com", "id": "video_30s"}],
+            )
+            mb = MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_fmt")
+            MediaPackageFactory(
+                media_buy=mb,
+                package_id=pkg_id,
+                package_config={"product_id": product.product_id},
+            )
+            env._commit_factory_data()
+
+            # Creative uses display_300x250 (not video_30s)
+            result = env.call_via(
+                transport,
+                creatives=[_creative(creative_id="c_fmt_mismatch", name="Format Mismatch")],
+                assignments={"c_fmt_mismatch": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        assert result.is_success
+        assert_envelope(result, transport)
+        creative_result = result.payload.creatives[0]
+        assert creative_result.assignment_errors is not None
+        assert pkg_id in creative_result.assignment_errors
+        error_msg = creative_result.assignment_errors[pkg_id]
+        assert "not supported" in error_msg
+
+
+@pytest.mark.requires_db
+class TestAssignmentResultFields:
+    """Successful assignment populates assigned_to on the creative result.
+
+    Covers: UC-006-ASSIGNMENT-RESULT-01
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_successful_assignment_has_assigned_to(self, integration_db, transport):
+        """Result includes assigned_to with package IDs after successful assignment."""
+        from tests.factories import (
+            MediaBuyFactory,
+            MediaPackageFactory,
+            PrincipalFactory,
+            ProductFactory,
+            TenantFactory,
+        )
+
+        pkg_id = "pkg_assign_ok"
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Product supports the default display format
+            product = ProductFactory(
+                tenant=tenant,
+                product_id="prod_assign",
+                format_ids=[DEFAULT_FORMAT_ID],
+            )
+            mb = MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_assign")
+            MediaPackageFactory(
+                media_buy=mb,
+                package_id=pkg_id,
+                package_config={"product_id": product.product_id},
+            )
+            env._commit_factory_data()
+
+            result = env.call_via(
+                transport,
+                creatives=[_creative(creative_id="c_assign", name="Assignment Test")],
+                assignments={"c_assign": [pkg_id]},
+            )
+
+        assert result.is_success
+        assert_envelope(result, transport)
+        creative_result = result.payload.creatives[0]
+        assert creative_result.assigned_to is not None
+        assert pkg_id in creative_result.assigned_to
+
+
+# ---------------------------------------------------------------------------
+# Extension Tests — Auth & Validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestAuthPrincipalRequired:
+    """Missing principal_id → AdCPAuthenticationError.
+
+    Covers: UC-006-EXT-A-02
+    """
+
+    def test_no_principal_raises_auth_error(self, integration_db):
+        """Identity with principal_id=None → AdCPAuthenticationError."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            identity_no_principal = make_identity(
+                principal_id=None,
+                tenant_id="test_tenant",
+                tenant=env.identity.tenant,
+            )
+
+            result = env.call_via(
+                Transport.IMPL,
+                creatives=[_creative()],
+                identity=identity_no_principal,
+            )
+
+        assert result.is_error
+        assert isinstance(result.error, AdCPAuthenticationError)
+
+
+@pytest.mark.requires_db
+class TestAuthTenantRequired:
+    """Missing tenant → AdCPAuthenticationError.
+
+    Covers: UC-006-EXT-B-02
+    """
+
+    def test_no_tenant_raises_auth_error(self, integration_db):
+        """Identity with tenant=None → AdCPAuthenticationError."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            identity_no_tenant = make_identity(
+                principal_id="test_principal",
+                tenant_id="test_tenant",
+                tenant=None,
+            )
+
+            result = env.call_via(
+                Transport.IMPL,
+                creatives=[_creative()],
+                identity=identity_no_tenant,
+            )
+
+        assert result.is_error
+        assert isinstance(result.error, AdCPAuthenticationError)
+
+
+@pytest.mark.requires_db
+class TestEmptyNameFails:
+    """Empty creative name → per-creative failure.
+
+    Covers: UC-006-EXT-D-01
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_empty_name_action_failed(self, integration_db, transport):
+        """Creative with name='' → action=failed with error."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(
+                transport,
+                creatives=[_creative(creative_id="c_no_name", name="")],
+                validation_mode="lenient",
+            )
+
+        assert result.is_success  # sync succeeds, individual creative fails
+        assert_envelope(result, transport)
+        assert len(result.payload.creatives) == 1
+        creative_result = result.payload.creatives[0]
+        assert creative_result.action == CreativeAction.failed
+        assert creative_result.errors
+
+
+@pytest.mark.requires_db
+class TestMissingFormatFails:
+    """Missing format_id → per-creative failure.
+
+    Covers: UC-006-EXT-E-01
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_no_format_action_failed(self, integration_db, transport):
+        """Creative without format_id → action=failed."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_no_format",
+                        "name": "No Format Creative",
+                        "assets": {"banner": {"url": "https://example.com/ad.png"}},
+                    }
+                ],
+                validation_mode="lenient",
+            )
+
+        assert result.is_success
+        assert_envelope(result, transport)
+        creative_result = result.payload.creatives[0]
+        assert creative_result.action == CreativeAction.failed
+        assert creative_result.errors
+
+
+@pytest.mark.requires_db
+class TestStaticPreviewFailed:
+    """Static creative: no previews and no media_url → action=failed.
+
+    Covers: UC-006-EXT-H-01
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_no_preview_no_url_fails(self, integration_db, transport):
+        """Static format with empty preview_creative result and no url → failed."""
+        from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            # Set up a static format (no output_format_ids) in the all_formats list
+            mock_format = MagicMock()
+            mock_format.format_id = LibraryFormatId(
+                agent_url=DEFAULT_AGENT_URL,
+                id="display_300x250",
+            )
+            mock_format.agent_url = DEFAULT_AGENT_URL
+            mock_format.output_format_ids = None  # Static, not generative
+            env.set_run_async_result([mock_format])
+
+            # preview_creative returns empty dict (no previews)
+            registry = env.mock["registry"].return_value
+            registry.preview_creative = AsyncMock(return_value={})
+
+            # Creative with no url — only assets without a url field
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_no_preview",
+                        "name": "No Preview Creative",
+                        "format_id": DEFAULT_FORMAT_ID,
+                    }
+                ],
+                validation_mode="lenient",
+            )
+
+        assert result.is_success
+        assert_envelope(result, transport)
+        creative_result = result.payload.creatives[0]
+        assert creative_result.action == CreativeAction.failed
+        assert any("no previews" in e.lower() or "no media_url" in e.lower() for e in (creative_result.errors or []))
+
+
+@pytest.mark.requires_db
+class TestGeminiKeyMissing:
+    """Generative format without GEMINI_API_KEY → per-creative failure.
+
+    Covers: UC-006-EXT-I-01
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_generative_no_gemini_key_fails(self, integration_db, transport):
+        """Generative format + no gemini_api_key → action=failed."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build(gemini_api_key="")
+
+            # Override: remove the gemini key after setup
+            env.mock["config"].return_value.gemini_api_key = None
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_no_gemini",
+                        "name": "No Gemini Key",
+                        "format_id": fmt,
+                        "assets": {"message": {"content": "Build a banner"}},
+                    }
+                ],
+                validation_mode="lenient",
+            )
+
+        assert result.is_success
+        assert_envelope(result, transport)
+        creative_result = result.payload.creatives[0]
+        assert creative_result.action == CreativeAction.failed
+        assert any("gemini" in e.lower() for e in (creative_result.errors or []))
