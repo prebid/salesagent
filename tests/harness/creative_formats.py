@@ -90,8 +90,12 @@ class CreativeFormatsEnv(IntegrationEnv):
         return self._run_mcp_wrapper(list_creative_formats, ListCreativeFormatsResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to ListCreativeFormatsBody shape for REST POST."""
-        # ListCreativeFormatsBody only has adcp_version (no meaningful params)
+        """Convert kwargs to ListCreativeFormatsBody shape for REST POST.
+
+        Returns empty dict intentionally: ListCreativeFormatsBody
+        (src/routes/api_v1.py) only defines ``adcp_version: str = "1.0.0"``
+        with no user-facing parameters. All kwargs are dropped.
+        """
         return {}
 
     def parse_rest_response(self, data: dict[str, Any]) -> ListCreativeFormatsResponse:
