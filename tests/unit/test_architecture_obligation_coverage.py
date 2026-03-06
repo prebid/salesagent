@@ -24,6 +24,7 @@ from pathlib import Path
 
 OBLIGATIONS_DIR = Path(__file__).resolve().parents[2] / "docs" / "test-obligations"
 INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration"
+INTEGRATION_V2_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration_v2"
 UNIT_DIR = Path(__file__).resolve().parents[2] / "tests" / "unit"
 ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_coverage_allowlist.json"
 
@@ -82,6 +83,10 @@ def _get_covered_obligations() -> set[str]:
 
     # Integration tests
     for tf in INTEGRATION_DIR.glob("test_*_v3.py"):
+        _scan_file(tf)
+
+    # Integration V2 tests
+    for tf in INTEGRATION_V2_DIR.glob("test_*.py"):
         _scan_file(tf)
 
     # Unit entity tests
