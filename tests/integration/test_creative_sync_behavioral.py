@@ -1,10 +1,10 @@
-"""Integration tests: sync_creatives auth, isolation, and validation.
+"""Integration tests: sync_creatives auth, isolation, validation, and CRUD workflow.
 
 Behavioral tests using CreativeSyncEnv + real PostgreSQL + factory_boy.
 Replaces mock-heavy unit tests from test_creative.py with provable assertions
 against actual database state.
 
-Covers: salesagent-xwkj
+Covers: salesagent-xwkj, salesagent-11th
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
-from tests.factories import PrincipalFactory, TenantFactory
+from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
 from tests.harness.creative_sync import CreativeSyncEnv
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -360,3 +360,416 @@ class TestValidationModeSemantics:
             assert "c_survives" in survivor_ids, "Good creative should be persisted"
             assert "c_also_survives" in survivor_ids, "Second good creative should be persisted"
             assert "c_fails" not in survivor_ids, "Bad creative should not be persisted"
+
+
+# ---------------------------------------------------------------------------
+# CRUD Workflow Tests — Covers: salesagent-11th
+# ---------------------------------------------------------------------------
+
+
+class TestCreateUpdateWorkflow:
+    """Create/update upsert semantics with real DB verification."""
+
+    def test_new_creative_creates_db_record(self, integration_db):
+        """Covers: UC-006-MAIN-MCP-01 — new creative inserted into DB."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(creatives=[_make_creative_asset(creative_id="c_new", name="New Creative")])
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].action == CreativeAction.created
+
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(
+                    creative_id="c_new", tenant_id="test_tenant", principal_id="test_principal"
+                )
+            ).first()
+            assert db_creative is not None
+            assert db_creative.name == "New Creative"
+
+    def test_existing_creative_updates_in_place(self, integration_db):
+        """Covers: UC-006-MAIN-MCP-03 — upsert updates existing record by triple key."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Create first
+            env.call_impl(creatives=[_make_creative_asset(creative_id="c_upsert", name="Original")])
+            # Update with same creative_id
+            response = env.call_impl(creatives=[_make_creative_asset(creative_id="c_upsert", name="Updated")])
+
+        assert len(response.creatives) == 1
+        assert response.creatives[0].action == CreativeAction.updated
+
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_upsert", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is not None
+            assert db_creative.name == "Updated"
+
+    def test_batch_sync_multiple_creatives(self, integration_db):
+        """Covers: UC-006-MAIN-MCP-02 — batch of N creatives produces N results."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id=f"c_batch_{i}", name=f"Batch {i}") for i in range(5)]
+            )
+
+        assert len(response.creatives) == 5
+        result_ids = {r.creative_id for r in response.creatives}
+        assert result_ids == {f"c_batch_{i}" for i in range(5)}
+
+
+class TestDeleteMissing:
+    """delete_missing flag behavior with real DB."""
+
+    def test_delete_missing_archives_unlisted_creatives(self, integration_db):
+        """Covers: UC-006-DELETE-MISSING-01 — unlisted creatives soft-deleted."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Create two creatives
+            env.call_impl(
+                creatives=[
+                    _make_creative_asset(creative_id="c_keep", name="Keep"),
+                    _make_creative_asset(creative_id="c_orphan", name="Orphan"),
+                ]
+            )
+            # Re-sync with only one — orphan should be archived
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_keep", name="Keep")],
+                delete_missing=True,
+            )
+
+        # Check response includes a deleted action for orphan
+        actions = {r.creative_id: r.action for r in response.creatives}
+        assert CreativeAction.deleted in actions.values()
+
+        with get_db_session() as session:
+            orphan = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_orphan", tenant_id="test_tenant")
+            ).first()
+            assert orphan is not None
+            assert orphan.status == "archived"
+
+    def test_delete_missing_false_preserves_unlisted(self, integration_db):
+        """Covers: UC-006-DELETE-MISSING-02 — default: unlisted creatives unchanged."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Create initial creative
+            env.call_impl(creatives=[_make_creative_asset(creative_id="c_existing", name="Existing")])
+            # Sync a different creative without delete_missing
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_new_one", name="New")],
+                delete_missing=False,
+            )
+
+        # Only the synced creative in results
+        assert len(response.creatives) == 1
+        assert response.creatives[0].creative_id == "c_new_one"
+
+        with get_db_session() as session:
+            existing = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_existing", tenant_id="test_tenant")
+            ).first()
+            assert existing is not None
+            assert existing.status != "archived", "Existing creative should not be archived"
+
+
+class TestCreativeIdsFilter:
+    """creative_ids parameter scoping with real DB."""
+
+    def test_creative_ids_filter_narrows_processing(self, integration_db):
+        """Covers: UC-006-CREATIVE-IDS-SCOPE-01 — only matching IDs processed."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(creative_id="c1", name="One"),
+                    _make_creative_asset(creative_id="c2", name="Two"),
+                    _make_creative_asset(creative_id="c3", name="Three"),
+                ],
+                creative_ids=["c1", "c3"],
+            )
+
+        # Only c1 and c3 should be in results
+        result_ids = {r.creative_id for r in response.creatives}
+        assert result_ids == {"c1", "c3"}
+        assert "c2" not in result_ids
+
+    def test_empty_creative_ids_processes_all(self, integration_db):
+        """Covers: UC-006-CREATIVE-IDS-SCOPE-02 — empty list is falsy, processes all creatives."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c1", name="One")],
+                creative_ids=[],
+            )
+
+        # Empty list is falsy in `if creative_ids:` — all creatives processed
+        assert len(response.creatives) == 1
+
+
+class TestDryRunMode:
+    """dry_run flag: no DB writes."""
+
+    def test_dry_run_does_not_persist(self, integration_db):
+        """Covers: UC-006-DRY-RUN-01 — dry_run=True produces results without DB changes."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_dry", name="Dry Run Creative")],
+                dry_run=True,
+            )
+
+        assert response.dry_run is True
+        assert len(response.creatives) >= 1
+
+        # Verify nothing written to DB
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_dry", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is None, "Dry run should not persist any creatives"
+
+
+class TestApprovalWorkflow:
+    """Tenant approval_mode controls creative status."""
+
+    def test_auto_approve_sets_approved_status(self, integration_db):
+        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — auto-approve → status=approved."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant", approval_mode="auto-approve")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Override identity tenant dict to include approval_mode
+            identity = _make_identity(
+                principal_id="test_principal",
+                tenant_id="test_tenant",
+                tenant={"tenant_id": "test_tenant", "name": "Test", "approval_mode": "auto-approve"},
+            )
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_auto", name="Auto Approved")],
+                identity=identity,
+            )
+
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_auto", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is not None
+            assert db_creative.status == "approved"
+
+    def test_require_human_sets_pending_review(self, integration_db):
+        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-02 — require-human → status=pending_review."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant", approval_mode="require-human")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            identity = _make_identity(
+                principal_id="test_principal",
+                tenant_id="test_tenant",
+                tenant={"tenant_id": "test_tenant", "name": "Test", "approval_mode": "require-human"},
+            )
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_human", name="Needs Review")],
+                identity=identity,
+            )
+
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_human", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is not None
+            assert db_creative.status == "pending_review"
+
+    def test_default_approval_mode_is_require_human(self, integration_db):
+        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-04 — no approval_mode → defaults to require-human."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Identity tenant dict has NO approval_mode key
+            response = env.call_impl(creatives=[_make_creative_asset(creative_id="c_default", name="Default Mode")])
+
+        assert len(response.creatives) == 1
+
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_default", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is not None
+            assert db_creative.status == "pending_review"
+
+
+class TestAssignmentProcessing:
+    """Assignment creation with real DB + factory-created packages."""
+
+    def test_assignment_persists_to_db(self, integration_db):
+        """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01 — assignment record created in DB."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import CreativeAssignment as DBAssignment
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+
+            pkg_id = pkg.package_id
+
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_assign", name="Assigned")],
+                assignments={"c_assign": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        with get_db_session() as session:
+            assignments = session.scalars(
+                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_assign", package_id=pkg_id)
+            ).all()
+            assert len(assignments) == 1
+
+    def test_none_assignments_produces_no_records(self, integration_db):
+        """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01 — None assignments = no assignment records."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import CreativeAssignment as DBAssignment
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_noassign", name="No Assign")],
+                assignments=None,
+            )
+
+        with get_db_session() as session:
+            assignments = session.scalars(
+                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_noassign")
+            ).all()
+            assert len(assignments) == 0
+
+    def test_idempotent_assignment_upsert(self, integration_db):
+        """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-04 — duplicate assignment not duplicated."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import CreativeAssignment as DBAssignment
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+
+            pkg_id = pkg.package_id
+
+            # Assign twice
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_idem", name="Idempotent")],
+                assignments={"c_idem": [pkg_id]},
+                validation_mode="lenient",
+            )
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_idem", name="Idempotent")],
+                assignments={"c_idem": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        with get_db_session() as session:
+            assignments = session.scalars(
+                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_idem", package_id=pkg_id)
+            ).all()
+            assert len(assignments) == 1, "Idempotent: should not duplicate assignment"
+
+
+class TestSchemaCompleteness:
+    """Response schema fields verified against real results."""
+
+    def test_warnings_in_per_creative_results(self, integration_db):
+        """Covers: UC-006-ASSIGNMENTS-RESPONSE-COMPLETENESS-02 — warnings field populated."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(creatives=[_make_creative_asset(creative_id="c_warn", name="With Warnings")])
+
+        assert len(response.creatives) == 1
+        result = response.creatives[0]
+        # Warnings field should exist (may be empty or populated)
+        assert hasattr(result, "warnings")
+        assert isinstance(result.warnings, list)
+
+    def test_per_creative_result_has_required_fields(self, integration_db):
+        """Covers: UC-006-MAIN-MCP-01 — result has creative_id, action, changes, errors."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(creatives=[_make_creative_asset(creative_id="c_fields", name="Field Check")])
+
+        result = response.creatives[0]
+        assert result.creative_id == "c_fields"
+        assert result.action in list(CreativeAction)
+        assert isinstance(result.changes, list)
+        assert isinstance(result.errors, list)
