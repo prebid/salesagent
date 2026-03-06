@@ -33,8 +33,8 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.exceptions import AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyError, Error
-from src.core.tool_context import ToolContext
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
@@ -149,12 +149,16 @@ class TestCreateMediaBuyErrorPaths:
         This tests line 3159 in main.py where Error(code="authentication_error") is used.
         Previously this would cause NameError because Error wasn't imported.
         """
-        context = ToolContext(
-            context_id="test_ctx",
+        identity = ResolvedIdentity(
             tenant_id="error_test_tenant",
             principal_id="nonexistent_principal",  # Principal doesn't exist
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
+            tenant={
+                "tenant_id": "error_test_tenant",
+                "name": "Error Test Tenant",
+                "subdomain": "errortest",
+                "ad_server": "mock",
+            },
+            protocol="a2a",
         )
 
         future_start = datetime.now(UTC) + timedelta(days=1)
@@ -177,7 +181,7 @@ class TestCreateMediaBuyErrorPaths:
             start_time=future_start.isoformat(),
             end_time=future_end.isoformat(),
             budget={"total": 5000.0, "currency": "USD"},
-            ctx=context,
+            identity=identity,
         )
 
         # CreateMediaBuyResult supports tuple unpacking: (response, status)
@@ -202,12 +206,16 @@ class TestCreateMediaBuyErrorPaths:
         This tests line 3147 in main.py where Error(code="validation_error") is used
         in the ValueError exception handler.
         """
-        context = ToolContext(
-            context_id="test_ctx",
+        identity = ResolvedIdentity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
+            tenant={
+                "tenant_id": "error_test_tenant",
+                "name": "Error Test Tenant",
+                "subdomain": "errortest",
+                "ad_server": "mock",
+            },
+            protocol="a2a",
         )
 
         past_start = datetime.now(UTC) - timedelta(days=1)  # In the past!
@@ -230,7 +238,7 @@ class TestCreateMediaBuyErrorPaths:
             start_time=past_start.isoformat(),
             end_time=past_end.isoformat(),
             budget={"total": 5000.0, "currency": "USD"},
-            ctx=context,
+            identity=identity,
         )
 
         # CreateMediaBuyResult supports tuple unpacking: (response, status)
@@ -251,12 +259,16 @@ class TestCreateMediaBuyErrorPaths:
 
     async def test_end_time_before_start_returns_validation_error(self, test_tenant_with_principal):
         """Test that end_time before start_time returns Error response."""
-        context = ToolContext(
-            context_id="test_ctx",
+        identity = ResolvedIdentity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
+            tenant={
+                "tenant_id": "error_test_tenant",
+                "name": "Error Test Tenant",
+                "subdomain": "errortest",
+                "ad_server": "mock",
+            },
+            protocol="a2a",
         )
 
         start = datetime.now(UTC) + timedelta(days=7)
@@ -277,7 +289,7 @@ class TestCreateMediaBuyErrorPaths:
             start_time=start.isoformat(),
             end_time=end.isoformat(),
             budget={"total": 5000.0, "currency": "USD"},
-            ctx=context,
+            identity=identity,
         )
 
         # CreateMediaBuyResult supports tuple unpacking: (response, status)
@@ -300,12 +312,16 @@ class TestCreateMediaBuyErrorPaths:
         business logic runs, so it raises ToolError or AdCPValidationError rather
         than returning an Error response.
         """
-        context = ToolContext(
-            context_id="test_ctx",
+        identity = ResolvedIdentity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
+            tenant={
+                "tenant_id": "error_test_tenant",
+                "name": "Error Test Tenant",
+                "subdomain": "errortest",
+                "ad_server": "mock",
+            },
+            protocol="a2a",
         )
 
         future_start = datetime.now(UTC) + timedelta(days=1)
@@ -328,7 +344,7 @@ class TestCreateMediaBuyErrorPaths:
                 start_time=future_start.isoformat(),
                 end_time=future_end.isoformat(),
                 budget={"total": -1000.0, "currency": "USD"},
-                ctx=context,
+                identity=identity,
             )
 
         error_message = str(exc_info.value)
@@ -337,12 +353,16 @@ class TestCreateMediaBuyErrorPaths:
 
     async def test_missing_packages_returns_validation_error(self, test_tenant_with_principal):
         """Test that missing packages returns Error response."""
-        context = ToolContext(
-            context_id="test_ctx",
+        identity = ResolvedIdentity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
-            tool_name="create_media_buy",
-            request_timestamp=datetime.now(UTC),
+            tenant={
+                "tenant_id": "error_test_tenant",
+                "name": "Error Test Tenant",
+                "subdomain": "errortest",
+                "ad_server": "mock",
+            },
+            protocol="a2a",
         )
 
         future_start = datetime.now(UTC) + timedelta(days=1)
@@ -356,7 +376,7 @@ class TestCreateMediaBuyErrorPaths:
             start_time=future_start.isoformat(),
             end_time=future_end.isoformat(),
             budget={"total": 5000.0, "currency": "USD"},
-            ctx=context,
+            identity=identity,
         )
 
         # CreateMediaBuyResult supports tuple unpacking: (response, status)
@@ -383,13 +403,16 @@ class TestSyncCreativesErrorPaths:
         """Test that invalid creative format is handled gracefully."""
         from src.core.config_loader import set_current_tenant
 
-        # Create minimal test context
-        context = ToolContext(
-            context_id="test_ctx",
+        identity = ResolvedIdentity(
             tenant_id="test_tenant",
             principal_id="test_principal",
-            tool_name="sync_creatives",
-            request_timestamp=datetime.now(UTC),
+            tenant={
+                "tenant_id": "test_tenant",
+                "name": "Test Tenant",
+                "subdomain": "test",
+                "ad_server": "mock",
+            },
+            protocol="a2a",
         )
 
         # Set tenant (mock for this test)
@@ -414,7 +437,7 @@ class TestSyncCreativesErrorPaths:
         try:
             response = await sync_creatives_raw(
                 creatives=invalid_creatives,
-                ctx=context,
+                identity=identity,
             )
             # If it returns, check for errors
             assert response is not None
@@ -436,12 +459,16 @@ class TestListCreativesErrorPaths:
         """Test that invalid date format is handled with proper error."""
         from src.core.config_loader import set_current_tenant
 
-        context = ToolContext(
-            context_id="test_ctx",
+        identity = ResolvedIdentity(
             tenant_id="test_tenant",
             principal_id="test_principal",
-            tool_name="list_creatives",
-            request_timestamp=datetime.now(UTC),
+            tenant={
+                "tenant_id": "test_tenant",
+                "name": "Test Tenant",
+                "subdomain": "test",
+                "ad_server": "mock",
+            },
+            protocol="a2a",
         )
 
         set_current_tenant(
@@ -457,7 +484,7 @@ class TestListCreativesErrorPaths:
         with pytest.raises((ToolError, AdCPValidationError)) as exc_info:
             await list_creatives_raw(
                 created_after="not-a-date",  # Invalid format
-                ctx=context,
+                identity=identity,
             )
 
         # Verify it's a proper error, not NameError
