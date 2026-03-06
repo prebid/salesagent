@@ -307,6 +307,14 @@ class TestBaseClassContract:
 class TestEnvMethodNamingConsistency:
     """Env methods with the same name across subclasses must have consistent semantics."""
 
+    def test_base_env_has_run_mcp_wrapper(self):
+        """BaseTestEnv exposes _run_mcp_wrapper for DRY MCP dispatch."""
+        from tests.harness._base import BaseTestEnv
+
+        assert hasattr(BaseTestEnv, "_run_mcp_wrapper"), (
+            "BaseTestEnv should have _run_mcp_wrapper to reduce call_mcp duplication"
+        )
+
     def test_creative_sync_env_has_set_run_async_result(self):
         """CreativeSyncEnv uses set_run_async_result, not set_registry_formats.
 

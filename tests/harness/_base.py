@@ -178,10 +178,48 @@ class BaseTestEnv:
         Override in subclass. Should create a mock Context with
         get_state("identity") returning the MCP identity, call the
         async MCP wrapper, and extract the payload from ToolResult.structured_content.
+
+        Note on enum coercion: FastMCP auto-coerces string values to enums
+        when calling tools through the MCP protocol. When calling wrappers
+        directly in tests, you must coerce enum parameters yourself before
+        passing them. See CreativeSyncEnv.call_mcp for an example with
+        ValidationMode.
         """
         raise NotImplementedError(
             f"{type(self).__name__} does not implement call_mcp(). Override to enable Transport.MCP dispatch."
         )
+
+    def _run_mcp_wrapper(
+        self,
+        wrapper_fn: Any,
+        response_cls: type,
+        **kwargs: Any,
+    ) -> Any:
+        """Shared MCP dispatch: mock Context → async wrapper → parse response.
+
+        Handles the boilerplate that every call_mcp() repeats:
+        1. Create mock Context with get_state returning MCP identity
+        2. Call the async wrapper via asyncio.run()
+        3. Extract structured_content from ToolResult
+        4. Parse into response_cls
+
+        Subclass call_mcp() should do any pre-processing (enum coercion,
+        kwarg popping) then delegate here.
+        """
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fastmcp.server.context import Context
+
+        from tests.harness.transport import Transport
+
+        self._commit_factory_data()
+
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=self.identity_for(Transport.MCP))
+
+        tool_result = asyncio.run(wrapper_fn(ctx=mock_ctx, **kwargs))
+        return response_cls(**tool_result.structured_content)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert call_impl kwargs to the REST endpoint body shape.

@@ -30,7 +30,6 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -109,29 +108,18 @@ class CreativeSyncEnv(IntegrationEnv):
     def call_mcp(self, **kwargs: Any) -> SyncCreativesResponse:
         """Call sync_creatives MCP wrapper with mock Context.
 
-        Note: The MCP wrapper expects ValidationMode enum for validation_mode,
-        not a string. FastMCP normally coerces strings to enums, but since we
-        call the wrapper directly, we must do it ourselves.
+        Coerces validation_mode string→enum before delegating to base.
         """
         from adcp.types.generated_poc.enums.validation_mode import ValidationMode
-        from fastmcp.server.context import Context
 
         from src.core.tools.creatives.sync_wrappers import sync_creatives
-        from tests.harness.transport import Transport
-
-        self._commit_factory_data()
-
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=self.identity_for(Transport.MCP))
 
         # Coerce validation_mode string to enum (FastMCP does this automatically)
         if "validation_mode" in kwargs and isinstance(kwargs["validation_mode"], str):
             kwargs["validation_mode"] = ValidationMode(kwargs["validation_mode"])
 
         kwargs.setdefault("creatives", [])
-        tool_result = asyncio.run(sync_creatives(ctx=mock_ctx, **kwargs))
-        # ToolResult.structured_content is a dict (FastMCP serializes Pydantic models)
-        return SyncCreativesResponse(**tool_result.structured_content)
+        return self._run_mcp_wrapper(sync_creatives, SyncCreativesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to SyncCreativesBody shape for REST POST."""
