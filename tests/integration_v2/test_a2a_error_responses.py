@@ -451,3 +451,57 @@ class TestA2AErrorResponseStructure:
         # Verify this is a validation error response
         assert result["success"] is False, "Validation error should have success=False"
         assert "required_parameters" in result, "Validation error should list required params"
+
+    async def test_adcp_error_carries_recovery_through_a2a_boundary(self, integration_db, handler):
+        """A2A boundary translates AdCPError to ServerError with recovery in data field.
+
+        This tests _adcp_to_a2a_error propagation through _handle_explicit_skill.
+        """
+        from unittest.mock import patch
+
+        from a2a.utils.errors import ServerError
+
+        from src.core.exceptions import AdCPAdapterError, AdCPValidationError
+
+        # Test transient recovery (AdCPAdapterError)
+        async def mock_adapter_fail(params, token):
+            raise AdCPAdapterError("GAM timeout")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_adapter_fail):
+            with pytest.raises(ServerError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, "token")
+
+            error = exc_info.value.error
+            assert error.data is not None, "ServerError data must not be None"
+            assert error.data["recovery"] == "transient", "AdCPAdapterError must have transient recovery"
+
+        # Test correctable recovery (AdCPValidationError)
+        async def mock_validation_fail(params, token):
+            raise AdCPValidationError("invalid brief")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_validation_fail):
+            with pytest.raises(ServerError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, "token")
+
+            error = exc_info.value.error
+            assert error.data["recovery"] == "correctable", "AdCPValidationError must have correctable recovery"
+
+    async def test_custom_recovery_override_preserved_through_a2a(self, integration_db, handler):
+        """Custom recovery= override on AdCPError is preserved through A2A serialization."""
+        from unittest.mock import patch
+
+        from a2a.utils.errors import ServerError
+
+        from src.core.exceptions import AdCPNotFoundError
+
+        async def mock_transient_not_found(params, token):
+            raise AdCPNotFoundError("temporarily gone", recovery="transient")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_transient_not_found):
+            with pytest.raises(ServerError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, "token")
+
+            error = exc_info.value.error
+            assert error.data["recovery"] == "transient", (
+                "Custom recovery='transient' override must be preserved, not default 'terminal'"
+            )

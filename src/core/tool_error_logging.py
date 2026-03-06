@@ -57,25 +57,26 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
     return tenant_id, principal_id
 
 
-def extract_error_info(error: Exception) -> tuple[str, str]:
-    """Extract error code and message from an exception.
+def extract_error_info(error: Exception) -> tuple[str, str, str | None]:
+    """Extract error code, message, and recovery hint from an exception.
 
-    For AdCPError, uses the exception's error_code and message attributes.
-    For ToolError, attempts to parse structured (code, message) format.
+    For AdCPError, uses the exception's error_code, message, and recovery attributes.
+    For ToolError, attempts to parse structured (code, message, recovery) format.
     Falls back to using exception type as code and str(error) as message.
 
     Args:
         error: The exception to extract info from
 
     Returns:
-        Tuple of (error_code, error_message)
+        Tuple of (error_code, error_message, recovery) where recovery may be None
     """
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
-        return error.error_code, error.message
+        return error.error_code, error.message, error.recovery
     elif isinstance(error, ToolError):
-        # ToolError may be constructed as ToolError("CODE", "message") or ToolError("message")
+        # ToolError may be constructed as ToolError("CODE", "message", "recovery")
+        # or ToolError("CODE", "message") or ToolError("message")
         # Check if first arg looks like an error code (all caps, no spaces, reasonable length)
         if error.args:
             first_arg = str(error.args[0])
@@ -86,14 +87,15 @@ def extract_error_info(error: Exception) -> tuple[str, str]:
                 and first_arg.replace("_", "").isalnum()
             )
             if is_error_code and len(error.args) > 1:
-                # Structured format: ToolError("CODE", "message")
-                return first_arg, str(error.args[1])
+                # Structured format: ToolError("CODE", "message") or ("CODE", "message", "recovery")
+                recovery = str(error.args[2]) if len(error.args) > 2 else None
+                return first_arg, str(error.args[1]), recovery
             else:
                 # Single-arg format: ToolError("message")
-                return "TOOL_ERROR", str(error)
-        return "TOOL_ERROR", str(error)
+                return "TOOL_ERROR", str(error), None
+        return "TOOL_ERROR", str(error), None
     else:
-        return type(error).__name__, str(error)
+        return type(error).__name__, str(error), None
 
 
 def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, principal_id: str | None) -> None:
@@ -110,8 +112,8 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
         logger.warning(f"Tool {tool_name} failed without tenant context: {error}")
         return
 
-    # Extract error code and message
-    error_code, error_message = extract_error_info(error)
+    # Extract error code, message, and recovery hint
+    error_code, error_message, _recovery = extract_error_info(error)
 
     # Log to activity feed for real-time visibility
     try:
@@ -157,7 +159,7 @@ def _translate_to_tool_error(error: Exception) -> None:
     if isinstance(error, ToolError):
         raise
     elif isinstance(error, AdCPError):
-        raise ToolError(error.error_code, error.message) from error
+        raise ToolError(error.error_code, error.message, error.recovery) from error
     elif isinstance(error, ValueError):
         raise ToolError("VALIDATION_ERROR", str(error)) from error
     elif isinstance(error, PermissionError):

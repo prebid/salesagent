@@ -50,6 +50,8 @@ from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPBudgetExhaustedError,
+    AdCPConflictError,
     AdCPError,
     AdCPValidationError,
 )
@@ -95,13 +97,18 @@ logger = logging.getLogger(__name__)
 
 
 def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
-    """Translate AdCPError to an A2A SDK error type preserving semantics."""
-    if isinstance(exc, AdCPValidationError):
-        return InvalidParamsError(message=exc.message)
+    """Translate AdCPError to an A2A SDK error type preserving semantics.
+
+    The recovery classification is forwarded in the ``data`` field so that
+    buyer agents can decide whether to retry, fix, or abandon the request.
+    """
+    data: dict[str, str] = {"recovery": exc.recovery}
+    if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
+        return InvalidParamsError(message=exc.message, data=data)
     elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):
-        return InvalidRequestError(message=exc.message)
+        return InvalidRequestError(message=exc.message, data=data)
     else:
-        return InternalError(message=exc.message)
+        return InternalError(message=exc.message, data=data)
 
 
 # ADCP Discovery Skills: Skills that don't require authentication
