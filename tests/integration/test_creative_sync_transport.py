@@ -47,8 +47,7 @@ class TestSyncCreativeCreateTransport:
             )
 
         assert result.is_success, f"Expected success but got error: {result.error}"
-        if transport == Transport.REST:
-            assert_envelope(result, Transport.REST)
+        assert_envelope(result, transport)
 
         # Shared payload assertion — identical across all transports
         assert len(result.payload.creatives) == 1
@@ -64,6 +63,7 @@ class TestSyncCreativeCreateTransport:
             result = env.call_via(transport, creatives=[])
 
         assert result.is_success
+        assert_envelope(result, transport)
         assert len(result.payload.creatives) == 0
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
@@ -86,6 +86,7 @@ class TestSyncCreativeCreateTransport:
             )
 
         assert result.is_success
+        assert_envelope(result, transport)
         assert result.payload.dry_run is True
 
         # DB verification: dry-run creative must NOT be persisted
@@ -130,14 +131,15 @@ class TestSyncUpsertReturnsUpdatedTransport:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # First sync: create the creative
+            # First sync: create the creative (same transport as upsert)
             creative_data = _creative(creative_id="c_upsert")
-            env.call_via(Transport.IMPL, creatives=[creative_data])
+            env.call_via(transport, creatives=[creative_data])
 
             # Second sync via parametrized transport: upsert
             result = env.call_via(transport, creatives=[creative_data])
 
         assert result.is_success, f"Expected success but got error: {result.error}"
+        assert_envelope(result, transport)
         assert len(result.payload.creatives) == 1
         upserted = result.payload.creatives[0]
         assert upserted.creative_id == "c_upsert"
@@ -168,6 +170,7 @@ class TestSyncSavepointIsolationTransport:
             )
 
         assert result.is_success
+        assert_envelope(result, transport)
         assert len(result.payload.creatives) == 3
 
         results_by_id = {r.creative_id: r for r in result.payload.creatives}
@@ -239,6 +242,7 @@ class TestSyncLenientModeContinuesTransport:
             )
 
         assert result.is_success
+        assert_envelope(result, transport)
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
         assert creative_result.assignment_errors is not None
@@ -268,6 +272,7 @@ class TestSyncFormatValidationTransport:
             )
 
         assert result.is_success  # sync itself succeeds, individual creative fails
+        assert_envelope(result, transport)
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
         assert creative_result.action == CreativeAction.failed
@@ -297,5 +302,7 @@ class TestSyncRegistryCachingTransport:
             )
 
             assert result.is_success
-            # run_async_in_sync_context is called once (for list_all_formats)
-            assert env.mock["run_async"].call_count == 1
+            assert_envelope(result, transport)
+            # list_all_formats called once per sync, not per creative
+            registry = env.mock["registry"].return_value
+            assert registry.list_all_formats.call_count == 1
