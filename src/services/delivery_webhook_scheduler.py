@@ -15,12 +15,12 @@ from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import McpWebhookPayload
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import NotificationType
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+from src.core.database.models import WebhookDeliveryLog
 from src.core.database.repositories import MediaBuyRepository
-from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -186,13 +186,14 @@ class DeliveryWebhookScheduler:
             if not force:
                 # Look back 24 hours to find recent successful webhooks
                 one_day_ago = datetime.now(UTC) - timedelta(hours=24)
-                delivery_repo = DeliveryRepository(session, media_buy.tenant_id)
-                existing_log = delivery_repo.get_recent_successful_log(
-                    media_buy.media_buy_id,
-                    task_type="media_buy_delivery",
-                    notification_type="scheduled",
-                    since=one_day_ago,
+                existing_stmt = select(WebhookDeliveryLog).where(
+                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
+                    WebhookDeliveryLog.task_type == "media_buy_delivery",
+                    WebhookDeliveryLog.notification_type == "scheduled",
+                    WebhookDeliveryLog.status == "success",
+                    WebhookDeliveryLog.created_at > one_day_ago,
                 )
+                existing_log = session.scalars(existing_stmt).first()
                 if existing_log:
                     logger.info(
                         "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
@@ -247,9 +248,12 @@ class DeliveryWebhookScheduler:
             # Get sequence number for this webhook (get max sequence + 1)
             sequence_number = 1
             try:
-                delivery_repo = DeliveryRepository(session, media_buy.tenant_id)
-                max_seq = delivery_repo.get_max_sequence_number(media_buy.media_buy_id, task_type="media_buy_delivery")
-                sequence_number = max_seq + 1
+                stmt = select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
+                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
+                    WebhookDeliveryLog.task_type == "media_buy_delivery",
+                )
+                max_seq = session.scalar(stmt)
+                sequence_number = (max_seq or 0) + 1
             except Exception as e:
                 logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
 

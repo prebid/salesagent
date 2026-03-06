@@ -11,7 +11,6 @@ by tool domain.
 
 # Re-export raw functions from tool modules
 from src.core.tools.capabilities import get_adcp_capabilities_raw
-from src.core.tools.creative_delivery import get_creative_delivery_raw
 from src.core.tools.creative_formats import list_creative_formats_raw
 from src.core.tools.creatives import list_creatives_raw, sync_creatives_raw
 from src.core.tools.media_buy_create import create_media_buy_raw
@@ -34,7 +33,6 @@ __all__ = [
     "list_authorized_properties_raw",
     "update_media_buy_raw",
     "get_media_buy_delivery_raw",
-    "get_creative_delivery_raw",
     "get_media_buys_raw",
     "update_performance_index_raw",
 ]

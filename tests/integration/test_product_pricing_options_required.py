@@ -18,8 +18,8 @@ from src.core.database.models import PricingOption as PricingOptionModel
 from src.core.database.models import Principal as PrincipalModel
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import Tenant as TenantModel
-from src.core.main import get_product_catalog
 from src.core.schemas import Product as ProductSchema
+from src.core.tools.products import get_product_catalog
 
 
 @pytest.mark.requires_db

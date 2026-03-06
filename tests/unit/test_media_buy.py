@@ -1364,7 +1364,7 @@ class TestCreateMediaBuyAdapterInteraction:
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=MagicMock()),
             patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
-            patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+            patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
             patch(
                 "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
                 side_effect=AssertionError("adapter must not be called in dry_run mode"),
@@ -3018,7 +3018,6 @@ class TestDeliveryImplSingleBuy:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3028,10 +3027,6 @@ class TestDeliveryImplSingleBuy:
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
-            # Inner session for PricingOption query
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3738,33 +3733,36 @@ class TestDeliveryImplPricingLookup:
     """UC-004 pricing: salesagent-mq3n string-to-integer PK regression."""
 
     def test_pricing_option_lookup_uses_string_field(self):
-        """UC-004-PL01: lookup via string pricing_option_id, not integer PK.
+        """UC-004-PL01: lookup via synthetic ID (model_currency_type), not integer PK.
 
         Spec: CONFIRMED -- cpm-option.json pricing_option_id is type: string
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/pricing-options/cpm-option.json
+        Our implementation constructs synthetic IDs like "cpm_usd_fixed".
         Priority: P0
         Type: unit
         Source: UC-004, salesagent-mq3n
         Covers: UC-002-EXT-N-08
         """
+        from unittest.mock import patch
+
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
-        # _get_pricing_options matches by synthetic ID: {pricing_model}_{currency}_{fixed|auction}
         mock_po = MagicMock()
         mock_po.id = 42
         mock_po.pricing_model = "cpm"
         mock_po.currency = "USD"
         mock_po.is_fixed = True
+        mock_po.tenant_id = "test_tenant"
 
         with patch("src.core.tools.media_buy_delivery.get_db_session") as mock_db:
             mock_session = MagicMock()
             mock_session.scalars.return_value.all.return_value = [mock_po]
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__enter__ = lambda s: mock_session
+            mock_db.return_value.__exit__ = MagicMock(return_value=False)
 
-            result = _get_pricing_options(["cpm_usd_fixed"])
+            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant")
 
-            assert "cpm_usd_fixed" in result
-            assert result["cpm_usd_fixed"] == mock_po
+        assert "cpm_usd_fixed" in result
+        assert result["cpm_usd_fixed"] == mock_po
 
     def test_delivery_spend_with_correct_pricing(self):
         """UC-004-PL02: spend computed from rate and impressions.

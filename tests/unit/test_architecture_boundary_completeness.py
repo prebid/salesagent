@@ -39,8 +39,6 @@ IMPL_REGISTRY = [
 # Each entry is a known parameter drop that needs fixing.
 # Format: "module::impl_name::wrapper_kind::param_name"
 KNOWN_VIOLATIONS = {
-    # MCP wrapper for create_media_buy doesn't pass push_notification_config
-    "src.core.tools.media_buy_create::_create_media_buy_impl::mcp::push_notification_config",
     # A2A wrapper for create_media_buy doesn't pass context_id
     "src.core.tools.media_buy_create::_create_media_buy_impl::a2a::context_id",
     # A2A wrapper for update_media_buy doesn't pass context_id

@@ -2354,7 +2354,7 @@ async def _create_media_buy_impl(
 
         # Get products for the media buy to check product-level auto-creation settings
         # Lazy import to avoid circular dependency with main.py
-        from src.core.main import get_product_catalog
+        from src.core.tools.products import get_product_catalog
 
         catalog = get_product_catalog(tenant_id=identity.tenant_id)
         product_ids = req.get_product_ids()
@@ -3742,8 +3742,11 @@ async def create_media_buy(
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
-    # FIXME(salesagent-v0kb): boundary-completeness — push_notification_config not passed to _impl
-    result = await _create_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
+    # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None)
+    pnc_dict = push_notification_config.model_dump() if push_notification_config else None
+    result = await _create_media_buy_impl(
+        req=req, push_notification_config=pnc_dict, identity=identity, context_id=_ctx_id
+    )
     return ToolResult(content=str(result), structured_content=result)
 
 

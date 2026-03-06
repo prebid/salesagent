@@ -15,8 +15,8 @@ Usage:
         # auto-commits on clean exit, rolls back on exception
 """
 
-from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.uow import MediaBuyUoW
 
-__all__ = ["DeliveryRepository", "MediaBuyRepository", "MediaBuyUoW"]
+__all__ = ["MediaBuyRepository", "MediaBuyUoW", "ProductRepository"]

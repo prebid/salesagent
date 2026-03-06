@@ -182,9 +182,19 @@ def get_tenant_config(key: str, default=None):
     return default
 
 
-def set_current_tenant(tenant_dict: dict[str, Any]):
-    """Set the current tenant context."""
-    current_tenant.set(tenant_dict)
+def set_current_tenant(tenant_data: Any) -> None:
+    """Set the current tenant context.
+
+    Normalizes TenantContext / LazyTenantContext to a plain dict before
+    storing in the ContextVar.  This is the SINGLE conversion point —
+    callers pass whatever they have and this function ensures the ContextVar
+    always holds dict[str, Any].
+    """
+    from src.core.tenant_context import LazyTenantContext, TenantContext
+
+    if isinstance(tenant_data, (TenantContext, LazyTenantContext)):
+        tenant_data = dict(tenant_data)
+    current_tenant.set(tenant_data)
 
 
 def get_tenant_by_subdomain(subdomain: str) -> dict[str, Any] | None:

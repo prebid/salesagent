@@ -27,7 +27,6 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.exceptions import AdCPAdapterError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
@@ -636,9 +635,11 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
 
 @pytest.mark.requires_db
 async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_pricing_models):
-    """Test auction-based CPC (non-fixed) is rejected with clear error (not supported by adcp library v2.5.0)."""
-    from fastmcp.exceptions import ToolError
+    """Test auction-based CPC creates a PRICE_PRIORITY line item in GAM.
 
+    Auction CPC is supported by adcp library v3.2.0+ via CpcPricingOption
+    with floor_price (no fixed_price = auction-based).
+    """
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     # Add auction CPC pricing option
@@ -681,17 +682,15 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         protocol="mcp",
     )
 
-    # Auction CPC should be rejected because adcp library v2.5.0 doesn't support CpcAuctionPricingOption
-    # Only CpcPricingOption exists, which requires is_fixed=true
-    # When calling _impl directly, AdCPAdapterError propagates (MCP wrapper converts to ToolError)
-    with pytest.raises((ToolError, AdCPAdapterError)) as exc_info:
-        await _create_media_buy_impl(req=request, identity=identity)
+    response, _ = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify error message explains the limitation
-    error_message = str(exc_info.value)
-    assert "Auction CPC pricing option cpc_usd_auction is not supported" in error_message
-    # V3: Message updated to explain fixed_price requirement
-    assert "CPC pricing requires fixed_price" in error_message
+    if is_external_service_response_error(response):
+        pytest.skip(f"External creative agent unavailable: {response.errors}")
+
+    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+        f"Auction CPC media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
+    )
+    assert response.media_buy_id is not None
 
     # Cleanup auction pricing option
     with get_db_session() as session:

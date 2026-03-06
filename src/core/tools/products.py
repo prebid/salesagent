@@ -19,17 +19,13 @@ from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
-from sqlalchemy import select
-
-# Imports for implementation
-from sqlalchemy.orm import joinedload
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import create_get_products_request
+from src.core.schema_helpers import create_get_products_request, to_brand_reference
 from src.core.schemas import (
     GetProductsResponse,
     Product,  # Extends library Product
@@ -245,13 +241,13 @@ async def _get_products_impl(
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
-    # req.brand is dict[str, Any] | None (our schema override accepts flexible input).
+    # req.brand is BrandReference | None after Pydantic parsing.
+    # to_brand_reference handles both dict and model (defensive for mock callers).
     offering = None
-    if req.brand:
-        brand_dict: dict[str, Any] = req.brand if isinstance(req.brand, dict) else {}
-        domain = brand_dict.get("domain")
-        if domain:
-            offering = f"Brand at {domain}"
+    brand_ref = to_brand_reference(req.brand) if req.brand else None
+    if brand_ref:
+        if brand_ref.domain:
+            offering = f"Brand at {brand_ref.domain}"
 
     # Check brand_manifest_policy from tenant settings
     brand_manifest_policy = tenant.get("brand_manifest_policy", "require_auth")
@@ -396,19 +392,12 @@ async def _get_products_impl(
             details={"error_code": "POLICY_VIOLATION"},
         )
 
-    # Query products directly from database
-    # This replaces the product_catalog_providers abstraction with simple direct access
-    from src.core.database.models import Product as ProductModel
+    # Query products via ProductRepository (tenant-scoped, eager-loaded)
+    from src.core.database.repositories.product import ProductRepository
 
     with get_db_session() as db_session:
-        stmt = (
-            select(ProductModel)
-            .options(joinedload(ProductModel.pricing_options), joinedload(ProductModel.tenant))
-            .filter_by(tenant_id=tenant["tenant_id"])
-            .order_by(ProductModel.product_id)
-        )
-        result = db_session.execute(stmt).unique()
-        db_products = list(result.scalars().all())
+        product_repo = ProductRepository(db_session, tenant["tenant_id"])
+        db_products = product_repo.get_all_for_tenant()
 
         # Convert database Product models to AdCP Product schema
         products = []
@@ -834,7 +823,7 @@ async def _get_products_impl(
             "product_count": len(eligible_products),
             "brief_length": len(brief_text),
             "has_filters": req.filters is not None,
-            "has_brand_manifest": req.brand is not None,
+            "has_brand": req.brand is not None,
             "elapsed_ms": elapsed_ms,
         },
     )
@@ -893,10 +882,11 @@ async def get_products(
     response = await _get_products_impl(req, identity)
 
     # Return ToolResult with human-readable text and structured data
-    # Serialize with v2.x backward-compat fields for pre-3.0 clients
+    response_dict = response.model_dump(mode="json")
+    # Apply v2.x backward-compat fields only for pre-3.0 clients
     from src.core.version_compat import apply_version_compat
 
-    response_dict = apply_version_compat("get_products", response, adcp_version)
+    response_dict = apply_version_compat("get_products", response_dict, adcp_version)
     return ToolResult(content=str(response), structured_content=response_dict)
 
 
@@ -960,10 +950,7 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
     Returns:
         List of Product objects with full pricing options
     """
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-
-    from src.core.database.models import Product as ModelProduct
+    from src.core.database.repositories.product import ProductRepository
 
     if tenant_id is None:
         from src.core.config_loader import get_current_tenant
@@ -971,26 +958,12 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
         tenant_id = get_current_tenant()["tenant_id"]
 
     with get_db_session() as session:
-        stmt = (
-            select(ModelProduct)
-            .filter_by(tenant_id=tenant_id)
-            .options(
-                selectinload(ModelProduct.pricing_options),
-                selectinload(ModelProduct.inventory_profile),  # Avoid N+1 query
-                selectinload(ModelProduct.tenant),  # For publisher_domain resolution
-            )
-        )
-        products = session.scalars(stmt).all()
+        product_repo = ProductRepository(session, tenant_id)
+        db_products = product_repo.get_all_for_tenant()
 
         # Use convert_product_model_to_schema for consistency
         loaded_products = []
-        for product in products:
-            try:
-                # convert_product_model_to_schema returns library Product
-                # which is compatible with our extended Product at runtime
-                loaded_products.append(convert_product_model_to_schema(product))
-            except ValueError as e:
-                logger.warning(f"Skipping product {product.product_id}: {e}")
-                continue
+        for product in db_products:
+            loaded_products.append(convert_product_model_to_schema(product))
 
     return loaded_products

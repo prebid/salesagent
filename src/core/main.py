@@ -232,17 +232,9 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
         stmt = select(ModelProduct).filter_by(tenant_id=tenant_id).options(selectinload(ModelProduct.pricing_options))
         products = session.scalars(stmt).all()
 
-        # Use shared conversion function - handles all required fields,
-        # pricing options (with typed instances), and all edge cases
         loaded_products = []
         for product in products:
-            try:
-                converted_product = convert_product_model_to_schema(product)
-                loaded_products.append(converted_product)
-            except Exception as e:
-                logger.error(f"Failed to convert product {product.product_id}: {e}")
-                # Re-raise to surface conversion errors
-                raise ValueError(f"Product {product.product_id} conversion failed: {e}") from e
+            loaded_products.append(convert_product_model_to_schema(product))
 
     # convert_product_model_to_schema returns LibraryProduct,
     # which our Product extends - safe cast at runtime
@@ -290,7 +282,6 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
 # Import error logging wrapper for centralized error visibility
 from src.core.tool_error_logging import with_error_logging
 from src.core.tools.capabilities import get_adcp_capabilities
-from src.core.tools.creative_delivery import get_creative_delivery
 from src.core.tools.creative_formats import list_creative_formats
 from src.core.tools.creatives import list_creatives, sync_creatives
 from src.core.tools.media_buy_create import create_media_buy
@@ -314,7 +305,6 @@ mcp.tool()(with_error_logging(list_authorized_properties))
 mcp.tool()(with_error_logging(create_media_buy))
 mcp.tool()(with_error_logging(update_media_buy))
 mcp.tool()(with_error_logging(get_media_buy_delivery))
-mcp.tool()(with_error_logging(get_creative_delivery))
 mcp.tool()(with_error_logging(get_media_buys))
 mcp.tool()(with_error_logging(update_performance_index))
 mcp.tool()(with_error_logging(list_tasks))

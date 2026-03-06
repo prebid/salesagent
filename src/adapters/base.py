@@ -13,7 +13,6 @@ from rich.console import Console
 
 from src.core.audit_logger import get_audit_logger
 from src.core.schemas import (
-    AdapterGetCreativeDeliveryResponse,
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
     CheckMediaBuyStatusResponse,
@@ -305,27 +304,6 @@ class AdServerAdapter(ABC):
     ) -> AdapterGetMediaBuyDeliveryResponse:
         """Gets delivery data for a media buy."""
         pass
-
-    def get_creative_delivery(
-        self,
-        media_buy_id: str,
-        date_range: ReportingPeriod,
-        creative_ids: list[str] | None = None,
-    ) -> AdapterGetCreativeDeliveryResponse:
-        """Gets creative-level delivery data for a media buy.
-
-        Default implementation raises NotImplementedError. Override in
-        adapters that support creative-dimension reporting.
-
-        Args:
-            media_buy_id: Media buy to get creative delivery for
-            date_range: Reporting period
-            creative_ids: Optional filter to specific creatives
-
-        Returns:
-            AdapterGetCreativeDeliveryResponse with per-creative metrics
-        """
-        raise NotImplementedError("Creative delivery not supported by this adapter")
 
     def get_packages_snapshot(
         self, package_refs: list[tuple[str, str, str | None]]

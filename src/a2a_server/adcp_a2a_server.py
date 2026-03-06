@@ -60,9 +60,6 @@ from src.core.tools import (
     create_media_buy_raw as core_create_media_buy_tool,
 )
 from src.core.tools import (
-    get_creative_delivery_raw as core_get_creative_delivery_tool,
-)
-from src.core.tools import (
     get_media_buy_delivery_raw as core_get_media_buy_delivery_tool,
 )
 from src.core.tools import (
@@ -369,7 +366,6 @@ class AdCPRequestHandler(RequestHandler):
             from src.core.schemas import (
                 CreateMediaBuyError,
                 CreateMediaBuySuccess,
-                GetCreativeDeliveryResponse,
                 GetMediaBuyDeliveryResponse,
                 GetMediaBuysResponse,
                 GetProductsResponse,
@@ -398,7 +394,6 @@ class AdCPRequestHandler(RequestHandler):
 
             # Non-union response types - use the concrete class directly
             response_map: dict[str, type] = {
-                "get_creative_delivery": GetCreativeDeliveryResponse,
                 "get_media_buy_delivery": GetMediaBuyDeliveryResponse,
                 "get_media_buys": GetMediaBuysResponse,
                 "get_products": GetProductsResponse,
@@ -1328,7 +1323,6 @@ class AdCPRequestHandler(RequestHandler):
             "update_media_buy": self._handle_update_media_buy_skill,
             "get_media_buys": self._handle_get_media_buys_skill,
             "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
-            "get_creative_delivery": self._handle_get_creative_delivery_skill,
             "update_performance_index": self._handle_update_performance_index_skill,
             # AdCP Spec Creative Management (centralized library approach)
             "sync_creatives": self._handle_sync_creatives_skill,
@@ -1373,17 +1367,6 @@ class AdCPRequestHandler(RequestHandler):
         brand_manifest_policy setting (public/require_brand/require_auth).
         """
         try:
-            # Normalize brand_manifest: URL string → dict (adcp v1.2.1 compat)
-            brand_manifest = parameters.get("brand_manifest")
-            if isinstance(brand_manifest, str):
-                brand_manifest = {"url": brand_manifest}
-            elif brand_manifest is not None and not isinstance(brand_manifest, dict):
-                raise ServerError(
-                    InvalidParamsError(
-                        message=f"brand_manifest must be a dict or URL string, got {type(brand_manifest)}"
-                    )
-                )
-
             brief = parameters.get("brief", "")
             brand = parameters.get("brand")
             filters = parameters.get("filters")
@@ -1393,6 +1376,7 @@ class AdCPRequestHandler(RequestHandler):
                 brief=brief,
                 brand=brand,
                 filters=filters,
+                property_list=parameters.get("property_list"),
                 min_exposures=parameters.get("min_exposures"),
                 strategy_id=parameters.get("strategy_id"),
                 context=parameters.get("context"),
@@ -1408,13 +1392,12 @@ class AdCPRequestHandler(RequestHandler):
             else:
                 # Capture human-readable message before converting to dict
                 message = str(response)
-                # Serialize with model-level v2 compat (pricing options from models)
-                response_data = apply_version_compat("get_products", response, adcp_version)
+                response_data = response.model_dump(mode="json")
                 # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
                 # since returning a dict bypasses that logic
                 response_data["message"] = message
                 response_data.setdefault("success", True)
-            return response_data
+            return apply_version_compat("get_products", response_data, adcp_version)
 
         except AdCPError:
             # Let AdCPError propagate to outer handler for proper translation
@@ -1846,8 +1829,6 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle get_media_buys skill invocation."""
         try:
-            tool_context = self._make_tool_context(identity, "get_media_buys")
-
             response = core_get_media_buys_tool(
                 media_buy_ids=parameters.get("media_buy_ids"),
                 buyer_refs=parameters.get("buyer_refs"),
@@ -1855,7 +1836,7 @@ class AdCPRequestHandler(RequestHandler):
                 include_snapshot=parameters.get("include_snapshot", False),
                 account_id=parameters.get("account_id"),
                 context=parameters.get("context"),
-                ctx=tool_context,
+                identity=identity,
             )
 
             return response
@@ -1908,35 +1889,6 @@ class AdCPRequestHandler(RequestHandler):
         except Exception as e:
             logger.error(f"Error in get_media_buy_delivery skill: {e}")
             raise ServerError(InternalError(message=f"Unable to get media buy delivery: {str(e)}"))
-
-    async def _handle_get_creative_delivery_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
-        """Handle get_creative_delivery skill invocation.
-
-        Per AdCP spec, at least one scoping filter is required:
-        media_buy_ids, media_buy_buyer_refs, or creative_ids.
-        """
-        try:
-            from src.core.schemas import GetCreativeDeliveryRequest
-
-            req = GetCreativeDeliveryRequest.model_validate(parameters)
-
-            response = core_get_creative_delivery_tool(
-                media_buy_ids=req.media_buy_ids,
-                media_buy_buyer_refs=req.media_buy_buyer_refs,
-                creative_ids=req.creative_ids,
-                account_id=req.account_id,
-                start_date=req.start_date,
-                end_date=req.end_date,
-                max_variants=req.max_variants,
-                context=parameters.get("context"),
-                identity=identity,
-            )
-
-            return response
-
-        except Exception as e:
-            logger.error(f"Error in get_creative_delivery skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to get creative delivery: {str(e)}"))
 
     async def _handle_update_performance_index_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit update_performance_index skill invocation (CRITICAL for optimization)."""
@@ -1994,10 +1946,12 @@ class AdCPRequestHandler(RequestHandler):
             # Convert to A2A response format with v2.x backward compatibility
             from src.core.version_compat import apply_version_compat
 
-            # Serialize with model-level v2 compat (adcp_version=None -> v2 compat applied)
-            response_data = apply_version_compat("get_products", response, None)
-            response_data["message"] = str(response)  # Use __str__ method for human-readable message
-            return response_data
+            products = [product.model_dump(mode="json") for product in response.products]
+            response_data = {
+                "products": products,
+                "message": str(response),  # Use __str__ method for human-readable message
+            }
+            return apply_version_compat("get_products", response_data, None)
 
         except Exception as e:
             logger.error(f"Error getting products: {e}")
@@ -2176,12 +2130,6 @@ def create_agent_card() -> AgentCard:
                 name="get_media_buy_delivery",
                 description="Get delivery metrics and performance data for media buys",
                 tags=["delivery", "metrics", "performance", "monitoring", "adcp"],
-            ),
-            AgentSkill(
-                id="get_creative_delivery",
-                name="get_creative_delivery",
-                description="Get creative-level delivery metrics for media buys",
-                tags=["creative", "delivery", "metrics", "monitoring", "adcp"],
             ),
             AgentSkill(
                 id="update_performance_index",

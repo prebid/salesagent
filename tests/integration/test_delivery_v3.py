@@ -586,12 +586,13 @@ class TestDeliveryPricingOptionIntegration:
         """_get_pricing_options resolves string pricing_option_id to real PricingOption row.
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
-        Spec: UNSPECIFIED. CRITICAL: validates synthetic ID lookup
-        (salesagent-e34r). Creates a PricingOption (cpm/USD/fixed) and uses
-        its synthetic ID "cpm_usd_fixed" in raw_request to verify delivery resolves it.
+        Spec: UNSPECIFIED. CRITICAL: validates the int() cast at the boundary
+        (salesagent-mq3n). Creates a PricingOption with auto-increment int PK,
+        stores the string ID in raw_request, and verifies delivery resolves it.
         """
         with get_db_session() as session:
             base = _setup_base_state(session)
+            po_id = base["pricing_option_id"]  # int PK
 
             _create_media_buy(
                 session,
@@ -604,7 +605,7 @@ class TestDeliveryPricingOptionIntegration:
                         {
                             "package_id": "pkg_priced",
                             "product_id": "prod_display",
-                            "pricing_option_id": "cpm_usd_fixed",
+                            "pricing_option_id": str(po_id),
                         }
                     ],
                     "buyer_ref": "pricing_ref",
