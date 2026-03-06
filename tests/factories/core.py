@@ -10,7 +10,7 @@ from decimal import Decimal
 import factory
 from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
-from src.core.database.models import CurrencyLimit, PropertyTag, Tenant
+from src.core.database.models import CurrencyLimit, PropertyTag, PublisherPartner, Tenant
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -45,6 +45,20 @@ class CurrencyLimitFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     currency_code = "USD"
     min_package_budget = Decimal("100.00")
+
+
+class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
+    class Meta:
+        model = PublisherPartner
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    publisher_domain = Sequence(lambda n: f"publisher-{n:04d}.com")
+    display_name = LazyAttribute(lambda o: f"Publisher {o.publisher_domain}")
+    is_verified = True
+    sync_status = "success"
 
 
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):

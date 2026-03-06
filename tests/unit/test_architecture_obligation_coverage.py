@@ -29,7 +29,13 @@ UNIT_DIR = Path(__file__).resolve().parents[2] / "tests" / "unit"
 ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_coverage_allowlist.json"
 
 # Unit test entity files that carry Covers: tags
-_UNIT_ENTITY_FILES = ["test_media_buy.py", "test_creative.py", "test_delivery.py", "test_product.py"]
+_UNIT_ENTITY_FILES = [
+    "test_media_buy.py",
+    "test_creative.py",
+    "test_delivery.py",
+    "test_product.py",
+    "test_product_schema_obligations.py",
+]
 
 # Obligation ID pattern: PREFIX-SECTION-SEQ (e.g., UC-002-MAIN-01, BR-RULE-006-01)
 _OBLIGATION_ID_RE = re.compile(r"[A-Z][A-Z0-9]+-[\w-]+-\d{2}")
