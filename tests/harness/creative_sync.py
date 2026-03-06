@@ -75,8 +75,13 @@ class CreativeSyncEnv(IntegrationEnv):
         # Audit log: no-op
         self.mock["audit_log"].return_value = None
 
-    def set_registry_formats(self, formats: list[Any]) -> None:
-        """Configure mock registry to return these formats from list_all_formats."""
+    def set_run_async_result(self, formats: list[Any]) -> None:
+        """Configure run_async_in_sync_context to return *formats*.
+
+        Unlike CreativeFormatsEnv.set_registry_formats (which patches
+        registry.list_all_formats directly), this patches the sync bridge
+        that wraps the async call in _sync.py.
+        """
         self.mock["run_async"].side_effect = lambda coro: formats
 
     def call_impl(self, **kwargs: Any) -> SyncCreativesResponse:

@@ -302,3 +302,24 @@ class TestBaseClassContract:
                     # Second env should fail because factories are already bound
                     with pytest.raises(AssertionError, match="already bound"):
                         _TestEnv().__enter__()
+
+
+class TestEnvMethodNamingConsistency:
+    """Env methods with the same name across subclasses must have consistent semantics."""
+
+    def test_creative_sync_env_has_set_run_async_result(self):
+        """CreativeSyncEnv uses set_run_async_result, not set_registry_formats.
+
+        set_registry_formats patches registry.list_all_formats (CreativeFormatsEnv).
+        CreativeSyncEnv patches run_async.side_effect, which is a different mechanic.
+        Using the same name is a trap for new Env authors.
+        """
+        from tests.harness.creative_sync import CreativeSyncEnv
+
+        assert hasattr(CreativeSyncEnv, "set_run_async_result"), (
+            "CreativeSyncEnv should have set_run_async_result (not set_registry_formats)"
+        )
+        assert not hasattr(CreativeSyncEnv, "set_registry_formats"), (
+            "CreativeSyncEnv should NOT have set_registry_formats — "
+            "that name belongs to CreativeFormatsEnv (different mechanic)"
+        )
