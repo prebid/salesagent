@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0](https://github.com/prebid/salesagent/compare/v1.4.0...v1.5.0) (2026-03-06)
+
+
+### Features
+
+* AdCP v3.6 upgrade — schema migration, auth hardening, repository pattern, multi-tenant isolation ([#1071](https://github.com/prebid/salesagent/issues/1071)) ([3398aab](https://github.com/prebid/salesagent/commit/3398aabf387447ccfbd20402703a60ff99f62bd5))
+
+
+### Bug Fixes
+
+* resolve FormatId AttributeError crashing Add/Edit Product pages ([#1079](https://github.com/prebid/salesagent/issues/1079)) ([0b22f1e](https://github.com/prebid/salesagent/commit/0b22f1e4f54a219bd3e5cd54879c52872e9c468e))
+
+
+### Code Refactoring
+
+* FastAPI migration — unify MCP + A2A + Admin into single process ([#1066](https://github.com/prebid/salesagent/issues/1066)) ([7d2b1d9](https://github.com/prebid/salesagent/commit/7d2b1d9e05d30388c74259ec29bd03f24390e2e7))
+
 ## [1.4.0](https://github.com/prebid/salesagent/compare/v1.3.1...v1.4.0) (2026-02-27)
 
 
