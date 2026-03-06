@@ -88,6 +88,18 @@ class TestSyncCreativeCreateTransport:
         assert result.is_success
         assert result.payload.dry_run is True
 
+        # DB verification: dry-run creative must NOT be persisted
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_dry_run", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is None, "Dry-run creative should NOT be in the database"
+
 
 DEFAULT_AGENT_URL = "https://example.com/agent"
 DEFAULT_FORMAT_ID = {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL}
@@ -162,6 +174,24 @@ class TestSyncSavepointIsolationTransport:
         assert results_by_id["c_bad"].action == CreativeAction.failed
         assert results_by_id["c_good_1"].action != CreativeAction.failed
         assert results_by_id["c_good_2"].action != CreativeAction.failed
+
+        # DB verification: good creatives persisted, bad creative did not
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Creative as DBCreative
+
+        with get_db_session() as session:
+            for cid in ("c_good_1", "c_good_2"):
+                db_creative = session.scalars(
+                    select(DBCreative).filter_by(creative_id=cid, tenant_id="test_tenant")
+                ).first()
+                assert db_creative is not None, f"{cid} should be persisted in DB"
+
+            bad_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_bad", tenant_id="test_tenant")
+            ).first()
+            assert bad_creative is None, "Failed creative should NOT be in the database"
 
 
 @pytest.mark.requires_db
