@@ -92,8 +92,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/conftest.py", "sample_principal"),
     ("tests/integration/conftest.py", "sample_products"),
     ("tests/integration/conftest.py", "test_media_buy_workflow"),
-    # test_creative_v3.py (multiple classes share setup_tenant name)
-    ("tests/integration/test_creative_v3.py", "setup_tenant"),
     # test_media_buy_v3.py
     ("tests/integration/test_media_buy_v3.py", "mb_creatives"),
     ("tests/integration/test_media_buy_v3.py", "test_unsupported_currency_rejected"),
