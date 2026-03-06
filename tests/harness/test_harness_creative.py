@@ -96,6 +96,15 @@ class TestCreativeSyncEnvContract:
         response = env.parse_rest_response({"creatives": [], "dry_run": False})
         assert response is not None
 
+    def test_has_call_mcp(self):
+        """CreativeSyncEnv implements call_mcp for MCP dispatch."""
+        from tests.harness.creative_sync import CreativeSyncEnv
+
+        env = CreativeSyncEnv()
+        assert hasattr(env, "call_mcp")
+        # Should be a distinct method (not inherited NotImplementedError stub)
+        assert callable(env.call_mcp)
+
 
 class TestCreativeListEnvContract:
     """CreativeListEnv must mock only audit logger."""

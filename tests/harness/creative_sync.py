@@ -30,6 +30,7 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -99,6 +100,23 @@ class CreativeSyncEnv(IntegrationEnv):
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
         return sync_creatives_raw(**kwargs)
+
+    def call_mcp(self, **kwargs: Any) -> SyncCreativesResponse:
+        """Call sync_creatives MCP wrapper with mock Context."""
+        from fastmcp.server.context import Context
+
+        from src.core.tools.creatives.sync_wrappers import sync_creatives
+        from tests.harness.transport import Transport
+
+        self._commit_factory_data()
+
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=self.identity_for(Transport.MCP))
+
+        kwargs.setdefault("creatives", [])
+        tool_result = asyncio.run(sync_creatives(ctx=mock_ctx, **kwargs))
+        # ToolResult.structured_content is a dict (FastMCP serializes Pydantic models)
+        return SyncCreativesResponse(**tool_result.structured_content)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to SyncCreativesBody shape for REST POST."""

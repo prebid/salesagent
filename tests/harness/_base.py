@@ -172,6 +172,17 @@ class BaseTestEnv:
             f"{type(self).__name__} does not implement call_a2a(). Override to enable Transport.A2A dispatch."
         )
 
+    def call_mcp(self, **kwargs: Any) -> Any:
+        """Call the async MCP wrapper with a mock Context.
+
+        Override in subclass. Should create a mock Context with
+        get_state("identity") returning the MCP identity, call the
+        async MCP wrapper, and extract the payload from ToolResult.structured_content.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement call_mcp(). Override to enable Transport.MCP dispatch."
+        )
+
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert call_impl kwargs to the REST endpoint body shape.
 

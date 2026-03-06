@@ -235,6 +235,37 @@ class TestBaseClassContract:
         assert result.is_error
         assert isinstance(result.error, NotImplementedError)
 
+    def test_call_via_mcp_raises_for_unimplemented(self):
+        """call_via with Transport.MCP raises NotImplementedError if call_mcp not overridden."""
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        env = BaseTestEnv()
+        result = env.call_via(Transport.MCP)
+        assert result.is_error
+        assert isinstance(result.error, NotImplementedError)
+
+    def test_call_via_mcp_routes_through_call_mcp(self):
+        """call_via(Transport.MCP) dispatches through McpDispatcher → call_mcp."""
+
+        from pydantic import BaseModel
+
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        class _Resp(BaseModel):
+            ok: bool = True
+
+        class _TestEnv(BaseTestEnv):
+            def call_mcp(self, **kwargs):
+                return _Resp()
+
+        env = _TestEnv()
+        result = env.call_via(Transport.MCP)
+        assert result.is_success
+        assert result.payload.ok is True
+        assert result.envelope.get("transport") == "mcp"
+
     def test_call_via_impl_uses_call_impl(self):
         """call_via(Transport.IMPL) routes through call_impl."""
         from tests.harness._base import BaseTestEnv

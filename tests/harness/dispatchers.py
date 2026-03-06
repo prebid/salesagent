@@ -78,8 +78,28 @@ class RestDispatcher:
             return TransportResult(error=exc)
 
 
-DISPATCHERS: dict[Transport, ImplDispatcher | A2ADispatcher | RestDispatcher] = {
+class McpDispatcher:
+    """Dispatch via mock Context → async MCP wrapper → _impl().
+
+    The MCP wrapper is async, so this dispatcher uses asyncio.run()
+    to bridge from the sync dispatch() interface. The env.call_mcp()
+    method handles Context mocking and ToolResult extraction.
+    """
+
+    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+        try:
+            # MCP wrappers get identity from ctx.get_state(), not kwargs.
+            # Remove identity from kwargs to avoid passing it as a wrapper param.
+            kwargs.pop("identity", None)
+            payload = env.call_mcp(**kwargs)
+        except Exception as exc:
+            return TransportResult(error=exc)
+        return TransportResult(payload=payload, envelope={"transport": "mcp"})
+
+
+DISPATCHERS: dict[Transport, ImplDispatcher | A2ADispatcher | RestDispatcher | McpDispatcher] = {
     Transport.IMPL: ImplDispatcher(),
     Transport.A2A: A2ADispatcher(),
     Transport.REST: RestDispatcher(),
+    Transport.MCP: McpDispatcher(),
 }

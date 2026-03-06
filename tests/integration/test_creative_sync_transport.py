@@ -14,8 +14,8 @@ import pytest
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope
 
-# Transports exercised in this module — MCP deferred to Phase 3
-ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST]
+# All four transports: IMPL, A2A, REST, MCP
+ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
 
 
 @pytest.mark.requires_db

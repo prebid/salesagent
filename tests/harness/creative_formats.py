@@ -21,6 +21,7 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -77,6 +78,29 @@ class CreativeFormatsEnv(IntegrationEnv):
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("req", None)
         return list_creative_formats_raw(**kwargs)
+
+    def call_mcp(self, **kwargs: Any) -> ListCreativeFormatsResponse:
+        """Call list_creative_formats MCP wrapper with mock Context.
+
+        Note: The MCP wrapper takes individual filter params (type, format_ids, etc.),
+        NOT a 'req' object. The 'req' kwarg is popped since it's only used by
+        call_impl/call_a2a which call _impl directly.
+        """
+        from fastmcp.server.context import Context
+
+        from src.core.tools.creative_formats import list_creative_formats
+        from tests.harness.transport import Transport
+
+        self._commit_factory_data()
+
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=self.identity_for(Transport.MCP))
+
+        # MCP wrapper takes individual params, not 'req'
+        kwargs.pop("req", None)
+        tool_result = asyncio.run(list_creative_formats(ctx=mock_ctx, **kwargs))
+        # ToolResult.structured_content is a dict (FastMCP serializes Pydantic models)
+        return ListCreativeFormatsResponse(**tool_result.structured_content)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to ListCreativeFormatsBody shape for REST POST."""
