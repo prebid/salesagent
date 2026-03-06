@@ -11,8 +11,8 @@ from tests.factories.principal import _UNSET, PrincipalFactory
 
 
 def make_identity(
-    principal_id: str | None = None,
-    tenant_id: str | None = None,
+    principal_id: str | None = _UNSET,  # type: ignore[assignment]
+    tenant_id: str | None = _UNSET,  # type: ignore[assignment]
     tenant: dict | None = _UNSET,  # type: ignore[assignment]
     protocol: str = "mcp",
     dry_run: bool = False,
@@ -24,11 +24,12 @@ def make_identity(
     of defining a local ``_make_identity`` in each test file.
 
     Thin wrapper around PrincipalFactory.make_identity() for backward
-    compatibility with existing callers.
+    compatibility with existing callers. Preserves None when explicitly
+    passed (e.g. principal_id=None for auth-error tests).
     """
     return PrincipalFactory.make_identity(
-        principal_id=principal_id or "test_principal",
-        tenant_id=tenant_id or "test_tenant",
+        principal_id="test_principal" if principal_id is _UNSET else principal_id,
+        tenant_id="test_tenant" if tenant_id is _UNSET else tenant_id,
         tenant=tenant,
         protocol=protocol,
         dry_run=dry_run,
