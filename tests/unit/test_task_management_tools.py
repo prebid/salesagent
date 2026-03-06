@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from src.core.database.models import WorkflowStep
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 
 
 class TestListTasksTool:
@@ -55,11 +55,9 @@ class TestListTasksTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
-            tenant=sample_tenant,
-            protocol="mcp",
         )
 
     async def test_list_tasks_returns_tasks(self, mock_db_session, sample_tenant, sample_workflow_step):
@@ -146,11 +144,9 @@ class TestGetTaskTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
-            tenant=sample_tenant,
-            protocol="mcp",
         )
 
     async def test_get_task_returns_task_details(self, mock_db_session, sample_tenant, sample_workflow_step):
@@ -233,11 +229,9 @@ class TestCompleteTaskTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
-            tenant=sample_tenant,
-            protocol="mcp",
         )
 
     async def test_complete_task_updates_status(self, mock_db_session, sample_tenant, sample_pending_step):

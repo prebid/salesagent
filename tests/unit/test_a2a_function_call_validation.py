@@ -15,6 +15,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from tests.factories import PrincipalFactory
+
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -179,12 +181,10 @@ class TestFunctionCallIntegration:
 
     def test_tool_context_creation_does_not_fail(self):
         """Test that _make_tool_context creates ToolContext from identity without errors."""
-        from src.core.resolved_identity import ResolvedIdentity
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
             protocol="a2a",
         )
 

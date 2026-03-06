@@ -22,9 +22,8 @@ import pytest
 from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
-from src.core.testing_hooks import AdCPTestContext
+from tests.factories import PrincipalFactory
 from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
@@ -232,11 +231,10 @@ class TestCreateMediaBuyV24Format:
         ]
 
         # Create identity for auth
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            dry_run=True,
             protocol="mcp",
         )
 
@@ -304,11 +302,10 @@ class TestCreateMediaBuyV24Format:
         ]
 
         # Create identity for auth
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            dry_run=True,
             protocol="mcp",
         )
 
@@ -380,11 +377,10 @@ class TestCreateMediaBuyV24Format:
         ]
 
         # Create identity for auth
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            dry_run=True,
             protocol="mcp",
         )
 
@@ -430,11 +426,10 @@ class TestCreateMediaBuyV24Format:
         ]
 
         # Create identity for auth
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            dry_run=True,
             protocol="mcp",
         )
 
@@ -467,11 +462,10 @@ class TestCreateMediaBuyV24Format:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         # Create identity for auth
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+            dry_run=True,
             protocol="mcp",
         )
 

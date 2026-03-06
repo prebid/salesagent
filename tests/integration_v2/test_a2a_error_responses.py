@@ -25,9 +25,9 @@ from src.core.database.models import CurrencyLimit, PricingOption
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
-from src.core.resolved_identity import ResolvedIdentity
 
 # fmt: on
+from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration_v2.conftest import (
     add_required_setup_data,
@@ -171,7 +171,7 @@ class TestA2AErrorPropagation:
 
     async def test_create_media_buy_validation_error_includes_errors_field(self, handler, test_tenant, test_principal):
         """Test that validation errors include errors field in A2A response."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -219,7 +219,7 @@ class TestA2AErrorPropagation:
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
         """Test that authentication errors include errors field in A2A response."""
         # Mock identity with non-existent principal — simulates resolved but invalid principal
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="nonexistent_principal",
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -272,7 +272,7 @@ class TestA2AErrorPropagation:
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -332,7 +332,7 @@ class TestA2AErrorPropagation:
         This test verifies that all domain fields from CreateMediaBuyResponse schema are preserved
         when wrapped by the A2A handler.
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -408,10 +408,9 @@ class TestA2AErrorResponseStructure:
 
     async def test_error_response_has_consistent_structure(self, integration_db, handler):
         """Test that all error responses have consistent field structure."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
             auth_token="test_token",
             protocol="a2a",
         )
@@ -431,10 +430,9 @@ class TestA2AErrorResponseStructure:
 
     async def test_errors_field_structure_from_validation_error(self, integration_db, handler):
         """Test that validation errors produce properly structured errors field."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
             auth_token="test_token",
             protocol="a2a",
         )

@@ -10,6 +10,8 @@ beads: salesagent-yu73
 import pytest
 from a2a.utils.errors import ServerError
 
+from tests.factories import PrincipalFactory
+
 
 class TestTaskIdCollisionFree:
     """task_id generation must be collision-free under concurrent access."""
@@ -84,10 +86,13 @@ class TestStubSkillsRaiseErrors:
     async def test_approve_creative_raises_error(self):
         """approve_creative must raise ServerError(UnsupportedOperationError)."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.resolved_identity import ResolvedIdentity
 
         handler = AdCPRequestHandler()
-        identity = ResolvedIdentity(principal_id="test", tenant_id="test", tenant={"tenant_id": "test"}, protocol="a2a")
+        identity = PrincipalFactory.make_identity(
+            principal_id="test",
+            tenant_id="test",
+            protocol="a2a",
+        )
         with pytest.raises(ServerError):
             await handler._handle_approve_creative_skill({}, identity)
 
@@ -95,10 +100,13 @@ class TestStubSkillsRaiseErrors:
     async def test_get_media_buy_status_raises_error(self):
         """get_media_buy_status must raise ServerError(UnsupportedOperationError)."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.resolved_identity import ResolvedIdentity
 
         handler = AdCPRequestHandler()
-        identity = ResolvedIdentity(principal_id="test", tenant_id="test", tenant={"tenant_id": "test"}, protocol="a2a")
+        identity = PrincipalFactory.make_identity(
+            principal_id="test",
+            tenant_id="test",
+            protocol="a2a",
+        )
         with pytest.raises(ServerError):
             await handler._handle_get_media_buy_status_skill({}, identity)
 
@@ -106,9 +114,12 @@ class TestStubSkillsRaiseErrors:
     async def test_optimize_media_buy_raises_error(self):
         """optimize_media_buy must raise ServerError(UnsupportedOperationError)."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.resolved_identity import ResolvedIdentity
 
         handler = AdCPRequestHandler()
-        identity = ResolvedIdentity(principal_id="test", tenant_id="test", tenant={"tenant_id": "test"}, protocol="a2a")
+        identity = PrincipalFactory.make_identity(
+            principal_id="test",
+            tenant_id="test",
+            protocol="a2a",
+        )
         with pytest.raises(ServerError):
             await handler._handle_optimize_media_buy_skill({}, identity)

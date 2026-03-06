@@ -13,6 +13,8 @@ import inspect
 
 from fastapi.params import Depends
 
+from tests.factories import PrincipalFactory
+
 
 class TestResolveAuthDependencyExists:
     """auth_context.py should export resolve_auth and require_auth Depends."""
@@ -170,10 +172,9 @@ class TestResolveAuthDepBehavior:
             headers={"x-adcp-auth": "test-token"},
         )
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="default",
-            tenant={"tenant_id": "default"},
             protocol="rest",
         )
 
@@ -188,17 +189,15 @@ class TestResolveAuthDepBehavior:
         from unittest.mock import patch
 
         from src.core.auth_context import AuthContext, _resolve_auth_dep
-        from src.core.resolved_identity import ResolvedIdentity
 
         auth_ctx = AuthContext(
             auth_token="pre-extracted-token",
             headers={"authorization": "Bearer pre-extracted-token"},
         )
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="default",
-            tenant={"tenant_id": "default"},
             protocol="rest",
         )
 
@@ -238,10 +237,9 @@ class TestRequireAuthDepBehavior:
             headers={"x-adcp-auth": "test-token"},
         )
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="default",
-            tenant={"tenant_id": "default"},
             protocol="rest",
         )
 

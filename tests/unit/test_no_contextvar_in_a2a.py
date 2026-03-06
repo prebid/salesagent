@@ -15,6 +15,7 @@ from unittest.mock import patch
 from a2a.server.context import ServerCallContext
 
 from src.core.auth_context import AuthContext
+from tests.factories import PrincipalFactory
 
 
 class TestNoContextVarFallbackInA2AHandler:
@@ -41,15 +42,16 @@ class TestNoContextVarFallbackInA2AHandler:
     def test_resolve_a2a_identity_uses_context_headers_not_contextvar(self):
         """_resolve_a2a_identity should read headers from context, not ContextVar."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.resolved_identity import ResolvedIdentity
 
         handler = AdCPRequestHandler()
         ctx_headers = {"host": "context-host.example.com", "x-adcp-tenant": "from-context"}
         auth_ctx = AuthContext(auth_token="test-token", headers=ctx_headers)
         context = ServerCallContext(state={"auth_context": auth_ctx})
 
-        mock_identity = ResolvedIdentity(
-            principal_id="test", tenant_id="from-context", tenant={"tenant_id": "from-context"}, protocol="a2a"
+        mock_identity = PrincipalFactory.make_identity(
+            principal_id="test",
+            tenant_id="from-context",
+            protocol="a2a",
         )
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
@@ -64,11 +66,12 @@ class TestNoContextVarFallbackInA2AHandler:
     def test_resolve_a2a_identity_uses_empty_headers_without_context(self):
         """_resolve_a2a_identity(context=None) should use empty headers, not ContextVar."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.resolved_identity import ResolvedIdentity
 
         handler = AdCPRequestHandler()
-        mock_identity = ResolvedIdentity(
-            principal_id="test", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        mock_identity = PrincipalFactory.make_identity(
+            principal_id="test",
+            tenant_id="default",
+            protocol="a2a",
         )
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:

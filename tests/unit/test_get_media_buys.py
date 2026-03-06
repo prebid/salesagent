@@ -18,7 +18,6 @@ import pytest
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from pydantic import RootModel
 
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
@@ -37,6 +36,7 @@ from src.core.tools.media_buy_list import (
     _map_creative_status,
     _resolve_status_filter,
 )
+from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -52,12 +52,10 @@ def make_identity(
     """Create a ResolvedIdentity for testing."""
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "adapter_type": "mock"}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
-        protocol="mcp",
-        testing_context=testing_context,
     )
 
 

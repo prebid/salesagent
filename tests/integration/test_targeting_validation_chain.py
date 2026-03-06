@@ -18,10 +18,9 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
+from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -103,16 +102,6 @@ def targeting_tenant(integration_db):
     yield TENANT_ID
 
 
-def _make_identity() -> ResolvedIdentity:
-    return ResolvedIdentity(
-        principal_id="test_adv",
-        tenant_id=TENANT_ID,
-        tenant={"tenant_id": TENANT_ID},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_targeting"),
-        protocol="mcp",
-    )
-
-
 @pytest.mark.requires_db
 async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
     """Same country in include and exclude → validation error via real wiring."""
@@ -136,7 +125,9 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
         end_time=end,
     )
 
-    response, status = await _create_media_buy_impl(req=request, identity=_make_identity())
+    response, status = await _create_media_buy_impl(
+        req=request, identity=PrincipalFactory.make_identity(principal_id="test_adv", tenant_id=TENANT_ID, dry_run=True)
+    )
 
     assert isinstance(response, CreateMediaBuyError), f"Expected error response, got {type(response).__name__}"
     error_text = response.errors[0].message
@@ -167,7 +158,9 @@ async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
         end_time=end,
     )
 
-    response, status = await _create_media_buy_impl(req=request, identity=_make_identity())
+    response, status = await _create_media_buy_impl(
+        req=request, identity=PrincipalFactory.make_identity(principal_id="test_adv", tenant_id=TENANT_ID, dry_run=True)
+    )
 
     assert isinstance(response, CreateMediaBuyError), f"Expected error response, got {type(response).__name__}"
     error_text = response.errors[0].message

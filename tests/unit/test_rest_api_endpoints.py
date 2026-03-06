@@ -13,16 +13,15 @@ from unittest.mock import MagicMock, patch
 from starlette.testclient import TestClient
 
 from src.app import app
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 
 client = TestClient(app)
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
     tenant_id="default",
-    tenant={"tenant_id": "default"},
-    auth_token="test-token",
     protocol="rest",
+    auth_token="test-token",
 )
 
 

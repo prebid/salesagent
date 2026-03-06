@@ -27,9 +27,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import MediaBuy as DBMediaBuy
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
-from src.core.testing_hooks import AdCPTestContext
 from tests.factories import (
     MediaBuyFactory,
     MediaPackageFactory,
@@ -52,20 +50,6 @@ DEFAULT_FORMAT_ID = "display_300x250_image"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_identity(
-    tenant_id: str,
-    principal_id: str,
-    approval_mode: str = "auto-approve",
-) -> ResolvedIdentity:
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id, "approval_mode": approval_mode},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
-    )
 
 
 def _make_creative_dict(
@@ -111,7 +95,9 @@ class TestCrossPrincipalIsolation:
             PrincipalFactory(tenant=tenant, principal_id="principal_1")
             PrincipalFactory(tenant=tenant, principal_id="principal_2")
 
-            identity = _make_identity(self.TENANT_ID, "principal_1")
+            identity = PrincipalFactory.make_identity(
+                tenant_id=self.TENANT_ID, principal_id="principal_1", dry_run=True, approval_mode="auto-approve"
+            )
             result = env.call_impl(
                 creatives=[_make_creative_dict(creative_id="c_filter_test")],
                 identity=identity,
@@ -143,11 +129,15 @@ class TestCrossPrincipalIsolation:
 
             env.call_impl(
                 creatives=[_make_creative_dict(creative_id="c_shared")],
-                identity=_make_identity(self.TENANT_ID, "principal_1"),
+                identity=PrincipalFactory.make_identity(
+                    tenant_id=self.TENANT_ID, principal_id="principal_1", dry_run=True, approval_mode="auto-approve"
+                ),
             )
             env.call_impl(
                 creatives=[_make_creative_dict(creative_id="c_shared")],
-                identity=_make_identity(self.TENANT_ID, "principal_2"),
+                identity=PrincipalFactory.make_identity(
+                    tenant_id=self.TENANT_ID, principal_id="principal_2", dry_run=True, approval_mode="auto-approve"
+                ),
             )
 
         with get_db_session() as session:
@@ -173,7 +163,9 @@ class TestCrossPrincipalIsolation:
 
             env.call_impl(
                 creatives=[_make_creative_dict(creative_id="c_stamp_test")],
-                identity=_make_identity(self.TENANT_ID, "principal_1"),
+                identity=PrincipalFactory.make_identity(
+                    tenant_id=self.TENANT_ID, principal_id="principal_1", dry_run=True, approval_mode="auto-approve"
+                ),
             )
 
         with get_db_session() as session:
@@ -221,7 +213,9 @@ class TestApprovalWorkflow:
             tenant = TenantFactory(tenant_id=self.TENANT_ID)
             PrincipalFactory(tenant=tenant, principal_id=self.PRINCIPAL_ID)
 
-            identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID, approval_mode="auto-approve")
+            identity = PrincipalFactory.make_identity(
+                tenant_id=self.TENANT_ID, principal_id=self.PRINCIPAL_ID, dry_run=True, approval_mode="auto-approve"
+            )
             env.call_impl(
                 creatives=[_make_creative_dict(creative_id="c_auto")],
                 identity=identity,
@@ -240,7 +234,9 @@ class TestApprovalWorkflow:
             tenant = TenantFactory(tenant_id=self.TENANT_ID)
             PrincipalFactory(tenant=tenant, principal_id=self.PRINCIPAL_ID)
 
-            identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID, approval_mode="require-human")
+            identity = PrincipalFactory.make_identity(
+                tenant_id=self.TENANT_ID, principal_id=self.PRINCIPAL_ID, dry_run=True, approval_mode="require-human"
+            )
             env.call_impl(
                 creatives=[_make_creative_dict(creative_id="c_human")],
                 identity=identity,
@@ -260,12 +256,10 @@ class TestApprovalWorkflow:
             PrincipalFactory(tenant=tenant, principal_id=self.PRINCIPAL_ID)
 
             # Identity with tenant dict that lacks approval_mode key
-            identity = ResolvedIdentity(
+            identity = PrincipalFactory.make_identity(
                 principal_id=self.PRINCIPAL_ID,
                 tenant_id=self.TENANT_ID,
-                tenant={"tenant_id": self.TENANT_ID},  # No approval_mode key
-                testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-                protocol="mcp",
+                dry_run=True,
             )
             env.call_impl(
                 creatives=[_make_creative_dict(creative_id="c_default")],
@@ -401,7 +395,7 @@ class TestFormatCompatibility:
                 package_config={"package_id": "pkg_video", "product_id": product.product_id},
             )
 
-            identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID)
+            identity = PrincipalFactory.make_identity(tenant_id=self.TENANT_ID, principal_id=self.PRINCIPAL_ID)
 
             # First sync the display creative (so it exists in DB)
             env.call_impl(
@@ -472,7 +466,7 @@ class TestMediaBuyStatusTransition:
                 package_config={"package_id": "pkg_draft", "product_id": "prod_display"},
             )
 
-            identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID)
+            identity = PrincipalFactory.make_identity(tenant_id=self.TENANT_ID, principal_id=self.PRINCIPAL_ID)
 
             # Sync creative and assign to draft media buy's package
             env.call_impl(

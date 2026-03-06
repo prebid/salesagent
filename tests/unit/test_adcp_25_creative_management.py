@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+from tests.factories import PrincipalFactory
 
 
 class TestSyncCreativesCreativeIdsFilter:
@@ -61,14 +62,12 @@ class TestSyncCreativesCreativeIdsFilter:
     @patch("src.core.tools.creatives._sync.get_db_session")
     def test_sync_creatives_filters_by_creative_ids(self, mock_db_session, mock_tenant):
         """Test _sync_creatives_impl filters creatives by creative_ids."""
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.creatives import _sync_creatives_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="tenant_1",
             tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
-            protocol="mcp",
         )
         mock_tenant.return_value = {"tenant_id": "tenant_1", "adapter_type": "mock"}
 

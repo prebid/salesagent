@@ -16,7 +16,7 @@ Beads: salesagent-6931
 from unittest.mock import patch
 
 from src.core.auth_context import AuthContext
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 
 
 class TestResolveAuthTokenPassthrough:
@@ -31,10 +31,9 @@ class TestResolveAuthTokenPassthrough:
             headers={"authorization": "Bearer pre-extracted-token"},
         )
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="default",
-            tenant={"tenant_id": "default"},
             protocol="rest",
         )
 

@@ -26,9 +26,8 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.testing_hooks import AdCPTestContext
+from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -307,12 +306,10 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_gam_tenant",
-        tenant={"tenant_id": "test_gam_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     from src.core.schemas import CreateMediaBuyError
@@ -353,12 +350,10 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_gam_tenant",
-        tenant={"tenant_id": "test_gam_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     # This should succeed
@@ -404,12 +399,10 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_gam_tenant",
-        tenant={"tenant_id": "test_gam_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     from src.core.schemas import CreateMediaBuyError
@@ -449,12 +442,10 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_gam_tenant",
-        tenant={"tenant_id": "test_gam_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     # This should succeed - buyer chose CPM from multi-option product

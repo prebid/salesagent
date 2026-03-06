@@ -41,35 +41,15 @@ from src.core.schemas import (
     PricingModel,
     ReportingPeriod,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
+from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Fixtures (shared across all test classes)
 # ---------------------------------------------------------------------------
 
 _PATCH_PREFIX = "src.core.tools.media_buy_delivery"
-
-
-def _make_identity(
-    principal_id: str = "test_principal",
-    tenant_id: str = "test_tenant",
-    testing_context: AdCPTestContext | None = None,
-) -> ResolvedIdentity:
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id},
-        protocol="mcp",
-        testing_context=testing_context
-        or AdCPTestContext(
-            dry_run=False,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
-    )
 
 
 def _make_mock_media_buy(
@@ -206,7 +186,7 @@ def _run_impl_with_patches(
 ) -> GetMediaBuyDeliveryResponse:
     """Helper to run _get_media_buy_delivery_impl with standard mocking."""
     if identity is None:
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
 
     mock_adapter = adapter or MagicMock()
     patches = _standard_patches(
@@ -426,7 +406,7 @@ class TestDeliveryIdentificationModes:
 
         patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_id1", buy)])
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_id1"])
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
 
         mock_inner_session = MagicMock()
         mock_inner_session.scalars.return_value.all.return_value = []
@@ -466,7 +446,7 @@ class TestDeliveryIdentificationModes:
 
         patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_ref1", buy)])
         req = GetMediaBuyDeliveryRequest(buyer_refs=["buyer_A"])
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
 
         mock_inner_session = MagicMock()
         mock_inner_session.scalars.return_value.all.return_value = []
@@ -508,7 +488,7 @@ class TestDeliveryIdentificationModes:
             media_buy_ids=["mb_priority"],
             buyer_refs=["should_be_ignored"],
         )
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
 
         mock_inner_session = MagicMock()
         mock_inner_session.scalars.return_value.all.return_value = []
@@ -547,7 +527,7 @@ class TestDeliveryIdentificationModes:
 
         patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_all1", buy)])
         req = GetMediaBuyDeliveryRequest()
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
 
         mock_inner_session = MagicMock()
         mock_inner_session.scalars.return_value.all.return_value = []
@@ -712,7 +692,7 @@ class TestDeliveryStatusFilter:
         """
         patches = _standard_patches(target_buys=[])
         req = GetMediaBuyDeliveryRequest()
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
 
         with (
             patches["principal_obj"],
@@ -1298,12 +1278,9 @@ class TestDeliveryAuthErrors:
         Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
         Covers: UC-004-EXT-A-01
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="",
             tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
         )
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
@@ -1321,7 +1298,7 @@ class TestDeliveryAuthErrors:
         Covers: UC-004-EXT-B-01
         """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-        identity = _make_identity(principal_id="ghost_principal")
+        identity = PrincipalFactory.make_identity(principal_id="ghost_principal", tenant_id="test_tenant")
 
         with patch(f"{_PATCH_PREFIX}.get_principal_object", return_value=None):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -1339,12 +1316,9 @@ class TestDeliveryAuthErrors:
         or adapter calls. Verifies that get_adapter and _get_target_media_buys are never called.
         Covers: UC-004-EXT-A-02
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="",
             tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
         )
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
@@ -1619,7 +1593,7 @@ class TestDeliveryInvalidDateRange:
             end_date="2025-03-10",
         )
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
         mock_adapter = MagicMock()
         patches = _standard_patches(adapter=mock_adapter)
 

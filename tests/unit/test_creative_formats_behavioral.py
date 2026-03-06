@@ -24,8 +24,8 @@ from adcp.types.generated_poc.core.format import (
 # Nested group assets: Assets17 (image), Assets18 (video), Assets20 (text), etc.
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
+from tests.factories import PrincipalFactory
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 MOCK_TENANT = {"tenant_id": "test-tenant", "name": "Test Tenant"}
@@ -65,11 +65,10 @@ def _call_impl(
     if req is None:
         req = ListCreativeFormatsRequest()
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id=None,
         tenant_id=MOCK_TENANT["tenant_id"],
         tenant=MOCK_TENANT,
-        protocol="mcp",
     )
 
     with (

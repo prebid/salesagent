@@ -16,9 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.testing_hooks import AdCPTestContext
+from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 
 
@@ -40,12 +39,11 @@ class TestDuplicateProductValidation:
         mock_tenant = {"tenant_id": "test_tenant", "subdomain": "test", "ad_server": "mock"}
 
         # Build identity directly instead of patching removed functions
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant=mock_tenant,
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test-session"),
-            protocol="mcp",
+            dry_run=True,
         )
 
         # Mock the dependencies that still exist on the module
@@ -112,12 +110,11 @@ class TestDuplicateProductValidation:
         mock_tenant = {"tenant_id": "test_tenant", "subdomain": "test", "ad_server": "mock"}
 
         # Build identity directly instead of patching removed functions
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant=mock_tenant,
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test-session"),
-            protocol="mcp",
+            dry_run=True,
         )
 
         # Mock the dependencies that still exist on the module

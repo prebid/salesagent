@@ -20,12 +20,11 @@ import pytest
 from starlette.testclient import TestClient
 
 from src.app import app
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
     tenant_id="test-tenant",
-    tenant={"tenant_id": "test-tenant"},
     protocol="a2a",
 )
 

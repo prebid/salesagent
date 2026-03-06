@@ -27,13 +27,11 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Tenant as TenantModel
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyRequest,
     UpdateMediaBuyRequest,
 )
-from src.core.testing_hooks import AdCPTestContext
-from tests.factories import CreativeFactory
+from tests.factories import CreativeFactory, PrincipalFactory
 from tests.harness._base import IntegrationEnv
 from tests.helpers.adcp_factories import create_test_format
 
@@ -78,26 +76,6 @@ class _AssignmentTestEnv(IntegrationEnv):
 
 def _future(days: int = 1) -> datetime:
     return datetime.now(UTC) + timedelta(days=days)
-
-
-def _make_identity(
-    principal_id: str,
-    tenant_id: str,
-    tenant: dict[str, Any],
-    dry_run: bool = False,
-) -> ResolvedIdentity:
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant,
-        protocol="mcp",
-        testing_context=AdCPTestContext(
-            dry_run=dry_run,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
-    )
 
 
 def _get_tenant_dict(tenant_id: str) -> dict[str, Any]:
@@ -216,7 +194,7 @@ class TestCreativeAssignmentPrincipalIdManualApproval:
             creative_ids = _create_test_creatives(env, sample_tenant["tenant_id"], sample_principal["principal_id"])
             env._commit_factory_data()
 
-            identity = _make_identity(
+            identity = PrincipalFactory.make_identity(
                 principal_id=sample_principal["principal_id"],
                 tenant_id=sample_tenant["tenant_id"],
                 tenant=tenant_dict,
@@ -281,7 +259,7 @@ class TestCreativeAssignmentPrincipalIdAutoApprove:
             creative_ids = _create_test_creatives(env, sample_tenant["tenant_id"], sample_principal["principal_id"])
             env._commit_factory_data()
 
-            identity = _make_identity(
+            identity = PrincipalFactory.make_identity(
                 principal_id=sample_principal["principal_id"],
                 tenant_id=sample_tenant["tenant_id"],
                 tenant=tenant_dict,
@@ -347,7 +325,7 @@ class TestCreativeAssignmentPrincipalIdUpdate:
             creative_ids = _create_test_creatives(env, sample_tenant["tenant_id"], sample_principal["principal_id"])
             env._commit_factory_data()
 
-            identity = _make_identity(
+            identity = PrincipalFactory.make_identity(
                 principal_id=sample_principal["principal_id"],
                 tenant_id=sample_tenant["tenant_id"],
                 tenant=tenant_dict,

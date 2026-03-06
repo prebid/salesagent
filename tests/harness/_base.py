@@ -104,20 +104,13 @@ class BaseTestEnv:
 
         protocol = TRANSPORT_PROTOCOL[transport]
         if protocol not in self._identity_cache:
-            from src.core.resolved_identity import ResolvedIdentity
-            from src.core.testing_hooks import AdCPTestContext
+            from tests.factories.principal import PrincipalFactory
 
-            self._identity_cache[protocol] = ResolvedIdentity(
+            self._identity_cache[protocol] = PrincipalFactory.make_identity(
                 principal_id=self._principal_id,
                 tenant_id=self._tenant_id,
-                tenant={"tenant_id": self._tenant_id, "name": "Test Tenant"},
                 protocol=protocol,
-                testing_context=AdCPTestContext(
-                    dry_run=self._dry_run,
-                    mock_time=None,
-                    jump_to_event=None,
-                    test_session_id=None,
-                ),
+                dry_run=self._dry_run,
             )
         return self._identity_cache[protocol]
 

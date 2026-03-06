@@ -18,6 +18,7 @@ from fastmcp.exceptions import ToolError
 from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.services.policy_check_service import PolicyStatus
+from tests.factories import PrincipalFactory
 
 # --- Helpers ---
 
@@ -29,12 +30,14 @@ def _make_identity(
 ) -> ResolvedIdentity:
     """Create a ResolvedIdentity for testing."""
     if tenant is None:
-        tenant = {"tenant_id": tenant_id, "name": "Test"}
-    return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+        )
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
-        protocol="mcp",
     )
 
 
@@ -203,11 +206,10 @@ class TestDiscoveryEndpointsAnonymousAccess:
         from src.core.tools.products import _get_products_impl
 
         # brand_manifest_policy="public" allows anonymous access without auth requirement
-        mock_tenant = {"tenant_id": "test-tenant", "name": "Test", "brand_manifest_policy": "public"}
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="test-tenant",
-            tenant=mock_tenant,
+            brand_manifest_policy="public",
         )
 
         with (
@@ -321,11 +323,9 @@ class TestDiscoveryEndpointsInvalidAuth:
 
         # With require_valid_token=False at the transport boundary, invalid tokens
         # result in an anonymous ResolvedIdentity (principal_id=None)
-        mock_tenant = {"tenant_id": "test-tenant"}
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="test-tenant",
-            tenant=mock_tenant,
         )
 
         with (

@@ -33,9 +33,9 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.exceptions import AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyError, Error
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
+from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
 
@@ -149,15 +149,9 @@ class TestCreateMediaBuyErrorPaths:
         This tests line 3159 in main.py where Error(code="authentication_error") is used.
         Previously this would cause NameError because Error wasn't imported.
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="nonexistent_principal",  # Principal doesn't exist
-            tenant={
-                "tenant_id": "error_test_tenant",
-                "name": "Error Test Tenant",
-                "subdomain": "errortest",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -206,15 +200,9 @@ class TestCreateMediaBuyErrorPaths:
         This tests line 3147 in main.py where Error(code="validation_error") is used
         in the ValueError exception handler.
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
-            tenant={
-                "tenant_id": "error_test_tenant",
-                "name": "Error Test Tenant",
-                "subdomain": "errortest",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -259,15 +247,9 @@ class TestCreateMediaBuyErrorPaths:
 
     async def test_end_time_before_start_returns_validation_error(self, test_tenant_with_principal):
         """Test that end_time before start_time returns Error response."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
-            tenant={
-                "tenant_id": "error_test_tenant",
-                "name": "Error Test Tenant",
-                "subdomain": "errortest",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -312,15 +294,9 @@ class TestCreateMediaBuyErrorPaths:
         business logic runs, so it raises ToolError or AdCPValidationError rather
         than returning an Error response.
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
-            tenant={
-                "tenant_id": "error_test_tenant",
-                "name": "Error Test Tenant",
-                "subdomain": "errortest",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -353,15 +329,9 @@ class TestCreateMediaBuyErrorPaths:
 
     async def test_missing_packages_returns_validation_error(self, test_tenant_with_principal):
         """Test that missing packages returns Error response."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
-            tenant={
-                "tenant_id": "error_test_tenant",
-                "name": "Error Test Tenant",
-                "subdomain": "errortest",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -403,15 +373,9 @@ class TestSyncCreativesErrorPaths:
         """Test that invalid creative format is handled gracefully."""
         from src.core.config_loader import set_current_tenant
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="test_tenant",
             principal_id="test_principal",
-            tenant={
-                "tenant_id": "test_tenant",
-                "name": "Test Tenant",
-                "subdomain": "test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -459,15 +423,9 @@ class TestListCreativesErrorPaths:
         """Test that invalid date format is handled with proper error."""
         from src.core.config_loader import set_current_tenant
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="test_tenant",
             principal_id="test_principal",
-            tenant={
-                "tenant_id": "test_tenant",
-                "name": "Test Tenant",
-                "subdomain": "test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 

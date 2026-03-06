@@ -11,7 +11,7 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 from tests.integration_v2.conftest import (
     add_required_setup_data,
     create_auction_product,
@@ -169,15 +169,9 @@ class TestGetProductsFilterBehavior:
         """Test filtering for guaranteed delivery products only."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="filter_test",
             principal_id="test_principal",
-            tenant={
-                "tenant_id": "filter_test",
-                "name": "Filter Test Publisher",
-                "subdomain": "filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -204,15 +198,9 @@ class TestGetProductsFilterBehavior:
         """Test that calling without filters returns all products."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="filter_test",
             principal_id="test_principal",
-            tenant={
-                "tenant_id": "filter_test",
-                "name": "Filter Test Publisher",
-                "subdomain": "filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -238,15 +226,9 @@ class TestGetProductsFilterBehavior:
         """Test that returned products have all required AdCP fields."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="filter_test",
             principal_id="test_principal",
-            tenant={
-                "tenant_id": "filter_test",
-                "name": "Filter Test Publisher",
-                "subdomain": "filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -456,15 +438,9 @@ class TestNewGetProductsFilters:
         """Test filtering products by a single country."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="new_filter_test",
             principal_id="new_filter_principal",
-            tenant={
-                "tenant_id": "new_filter_test",
-                "name": "New Filter Test Publisher",
-                "subdomain": "new-filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -491,15 +467,9 @@ class TestNewGetProductsFilters:
         """Test filtering products by multiple countries."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="new_filter_test",
             principal_id="new_filter_principal",
-            tenant={
-                "tenant_id": "new_filter_test",
-                "name": "New Filter Test Publisher",
-                "subdomain": "new-filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -526,15 +496,9 @@ class TestNewGetProductsFilters:
         """Test filtering products by display channel."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="new_filter_test",
             principal_id="new_filter_principal",
-            tenant={
-                "tenant_id": "new_filter_test",
-                "name": "New Filter Test Publisher",
-                "subdomain": "new-filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -561,15 +525,9 @@ class TestNewGetProductsFilters:
         """Test filtering products by olv (online video) channel."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="new_filter_test",
             principal_id="new_filter_principal",
-            tenant={
-                "tenant_id": "new_filter_test",
-                "name": "New Filter Test Publisher",
-                "subdomain": "new-filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -590,15 +548,9 @@ class TestNewGetProductsFilters:
         """Test filtering products by multiple channels."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="new_filter_test",
             principal_id="new_filter_principal",
-            tenant={
-                "tenant_id": "new_filter_test",
-                "name": "New Filter Test Publisher",
-                "subdomain": "new-filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -624,15 +576,9 @@ class TestNewGetProductsFilters:
         """
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="new_filter_test",
             principal_id="new_filter_principal",
-            tenant={
-                "tenant_id": "new_filter_test",
-                "name": "New Filter Test Publisher",
-                "subdomain": "new-filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -653,15 +599,9 @@ class TestNewGetProductsFilters:
         """Test combining country and channel filters."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="new_filter_test",
             principal_id="new_filter_principal",
-            tenant={
-                "tenant_id": "new_filter_test",
-                "name": "New Filter Test Publisher",
-                "subdomain": "new-filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 
@@ -688,15 +628,9 @@ class TestNewGetProductsFilters:
         """Test combining country and channel filters with strict matching."""
         get_products = self._import_get_products_tool()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             tenant_id="new_filter_test",
             principal_id="new_filter_principal",
-            tenant={
-                "tenant_id": "new_filter_test",
-                "name": "New Filter Test Publisher",
-                "subdomain": "new-filter-test",
-                "ad_server": "mock",
-            },
             protocol="a2a",
         )
 

@@ -20,16 +20,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 from tests.helpers.a2a_response_validator import assert_valid_skill_response
 from tests.helpers.external_service import is_external_service_exception
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-_MOCK_IDENTITY = ResolvedIdentity(
-    principal_id="test_principal",
-    tenant_id="test_tenant",
-    tenant={"tenant_id": "test_tenant"},
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     protocol="a2a",
 )
 
@@ -57,7 +54,7 @@ class TestA2AMessageFieldValidation:
         """
         from src.core.tenant_context import LazyTenantContext
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=sample_principal["principal_id"],
             tenant_id=sample_tenant["tenant_id"],
             tenant=LazyTenantContext(sample_tenant["tenant_id"]),

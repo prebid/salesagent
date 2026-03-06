@@ -17,14 +17,14 @@ Migration note:
 --------------
 _impl functions now accept `identity: ResolvedIdentity | None` instead of
 transport-specific context objects. Tests pass identity=None for unauthenticated
-scenarios and ResolvedIdentity(principal_id=None) for invalid auth scenarios.
+scenarios and PrincipalFactory.make_identity(principal_id=None) for invalid auth scenarios.
 """
 
 import pytest
 from fastmcp.exceptions import ToolError
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 
 
 class TestAuthenticationRequirements:
@@ -67,7 +67,10 @@ class TestAuthenticationRequirements:
         from src.core.tools.creatives import _sync_creatives_impl
 
         # ResolvedIdentity with None principal_id (simulates invalid token)
-        invalid_identity = ResolvedIdentity(principal_id=None, tenant_id="test_tenant")
+        invalid_identity = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id="test_tenant",
+        )
 
         creatives = [
             {
@@ -137,12 +140,13 @@ class TestAuthenticationRequirements:
         """update_media_buy must reject requests without authentication."""
         from unittest.mock import MagicMock
 
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_update import _verify_principal
 
         # ResolvedIdentity with no principal_id — _verify_principal raises AdCPAuthenticationError
-        no_auth_identity = ResolvedIdentity(
-            principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="rest"
+        no_auth_identity = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id="default",
+            protocol="rest",
         )
         # repo is not accessed when principal_id is None (early exit)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
@@ -156,12 +160,13 @@ class TestAuthenticationRequirements:
         """update_media_buy must reject requests with invalid auth."""
         from unittest.mock import MagicMock
 
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_update import _verify_principal
 
         # ResolvedIdentity with None principal_id
-        invalid_identity = ResolvedIdentity(
-            principal_id=None, tenant_id="test_tenant", tenant={"tenant_id": "test_tenant"}, protocol="rest"
+        invalid_identity = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id="test_tenant",
+            protocol="rest",
         )
 
         # repo is not accessed when principal_id is None (early exit)
@@ -240,7 +245,10 @@ class TestAuthenticationWithMockedContext:
         from src.core.tools.creatives import _sync_creatives_impl
 
         # ResolvedIdentity with None principal_id (invalid token scenario)
-        identity = ResolvedIdentity(principal_id=None, tenant_id="test_tenant")
+        identity = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id="test_tenant",
+        )
 
         creatives = [{"creative_id": "test", "name": "Test", "assets": {}}]
 
@@ -254,7 +262,10 @@ class TestAuthenticationWithMockedContext:
         from src.core.tools.creatives import _sync_creatives_impl
 
         # ResolvedIdentity with empty principal_id
-        identity = ResolvedIdentity(principal_id="", tenant_id="test_tenant")
+        identity = PrincipalFactory.make_identity(
+            principal_id="",
+            tenant_id="test_tenant",
+        )
 
         creatives = [{"creative_id": "test", "name": "Test", "assets": {}}]
 
@@ -282,11 +293,12 @@ class TestAuthenticationErrorMessages:
         """Error message should be actionable for developers."""
         from unittest.mock import MagicMock
 
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_update import _verify_principal
 
-        no_auth = ResolvedIdentity(
-            principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="rest"
+        no_auth = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id="default",
+            protocol="rest",
         )
         # repo is not accessed when principal_id is None (early exit)
         with pytest.raises(AdCPAuthenticationError) as exc_info:

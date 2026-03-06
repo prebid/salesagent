@@ -20,23 +20,12 @@ from src.core.database.models import (
 from src.core.database.models import (
     Principal as ModelPrincipal,
 )
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories import PrincipalFactory
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
 # Tests that used _verify_principal directly will need to test through the public API
-
-
-def _make_identity(tenant_id: str, principal_id: str, token: str) -> ResolvedIdentity:
-    """Create a ResolvedIdentity for testing."""
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id},
-        auth_token=token,
-        protocol="mcp",
-    )
 
 
 @pytest.fixture
@@ -143,7 +132,7 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
     )
 
     # Create identity
-    identity = _make_identity(tenant_id, principal_id, token)
+    identity = PrincipalFactory.make_identity(tenant_id=tenant_id, principal_id=principal_id, auth_token=token)
 
     # Test: Call update_media_buy (should not raise "Media buy not found")
     req = UpdateMediaBuyRequest(
@@ -172,10 +161,10 @@ def test_update_media_buy_requires_context():
 def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
     """Test update_media_buy raises error when buyer_ref lookup fails."""
     # Use valid authentication from fixture (required after auth ordering fix)
-    identity = _make_identity(
+    identity = PrincipalFactory.make_identity(
         tenant_id=test_tenant_setup["tenant_id"],
         principal_id=test_tenant_setup["principal_id"],
-        token=test_tenant_setup["token"],
+        auth_token=test_tenant_setup["token"],
     )
 
     # Note: When media_buy_id is None and buyer_ref is provided,

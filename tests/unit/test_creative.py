@@ -59,7 +59,6 @@ from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     Creative,
     CreativeApprovalStatus,
@@ -75,6 +74,7 @@ from src.core.schemas import (
     SyncCreativesRequest,
     SyncCreativesResponse,
 )
+from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -105,25 +105,6 @@ def _make_creative(**overrides) -> Creative:
     }
     defaults.update(overrides)
     return Creative(**defaults)
-
-
-def _make_identity(
-    principal_id: str = "principal_1",
-    tenant_id: str = "tenant_1",
-    **tenant_overrides,
-) -> ResolvedIdentity:
-    tenant = {
-        "tenant_id": tenant_id,
-        "approval_mode": "auto-approve",
-        "slack_webhook_url": None,
-    }
-    tenant.update(tenant_overrides)
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant,
-        protocol="mcp",
-    )
 
 
 def _make_creative_asset(**overrides) -> CreativeAsset:
@@ -623,11 +604,9 @@ class TestSyncCreativesAuth:
         """
         from src.core.tools.creatives import _sync_creatives_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="t1",
-            tenant={"tenant_id": "t1"},
-            protocol="mcp",
         )
         with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
             _sync_creatives_impl(
@@ -643,11 +622,10 @@ class TestSyncCreativesAuth:
         """
         from src.core.tools.creatives import _sync_creatives_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="p1",
             tenant_id="t1",
             tenant=None,
-            protocol="mcp",
         )
         with pytest.raises(AdCPAuthenticationError, match="tenant"):
             _sync_creatives_impl(
@@ -683,11 +661,10 @@ class TestSyncCreativesAuth:
         """
         from src.core.tools.creatives import _sync_creatives_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="p1",
             tenant_id="t1",
             tenant=None,
-            protocol="mcp",
         )
         creatives = [
             {"creative_id": "c1", "name": "Banner", "assets": {}},
@@ -713,7 +690,9 @@ class TestCrossPrincipalIsolation:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         # Mock everything to trace the DB filter_by call
         with (
@@ -759,8 +738,12 @@ class TestCrossPrincipalIsolation:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity_p1 = _make_identity(principal_id="principal_1")
-        identity_p2 = _make_identity(principal_id="principal_2")
+        identity_p1 = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
+        identity_p2 = PrincipalFactory.make_identity(
+            principal_id="principal_2", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         create_calls = []
 
@@ -1426,11 +1409,9 @@ class TestListCreativesAuth:
         """
         from src.core.tools.creatives.listing import _list_creatives_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="t1",
-            tenant={"tenant_id": "t1"},
-            protocol="mcp",
         )
         with pytest.raises(AdCPAuthenticationError, match="x-adcp-auth"):
             _list_creatives_impl(identity=identity)
@@ -1442,11 +1423,10 @@ class TestListCreativesAuth:
         """
         from src.core.tools.creatives.listing import _list_creatives_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="p1",
             tenant_id="t1",
             tenant=None,
-            protocol="mcp",
         )
         with pytest.raises(AdCPAuthenticationError, match="tenant"):
             _list_creatives_impl(identity=identity)
@@ -1467,7 +1447,9 @@ class TestListCreativesValidation:
         """
         from src.core.tools.creatives.listing import _list_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
         with pytest.raises(AdCPValidationError, match="created_after"):
             _list_creatives_impl(created_after="not-a-date", identity=identity)
 
@@ -1478,7 +1460,9 @@ class TestListCreativesValidation:
         """
         from src.core.tools.creatives.listing import _list_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
         with pytest.raises(AdCPValidationError, match="created_before"):
             _list_creatives_impl(created_before="not-a-date", identity=identity)
 
@@ -1500,7 +1484,9 @@ class TestListCreativesRawBoundaryCompleteness:
         from src.core.tools.creatives.listing import list_creatives_raw
 
         test_filters = CreativeFilters()
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
             mock_impl.return_value = ListCreativesResponse(
@@ -1517,7 +1503,9 @@ class TestListCreativesRawBoundaryCompleteness:
         """
         from src.core.tools.creatives.listing import list_creatives_raw
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
             mock_impl.return_value = ListCreativesResponse(
@@ -1534,7 +1522,9 @@ class TestListCreativesRawBoundaryCompleteness:
         """
         from src.core.tools.creatives.listing import list_creatives_raw
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
             mock_impl.return_value = ListCreativesResponse(
@@ -1563,11 +1553,10 @@ class TestListCreativeFormatsAuth:
         """
         from src.core.tools.creative_formats import _list_creative_formats_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
-            tenant_id=None,
+            tenant_id="none",
             tenant=None,
-            protocol="mcp",
         )
         with pytest.raises(AdCPAuthenticationError, match="tenant"):
             _list_creative_formats_impl(None, identity)
@@ -1589,11 +1578,9 @@ class TestListCreativeFormatsFiltering:
         if req is None:
             req = ListCreativeFormatsRequest()
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="test-tenant",
-            tenant={"tenant_id": "test-tenant"},
-            protocol="mcp",
         )
 
         with (
@@ -2261,7 +2248,9 @@ class TestWorkflowStepCreation:
         """
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr_getter,
@@ -2431,7 +2420,9 @@ class TestDeleteMissing:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -2507,7 +2498,9 @@ class TestDryRun:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -2960,7 +2953,9 @@ class TestValidationModeSemantics:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -3640,7 +3635,9 @@ class TestSyncCreativesMainFlowGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -3688,7 +3685,9 @@ class TestSyncCreativesMainFlowGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -3802,7 +3801,9 @@ class TestSyncCreativesMainFlowGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -3846,7 +3847,9 @@ class TestSyncCreativesMainFlowGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -3908,11 +3911,10 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="p1",
             tenant_id="t1",
             tenant=None,  # No tenant context
-            protocol="mcp",
         )
 
         with pytest.raises(AdCPAuthenticationError, match="tenant"):
@@ -3928,7 +3930,9 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -3988,7 +3992,9 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -4043,7 +4049,9 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -4138,7 +4146,9 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -4181,7 +4191,9 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -4391,7 +4403,9 @@ class TestA2ATransportGaps:
         """
         from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -4483,7 +4497,9 @@ class TestA2ATransportGaps:
         """
         from src.core.tools.creatives.listing import list_creatives_raw
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
             mock_impl.return_value = MagicMock()
@@ -4514,7 +4530,9 @@ class TestA2ATransportGaps:
         """
         from src.core.tools.creative_formats import list_creative_formats_raw
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
         req = ListCreativeFormatsRequest(type="display")
 
         with patch("src.core.tools.creative_formats._list_creative_formats_impl") as mock_impl:
@@ -4657,7 +4675,9 @@ class TestDeleteMissingDefault:
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
@@ -4766,7 +4786,9 @@ class TestCreativeIdsScopeFilterGap:
         """Sending creatives [C1,C2,C3] with creative_ids=[C1,C3] processes only C1,C3."""
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(
+            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
+        )
 
         with (
             patch("src.core.tools.creatives._sync.get_db_session") as mock_db,

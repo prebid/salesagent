@@ -18,9 +18,9 @@ import pytest
 from adcp.types.generated_poc.core.context import ContextObject
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexResponse
 from src.core.tool_context import ToolContext
+from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,19 +38,6 @@ def _make_tool_context(
         principal_id=principal_id,
         tool_name="update_performance_index",
         request_timestamp=datetime.now(UTC),
-    )
-
-
-def _make_identity(
-    principal_id: str = "principal_1",
-    tenant_id: str = "tenant_1",
-) -> ResolvedIdentity:
-    """Build a minimal ResolvedIdentity for testing."""
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id},
-        protocol="mcp",
     )
 
 
@@ -150,7 +137,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, _mocks = _patch_happy_path()
 
         with stack:
@@ -174,7 +161,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, mocks = _patch_happy_path()
 
         with stack:
@@ -203,7 +190,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, mocks = _patch_happy_path()
 
         perf_data = [
@@ -245,7 +232,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, _mocks = _patch_happy_path()
 
         with stack:
@@ -270,7 +257,7 @@ class TestHighRiskMCP:
 
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
 
         mock_uow = MagicMock()
         mock_uow.media_buys = MagicMock()
@@ -306,7 +293,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
 
         with pytest.raises(AdCPValidationError) as exc_info:
             _update_performance_index_impl(
@@ -326,7 +313,7 @@ class TestHighRiskMCP:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, _mocks = _patch_happy_path(adapter_return=False)
 
         with stack:
@@ -364,7 +351,7 @@ class TestHighRiskA2A:
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
-        mock_identity = _make_identity()
+        mock_identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
 
         result = await handler._handle_update_performance_index_skill(
             parameters={},
@@ -386,7 +373,7 @@ class TestHighRiskA2A:
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
-        mock_identity = _make_identity()
+        mock_identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
 
         with patch(
             "src.a2a_server.adcp_a2a_server.core_update_performance_index_tool",
@@ -443,11 +430,10 @@ class TestErrorPaths:
         """E2: identity with no tenant raises AdCPAuthenticationError."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="tenant_1",
             tenant=None,
-            protocol="mcp",
         )
 
         with pytest.raises(AdCPAuthenticationError, match="No tenant context"):
@@ -464,11 +450,9 @@ class TestErrorPaths:
 
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="tenant_1",
-            tenant={"tenant_id": "tenant_1"},
-            protocol="mcp",
         )
 
         mock_uow = MagicMock()
@@ -494,7 +478,7 @@ class TestErrorPaths:
 
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
 
         mock_uow = MagicMock()
         mock_uow.media_buys = MagicMock()
@@ -518,7 +502,7 @@ class TestErrorPaths:
         """E5: performance_data item missing product_id raises AdCPValidationError."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
 
         with pytest.raises(AdCPValidationError) as exc_info:
             _update_performance_index_impl(
@@ -534,7 +518,7 @@ class TestErrorPaths:
         """E6: Non-numeric performance_index raises AdCPValidationError."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
 
         with pytest.raises(AdCPValidationError):
             _update_performance_index_impl(
@@ -558,7 +542,7 @@ class TestResponseShape:
         """S1: Response model_dump(mode='json') has correct top-level keys."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, _mocks = _patch_happy_path()
 
         with stack:
@@ -581,7 +565,7 @@ class TestResponseShape:
         """S2: Response is an instance of UpdatePerformanceIndexResponse."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, _mocks = _patch_happy_path()
 
         with stack:
@@ -598,7 +582,7 @@ class TestResponseShape:
         """S3: Response __str__ returns the detail message (for MCP ToolResult content)."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, _mocks = _patch_happy_path()
 
         with stack:
@@ -615,7 +599,7 @@ class TestResponseShape:
         """S4: When context is not provided, response.context is None."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, _mocks = _patch_happy_path()
 
         with stack:
@@ -642,7 +626,7 @@ class TestConfidenceScoreAndEdgeCases:
         """C1: confidence_score is accepted in performance_data and doesn't affect status."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, _mocks = _patch_happy_path()
 
         with stack:
@@ -661,7 +645,7 @@ class TestConfidenceScoreAndEdgeCases:
         """C2: Empty performance_data list does not raise and returns success."""
         from src.core.tools.performance import _update_performance_index_impl
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1")
         stack, mocks = _patch_happy_path()
 
         with stack:

@@ -14,17 +14,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.products import _get_products_impl
+from tests.factories import PrincipalFactory
 
 logger = logging.getLogger(__name__)
 
 
 def _make_identity(principal_id=None, tenant=None):
     """Create a ResolvedIdentity for testing."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
-        tenant_id=tenant.get("tenant_id") if tenant else None,
+        tenant_id=tenant.get("tenant_id") if tenant else "test_tenant",
         tenant=tenant,
     )
 

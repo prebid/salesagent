@@ -22,15 +22,14 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     Budget,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuySuccess,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -38,21 +37,6 @@ from src.core.tools.media_buy_update import _update_media_buy_impl
 
 MODULE = "src.core.tools.media_buy_update"
 DB_MODULE = "src.core.database.database_session"
-
-
-def _make_identity(
-    principal_id: str | None = "principal_test",
-    tenant_id: str = "tenant_test",
-    dry_run: bool = False,
-) -> ResolvedIdentity:
-    """Create a ResolvedIdentity for tests."""
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id, "name": "Test"},
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=dry_run),
-    )
 
 
 def _make_mock_db_session():
@@ -183,7 +167,7 @@ def test_principal_not_found_returns_error(standard_mocks):
     # Principal ID resolves but the object doesn't exist in DB
     standard_mocks["principal_obj"].return_value = None
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     req = UpdateMediaBuyRequest(media_buy_id="mb_001")
     result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -240,7 +224,7 @@ def test_combined_campaign_and_package_update(standard_mocks):
     mock_scalars.first.side_effect = [mock_currency_limit]
     mock_session.scalars.return_value = mock_scalars
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_combined",
         budget=Budget(total=5000.0, currency="USD", pacing="even"),
@@ -287,7 +271,7 @@ def test_multi_package_update_processes_all_packages(standard_mocks):
     mock_scalars.first.side_effect = [mock_currency_limit]
     mock_session.scalars.return_value = mock_scalars
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_multi",
         packages=[
@@ -324,7 +308,7 @@ def test_buyer_ref_positive_resolution(standard_mocks):
     mock_media_buy.media_buy_id = "mb_resolved_123"
     standard_mocks["uow_instance"].media_buys.get_by_buyer_ref.return_value = mock_media_buy
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     # Use buyer_ref instead of media_buy_id (no packages, no budget = empty update)
     req = UpdateMediaBuyRequest(buyer_ref="buyer_ref_abc")
     result = _update_media_buy_impl(req=req, identity=identity)
@@ -364,7 +348,7 @@ def test_main_flow_package_budget_update(standard_mocks):
     mock_scalars.first.side_effect = [mock_currency_limit]
     mock_session.scalars.return_value = mock_scalars
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_main",
         packages=[{"package_id": "pkg_main_1", "budget": 15000.0}],
@@ -415,7 +399,7 @@ class TestFlightDateValidationAndPersistence:
         start = datetime(2025, 6, 1, tzinfo=UTC)
         end = datetime(2025, 12, 1, tzinfo=UTC)
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_dates",
             start_time=start,
@@ -452,7 +436,7 @@ class TestFlightDateValidationAndPersistence:
         start = datetime(2025, 6, 1, tzinfo=UTC)
         end = datetime(2025, 3, 1, tzinfo=UTC)
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_dates_bad",
             start_time=start,
@@ -485,7 +469,7 @@ class TestFlightDateValidationAndPersistence:
         ]
         mock_session.scalars.return_value = mock_scalars
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_dates_equal",
             start_time=same_time,
@@ -523,7 +507,7 @@ class TestCampaignBudgetValidationAndPersistence:
         mock_pkg.package_id = "pkg_budget_1"
         standard_mocks["uow_instance"].media_buys.get_packages.return_value = [mock_pkg]
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_budget",
             budget=Budget(total=10000.0, currency="USD", pacing="even"),
@@ -565,7 +549,7 @@ def test_manual_approval_path_through_impl(standard_mocks):
     standard_mocks["adapter_instance"].manual_approval_required = True
     standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_manual",
     )
@@ -600,7 +584,7 @@ def test_package_not_found_returns_error(standard_mocks):
     # Package lookup via repo returns None
     standard_mocks["uow_instance"].media_buys.get_package.return_value = None
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_pkg_nf",
         packages=[
@@ -638,7 +622,7 @@ def test_pause_completes_workflow_step(standard_mocks):
     )
     standard_mocks["adapter_instance"].update_media_buy.return_value = mock_result
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_pause",
         paused=True,
@@ -680,7 +664,7 @@ def test_manual_approval_creates_object_workflow_mapping(standard_mocks):
     standard_mocks["adapter_instance"].manual_approval_required = True
     standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_approval_mapping",
         paused=True,
@@ -729,7 +713,7 @@ def test_manual_approval_stores_raw_request(standard_mocks):
     standard_mocks["adapter_instance"].manual_approval_required = True
     standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
 
-    identity = _make_identity()
+    identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_approval",
         paused=True,
@@ -801,7 +785,7 @@ class TestTimezoneHandlingRegression:
         ]
         mock_session.scalars.return_value = mock_scalars
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_tz_end",
             end_time=datetime(2025, 9, 1, tzinfo=UTC),  # Only end_time
@@ -833,7 +817,7 @@ class TestTimezoneHandlingRegression:
         ]
         mock_session.scalars.return_value = mock_scalars
 
-        identity = _make_identity()
+        identity = PrincipalFactory.make_identity(principal_id="principal_test", tenant_id="tenant_test")
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_tz_start",
             start_time=datetime(2025, 3, 1, tzinfo=UTC),  # Only start_time

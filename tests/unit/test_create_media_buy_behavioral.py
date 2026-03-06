@@ -24,14 +24,13 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     PricingOption,
 )
-from src.core.testing_hooks import AdCPTestContext
+from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Shared helpers for building mocks/fixtures
@@ -132,13 +131,11 @@ class _PatchContext:
 
     def __enter__(self):
         # Build a ResolvedIdentity instead of mock context
-        self.identity = ResolvedIdentity(
+        self.identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
             auth_token="test-token",
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
         )
 
         # tenant

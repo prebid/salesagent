@@ -12,8 +12,8 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import FormatId, GetProductsRequest, ProductFilters
+from tests.factories import PrincipalFactory
 from tests.integration_v2.conftest import create_test_product_with_pricing
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
@@ -23,10 +23,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 @pytest.fixture
 def identity():
     """Create ResolvedIdentity for testing."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="format_id_filter_test",
-        tenant={"tenant_id": "format_id_filter_test"},
         protocol="mcp",
     )
 

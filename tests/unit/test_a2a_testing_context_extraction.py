@@ -12,8 +12,8 @@ Beads: salesagent-2yt6
 from unittest.mock import patch
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
 from tests.a2a_helpers import make_a2a_context
+from tests.factories import PrincipalFactory
 
 
 class TestA2ATestingContextExtraction:
@@ -34,10 +34,9 @@ class TestA2ATestingContextExtraction:
         }
         ctx = make_a2a_context(auth_token="test-token", headers=headers)
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test-tenant",
-            tenant={"tenant_id": "test-tenant"},
             protocol="a2a",
         )
 
@@ -63,10 +62,9 @@ class TestA2ATestingContextExtraction:
         }
         ctx = make_a2a_context(auth_token="test-token", headers=headers)
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test-tenant",
-            tenant={"tenant_id": "test-tenant"},
             protocol="a2a",
         )
 
@@ -90,10 +88,9 @@ class TestA2ATestingContextExtraction:
         }
         ctx = make_a2a_context(auth_token="test-token", headers=headers)
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test-tenant",
-            tenant={"tenant_id": "test-tenant"},
             protocol="a2a",
         )
 

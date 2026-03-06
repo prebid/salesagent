@@ -15,7 +15,7 @@ import pytest
 from a2a.utils.errors import ServerError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 
 
 class TestAuthOptionalSkills:
@@ -24,11 +24,15 @@ class TestAuthOptionalSkills:
     def setup_method(self):
         """Set up test fixtures."""
         self.handler = AdCPRequestHandler()
-        self.mock_identity = ResolvedIdentity(
-            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        self.mock_identity = PrincipalFactory.make_identity(
+            principal_id="test_principal",
+            tenant_id="default",
+            protocol="a2a",
         )
-        self.anon_identity = ResolvedIdentity(
-            principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        self.anon_identity = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id="default",
+            protocol="a2a",
         )
 
     @pytest.mark.asyncio

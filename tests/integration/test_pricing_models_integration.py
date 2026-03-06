@@ -11,11 +11,10 @@ from adcp import GetProductsRequest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, PricingModel
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl
+from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -246,12 +245,10 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     request = GetProductsRequest(brief="display ads", brand={"domain": "testbrand.com"})
 
     # Create identity
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     response = await _get_products_impl(request, identity)
@@ -301,12 +298,10 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     response, _ = await _create_media_buy_impl(req=request, identity=identity)
@@ -339,12 +334,10 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     response, _ = await _create_media_buy_impl(req=request, identity=identity)
@@ -377,12 +370,10 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
@@ -413,12 +404,10 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     response, _ = await _create_media_buy_impl(req=request, identity=identity)
@@ -450,12 +439,10 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
@@ -486,12 +473,10 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     response, _ = await _create_media_buy_impl(req=request, identity=identity)
@@ -523,12 +508,10 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         end_time=end_time,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
+        dry_run=True,
     )
 
     # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions

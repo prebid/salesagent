@@ -14,7 +14,7 @@ from a2a.types import MessageSendParams, Task
 from a2a.utils.errors import InvalidParamsError, ServerError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -22,9 +22,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 logger = logging.getLogger(__name__)
 
 
-def _make_identity(sample_tenant, sample_principal) -> ResolvedIdentity:
+def _make_identity(sample_tenant, sample_principal):
     """Build a ResolvedIdentity for A2A tests."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=sample_principal["principal_id"],
         tenant_id=sample_tenant["tenant_id"],
         tenant=sample_tenant,

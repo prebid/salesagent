@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.products import _get_products_impl
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
+from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import (
     create_test_cpm_pricing_option,
     create_test_publisher_properties_by_tag,
@@ -56,8 +56,13 @@ def _make_identity(
 ):
     """Create a ResolvedIdentity for testing _get_products_impl."""
     if tenant is None:
-        tenant = {"tenant_id": tenant_id, "brand_manifest_policy": "public", "advertising_policy": {}}
-    return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            brand_manifest_policy="public",
+            advertising_policy={},
+        )
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant.get("tenant_id", tenant_id),
         tenant=tenant,

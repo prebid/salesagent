@@ -6,6 +6,7 @@ Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 import factory
 from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
@@ -27,6 +28,23 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     ad_server = "mock"
     authorized_emails = factory.LazyFunction(lambda: ["test@example.com"])
     authorized_domains = factory.LazyFunction(lambda: ["example.com"])
+
+    @classmethod
+    def make_tenant(cls, tenant_id: str = "test_tenant", **overrides: Any) -> dict[str, Any]:
+        """Build a tenant dict without DB persistence.
+
+        Uses same defaults as TenantFactory fields.
+        Pass **overrides for domain fields (approval_mode, gemini_api_key, etc).
+        """
+        subdomain = f"pub-{tenant_id}".replace("_", "-")
+        tenant: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "name": f"Test Publisher {tenant_id}",
+            "subdomain": subdomain,
+            "ad_server": "mock",
+        }
+        tenant.update(overrides)
+        return tenant
 
     # Auto-create required CurrencyLimit (USD) for budget validation
     currency_usd = RelatedFactory(

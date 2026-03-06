@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 
 
 class TestMCPErrorShapes:
@@ -85,9 +85,7 @@ class TestMCPErrorShapes:
     @pytest.mark.asyncio
     async def test_not_found_principal_returns_error_response(self):
         """MCP _create_media_buy_impl returns error response for non-existent principal."""
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
-        from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = CreateMediaBuyRequest(
@@ -98,11 +96,9 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="nonexistent",
             tenant_id="test",
-            tenant={"tenant_id": "test"},
-            testing_context=AdCPTestContext(dry_run=False, test_session_id="test"),
         )
 
         with (
@@ -145,10 +141,11 @@ class TestA2AErrorShapes:
     @pytest.mark.asyncio
     async def test_unknown_skill_raises_server_error(self):
         """A2A raises ServerError for unknown skill names."""
-        from src.core.resolved_identity import ResolvedIdentity
 
-        mock_identity = ResolvedIdentity(
-            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        mock_identity = PrincipalFactory.make_identity(
+            principal_id="test_principal",
+            tenant_id="default",
+            protocol="a2a",
         )
         with pytest.raises(ServerError) as exc_info:
             await self.handler._handle_explicit_skill(
@@ -165,8 +162,10 @@ class TestA2AErrorShapes:
     async def test_invalid_auth_identity_raises_server_error(self):
         """A2A raises ServerError when identity has no principal (auth required skill)."""
         # Identity with no principal_id simulates invalid auth
-        invalid_identity = ResolvedIdentity(
-            principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        invalid_identity = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id="default",
+            protocol="a2a",
         )
 
         with pytest.raises(ServerError) as exc_info:
@@ -181,8 +180,10 @@ class TestA2AErrorShapes:
     @pytest.mark.asyncio
     async def test_missing_params_returns_error_dict(self):
         """A2A create_media_buy returns error dict for missing required params."""
-        mock_identity = ResolvedIdentity(
-            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        mock_identity = PrincipalFactory.make_identity(
+            principal_id="test_principal",
+            tenant_id="default",
+            protocol="a2a",
         )
 
         result = await self.handler._handle_create_media_buy_skill(
@@ -202,8 +203,10 @@ class TestA2AErrorShapes:
     @pytest.mark.asyncio
     async def test_validation_error_returns_error_dict(self):
         """A2A create_media_buy returns error dict for invalid parameter types."""
-        mock_identity = ResolvedIdentity(
-            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        mock_identity = PrincipalFactory.make_identity(
+            principal_id="test_principal",
+            tenant_id="default",
+            protocol="a2a",
         )
 
         # Provide all required params but with invalid types
@@ -230,8 +233,10 @@ class TestA2AErrorShapes:
             mock_tool.return_value = {"products": []}
 
             # Should NOT raise "Authentication required"
-            anon_identity = ResolvedIdentity(
-                principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+            anon_identity = PrincipalFactory.make_identity(
+                principal_id=None,
+                tenant_id="default",
+                protocol="a2a",
             )
             try:
                 await self.handler._handle_explicit_skill(
@@ -391,8 +396,10 @@ class TestCrossTransportErrorConsistency:
             mcp_error_message = str(e)
 
         # A2A path: missing required params — identity resolved at transport boundary
-        mock_identity = ResolvedIdentity(
-            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        mock_identity = PrincipalFactory.make_identity(
+            principal_id="test_principal",
+            tenant_id="default",
+            protocol="a2a",
         )
 
         a2a_result = await self.handler._handle_create_media_buy_skill(
@@ -426,9 +433,7 @@ class TestCrossTransportErrorConsistency:
         The _create_media_buy_impl function returns a CreateMediaBuyError when
         principal is not found. This result flows through both transports.
         """
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
-        from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = CreateMediaBuyRequest(
@@ -439,11 +444,9 @@ class TestCrossTransportErrorConsistency:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="ghost_principal",
             tenant_id="test",
-            tenant={"tenant_id": "test"},
-            testing_context=AdCPTestContext(dry_run=False, test_session_id="test"),
         )
 
         with (
@@ -480,10 +483,10 @@ class TestCrossTransportErrorConsistency:
         """
         handler = AdCPRequestHandler()
 
-        from src.core.resolved_identity import ResolvedIdentity
-
-        mock_identity = ResolvedIdentity(
-            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
+        mock_identity = PrincipalFactory.make_identity(
+            principal_id="test_principal",
+            tenant_id="default",
+            protocol="a2a",
         )
         with pytest.raises(ServerError) as exc_info:
             await handler._handle_explicit_skill(
