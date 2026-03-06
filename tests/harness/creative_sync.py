@@ -1,6 +1,6 @@
 """CreativeSyncEnv — integration test environment for _sync_creatives_impl.
 
-Patches: creative agent registry, run_async_in_sync_context, notifications, audit.
+Patches: creative agent registry, run_async_in_sync_context, notifications, audit, config.
 Real: get_db_session, CreativeRepository, all validation/processing (all hit real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
@@ -21,11 +21,27 @@ Usage::
             }])
             assert len(response.results) == 1
 
+Generative creative usage::
+
+    with CreativeSyncEnv() as env:
+        env.setup_default_data()
+        fmt = env.setup_generative_build(
+            format_id="gen_banner",
+            build_result={"status": "draft", "context_id": "ctx-1", "creative_output": {}},
+        )
+        result = env.call_via(transport, creatives=[{
+            "creative_id": "c1",
+            "name": "Gen Creative",
+            "format_id": fmt,
+            "assets": {"message": {"content": "Build me a banner"}},
+        }])
+
 Available mocks via env.mock:
     "registry"           -- get_creative_agent_registry (lazy import in _sync.py)
     "run_async"          -- run_async_in_sync_context (module-level import in _sync.py)
     "send_notifications" -- _send_creative_notifications (from _workflow)
     "audit_log"          -- _audit_log_sync (from _workflow)
+    "config"             -- get_config (lazy import in _processing.py)
 """
 
 from __future__ import annotations
@@ -52,7 +68,9 @@ class CreativeSyncEnv(IntegrationEnv):
         "run_async": "src.core.tools.creatives._sync.run_async_in_sync_context",
         "send_notifications": "src.core.tools.creatives._sync._send_creative_notifications",
         "audit_log": "src.core.tools.creatives._sync._audit_log_sync",
+        "config": "src.core.config.get_config",
     }
+    DEFAULT_AGENT_URL = "https://creative.test.example.com"
     REST_ENDPOINT = "/api/v1/creatives/sync"
 
     def _configure_mocks(self) -> None:
@@ -63,6 +81,10 @@ class CreativeSyncEnv(IntegrationEnv):
         # get_format must return a coroutine (consumed by run_async_in_sync_context
         # in _validation.py). Return a truthy value to pass format existence check.
         mock_registry.get_format = AsyncMock(return_value={"id": "display_300x250", "name": "Display 300x250"})
+        # build_creative and preview_creative must be AsyncMock because
+        # _processing.py uses the REAL run_async_in_sync_context (not patched there).
+        mock_registry.build_creative = AsyncMock(return_value={})
+        mock_registry.preview_creative = AsyncMock(return_value={})
         self.mock["registry"].return_value = mock_registry
 
         # run_async: execute the coroutine synchronously (return empty list)
@@ -73,6 +95,64 @@ class CreativeSyncEnv(IntegrationEnv):
 
         # Audit log: no-op
         self.mock["audit_log"].return_value = None
+
+        # Config: default with no gemini key (safe for static creatives)
+        mock_config = MagicMock()
+        mock_config.gemini_api_key = None
+        self.mock["config"].return_value = mock_config
+
+    def setup_generative_build(
+        self,
+        format_id: str = "display_gen",
+        agent_url: str | None = None,
+        build_result: dict[str, Any] | None = None,
+        gemini_api_key: str = "test-gemini-key",
+    ) -> dict[str, str]:
+        """Configure harness for generative creative testing.
+
+        Sets up:
+        - A format mock with output_format_ids (makes it generative)
+        - build_creative AsyncMock with the given return value
+        - gemini_api_key on the config mock
+        - run_async to return the generative format list
+
+        Returns a format_id dict for use in creative payloads::
+
+            fmt = env.setup_generative_build(format_id="gen_banner")
+            creative = {"creative_id": "c1", "name": "Test", "format_id": fmt, ...}
+        """
+        from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+
+        agent = agent_url or self.DEFAULT_AGENT_URL
+
+        # Create format mock with matching FormatId
+        mock_format = MagicMock()
+        mock_format.format_id = LibraryFormatId(agent_url=agent, id=format_id)
+        mock_format.agent_url = agent
+        mock_format.output_format_ids = [format_id]  # Non-empty → generative
+
+        # Configure run_async to return this format for list_all_formats
+        self.set_run_async_result([mock_format])
+
+        # Configure build_creative return value
+        default_build = {
+            "status": "draft",
+            "context_id": "ctx-test-123",
+            "creative_output": {
+                "assets": {"headline": {"text": "Generated headline"}},
+                "output_format": {"url": "https://generated.example.com/creative.html"},
+            },
+        }
+        registry = self.mock["registry"].return_value
+        registry.build_creative = AsyncMock(return_value=build_result or default_build)
+
+        # Also configure get_format to return this format for validation
+        registry.get_format = AsyncMock(return_value=mock_format)
+
+        # Set gemini API key
+        self.mock["config"].return_value.gemini_api_key = gemini_api_key
+
+        return {"agent_url": agent, "id": format_id}
 
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.

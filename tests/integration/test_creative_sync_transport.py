@@ -5,6 +5,7 @@ transports. Fixture setup and payload assertions are shared; only the
 dispatch mechanism varies.
 
 Covers: UC-006-MAIN-MCP-04 through UC-006-MAIN-MCP-09 (transport-paired)
+Covers: UC-006-GENERATIVE-CREATIVE-BUILD-01 through BUILD-08
 """
 
 from __future__ import annotations
@@ -13,7 +14,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from adcp.types import CreativeAction
+from sqlalchemy import select
 
+from src.core.database.database_session import get_db_session
+from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPNotFoundError
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope
 
@@ -306,3 +310,345 @@ class TestSyncRegistryCachingTransport:
             # list_all_formats called once per sync, not per creative
             registry = env.mock["registry"].return_value
             assert registry.list_all_formats.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Generative Creative Build Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestGenerativeBuildClassification:
+    """Format with output_format_ids classified as generative."""
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_generative_format_calls_build_creative(self, integration_db, transport):
+        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-01
+
+        A format with output_format_ids triggers build_creative, not preview_creative.
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_gen_01",
+                        "name": "Generative Banner",
+                        "format_id": fmt,
+                        "assets": {"message": {"content": "Build me a banner"}},
+                    }
+                ],
+            )
+
+            assert result.is_success, f"Expected success but got error: {result.error}"
+            assert_envelope(result, transport)
+            assert len(result.payload.creatives) == 1
+            assert result.payload.creatives[0].action == CreativeAction.created
+
+            # Verify build_creative was called (generative path)
+            registry = env.mock["registry"].return_value
+            assert registry.build_creative.called, "build_creative should be called for generative format"
+
+        # Verify DB has generative data
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_gen_01", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is not None
+            assert db_creative.data.get("generative_status") == "draft"
+            assert db_creative.data.get("generative_context_id") == "ctx-test-123"
+
+
+@pytest.mark.requires_db
+class TestGenerativeBuildPromptMessage:
+    """Prompt extracted from message asset role."""
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_message_role_used_as_prompt(self, integration_db, transport):
+        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-02
+
+        The 'message' asset role content is passed as the build prompt.
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_gen_02",
+                        "name": "Message Test",
+                        "format_id": fmt,
+                        "assets": {"message": {"content": "Create a holiday banner"}},
+                    }
+                ],
+            )
+
+            assert result.is_success
+            assert_envelope(result, transport)
+
+            call_args = env.mock["registry"].return_value.build_creative.call_args
+            assert call_args is not None
+            assert call_args[1]["message"] == "Create a holiday banner"
+
+
+@pytest.mark.requires_db
+class TestGenerativeBuildPromptBrief:
+    """Prompt extracted from brief asset role (fallback)."""
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_brief_role_used_when_no_message(self, integration_db, transport):
+        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-03
+
+        When no 'message' asset, 'brief' role content is used as prompt.
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_gen_03",
+                        "name": "Brief Test",
+                        "format_id": fmt,
+                        "assets": {"brief": {"content": "Promote summer sale"}},
+                    }
+                ],
+            )
+
+            assert result.is_success
+            assert_envelope(result, transport)
+
+            call_args = env.mock["registry"].return_value.build_creative.call_args
+            assert call_args is not None
+            assert call_args[1]["message"] == "Promote summer sale"
+
+
+@pytest.mark.requires_db
+class TestGenerativeBuildPromptRole:
+    """Prompt extracted from prompt asset role (fallback)."""
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_prompt_role_used_when_no_message_or_brief(self, integration_db, transport):
+        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-04
+
+        When no 'message' or 'brief' asset, 'prompt' role content is used.
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_gen_04",
+                        "name": "Prompt Role Test",
+                        "format_id": fmt,
+                        "assets": {"prompt": {"content": "Design a Q4 campaign banner"}},
+                    }
+                ],
+            )
+
+            assert result.is_success
+            assert_envelope(result, transport)
+
+            call_args = env.mock["registry"].return_value.build_creative.call_args
+            assert call_args is not None
+            assert call_args[1]["message"] == "Design a Q4 campaign banner"
+
+
+@pytest.mark.requires_db
+class TestGenerativeBuildPromptInputs:
+    """Prompt from inputs[0].context_description."""
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_inputs_context_description_as_prompt(self, integration_db, transport):
+        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-05
+
+        When no message/brief/prompt assets, inputs[0].context_description is used.
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_gen_05",
+                        "name": "Inputs Test",
+                        "format_id": fmt,
+                        "inputs": [{"name": "q4_brief", "context_description": "Design for Q4 campaign"}],
+                    }
+                ],
+            )
+
+            assert result.is_success
+            assert_envelope(result, transport)
+
+            call_args = env.mock["registry"].return_value.build_creative.call_args
+            assert call_args is not None
+            assert call_args[1]["message"] == "Design for Q4 campaign"
+
+
+@pytest.mark.requires_db
+class TestGenerativeBuildNameFallback:
+    """Creative name as fallback prompt on CREATE."""
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_name_used_as_fallback_prompt(self, integration_db, transport):
+        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-06
+
+        When no assets and no inputs, 'Create a creative for: {name}' is used.
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_gen_06",
+                        "name": "Holiday Sale Banner",
+                        "format_id": fmt,
+                    }
+                ],
+            )
+
+            assert result.is_success
+            assert_envelope(result, transport)
+
+            call_args = env.mock["registry"].return_value.build_creative.call_args
+            assert call_args is not None
+            assert call_args[1]["message"] == "Create a creative for: Holiday Sale Banner"
+
+
+@pytest.mark.requires_db
+class TestGenerativeBuildUpdatePreserve:
+    """Update without prompt preserves existing data."""
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_update_without_prompt_skips_build(self, integration_db, transport):
+        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-07
+
+        An UPDATE with no prompt in assets/inputs skips build_creative
+        and preserves existing generative data.
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            # First sync: CREATE with a prompt
+            result1 = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_gen_07",
+                        "name": "Preserve Test",
+                        "format_id": fmt,
+                        "assets": {"message": {"content": "Initial prompt"}},
+                    }
+                ],
+            )
+            assert result1.is_success
+
+            # Record build call count after first sync
+            registry = env.mock["registry"].return_value
+            build_calls_after_create = registry.build_creative.call_count
+
+            # Second sync: UPDATE with no prompt assets
+            result2 = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_gen_07",
+                        "name": "Preserve Test Updated Name",
+                        "format_id": fmt,
+                    }
+                ],
+            )
+
+            assert result2.is_success
+            assert_envelope(result2, transport)
+
+            # build_creative should NOT be called again (no prompt → skip build)
+            assert registry.build_creative.call_count == build_calls_after_create, (
+                "build_creative should not be called on update without prompt"
+            )
+
+        # Verify existing generative data is preserved in DB
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_gen_07", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is not None
+            assert db_creative.data.get("generative_status") == "draft"
+            assert db_creative.data.get("generative_context_id") == "ctx-test-123"
+
+
+@pytest.mark.requires_db
+class TestGenerativeBuildUserAssetPriority:
+    """User assets take priority over generative output."""
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_user_assets_not_overwritten(self, integration_db, transport):
+        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-08
+
+        When user provides assets AND a generative prompt, user assets
+        are preserved (not overwritten by generative output).
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build(
+                build_result={
+                    "status": "draft",
+                    "context_id": "ctx-priority",
+                    "creative_output": {
+                        "assets": {"headline": {"text": "AI-generated headline"}},
+                        "output_format": {"url": "https://generated.example.com/ai.html"},
+                    },
+                },
+            )
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_gen_08",
+                        "name": "Asset Priority Test",
+                        "format_id": fmt,
+                        "assets": {
+                            "message": {"content": "Build me a banner"},
+                            "headline": {"content": "User-provided headline"},
+                        },
+                        "url": "https://user.example.com/image.png",
+                    }
+                ],
+            )
+
+            assert result.is_success
+            assert_envelope(result, transport)
+
+            # build_creative is still called (we have a message prompt)
+            registry = env.mock["registry"].return_value
+            assert registry.build_creative.called
+
+        # Verify user assets preserved in DB (not overwritten by generative output)
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_gen_08", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is not None
+            # User-provided URL should be preserved (not overwritten by generative output)
+            assert db_creative.data.get("url") == "https://user.example.com/image.png"
+            # User-provided assets should be preserved
+            assets = db_creative.data.get("assets", {})
+            assert "headline" in assets

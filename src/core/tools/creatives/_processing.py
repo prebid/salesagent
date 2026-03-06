@@ -291,6 +291,17 @@ def _update_existing_creative(
                                 f"context_id={data.get('generative_context_id')}"
                             )
                     else:
+                        # No prompt → skip build, but preserve generative fields
+                        # from existing data (data was rebuilt from scratch above)
+                        if existing_creative.data:
+                            for key in (
+                                "generative_build_result",
+                                "generative_status",
+                                "generative_context_id",
+                                "output_format",
+                            ):
+                                if key in existing_creative.data:
+                                    data[key] = existing_creative.data[key]
                         logger.info("[sync_creatives] No message for generative update, keeping existing creative data")
 
                     # Skip preview_creative call since we already have the output

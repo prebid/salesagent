@@ -66,8 +66,8 @@ def _validate_creative_input(
     }
 
     # Add optional AdCP v1 fields if provided
-    if creative.inputs:
-        schema_data["inputs"] = creative.inputs
+    # NOTE: creative.inputs is NOT included — Creative model (extra="forbid")
+    # doesn't accept it. Processing reads inputs from the original CreativeAsset.
     if creative.tags:
         schema_data["tags"] = creative.tags
     approved = getattr(creative, "approved", None)
