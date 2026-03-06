@@ -113,15 +113,27 @@ For each obligation:
 
 1. **Read the scenario** from `docs/test-obligations/`:
    ```bash
-   grep -n "{OID}" docs/test-obligations/*.md
+   grep -A 10 "{OID}" docs/test-obligations/*.md
    ```
    Extract: Given/When/Then, business rule, priority, layer.
 
-2. **Find the production code**: Locate the specific lines in the `_impl`
-   function that implement this behavior.
+2. **Translate Given/When/Then directly into the test**:
+   - **Given** → test setup (fixtures, env configuration)
+   - **When** → action (call production function)
+   - **Then** → assertions (expected output/state)
 
-3. **Plan the test**: Identify the KEY ASSERTION — "What assertion would
-   FAIL if production behavior changed?"
+   The BDD spec is the **sole source** of expected behavior. Do NOT derive
+   assertions from what the production code currently does. If the spec says
+   "Then a SyncCreativesSubmitted is returned," assert `isinstance(result,
+   SyncCreativesSubmitted)` — even if the code currently returns something
+   else or doesn't implement the behavior at all.
+
+3. **Check if production code implements it**: Locate the `_impl` function.
+   - **Implemented** → test should PASS. If it doesn't, the code has a bug.
+   - **Not implemented** → test MUST still assert spec behavior, marked with
+     `@pytest.mark.xfail(strict=True, reason="<what's missing>")`.
+     Never write a test that asserts current (wrong) behavior just because
+     the spec behavior doesn't exist yet. That legitimizes the gap.
 
 ### Step 4: Write test
 
@@ -445,10 +457,32 @@ with CircuitBreakerEnv() as env:
 When production code doesn't implement the tested behavior:
 
 ```python
-@pytest.mark.xfail(reason="<what's missing in production code>")
+@pytest.mark.xfail(strict=True, reason="<what's missing> (salesagent-xxxx)")
 def test_name(self):
     """... Covers: {OID} ..."""
+    # Assert the SPEC-DEFINED behavior, not current behavior
 ```
+
+Always use `strict=True` — when someone implements the feature, the xfail
+will break the build and remind them to remove the marker.
+
+## Iron Rule: BDD Spec Is the Sole Source of Assertions
+
+**The Given/When/Then from the obligation spec IS the test.** Period.
+
+- **Given** → test setup
+- **When** → call production function
+- **Then** → assertions
+
+Do NOT adapt assertions to match current implementation. If the spec says
+"Then a SyncCreativesSubmitted is returned" but the code returns
+SyncCreativesResponse, assert SyncCreativesSubmitted and mark xfail.
+A test that asserts current (wrong) behavior is WORSE than no test — it
+legitimizes the gap and makes it invisible.
+
+**The only valid reason to read production code** is to understand HOW to
+set up the test (what parameters to pass, what mocks to configure). The
+production code NEVER determines WHAT to assert — only the spec does.
 
 ## Anti-Patterns
 
@@ -457,6 +491,11 @@ def test_name(self):
 - Don't copy helper functions (_make_buy, _make_adapter_response) — use env methods
 - Don't assert `mock.called` as the primary assertion (Rule 6)
 - Don't drop obligations because "the code doesn't do this" — use xfail
+- **Don't write tests that mirror current behavior instead of spec behavior** —
+  this is the most dangerous anti-pattern. It makes gaps invisible by
+  producing passing tests that verify the system "behaves somehow" rather
+  than "behaves correctly"
+- Don't exclude obligations as "not implemented" — that IS the gap to surface
 
 ## When to Use This vs /obligation-test
 

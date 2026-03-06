@@ -70,15 +70,24 @@ All research atoms unblock after baseline. For each obligation:
 
 1. **Read the scenario** from `docs/test-obligations/`:
    ```bash
-   grep -n "{OID}" docs/test-obligations/*.md
+   grep -A 10 "{OID}" docs/test-obligations/*.md
    ```
    Extract: Given/When/Then, business rule, priority, layer.
 
-2. **Find the production code**: Locate the `_impl` function and specific
-   lines that implement this behavior.
+2. **Translate Given/When/Then directly into the test**:
+   - **Given** → test setup (fixtures, env configuration)
+   - **When** → action (call production function)
+   - **Then** → assertions (expected output/state)
 
-3. **Plan the test**: Decide unit vs integration, list mocks, identify the
-   KEY ASSERTION — "What assertion would FAIL if production behavior changed?"
+   The BDD spec is the **sole source** of expected behavior. Do NOT derive
+   assertions from what the production code currently does.
+
+3. **Check if production code implements it**: Locate the `_impl` function.
+   - **Implemented** → test should PASS
+   - **Not implemented** → test MUST still assert spec behavior, marked with
+     `@pytest.mark.xfail(strict=True, reason="<what's missing>")`
+   - Never write a test that asserts current (wrong) behavior instead of
+     spec behavior. Never exclude an obligation as "not implemented."
 
 4. **Store findings** in the atom notes via `bd update`.
 

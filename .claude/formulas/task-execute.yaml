@@ -294,9 +294,23 @@ iterate:
 
         ## Instructions
 
-        1. **Identify what to test**: From the implementation plan, determine
-           the key behavior that this task adds or changes. What should be true
-           after implementation that isn't true now?
+        1. **Identify what to test**: From the BDD obligation spec
+           (`docs/test-obligations/`), extract the Given/When/Then scenario.
+           The Given/When/Then IS your test — translate it directly into
+           setup/action/assertion. Do NOT adapt assertions to match current
+           implementation behavior. If the spec says the system should return
+           X, assert X — even if the system currently returns Y or doesn't
+           implement the behavior at all.
+
+           If no BDD obligation exists, fall back to the task description
+           and implementation plan. But if a spec exists, it is the sole
+           source of expected behavior.
+
+           **If the behavior is not implemented**: The test MUST still assert
+           the spec-defined behavior and use `@pytest.mark.xfail(strict=True,
+           reason="<what's missing>")`. A test that mirrors current (wrong)
+           behavior instead of asserting expected behavior is WORSE than no
+           test — it legitimizes the gap.
 
         2. **Choose test location** (entity-suite-aware):
            - **First, check for an entity test suite**:
