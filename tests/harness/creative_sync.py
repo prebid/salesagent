@@ -102,7 +102,13 @@ class CreativeSyncEnv(IntegrationEnv):
         return sync_creatives_raw(**kwargs)
 
     def call_mcp(self, **kwargs: Any) -> SyncCreativesResponse:
-        """Call sync_creatives MCP wrapper with mock Context."""
+        """Call sync_creatives MCP wrapper with mock Context.
+
+        Note: The MCP wrapper expects ValidationMode enum for validation_mode,
+        not a string. FastMCP normally coerces strings to enums, but since we
+        call the wrapper directly, we must do it ourselves.
+        """
+        from adcp.types.generated_poc.enums.validation_mode import ValidationMode
         from fastmcp.server.context import Context
 
         from src.core.tools.creatives.sync_wrappers import sync_creatives
@@ -112,6 +118,10 @@ class CreativeSyncEnv(IntegrationEnv):
 
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=self.identity_for(Transport.MCP))
+
+        # Coerce validation_mode string to enum (FastMCP does this automatically)
+        if "validation_mode" in kwargs and isinstance(kwargs["validation_mode"], str):
+            kwargs["validation_mode"] = ValidationMode(kwargs["validation_mode"])
 
         kwargs.setdefault("creatives", [])
         tool_result = asyncio.run(sync_creatives(ctx=mock_ctx, **kwargs))
