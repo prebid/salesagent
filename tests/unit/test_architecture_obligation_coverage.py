@@ -24,11 +24,19 @@ from pathlib import Path
 
 OBLIGATIONS_DIR = Path(__file__).resolve().parents[2] / "docs" / "test-obligations"
 INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration"
+INTEGRATION_V2_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration_v2"
 UNIT_DIR = Path(__file__).resolve().parents[2] / "tests" / "unit"
 ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_coverage_allowlist.json"
 
 # Unit test entity files that carry Covers: tags
-_UNIT_ENTITY_FILES = ["test_media_buy.py", "test_creative.py", "test_delivery.py"]
+_UNIT_ENTITY_FILES = [
+    "test_media_buy.py",
+    "test_creative.py",
+    "test_delivery.py",
+    "test_product.py",
+    "test_product_schema_obligations.py",
+    "test_property_list_schema.py",
+]
 
 # Obligation ID pattern: PREFIX-SECTION-SEQ (e.g., UC-002-MAIN-01, BR-RULE-006-01)
 _OBLIGATION_ID_RE = re.compile(r"[A-Z][A-Z0-9]+-[\w-]+-\d{2}")
@@ -82,6 +90,10 @@ def _get_covered_obligations() -> set[str]:
 
     # Integration tests
     for tf in INTEGRATION_DIR.glob("test_*_v3.py"):
+        _scan_file(tf)
+
+    # Integration V2 tests
+    for tf in INTEGRATION_V2_DIR.glob("test_*.py"):
         _scan_file(tf)
 
     # Unit entity tests

@@ -53,7 +53,7 @@ async def test_public_policy_allows_no_brand_manifest():
         patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
-        patch("src.core.tools.products.get_db_session") as mock_db_session,
+        patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
     ):
         # Setup mocks
         mock_get_principal_obj.return_value = None
@@ -66,12 +66,12 @@ async def test_public_policy_allows_no_brand_manifest():
         mock_pricing_instance.enrich_products_with_pricing.return_value = []
         mock_pricing_service.return_value = mock_pricing_instance
 
-        # Mock database session (returns no products)
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.unique.return_value.scalars.return_value.all.return_value = []
-        mock_session.execute.return_value = mock_result
-        mock_db_session.return_value.__enter__.return_value = mock_session
+        # Mock ProductUoW (returns no products)
+        mock_uow = MagicMock()
+        mock_uow.products.list_all.return_value = []
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
 
         # Call implementation - should NOT raise error
         response = await _get_products_impl(mock_request, identity)
@@ -134,7 +134,7 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
         patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
-        patch("src.core.tools.products.get_db_session") as mock_db_session,
+        patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
     ):
         # Setup mocks
         mock_get_principal_obj.return_value = None
@@ -147,12 +147,12 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
         mock_pricing_instance.enrich_products_with_pricing.return_value = []
         mock_pricing_service.return_value = mock_pricing_instance
 
-        # Mock database session (returns no products)
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.unique.return_value.scalars.return_value.all.return_value = []
-        mock_session.execute.return_value = mock_result
-        mock_db_session.return_value.__enter__.return_value = mock_session
+        # Mock ProductUoW (returns no products)
+        mock_uow = MagicMock()
+        mock_uow.products.list_all.return_value = []
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
 
         # Call implementation - should NOT raise error
         response = await _get_products_impl(mock_request, identity)
@@ -213,7 +213,7 @@ async def test_require_auth_policy_accepts_with_auth():
         patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
-        patch("src.core.tools.products.get_db_session") as mock_db_session,
+        patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
     ):
         # Setup mocks - WITH authentication
         mock_get_principal_obj.return_value = None
@@ -226,12 +226,12 @@ async def test_require_auth_policy_accepts_with_auth():
         mock_pricing_instance.enrich_products_with_pricing.return_value = []
         mock_pricing_service.return_value = mock_pricing_instance
 
-        # Mock database session (returns no products)
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.unique.return_value.scalars.return_value.all.return_value = []
-        mock_session.execute.return_value = mock_result
-        mock_db_session.return_value.__enter__.return_value = mock_session
+        # Mock ProductUoW (returns no products)
+        mock_uow = MagicMock()
+        mock_uow.products.list_all.return_value = []
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls.return_value = mock_uow
 
         # Call implementation - should NOT raise error (brand_manifest optional)
         response = await _get_products_impl(mock_request, identity)

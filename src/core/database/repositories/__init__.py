@@ -17,6 +17,6 @@ Usage:
 
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
-from src.core.database.repositories.uow import MediaBuyUoW
+from src.core.database.repositories.uow import MediaBuyUoW, ProductUoW
 
-__all__ = ["MediaBuyRepository", "MediaBuyUoW", "ProductRepository"]
+__all__ = ["MediaBuyRepository", "MediaBuyUoW", "ProductRepository", "ProductUoW"]

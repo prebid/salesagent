@@ -11,6 +11,7 @@ beads: salesagent-qo8a (repository pattern enforcement)
 """
 
 import ast
+import glob
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +27,9 @@ IMPL_FILES = [
     "src/core/tools/media_buy_delivery.py",
     "src/core/tools/media_buy_list.py",
     "src/core/tools/products.py",
+    "src/core/tools/capabilities.py",
+    "src/core/tools/creative_formats.py",
+    "src/core/tools/properties.py",
     "src/core/tools/creatives/listing.py",
     "src/core/tools/creatives/_sync.py",
     "src/core/tools/creatives/_assignments.py",
@@ -41,9 +45,18 @@ IMPL_FILES = [
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
 # FIXME(salesagent-qo8a): all _impl functions should use repositories instead of get_db_session()
 IMPL_SESSION_ALLOWLIST = {
-    # products.py — 2 functions with get_db_session()
+    # products.py — 1 function with get_db_session() (product queries moved to ProductRepository)
+    # FIXME(salesagent-qo8a): _get_products_impl still uses get_db_session() for policy review + dynamic pricing
     ("src/core/tools/products.py", "_get_products_impl"),
-    ("src/core/tools/products.py", "get_product_catalog"),
+    # capabilities.py — 1 function with get_db_session()
+    # FIXME(salesagent-qo8a): _get_adcp_capabilities_impl should use a repository
+    ("src/core/tools/capabilities.py", "_get_adcp_capabilities_impl"),
+    # creative_formats.py — 1 function with get_db_session()
+    # FIXME(salesagent-qo8a): _list_creative_formats_impl should use a repository
+    ("src/core/tools/creative_formats.py", "_list_creative_formats_impl"),
+    # properties.py — 1 function with get_db_session()
+    # FIXME(salesagent-qo8a): _list_authorized_properties_impl should use a repository
+    ("src/core/tools/properties.py", "_list_authorized_properties_impl"),
     # creatives — 5 functions with get_db_session()
     ("src/core/tools/creatives/listing.py", "_list_creatives_impl"),
     ("src/core/tools/creatives/_sync.py", "_sync_creatives_impl"),
@@ -66,71 +79,90 @@ IMPL_SESSION_ALLOWLIST = {
 # Invariant 2: No session.add() in integration test bodies
 # ---------------------------------------------------------------------------
 
-# Integration test files to scan
-INTEGRATION_TEST_FILES = [
-    "tests/integration/conftest.py",
-    "tests/integration/test_creative_v3.py",
-    "tests/integration/test_media_buy_v3.py",
-    "tests/integration/test_delivery_v3.py",
-    "tests/integration/test_update_media_buy_creative_assignment.py",
-    "tests/integration/test_creative_review_model.py",
-    "tests/integration/test_media_buy_readiness.py",
-    "tests/integration/test_format_conversion_approval.py",
-    "tests/integration/test_setup_checklist_service.py",
-    "tests/integration/test_product_principal_access.py",
-]
+
+def _discover_integration_test_files() -> list[str]:
+    """Dynamically discover all integration test files via glob.
+
+    Scans tests/integration*/ directories for test_*.py files and conftest.py files.
+    This ensures new test files are automatically covered by the guard.
+    """
+    test_files = sorted(glob.glob("tests/integration*/**/test_*.py", recursive=True))
+    conftest_files = sorted(glob.glob("tests/integration*/conftest.py", recursive=True))
+    return sorted(set(test_files + conftest_files))
+
+
+INTEGRATION_TEST_FILES = _discover_integration_test_files()
 
 # Pre-existing violations: (file_path, function_or_fixture_name)
 # FIXME(salesagent-qo8a): integration tests should use polyfactory fixtures
 INTEGRATION_SESSION_ADD_ALLOWLIST = {
-    # conftest.py
+    # tests/integration/conftest.py
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
     ("tests/integration/conftest.py", "sample_tenant"),
     ("tests/integration/conftest.py", "sample_principal"),
     ("tests/integration/conftest.py", "sample_products"),
     ("tests/integration/conftest.py", "test_media_buy_workflow"),
-    # test_creative_v3.py (multiple classes share setup_tenant name)
-    ("tests/integration/test_creative_v3.py", "setup_tenant"),
-    # test_media_buy_v3.py
-    ("tests/integration/test_media_buy_v3.py", "mb_creatives"),
-    ("tests/integration/test_media_buy_v3.py", "test_unsupported_currency_rejected"),
-    ("tests/integration/test_media_buy_v3.py", "test_ownership_mismatch_rejected"),
-    # test_delivery_v3.py
-    ("tests/integration/test_delivery_v3.py", "_setup_base_state"),
-    ("tests/integration/test_delivery_v3.py", "_create_media_buy"),
-    ("tests/integration/test_delivery_v3.py", "test_ownership_isolation"),
-    ("tests/integration/test_delivery_v3.py", "test_ownership_no_info_leakage"),
-    ("tests/integration/test_delivery_v3.py", "test_mixed_ownership"),
-    # test_update_media_buy_creative_assignment.py
-    (
-        "tests/integration/test_update_media_buy_creative_assignment.py",
-        "test_update_media_buy_assigns_creatives_to_package",
-    ),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_update_media_buy_replaces_creatives"),
-    (
-        "tests/integration/test_update_media_buy_creative_assignment.py",
-        "test_update_media_buy_rejects_missing_creatives",
-    ),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_with_weights"),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_replaces_all"),
-    # test_creative_review_model.py
+    # tests/integration/test_adapter_factory.py
+    ("tests/integration/test_adapter_factory.py", "setup_adapters"),
+    # tests/integration/test_admin_ui_pages.py
+    ("tests/integration/test_admin_ui_pages.py", "test_cannot_access_other_tenant_data"),
+    # tests/integration/test_audit_decorator.py
+    ("tests/integration/test_audit_decorator.py", "test_decorator_logs_successful_action"),
+    ("tests/integration/test_audit_decorator.py", "test_decorator_filters_password_fields"),
+    ("tests/integration/test_audit_decorator.py", "test_decorator_filters_sensitive_json_fields"),
+    ("tests/integration/test_audit_decorator.py", "test_decorator_logs_failed_actions"),
+    ("tests/integration/test_audit_decorator.py", "test_decorator_truncates_long_values"),
+    ("tests/integration/test_audit_decorator.py", "test_decorator_extracts_custom_details"),
+    ("tests/integration/test_audit_decorator.py", "test_decorator_handles_missing_session"),
+    # tests/integration/test_context_persistence.py
+    ("tests/integration/test_context_persistence.py", "test_simplified_context"),
+    # tests/integration/test_creative_assignment_principal_id.py
+    ("tests/integration/test_creative_assignment_principal_id.py", "ca_creatives"),
+    # tests/integration/test_product_repository.py — repository test legitimately uses session.add()
+    ("tests/integration/test_product_repository.py", "_create_test_tenant"),
+    ("tests/integration/test_product_repository.py", "_create_test_product"),
+    # tests/integration/test_creative_review_model.py
     ("tests/integration/test_creative_review_model.py", "_create_test_tenant_with_creative"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_query"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_filters_by_review_type"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_tenant_isolation"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_with_latest_review_tenant_isolation"),
-    # test_media_buy_readiness.py
-    ("tests/integration/test_media_buy_readiness.py", "test_tenant"),
-    ("tests/integration/test_media_buy_readiness.py", "test_principal"),
-    ("tests/integration/test_media_buy_readiness.py", "test_draft_state_no_packages"),
-    ("tests/integration/test_media_buy_readiness.py", "test_needs_creatives_state"),
-    ("tests/integration/test_media_buy_readiness.py", "test_needs_approval_state"),
-    ("tests/integration/test_media_buy_readiness.py", "test_scheduled_state"),
-    ("tests/integration/test_media_buy_readiness.py", "test_live_state"),
-    ("tests/integration/test_media_buy_readiness.py", "test_completed_state"),
-    ("tests/integration/test_media_buy_readiness.py", "test_tenant_readiness_summary"),
-    # test_format_conversion_approval.py
+    # tests/integration/test_creative_sync_data_preservation.py
+    ("tests/integration/test_creative_sync_data_preservation.py", "setup_test_data"),
+    # tests/integration/test_creative_v3.py (multiple classes share setup_tenant name)
+    ("tests/integration/test_creative_v3.py", "setup_tenant"),
+    # tests/integration/test_cross_principal_security.py
+    ("tests/integration/test_cross_principal_security.py", "setup_test_data"),
+    ("tests/integration/test_cross_principal_security.py", "test_cross_tenant_isolation_also_enforced"),
+    # tests/integration/test_database_health_integration.py
+    ("tests/integration/test_database_health_integration.py", "test_health_check_performance_with_real_database"),
+    # tests/integration/test_database_integration.py
+    ("tests/integration/test_database_integration.py", "test_settings_queries"),
+    # tests/integration/test_delivery_simulator_restart.py
+    ("tests/integration/test_delivery_simulator_restart.py", "test_tenant"),
+    ("tests/integration/test_delivery_simulator_restart.py", "test_principal"),
+    ("tests/integration/test_delivery_simulator_restart.py", "test_product"),
+    ("tests/integration/test_delivery_simulator_restart.py", "test_webhook_config"),
+    ("tests/integration/test_delivery_simulator_restart.py", "test_restart_finds_media_buys_with_principal_webhook"),
+    ("tests/integration/test_delivery_simulator_restart.py", "test_restart_ignores_media_buys_without_webhook"),
+    ("tests/integration/test_delivery_simulator_restart.py", "test_restart_join_cardinality"),
+    # tests/integration/test_delivery_v3.py
+    ("tests/integration/test_delivery_v3.py", "_setup_base_state"),
+    ("tests/integration/test_delivery_v3.py", "_create_media_buy"),
+    ("tests/integration/test_delivery_v3.py", "test_ownership_isolation"),
+    ("tests/integration/test_delivery_v3.py", "test_ownership_no_info_leakage"),
+    ("tests/integration/test_delivery_v3.py", "test_mixed_ownership"),
+    # tests/integration/test_delivery_webhooks_force.py
+    (
+        "tests/integration/test_delivery_webhooks_force.py",
+        "test_force_trigger_delivery_webhook_bypasses_duplicate_check",
+    ),
+    ("tests/integration/test_delivery_webhooks_force.py", "test_trigger_report_fails_gracefully_no_webhook"),
+    # tests/integration/test_delivery_webhooks_integration.py
+    ("tests/integration/test_delivery_webhooks_integration.py", "_create_test_tenant_and_principal"),
+    ("tests/integration/test_delivery_webhooks_integration.py", "_create_basic_media_buy_with_webhook"),
+    # tests/integration/test_format_conversion_approval.py
     ("tests/integration/test_format_conversion_approval.py", "create_media_package"),
     ("tests/integration/test_format_conversion_approval.py", "test_tenant"),
     ("tests/integration/test_format_conversion_approval.py", "test_currency_limit"),
@@ -146,7 +178,149 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_format_conversion_approval.py", "test_empty_formats_list_fails"),
     ("tests/integration/test_format_conversion_approval.py", "test_mixed_valid_format_types"),
     ("tests/integration/test_format_conversion_approval.py", "test_invalid_format_unknown_type"),
-    # test_setup_checklist_service.py
+    # tests/integration/test_gam_pricing_models_integration.py
+    ("tests/integration/test_gam_pricing_models_integration.py", "setup_gam_tenant_with_all_pricing_models"),
+    ("tests/integration/test_gam_pricing_models_integration.py", "test_gam_auction_cpc_creates_price_priority"),
+    # tests/integration/test_gam_pricing_restriction.py
+    ("tests/integration/test_gam_pricing_restriction.py", "setup_gam_tenant_with_non_cpm_product"),
+    # tests/integration/test_generative_creatives.py
+    ("tests/integration/test_generative_creatives.py", "setup_test_data"),
+    # tests/integration/test_inventory_profile_effective_properties.py
+    ("tests/integration/test_inventory_profile_effective_properties.py", "test_tenant"),
+    ("tests/integration/test_inventory_profile_effective_properties.py", "test_profile"),
+    ("tests/integration/test_inventory_profile_effective_properties.py", "test_product_custom"),
+    ("tests/integration/test_inventory_profile_effective_properties.py", "test_product_with_profile"),
+    (
+        "tests/integration/test_inventory_profile_effective_properties.py",
+        "test_effective_properties_handle_none_profile_relationship",
+    ),
+    # tests/integration/test_inventory_profile_media_buy.py
+    ("tests/integration/test_inventory_profile_media_buy.py", "test_create_media_buy_with_profile_based_product"),
+    ("tests/integration/test_inventory_profile_media_buy.py", "test_create_media_buy_with_profile_formats"),
+    ("tests/integration/test_inventory_profile_media_buy.py", "test_multiple_products_same_profile_in_media_buy"),
+    ("tests/integration/test_inventory_profile_media_buy.py", "test_media_buy_reflects_profile_updates"),
+    # tests/integration/test_inventory_profile_security.py
+    ("tests/integration/test_inventory_profile_security.py", "tenant_a"),
+    ("tests/integration/test_inventory_profile_security.py", "tenant_b"),
+    ("tests/integration/test_inventory_profile_security.py", "profile_a"),
+    ("tests/integration/test_inventory_profile_security.py", "profile_b"),
+    (
+        "tests/integration/test_inventory_profile_security.py",
+        "test_product_cannot_reference_profile_from_different_tenant",
+    ),
+    # tests/integration/test_inventory_profile_transitions.py
+    ("tests/integration/test_inventory_profile_transitions.py", "tenant"),
+    ("tests/integration/test_inventory_profile_transitions.py", "profile_a"),
+    ("tests/integration/test_inventory_profile_transitions.py", "profile_b"),
+    ("tests/integration/test_inventory_profile_transitions.py", "create_product"),
+    # tests/integration/test_inventory_profile_updates.py
+    ("tests/integration/test_inventory_profile_updates.py", "test_updating_profile_formats_affects_all_products"),
+    (
+        "tests/integration/test_inventory_profile_updates.py",
+        "test_updating_profile_inventory_affects_product_implementation_config",
+    ),
+    ("tests/integration/test_inventory_profile_updates.py", "test_updating_profile_properties_affects_all_products"),
+    # tests/integration/test_list_authorized_properties_integration.py
+    (
+        "tests/integration/test_list_authorized_properties_integration.py",
+        "test_list_authorized_properties_reads_from_publisher_partner",
+    ),
+    (
+        "tests/integration/test_list_authorized_properties_integration.py",
+        "test_list_authorized_properties_returns_all_registered_publishers",
+    ),
+    (
+        "tests/integration/test_list_authorized_properties_integration.py",
+        "test_list_authorized_properties_returns_empty_when_no_publishers",
+    ),
+    (
+        "tests/integration/test_list_authorized_properties_integration.py",
+        "test_list_authorized_properties_returns_sorted_domains",
+    ),
+    # tests/integration/test_list_creatives_auth.py
+    ("tests/integration/test_list_creatives_auth.py", "setup_test_data"),
+    # tests/integration/test_media_buy_readiness.py
+    ("tests/integration/test_media_buy_readiness.py", "test_tenant"),
+    ("tests/integration/test_media_buy_readiness.py", "test_principal"),
+    ("tests/integration/test_media_buy_readiness.py", "test_draft_state_no_packages"),
+    ("tests/integration/test_media_buy_readiness.py", "test_needs_creatives_state"),
+    ("tests/integration/test_media_buy_readiness.py", "test_needs_approval_state"),
+    ("tests/integration/test_media_buy_readiness.py", "test_scheduled_state"),
+    ("tests/integration/test_media_buy_readiness.py", "test_live_state"),
+    ("tests/integration/test_media_buy_readiness.py", "test_completed_state"),
+    ("tests/integration/test_media_buy_readiness.py", "test_tenant_readiness_summary"),
+    # tests/integration/test_media_buy_repository.py
+    ("tests/integration/test_media_buy_repository.py", "tenant_a"),
+    ("tests/integration/test_media_buy_repository.py", "tenant_b"),
+    ("tests/integration/test_media_buy_repository.py", "principal_a"),
+    ("tests/integration/test_media_buy_repository.py", "principal_b"),
+    ("tests/integration/test_media_buy_repository.py", "seed_data"),
+    # tests/integration/test_media_buy_repository_writes.py
+    ("tests/integration/test_media_buy_repository_writes.py", "tenant_a"),
+    ("tests/integration/test_media_buy_repository_writes.py", "tenant_b"),
+    ("tests/integration/test_media_buy_repository_writes.py", "principal_a"),
+    ("tests/integration/test_media_buy_repository_writes.py", "principal_b"),
+    # tests/integration/test_media_buy_status_scheduler.py
+    ("tests/integration/test_media_buy_status_scheduler.py", "_create_test_tenant"),
+    ("tests/integration/test_media_buy_status_scheduler.py", "_create_test_principal"),
+    ("tests/integration/test_media_buy_status_scheduler.py", "_create_media_buy"),
+    ("tests/integration/test_media_buy_status_scheduler.py", "_create_creative"),
+    ("tests/integration/test_media_buy_status_scheduler.py", "_create_creative_assignment"),
+    # tests/integration/test_media_buy_v3.py
+    ("tests/integration/test_media_buy_v3.py", "mb_creatives"),
+    ("tests/integration/test_media_buy_v3.py", "test_unsupported_currency_rejected"),
+    ("tests/integration/test_media_buy_v3.py", "test_ownership_mismatch_rejected"),
+    # tests/integration/test_mock_adapter_publisher_sync.py
+    ("tests/integration/test_mock_adapter_publisher_sync.py", "mock_tenant"),
+    ("tests/integration/test_mock_adapter_publisher_sync.py", "publisher_partner"),
+    # tests/integration/test_mock_ai_per_creative.py
+    ("tests/integration/test_mock_ai_per_creative.py", "mock_adapter"),
+    # tests/integration/test_pricing_models_integration.py
+    ("tests/integration/test_pricing_models_integration.py", "setup_tenant_with_pricing_products"),
+    # tests/integration/test_product_delete_with_pricing.py
+    ("tests/integration/test_product_delete_with_pricing.py", "test_product_deletion_with_pricing_options"),
+    (
+        "tests/integration/test_product_delete_with_pricing.py",
+        "test_pricing_option_direct_deletion_bypasses_trigger_due_to_cascade",
+    ),
+    # tests/integration/test_product_deletion_with_trigger.py
+    ("tests/integration/test_product_deletion_with_trigger.py", "test_product_deletion_cascades_pricing_options"),
+    (
+        "tests/integration/test_product_deletion_with_trigger.py",
+        "test_trigger_still_blocks_manual_deletion_of_last_pricing_option",
+    ),
+    ("tests/integration/test_product_deletion_with_trigger.py", "test_product_deletion_with_multiple_pricing_options"),
+    # tests/integration/test_product_formats_update.py
+    ("tests/integration/test_product_formats_update.py", "sample_product"),
+    # tests/integration/test_product_multiple_format_ids.py
+    ("tests/integration/test_product_multiple_format_ids.py", "test_tenant"),
+    ("tests/integration/test_product_multiple_format_ids.py", "test_create_product_with_multiple_format_ids"),
+    ("tests/integration/test_product_multiple_format_ids.py", "test_update_product_format_ids_preserves_all_formats"),
+    ("tests/integration/test_product_multiple_format_ids.py", "test_product_format_ids_migration_compatibility"),
+    # tests/integration/test_product_pricing_options_required.py
+    ("tests/integration/test_product_pricing_options_required.py", "test_get_product_catalog_loads_pricing_options"),
+    ("tests/integration/test_product_pricing_options_required.py", "test_product_query_with_eager_loading"),
+    (
+        "tests/integration/test_product_pricing_options_required.py",
+        "test_product_without_eager_loading_fails_validation",
+    ),
+    ("tests/integration/test_product_pricing_options_required.py", "test_create_media_buy_loads_pricing_options"),
+    # tests/integration/test_product_principal_access.py
+    ("tests/integration/test_product_principal_access.py", "test_product_stores_and_retrieves_allowed_principal_ids"),
+    ("tests/integration/test_product_principal_access.py", "test_product_with_null_allowed_principal_ids"),
+    ("tests/integration/test_product_principal_access.py", "test_convert_product_includes_allowed_principal_ids"),
+    ("tests/integration/test_product_principal_access.py", "test_allowed_principal_ids_excluded_from_serialization"),
+    ("tests/integration/test_product_principal_access.py", "test_principal_model_exists_for_access_control"),
+    # tests/integration/test_product_v3.py — migrated to factories
+    # tests/integration/test_product_with_inventory_profile.py
+    ("tests/integration/test_product_with_inventory_profile.py", "test_create_product_with_inventory_profile"),
+    (
+        "tests/integration/test_product_with_inventory_profile.py",
+        "test_product_creation_validates_profile_belongs_to_tenant",
+    ),
+    # tests/integration/test_self_service_signup.py
+    ("tests/integration/test_self_service_signup.py", "test_signup_completion_page_renders"),
+    # tests/integration/test_setup_checklist_service.py
     ("tests/integration/test_setup_checklist_service.py", "setup_minimal_tenant"),
     ("tests/integration/test_setup_checklist_service.py", "setup_complete_tenant"),
     ("tests/integration/test_setup_checklist_service.py", "test_progress_calculation"),
@@ -154,12 +328,127 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_setup_checklist_service.py", "test_currency_count_in_details"),
     ("tests/integration/test_setup_checklist_service.py", "test_sso_is_optional_not_critical_in_multi_tenant_mode"),
     ("tests/integration/test_setup_checklist_service.py", "test_ready_for_orders_without_sso_in_multi_tenant_mode"),
-    # test_product_principal_access.py
-    ("tests/integration/test_product_principal_access.py", "test_product_stores_and_retrieves_allowed_principal_ids"),
-    ("tests/integration/test_product_principal_access.py", "test_product_with_null_allowed_principal_ids"),
-    ("tests/integration/test_product_principal_access.py", "test_convert_product_includes_allowed_principal_ids"),
-    ("tests/integration/test_product_principal_access.py", "test_allowed_principal_ids_excluded_from_serialization"),
-    ("tests/integration/test_product_principal_access.py", "test_principal_model_exists_for_access_control"),
+    # tests/integration/test_sync_job_model.py
+    ("tests/integration/test_sync_job_model.py", "test_sync_job_id_length"),
+    # tests/integration/test_targeting_api.py
+    ("tests/integration/test_targeting_api.py", "test_get_targeting_data_returns_audience_type"),
+    # tests/integration/test_targeting_validation_chain.py
+    ("tests/integration/test_targeting_validation_chain.py", "targeting_tenant"),
+    # tests/integration/test_targeting_values_endpoint.py
+    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_endpoint"),
+    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_empty_result"),
+    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_tenant_isolation"),
+    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_requires_auth"),
+    # tests/integration/test_tenant_dashboard.py
+    ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_media_buys"),
+    ("tests/integration/test_tenant_dashboard.py", "test_dashboard_metrics_calculation"),
+    ("tests/integration/test_tenant_dashboard.py", "test_tenant_config_building"),
+    ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_empty_tenant"),
+    # tests/integration/test_tenant_isolation_breach_fix.py
+    ("tests/integration/test_tenant_isolation_breach_fix.py", "test_cross_tenant_token_rejected"),
+    # tests/integration/test_tenant_isolation_fix.py
+    ("tests/integration/test_tenant_isolation_fix.py", "test_tenant_isolation_with_subdomain_and_cross_tenant_token"),
+    ("tests/integration/test_tenant_isolation_fix.py", "test_global_token_lookup_sets_tenant_from_principal"),
+    ("tests/integration/test_tenant_isolation_fix.py", "test_admin_token_with_subdomain_preserves_tenant_context"),
+    # tests/integration/test_tenant_management_api_integration.py
+    ("tests/integration/test_tenant_management_api_integration.py", "mock_api_key_auth"),
+    ("tests/integration/test_tenant_management_api_integration.py", "test_tenant"),
+    # tests/integration/test_tenant_settings_comprehensive.py
+    ("tests/integration/test_tenant_settings_comprehensive.py", "test_database_queries"),
+    # tests/integration/test_tenant_utils.py
+    ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_json_fields_are_deserialized"),
+    ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_nullable_fields_have_defaults"),
+    # tests/integration/test_update_media_buy_creative_assignment.py
+    (
+        "tests/integration/test_update_media_buy_creative_assignment.py",
+        "test_update_media_buy_assigns_creatives_to_package",
+    ),
+    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_update_media_buy_replaces_creatives"),
+    (
+        "tests/integration/test_update_media_buy_creative_assignment.py",
+        "test_update_media_buy_rejects_missing_creatives",
+    ),
+    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_with_weights"),
+    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_replaces_all"),
+    # tests/integration/test_update_media_buy_persistence.py
+    ("tests/integration/test_update_media_buy_persistence.py", "test_tenant_setup"),
+    ("tests/integration/test_update_media_buy_persistence.py", "test_update_media_buy_with_database_persisted_buy"),
+    # tests/integration/test_workflow_lifecycle.py
+    ("tests/integration/test_workflow_lifecycle.py", "setup"),
+    # tests/integration_v2/conftest.py
+    ("tests/integration_v2/conftest.py", "sample_tenant"),
+    ("tests/integration_v2/conftest.py", "sample_principal"),
+    ("tests/integration_v2/conftest.py", "add_required_setup_data"),
+    ("tests/integration_v2/conftest.py", "create_test_product_with_pricing"),
+    ("tests/integration_v2/conftest.py", "authenticated_admin_session"),
+    ("tests/integration_v2/conftest.py", "test_tenant_with_data"),
+    # tests/integration_v2/test_a2a_error_responses.py
+    ("tests/integration_v2/test_a2a_error_responses.py", "test_tenant"),
+    ("tests/integration_v2/test_a2a_error_responses.py", "test_principal"),
+    # tests/integration_v2/test_a2a_skill_invocation.py
+    ("tests/integration_v2/test_a2a_skill_invocation.py", "test_update_media_buy_skill"),
+    ("tests/integration_v2/test_a2a_skill_invocation.py", "test_list_authorized_properties_skill"),
+    # tests/integration_v2/test_admin_ui_data_validation.py
+    ("tests/integration_v2/test_admin_ui_data_validation.py", "test_products_list_no_duplicates_with_pricing_options"),
+    ("tests/integration_v2/test_admin_ui_data_validation.py", "test_principals_list_no_duplicates_with_relationships"),
+    ("tests/integration_v2/test_admin_ui_data_validation.py", "test_inventory_browser_no_duplicate_ad_units"),
+    ("tests/integration_v2/test_admin_ui_data_validation.py", "test_dashboard_media_buy_count_accurate"),
+    ("tests/integration_v2/test_admin_ui_data_validation.py", "test_media_buys_list_no_duplicates_with_packages"),
+    ("tests/integration_v2/test_admin_ui_data_validation.py", "test_media_buys_list_shows_all_statuses"),
+    ("tests/integration_v2/test_admin_ui_data_validation.py", "test_workflows_list_no_duplicate_steps"),
+    # tests/integration_v2/test_create_media_buy_roundtrip.py
+    ("tests/integration_v2/test_create_media_buy_roundtrip.py", "setup_test_tenant"),
+    # tests/integration_v2/test_create_media_buy_v24.py
+    ("tests/integration_v2/test_create_media_buy_v24.py", "setup_test_tenant"),
+    # tests/integration_v2/test_creative_lifecycle_mcp.py
+    ("tests/integration_v2/test_creative_lifecycle_mcp.py", "setup_test_data"),
+    ("tests/integration_v2/test_creative_lifecycle_mcp.py", "test_sync_creatives_upsert_existing_creative"),
+    ("tests/integration_v2/test_creative_lifecycle_mcp.py", "test_list_creatives_with_media_buy_assignments"),
+    ("tests/integration_v2/test_creative_lifecycle_mcp.py", "test_validate_creatives_missing_required_fields"),
+    # tests/integration_v2/test_error_paths.py
+    ("tests/integration_v2/test_error_paths.py", "test_tenant_minimal"),
+    ("tests/integration_v2/test_error_paths.py", "test_tenant_with_principal"),
+    # tests/integration_v2/test_gam_automation_focused.py
+    ("tests/integration_v2/test_gam_automation_focused.py", "test_tenant_data"),
+    # tests/integration_v2/test_get_products_database_integration.py — migrated to factories
+    # tests/integration_v2/test_get_products_filters.py
+    # tests/integration_v2/test_get_products_filters.py — migrated to factories
+    # tests/integration_v2/test_get_products_format_id_filter.py — migrated to factories
+    # tests/integration_v2/test_mcp_endpoints_comprehensive.py
+    ("tests/integration_v2/test_mcp_endpoints_comprehensive.py", "setup_test_data"),
+    # tests/integration_v2/test_mcp_tool_roundtrip_validation.py
+    ("tests/integration_v2/test_mcp_tool_roundtrip_validation.py", "test_tenant_id"),
+    # tests/integration_v2/test_mcp_tools_audit.py
+    ("tests/integration_v2/test_mcp_tools_audit.py", "test_tenant_id"),
+    ("tests/integration_v2/test_mcp_tools_audit.py", "test_get_media_buy_delivery_roundtrip_safety"),
+    # tests/integration_v2/test_minimum_spend_validation.py
+    ("tests/integration_v2/test_minimum_spend_validation.py", "setup_test_data"),
+    ("tests/integration_v2/test_minimum_spend_validation.py", "test_no_minimum_when_not_set"),
+    # tests/integration_v2/test_pricing_helpers.py
+    ("tests/integration_v2/test_pricing_helpers.py", "test_create_product_with_cpm_pricing"),
+    ("tests/integration_v2/test_pricing_helpers.py", "test_create_auction_product"),
+    ("tests/integration_v2/test_pricing_helpers.py", "test_create_flat_rate_product"),
+    ("tests/integration_v2/test_pricing_helpers.py", "test_auto_generated_product_id"),
+    ("tests/integration_v2/test_pricing_helpers.py", "test_multiple_products_with_pricing"),
+    # tests/integration_v2/test_product_deletion.py (test_tenant_and_products migrated to factories)
+    ("tests/integration_v2/test_product_deletion.py", "setup_super_admin_config"),
+    ("tests/integration_v2/test_product_deletion.py", "test_delete_product_with_active_media_buy"),
+    ("tests/integration_v2/test_product_deletion.py", "test_delete_product_with_pending_media_buy"),
+    ("tests/integration_v2/test_product_deletion.py", "test_delete_product_with_completed_media_buy_allowed"),
+    ("tests/integration_v2/test_product_deletion.py", "test_delete_multiple_products_different_statuses"),
+    # tests/integration_v2/test_schema_database_mapping.py
+    ("tests/integration_v2/test_schema_database_mapping.py", "test_database_field_access_validation"),
+    ("tests/integration_v2/test_schema_database_mapping.py", "test_schema_to_database_conversion_safety"),
+    ("tests/integration_v2/test_schema_database_mapping.py", "test_database_json_field_handling"),
+    ("tests/integration_v2/test_schema_database_mapping.py", "test_schema_validation_with_database_data"),
+    # tests/integration_v2/test_session_json_validation.py
+    ("tests/integration_v2/test_session_json_validation.py", "test_context_manager_pattern"),
+    ("tests/integration_v2/test_session_json_validation.py", "test_get_or_404"),
+    ("tests/integration_v2/test_session_json_validation.py", "test_model_json_validation"),
+    ("tests/integration_v2/test_session_json_validation.py", "test_principal_platform_mappings"),
+    ("tests/integration_v2/test_session_json_validation.py", "test_workflow_step_comments"),
+    # tests/integration_v2/test_tool_result_format.py
+    ("tests/integration_v2/test_tool_result_format.py", "setup_test_data"),
 }
 
 

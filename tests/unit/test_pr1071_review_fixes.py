@@ -137,13 +137,13 @@ class TestBrandExtractionFromPydanticModel:
 
         with (
             patch("src.core.tools.products.get_principal_object", return_value=None),
-            patch("src.core.tools.products.get_db_session") as mock_db,
+            patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
         ):
-            mock_session = MagicMock()
-            mock_result = MagicMock()
-            mock_result.unique.return_value.scalars.return_value.all.return_value = []
-            mock_session.execute.return_value = mock_result
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_uow.products.list_all.return_value = []
+            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow.__exit__ = MagicMock(return_value=False)
+            mock_uow_cls.return_value = mock_uow
 
             # This must NOT raise AdCPAuthorizationError — brand IS provided
             response = await _get_products_impl(req, identity)
@@ -183,14 +183,14 @@ class TestAuditLogBrandFieldName:
 
         with (
             patch("src.core.tools.products.get_principal_object", return_value=None),
-            patch("src.core.tools.products.get_db_session") as mock_db,
+            patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
             patch("src.core.tools.products.get_audit_logger") as mock_audit_logger,
         ):
-            mock_session = MagicMock()
-            mock_result = MagicMock()
-            mock_result.unique.return_value.scalars.return_value.all.return_value = []
-            mock_session.execute.return_value = mock_result
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_uow.products.list_all.return_value = []
+            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow.__exit__ = MagicMock(return_value=False)
+            mock_uow_cls.return_value = mock_uow
 
             mock_logger = MagicMock()
             mock_audit_logger.return_value = mock_logger

@@ -145,7 +145,7 @@ class AuditLogger:
                         tenant = db_session.scalars(stmt).first()
                         if tenant:
                             tenant_name = tenant.name
-                except:
+                except Exception:
                     pass
 
             # Send notification based on criteria
@@ -225,7 +225,7 @@ class AuditLogger:
                             tenant = db_session.scalars(stmt).first()
                             if tenant:
                                 tenant_config = serialize_tenant_to_dict(tenant)
-                    except:
+                    except Exception:
                         pass
 
                 slack_notifier = get_slack_notifier(tenant_config=tenant_config)
@@ -298,7 +298,7 @@ class AuditLogger:
                         if tenant:
                             tenant_name = tenant.name
                             tenant_config = serialize_tenant_to_dict(tenant)
-                except:
+                except Exception:
                     pass
 
             slack_notifier = get_slack_notifier(tenant_config=tenant_config)

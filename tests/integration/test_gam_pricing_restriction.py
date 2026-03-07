@@ -282,13 +282,6 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
 
 
 @pytest.mark.requires_db
-@pytest.mark.xfail(
-    reason="dry_run=True now skips adapter call entirely (returns simulated success). "
-    "GAM pricing rejection only runs inside the adapter, which is no longer invoked. "
-    "Adapter pricing validation is unit-tested in test_gam_pricing_compatibility.py. "
-    "TODO: move adapter-level pricing validation to pre-adapter business logic.",
-    strict=True,
-)
 async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_product):
     """Test that GAM adapter rejects CPCV pricing model with clear error."""
     start_time, end_time = _get_future_date_range()
@@ -315,21 +308,12 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
         protocol="mcp",
     )
 
-    from src.core.schemas import CreateMediaBuyError
+    from src.core.exceptions import AdCPValidationError
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    # GAM adapter rejects unsupported pricing models by returning CreateMediaBuyError
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
-
-    # Verify adapter returned error response
-    assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
-
-    # Check error indicates CPCV/pricing model rejection
-    assert response.errors, "Expected error messages in CreateMediaBuyError"
-    error_msg = " ".join([err.message.lower() for err in response.errors])
-    assert "cpcv" in error_msg or "pricing" in error_msg or "not supported" in error_msg or "gam" in error_msg, (
-        f"Expected pricing/GAM error, got: {error_msg}"
-    )
+    # GAM adapter rejects unsupported pricing models — _impl raises AdCPValidationError
+    with pytest.raises(AdCPValidationError, match="(?i)cpcv|pricing|not support"):
+        await _create_media_buy_impl(req=request, identity=identity)
 
 
 @pytest.mark.requires_db
@@ -377,13 +361,6 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
 
 
 @pytest.mark.requires_db
-@pytest.mark.xfail(
-    reason="dry_run=True now skips adapter call entirely (returns simulated success). "
-    "GAM pricing rejection only runs inside the adapter, which is no longer invoked. "
-    "Adapter pricing validation is unit-tested in test_gam_pricing_compatibility.py. "
-    "TODO: move adapter-level pricing validation to pre-adapter business logic.",
-    strict=True,
-)
 async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_non_cpm_product):
     """Test that GAM adapter rejects CPP when buyer chooses it from multi-pricing product."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -412,20 +389,11 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
         protocol="mcp",
     )
 
-    from src.core.schemas import CreateMediaBuyError
+    from src.core.exceptions import AdCPValidationError
 
-    # GAM adapter rejects unsupported pricing models by returning CreateMediaBuyError
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
-
-    # Verify adapter returned error response
-    assert isinstance(response, CreateMediaBuyError), f"Expected CreateMediaBuyError, got {type(response)}"
-
-    # Check error indicates CPP/pricing model rejection
-    assert response.errors, "Expected error messages in CreateMediaBuyError"
-    error_msg = " ".join([err.message.lower() for err in response.errors])
-    assert "cpp" in error_msg or "pricing" in error_msg or "not supported" in error_msg or "gam" in error_msg, (
-        f"Expected pricing/GAM error, got: {error_msg}"
-    )
+    # GAM adapter rejects unsupported pricing models — _impl raises AdCPValidationError
+    with pytest.raises(AdCPValidationError, match="(?i)cpp|pricing|not support"):
+        await _create_media_buy_impl(req=request, identity=identity)
 
 
 @pytest.mark.requires_db

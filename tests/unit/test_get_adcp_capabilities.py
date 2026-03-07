@@ -650,6 +650,37 @@ class TestResponseShapeCapabilities:
         assert "media_buy" not in data
 
 
+class TestDevicePlatformCapability:
+    """Test device_platform targeting advertised in capabilities."""
+
+    def test_device_platform_true_in_targeting(self):
+        """Capabilities response advertises device_platform: true."""
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        identity = _make_capabilities_identity(principal_id=None)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        targeting = response.media_buy.execution.targeting
+        assert targeting.device_platform is True
+
+    def test_device_platform_in_serialized_output(self):
+        """device_platform: true appears in JSON-serialized capabilities."""
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        identity = _make_capabilities_identity(principal_id=None)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        data = response.model_dump(mode="json")
+        targeting_data = data["media_buy"]["execution"]["targeting"]
+        assert targeting_data["device_platform"] is True
+
+
 class TestGeoPostalAreas:
     """Test geo_postal_areas building from targeting capabilities."""
 

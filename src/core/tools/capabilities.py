@@ -217,6 +217,7 @@ def _get_adcp_capabilities_impl(
         geo_regions=targeting_caps.geo_regions if targeting_caps else True,
         geo_metros=geo_metros,
         geo_postal_areas=geo_postal_areas,
+        device_platform=True,
     )
 
     # Build execution capabilities

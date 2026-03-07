@@ -27,7 +27,7 @@ def get_principal_id_from_context(context: Context | ToolContext | None) -> str 
     """
     identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
     if identity and identity.tenant_id:
-        if identity.tenant:
+        if identity.tenant and isinstance(identity.tenant, dict):
             set_current_tenant(identity.tenant)
         else:
             set_current_tenant({"tenant_id": identity.tenant_id})
@@ -56,11 +56,10 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
     expected_tenant_id = None
     if identity:
         expected_tenant_id = identity.tenant_id
-        if not expected_tenant_id and identity.tenant:
+        if not expected_tenant_id and identity.tenant and isinstance(identity.tenant, dict):
             expected_tenant_id = identity.tenant.get("tenant_id")
 
-    # Step 1: Check existing ContextVar (always a dict thanks to
-    # set_current_tenant normalization)
+    # Step 1: Check existing ContextVar
     tenant = None
     try:
         tenant = get_current_tenant()
@@ -89,9 +88,8 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
             set_current_tenant(loaded)
             return loaded
         # DB lookup failed — use identity.tenant as fallback
-        if identity and identity.tenant and "tenant_id" in identity.tenant:
-            # set_current_tenant normalizes TenantContext to dict
+        if identity and identity.tenant and isinstance(identity.tenant, dict) and "tenant_id" in identity.tenant:
             set_current_tenant(identity.tenant)
-            return get_current_tenant()
+            return identity.tenant
 
     raise AdCPAuthenticationError("No tenant context available")

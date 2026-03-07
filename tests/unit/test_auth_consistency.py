@@ -211,7 +211,8 @@ class TestDiscoveryEndpointsAnonymousAccess:
         )
 
         with (
-            patch("src.core.tools.products.get_db_session") as mock_db,
+            patch("src.core.database.repositories.uow.get_db_session") as mock_db,
+            patch("src.core.tools.products.get_db_session") as mock_db2,
             patch("src.core.tools.products.PolicyCheckService") as mock_policy,
         ):
             # Mock database to return empty products
@@ -219,7 +220,9 @@ class TestDiscoveryEndpointsAnonymousAccess:
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
             mock_session.scalars.return_value.all.return_value = []
+            mock_session.execute.return_value.unique.return_value.scalars.return_value.all.return_value = []
             mock_db.return_value = mock_session
+            mock_db2.return_value = mock_session
 
             # Mock policy check service
             mock_policy_instance = MagicMock()

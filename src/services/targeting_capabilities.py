@@ -29,6 +29,24 @@ TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
     "frequency_cap": TargetingCapability(
         dimension="frequency_cap", access="overlay", description="Impression frequency limits"
     ),
+    "device_platform": TargetingCapability(
+        dimension="device_platform",
+        access="overlay",
+        description="OS-level platform targeting (Sec-CH-UA-Platform values)",
+        allowed_values=[
+            "ios",
+            "android",
+            "windows",
+            "macos",
+            "linux",
+            "chromeos",
+            "tvos",
+            "tizen",
+            "webos",
+            "fire_os",
+            "roku_os",
+        ],
+    ),
     # ── Seller extensions ────────────────────────────────────────────────
     # Standard ad-server dimensions not yet in AdCP TargetingOverlay.
     # Adapters (GAM, Kevel, Triton, Xandr) actively consume these.
@@ -130,6 +148,8 @@ FIELD_TO_DIMENSION: dict[str, str] = {
     "geo_regions_exclude": "geo_region",
     "geo_metros_exclude": "geo_metro",
     "geo_postal_areas_exclude": "geo_zip",
+    # ── AdCP device_platform (OS-level, converted to device_type internally) ──
+    "device_platform": "device_platform",
     # ── Seller extensions (not in AdCP, consumed by adapters) ────────────
     "device_type_any_of": "device_type",
     "device_type_none_of": "device_type",

@@ -213,6 +213,9 @@ def _run_impl_with_patches(
         principal_obj=principal_obj,
     )
 
+    mock_inner_session = MagicMock()
+    mock_inner_session.scalars.return_value.all.return_value = []
+
     with (
         patches["principal_obj"],
         patches["adapter"],
@@ -420,6 +423,9 @@ class TestDeliveryIdentificationModes:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_id1"])
         identity = _make_identity()
 
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -454,6 +460,9 @@ class TestDeliveryIdentificationModes:
         patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_ref1", buy)])
         req = GetMediaBuyDeliveryRequest(buyer_refs=["buyer_A"])
         identity = _make_identity()
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
 
         with (
             patches["principal_obj"],
@@ -492,6 +501,9 @@ class TestDeliveryIdentificationModes:
         )
         identity = _make_identity()
 
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -525,6 +537,9 @@ class TestDeliveryIdentificationModes:
         patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_all1", buy)])
         req = GetMediaBuyDeliveryRequest()
         identity = _make_identity()
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
 
         with (
             patches["principal_obj"],

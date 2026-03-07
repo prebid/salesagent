@@ -47,7 +47,7 @@ PR titles should use one of these prefixes:
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
 ### Structural Guards (Automated Architecture Enforcement)
-Seven AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+Eleven AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
@@ -59,6 +59,9 @@ Seven AST-scanning tests enforce architecture invariants on every `make quality`
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
 | Repository pattern | No `get_db_session()` in `_impl`; no inline `session.add()` in tests | `test_architecture_repository_pattern.py` |
+| Migration completeness | Every migration has non-empty `upgrade()` and `downgrade()` | `test_architecture_migration_completeness.py` |
+| No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
+| Obligation coverage | Behavioral obligations in docs have matching test coverage | `test_architecture_obligation_coverage.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead

@@ -52,6 +52,8 @@ class TestSchemaFieldMapping:
             "publisher_properties",  # Populated from property_tags database column
             # AdCP 2.12.0+ protocol extension field - not stored in database
             "ext",  # Protocol extension field for future protocol additions
+            # Device type targeting - populated from targeting_template.device_targets during conversion
+            "device_types",  # Internal field for device type filtering
             # property_targeting_allowed: now persisted (salesagent-kntn migration)
         }
 

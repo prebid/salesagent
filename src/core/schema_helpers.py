@@ -137,45 +137,12 @@ def create_get_products_request(
     )
 
 
-def create_get_products_response(
-    products: list[Product | dict[str, Any]],
-    errors: list | None = None,
-    request_context: dict[str, Any] | None = None,
-) -> GetProductsResponse:
-    """Create GetProductsResponse.
-
-    Note: The generated GetProductsResponse is already a simple BaseModel,
-    so this helper mainly just provides defaults and type conversion.
-
-    Args:
-        products: List of matching products (Product objects or dicts)
-        errors: List of errors (if any)
-
-    Returns:
-        GetProductsResponse
-    """
-    # Convert dict products to Product objects
-    product_list: list[Product] = []
-    for p in products:
-        if isinstance(p, dict):
-            product_list.append(Product(**p))
-        else:
-            product_list.append(p)
-
-    return GetProductsResponse(
-        products=product_list,
-        errors=errors,
-        context=to_context_object(request_context),
-    )
-
-
 # Re-export commonly used generated types for convenience
 __all__ = [
     "to_brand_reference",
     "to_context_object",
     "to_reporting_webhook",
     "create_get_products_request",
-    "create_get_products_response",
     # Re-export types for type hints
     "BrandReference",
     "GetProductsRequest",

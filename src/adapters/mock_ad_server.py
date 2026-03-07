@@ -59,6 +59,12 @@ class MockAdServer(AdServerAdapter):
     # Mock adapter supports all common channels for testing
     # V3 channel names: display, olv, streaming_audio, social
     default_channels = ["display", "olv", "streaming_audio", "social"]
+
+    # Mock adapter uses simulated measurement for testing
+    default_delivery_measurement = {
+        "provider": "mock",
+        "notes": "Simulated delivery measurement for testing",
+    }
     _media_buys: dict[str, dict[str, Any]] = {}
 
     # Schema and capabilities
@@ -160,6 +166,37 @@ class MockAdServer(AdServerAdapter):
             uk_itl1=True,
             uk_itl2=True,
         )
+
+    def validate_before_creation(
+        self,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[str]:
+        """Mock adapter pre-creation validation (mirrors _validate_media_buy_request checks)."""
+        errors = super().validate_before_creation(request, packages, start_time, end_time, package_pricing_info)
+
+        # Goal validation (like GAM limits)
+        for package in packages:
+            pricing_model = None
+            if package_pricing_info and package.package_id in package_pricing_info:
+                pricing_model = package_pricing_info[package.package_id].get("pricing_model")
+
+            limit = 100000000 if pricing_model in ["cpcv", "cpv", "cpp"] else 1000000
+            if package.impressions > limit:
+                errors.append(
+                    f"ReservationDetailsError.PERCENTAGE_UNITS_BOUGHT_TOO_HIGH "
+                    f"@ lineItem[0].primaryGoal.units; trigger:'{package.impressions}'"
+                )
+
+        # Budget validation
+        budget_amount = request.get_total_budget()
+        if budget_amount > 1000000:
+            errors.append("InvalidArgumentError.VALUE_TOO_LARGE @ order.totalBudget")
+
+        return errors
 
     def _initialize_hitl_config(self):
         """Initialize Human-in-the-Loop configuration from principal platform_mappings."""

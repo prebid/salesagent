@@ -235,6 +235,9 @@ class TestDeliveryImplSingleBuyOrchestration:
         identity = _make_identity()
 
         # Provide a mock session for the MediaPackage inner query
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -342,6 +345,10 @@ class TestDeliveryImplMultiBuyAggregation:
             end_date="2025-06-30",
         )
         identity = _make_identity()
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -404,6 +411,10 @@ class TestDeliveryImplAdapterError:
                 test_session_id=None,
             ),
         )
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -453,6 +464,10 @@ class TestDeliveryImplAdapterError:
                 test_session_id=None,
             ),
         )
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -536,6 +551,10 @@ class TestDeliveryImplIdentificationModes:
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_id1"])
         identity = _make_identity()
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -572,6 +591,10 @@ class TestDeliveryImplIdentificationModes:
 
         req = GetMediaBuyDeliveryRequest(buyer_refs=["buyer_A"])
         identity = _make_identity()
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -608,6 +631,10 @@ class TestDeliveryImplIdentificationModes:
             buyer_refs=["should_be_ignored"],
         )
         identity = _make_identity()
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -644,6 +671,10 @@ class TestDeliveryImplIdentificationModes:
 
         req = GetMediaBuyDeliveryRequest()  # no media_buy_ids, no buyer_refs
         identity = _make_identity()
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],
@@ -680,6 +711,10 @@ class TestDeliveryImplIdentificationModes:
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_valid", "mb_nonexistent"])
         identity = _make_identity()
+
+        mock_inner_session = MagicMock()
+        mock_inner_session.scalars.return_value.all.return_value = []
+
         with (
             patches["principal_obj"],
             patches["adapter"],

@@ -23,7 +23,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyRequest,
@@ -870,9 +870,9 @@ class TestUpdateMediaBuyOwnership:
             paused=True,
         )
 
-        # _update_media_buy_impl raises PermissionError for ownership mismatch
+        # _update_media_buy_impl raises AdCPAuthorizationError for ownership mismatch
         # (rather than returning error response)
-        with pytest.raises(PermissionError, match="does not own"):
+        with pytest.raises(AdCPAuthorizationError, match="does not own"):
             _update_media_buy_impl(req=update_req, identity=other_identity)
 
 
