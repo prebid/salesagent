@@ -523,3 +523,58 @@ class TestAssetTypesFilterExclusion:
 
         assert len(result) == 1
         assert result[0].name == "Video Format"
+
+
+class TestBroadstreetTemplateAssetParsing:
+    """Regression: Broadstreet templates must parse with real assets.
+
+    The production code uses _make_asset() to construct the correct Assets
+    variant class (Assets for image, Assets5 for video, etc.) for each
+    template asset. Previously, the code used Assets(asset_type=AssetContentType(...))
+    which failed because Assets.asset_type is Literal['image'], not an enum.
+    """
+
+    def test_all_broadstreet_templates_produce_formats_with_assets(self):
+        """Every Broadstreet template must produce a Format with non-empty assets."""
+        from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
+        from src.core.tools.creative_formats import _infer_asset_type, _make_asset
+
+        for tid, tmpl in BROADSTREET_TEMPLATES.items():
+            assets_list = []
+            for asset_id in tmpl.get("required_assets", []):
+                at = _infer_asset_type(asset_id)
+                assets_list.append(_make_asset(asset_id, at, required=True))
+            for asset_id in tmpl.get("optional_assets", []):
+                at = _infer_asset_type(asset_id)
+                assets_list.append(_make_asset(asset_id, at, required=False))
+
+            fmt = Format(
+                format_id=FormatId(id=f"broadstreet_{tid}", agent_url="broadstreet://test"),
+                name=str(tmpl["name"]),
+                type=FormatCategory.display,
+                assets=assets_list if assets_list else None,
+                is_standard=False,
+            )
+            assert fmt.assets, f"Template {tid} must have non-empty assets list"
+            assert len(fmt.assets) == len(tmpl.get("required_assets", [])) + len(tmpl.get("optional_assets", [])), (
+                f"Template {tid} asset count mismatch"
+            )
+
+    def test_asset_type_literals_match_inferred_type(self):
+        """Each constructed asset must have asset_type matching the inferred string."""
+        from src.core.tools.creative_formats import _infer_asset_type, _make_asset
+
+        for asset_id, expected_type in [
+            ("front_image", "image"),
+            ("logo", "image"),
+            ("youtube_url", "video"),
+            ("click_url", "url"),
+            ("headline", "text"),
+            ("html", "html"),
+        ]:
+            inferred = _infer_asset_type(asset_id)
+            assert inferred == expected_type, f"{asset_id}: expected {expected_type}, got {inferred}"
+            asset = _make_asset(asset_id, inferred, required=True)
+            assert asset.asset_type == expected_type, (
+                f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
+            )

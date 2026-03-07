@@ -272,6 +272,8 @@ class TestDiscoveryEndpointsAnonymousAccess:
             req.min_height = None
             req.max_height = None
             req.context = None
+            req.pagination = None
+            req.wcag_level = None
 
             try:
                 result = _list_creative_formats_impl(req, identity)
