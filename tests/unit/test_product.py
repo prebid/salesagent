@@ -5,6 +5,27 @@ ProductEnv (unit variant) which mocks all external dependencies.
 
 Schema-only obligations are covered by test_product_schema_obligations.py.
 Integration-level obligations are covered by tests/integration/test_product_v3.py.
+
+Spec verification: 2026-03-07
+adcp spec commit: 8f26baf3
+adcp-client-python commit: a08805d (v3.6.0)
+Verified: 3/12 CONFIRMED, 9/12 UNSPECIFIED, 0 CONTRADICTS
+
+CONFIRMED (3 — spec-defined behavior):
+  test_empty_catalog_returns_empty        — get-products-response.json: products required, [] valid
+  test_products_returned_in_response      — get-products-response.json: products[], product.json: product_id
+  test_delivery_type_filter               — product-filters.json: delivery_type field
+
+UNSPECIFIED (9 — implementation-defined, not in AdCP spec):
+  test_missing_identity_raises            — identity resolution is seller-defined
+  test_no_principal_requires_auth_policy_rejects — brand_manifest_policy is seller-defined
+  test_dynamic_variants_injected          — dynamic variants are a seller feature
+  test_unrestricted_products_visible_to_all — allowed_principal_ids ACL is seller-defined
+  test_restricted_product_visible_to_allowed_principal — same
+  test_restricted_product_hidden_from_other_principal — same
+  test_anonymous_sees_only_unrestricted   — anonymous access policy is seller-defined
+  test_policy_disabled_by_default         — content policy checking is seller-defined
+  test_policy_blocked_raises_authorization_error — same
 """
 
 from __future__ import annotations
@@ -53,6 +74,8 @@ class TestProductMainFlow:
         """Covers: UC-001-MAIN-03
 
         When no products exist in the catalog, response is empty.
+
+        Spec: get-products-response.json — products is required, empty [] is valid
         """
         with ProductEnv() as env:
             response = await env.call_impl(brief="test")
@@ -64,6 +87,8 @@ class TestProductMainFlow:
         """Covers: UC-001-MAIN-04
 
         Products from the catalog are included in the response.
+
+        Spec: get-products-response.json — products[] array; product.json — product_id required
         """
         with ProductEnv() as env:
             env.add_product(product_id="prod_001", name="Display Ad")
@@ -79,6 +104,8 @@ class TestProductMainFlow:
         """Covers: UC-001-MAIN-06
 
         Products can be filtered by delivery_type.
+
+        Spec: product-filters.json — delivery_type is a spec-defined filter dimension
         """
         with ProductEnv() as env:
             env.add_product(product_id="guaranteed", delivery_type="guaranteed")

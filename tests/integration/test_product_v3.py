@@ -7,6 +7,37 @@ Each test docstring includes ``Covers: <obligation-id>`` so the obligation
 coverage guard can track coverage.
 
 MIGRATED: Uses factory-based setup via IntegrationEnv session binding.
+
+Spec verification: 2026-03-07
+adcp spec commit: 8f26baf3
+adcp-client-python commit: a08805d (v3.6.0)
+Verified: 24/77 CONFIRMED, 51/77 UNSPECIFIED, 2/77 SPEC_AMBIGUOUS, 0 CONTRADICTS
+
+CONFIRMED (24 tests) — Spec-defined schema shapes and field requirements:
+  Response shape (products[] required, empty valid)
+  Product selectors fields (gtins, skus, tags, categories, query)
+  Filter independence from brief (filters, property_list, pagination work without brief)
+  Pagination (max_results bounds, cursor, has_more)
+  Proposal/Allocation fields (brief_alignment, aggregate_forecast, rationale,
+    daypart_targets, forecast, pricing_option_id, sequence)
+  Product required fields (pricing_options, format_ids, delivery_type, delivery_measurement)
+  Price guidance field on PricingOption
+
+UNSPECIFIED (51 tests) — Implementation-defined seller behavior:
+  Authentication/authorization (7 tests)
+  Content policy system (8 tests)
+  Brand manifest policies (4 tests)
+  AI ranking / relevance threshold (6 tests)
+  Dynamic variants (2 tests)
+  Anonymous discovery / pricing suppression (6 tests)
+  Adapter support annotation (3 tests)
+  Infrastructure preconditions (4 tests)
+  Pagination behavior (stable ordering, proposals first page only, cursor expiry)
+  Tenant isolation, ProductUoW internals, read-only semantics
+
+SPEC_AMBIGUOUS (2 tests):
+  product_selectors union logic (spec says seller-defined matching)
+  no_brief_proposal_generation_skipped (proposals optional, brief→proposals link unclear)
 """
 
 from __future__ import annotations

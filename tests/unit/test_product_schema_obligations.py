@@ -4,6 +4,38 @@ These tests verify response shape, field presence, serialization, and validation
 at the Pydantic schema layer -- no database or transport required.
 
 Every test method has a ``Covers: <obligation-id>`` tag in its docstring.
+
+Spec verification: 2026-03-07
+adcp spec commit: 8f26baf3
+adcp-client-python commit: a08805d (v3.6.0)
+Verified: 57/101 CONFIRMED, 28/101 UNSPECIFIED, 5/101 SPEC_AMBIGUOUS, 0 CONTRADICTS
+
+CONFIRMED (57 tests) — Schema fields, required/optional, types, XOR constraints:
+  Product required fields (product_id, name, description, publisher_properties,
+    format_ids, delivery_type, delivery_measurement, pricing_options)
+  ProductFilters fields (delivery_type, is_fixed_price, format_types, format_ids,
+    min_exposures, budget_range, start_date, end_date, countries, regions, metros,
+    channels, required_axe_integrations, required_features, required_geo_targeting,
+    signal_targeting, standard_formats_only)
+  GetProductsRequest (all fields optional, product_selectors→brand dependency)
+  GetProductsResponse (products required; proposals, property_list_applied optional)
+  PricingOption XOR (fixed_price XOR floor_price, CPA always fixed)
+  Proposal (proposal_id, name, allocations required; allocations sum to 100%)
+  Pagination (max_results: min=1, max=100, default=50; has_more + cursor)
+  Protocol envelope (status + payload required, terminal/non-terminal statuses)
+  is_fixed_price semantics (true=fixed_price present, false=floor_price present,
+    both match both)
+
+UNSPECIFIED (28 tests) — Implementation-defined, not in AdCP spec:
+  Access control (allowed_principal_ids, anonymous discovery, pricing suppression)
+  Product conversion (DB→schema, ValueError on failure, roundtrip)
+  Publisher domain sorting, product uniqueness, relevance threshold 0.1
+  Error response schemas (policy, auth)
+  Offering text derivation from brand name/url
+
+SPEC_AMBIGUOUS (5 tests) — Filter matching semantics not explicit in spec:
+  format_types OR matching, format_ids OR matching, countries intersection,
+  regions intersection, channels intersection
 """
 
 from __future__ import annotations
