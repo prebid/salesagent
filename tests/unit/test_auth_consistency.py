@@ -243,6 +243,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
 
     def test_list_creative_formats_works_without_auth(self):
         """list_creative_formats should succeed without authentication."""
+        from src.core.creative_agent_registry import FormatFetchResult
         from src.core.tools.creative_formats import _list_creative_formats_impl
 
         # Create anonymous identity with tenant
@@ -258,7 +259,11 @@ class TestDiscoveryEndpointsAnonymousAccess:
             async def mock_list_formats(**kwargs):
                 return []
 
+            async def mock_list_formats_with_errors(**kwargs):
+                return FormatFetchResult(formats=[], errors=[])
+
             mock_reg.list_all_formats = mock_list_formats
+            mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
             mock_registry.return_value = mock_reg
 
             req = MagicMock()
@@ -355,6 +360,7 @@ class TestDiscoveryEndpointsInvalidAuth:
 
     def test_list_creative_formats_with_invalid_token_gets_anonymous_identity(self):
         """list_creative_formats with invalid token gets anonymous identity at the boundary."""
+        from src.core.creative_agent_registry import FormatFetchResult
         from src.core.tools.creative_formats import _list_creative_formats_impl
 
         # At the boundary, require_valid_token=False means invalid tokens
@@ -370,7 +376,11 @@ class TestDiscoveryEndpointsInvalidAuth:
             async def mock_list_formats(**kwargs):
                 return []
 
+            async def mock_list_formats_with_errors(**kwargs):
+                return FormatFetchResult(formats=[], errors=[])
+
             mock_reg.list_all_formats = mock_list_formats
+            mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
             mock_registry.return_value = mock_reg
 
             try:

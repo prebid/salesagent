@@ -1573,6 +1573,7 @@ class TestListCreativeFormatsFiltering:
 
     def _call_impl(self, formats, req=None):
         """Shared helper (same pattern as test_creative_formats_behavioral.py)."""
+        from src.core.creative_agent_registry import FormatFetchResult
         from src.core.tools.creative_formats import _list_creative_formats_impl
 
         if req is None:
@@ -1592,7 +1593,11 @@ class TestListCreativeFormatsFiltering:
             async def mock_list(**kwargs):
                 return list(formats)
 
+            async def mock_list_with_errors(**kwargs):
+                return FormatFetchResult(formats=list(formats), errors=[])
+
             mock_reg.list_all_formats = mock_list
+            mock_reg.list_all_formats_with_errors = mock_list_with_errors
             mock_reg_getter.return_value = mock_reg
             mock_audit.return_value = MagicMock()
 

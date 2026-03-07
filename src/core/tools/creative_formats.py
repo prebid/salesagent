@@ -127,28 +127,47 @@ def _list_creative_formats_impl(
     # Get formats from all registered creative agents via registry
     import asyncio
 
-    from src.core.creative_agent_registry import get_creative_agent_registry
+    from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry
 
-    registry = get_creative_agent_registry()
-
-    # Run async operation - check if we're already in an async context
+    # Decision: docs/design/error-propagation-in-format-discovery.md
+    # Registry creation failure → return empty formats + errors (FD-ERR-03)
     try:
-        # Check if there's already a running event loop
+        registry = get_creative_agent_registry()
+    except Exception as e:
+        from adcp.types.generated_poc.core.error import Error as AdCPResponseError
+
+        logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
+        return ListCreativeFormatsResponse(
+            formats=[],
+            errors=[
+                AdCPResponseError(
+                    code="REGISTRY_ERROR",
+                    message=f"Creative agent registry initialization failed: {e}",
+                )
+            ],
+            context=req.context,
+        )
+
+    # Use list_all_formats_with_errors() to get per-agent error reporting (FD-ERR-01, FD-ERR-02)
+    try:
         loop = asyncio.get_running_loop()
-        # We're in an async context, run in thread pool to avoid nested loop error
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(lambda: asyncio.run(registry.list_all_formats(tenant_id=tenant["tenant_id"])))
-            formats = future.result()
+            future = executor.submit(
+                lambda: asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
+            )
+            fetch_result: FormatFetchResult = future.result()
     except RuntimeError:
-        # No running loop, safe to create one
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            formats = loop.run_until_complete(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
+            fetch_result = loop.run_until_complete(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
         finally:
             loop.close()
+
+    formats = fetch_result.formats
+    agent_errors = fetch_result.errors
 
     # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
     # Check adapter type from tenant config and load formats without instantiating the full adapter
@@ -406,7 +425,7 @@ def _list_creative_formats_impl(
     response = ListCreativeFormatsResponse(
         formats=page_formats,
         creative_agents=creative_agents_list,
-        errors=None,
+        errors=agent_errors if agent_errors else None,
         context=req.context,
         pagination=pagination_response,
     )

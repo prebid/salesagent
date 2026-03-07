@@ -61,6 +61,7 @@ def _call_impl(
     audit logger so the test exercises only the filtering/sorting logic.
     Identity is passed directly as a ResolvedIdentity.
     """
+    from src.core.creative_agent_registry import FormatFetchResult
     from src.core.tools.creative_formats import _list_creative_formats_impl
 
     if req is None:
@@ -81,7 +82,11 @@ def _call_impl(
         async def mock_list_formats(**kwargs):
             return list(formats)  # Copy to avoid mutation
 
+        async def mock_list_formats_with_errors(**kwargs):
+            return FormatFetchResult(formats=list(formats), errors=[])
+
         mock_reg.list_all_formats = mock_list_formats
+        mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
         mock_registry.return_value = mock_reg
 
         # Mock audit logger to avoid any side effects
@@ -626,16 +631,16 @@ class TestMCPWrapperStringCoercion:
 def _call_impl_raw(
     formats: list[Format],
     registry_side_effect: Exception | None = None,
-    agent_errors: dict[str, Exception] | None = None,
+    errors: list | None = None,
 ):
     """Call _list_creative_formats_impl and return the full response (not just formats).
 
     Args:
         formats: Formats returned by healthy agents.
         registry_side_effect: If set, get_creative_agent_registry() raises this.
-        agent_errors: Dict of agent_url → Exception for per-agent failures.
-            When set, simulates a registry where some agents fail and others succeed.
+        errors: List of AdCP Error objects to include as per-agent failures.
     """
+    from src.core.creative_agent_registry import FormatFetchResult
     from src.core.tools.creative_formats import _list_creative_formats_impl
 
     req = ListCreativeFormatsRequest()
@@ -659,11 +664,17 @@ def _call_impl_raw(
         patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit,
     ):
         mock_reg = MagicMock()
+        fetch_result = FormatFetchResult(formats=list(formats), errors=errors or [])
+
+        async def mock_list_formats_with_errors(**kwargs):
+            return fetch_result
 
         async def mock_list_formats(**kwargs):
             return list(formats)
 
+        mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
         mock_reg.list_all_formats = mock_list_formats
+        mock_reg._get_tenant_agents = MagicMock(return_value=[])
         mock_registry.return_value = mock_reg
         mock_audit.return_value = MagicMock()
 
@@ -676,10 +687,6 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
     Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-01)
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Not implemented: _list_creative_formats_impl always sets errors=None. Tracked in salesagent-ofuk.",
-    )
     def test_partial_agent_failure_returns_formats_and_errors(self):
         """Covers: UC-005-EXT-C-01
 
@@ -688,10 +695,18 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
         then the response contains formats from the healthy agent
         and an errors[] entry for the failed agent.
         """
+        from adcp.types.generated_poc.core.error import Error as AdCPResponseError
+
         healthy_formats = [
             _make_format("display_300x250", "Display 300x250"),
         ]
-        response = _call_impl_raw(healthy_formats)
+        agent_errors = [
+            AdCPResponseError(
+                code="AGENT_UNREACHABLE",
+                message="Creative agent at https://failing-agent.example.com is unreachable: Connection refused",
+            ),
+        ]
+        response = _call_impl_raw(healthy_formats, errors=agent_errors)
 
         # Formats from healthy agent should be present
         assert len(response.formats) >= 1
@@ -711,11 +726,6 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
     Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-02)
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Not implemented: registry.list_all_formats silently skips failed agents "
-        "and _impl sets errors=None. Tracked in salesagent-ofuk.",
-    )
     def test_all_agents_fail_returns_empty_formats_and_errors(self):
         """Covers: UC-005-EXT-C-02
 
@@ -724,8 +734,20 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
         then the response contains an empty formats array
         and errors[] with one entry per failed agent.
         """
-        # Simulate all agents failing — registry returns empty list but should report errors
-        response = _call_impl_raw(formats=[])
+        from adcp.types.generated_poc.core.error import Error as AdCPResponseError
+
+        # Simulate all agents failing — registry returns no formats but reports errors
+        agent_errors = [
+            AdCPResponseError(
+                code="AGENT_UNREACHABLE",
+                message="Creative agent at https://agent-1.example.com is unreachable: Connection refused",
+            ),
+            AdCPResponseError(
+                code="AGENT_UNREACHABLE",
+                message="Creative agent at https://agent-2.example.com is unreachable: Timeout",
+            ),
+        ]
+        response = _call_impl_raw(formats=[], errors=agent_errors)
 
         assert response.formats == []
         assert response.errors is not None, (
@@ -745,11 +767,6 @@ class TestRegistryCreationFailureReturnsErrors:
     Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-03)
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Not implemented: get_creative_agent_registry() failure raises unhandled "
-        "exception instead of returning response with errors[]. Tracked in salesagent-ofuk.",
-    )
     def test_registry_creation_failure_returns_errors(self):
         """Covers: UC-005-EXT-C-03
 
@@ -775,10 +792,6 @@ class TestErrorEntriesFollowAdCPSchema:
     Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-04)
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Not implemented: no errors are ever populated in the response. Tracked in salesagent-ofuk.",
-    )
     def test_error_entries_have_code_and_message(self):
         """Covers: UC-005-EXT-C-04
 

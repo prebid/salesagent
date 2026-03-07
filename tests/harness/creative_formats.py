@@ -43,9 +43,12 @@ class CreativeFormatsEnv(IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
-        # Registry: return a mock with async list_all_formats
+        from src.core.creative_agent_registry import FormatFetchResult
+
+        # Registry: return a mock with async list_all_formats + list_all_formats_with_errors
         mock_registry = MagicMock()
         mock_registry.list_all_formats = AsyncMock(return_value=[])
+        mock_registry.list_all_formats_with_errors = AsyncMock(return_value=FormatFetchResult(formats=[], errors=[]))
         self.mock["registry"].return_value = mock_registry
 
         # Audit logger: no-op
@@ -54,7 +57,12 @@ class CreativeFormatsEnv(IntegrationEnv):
 
     def set_registry_formats(self, formats: list[Any]) -> None:
         """Configure mock registry to return these formats from list_all_formats."""
+        from src.core.creative_agent_registry import FormatFetchResult
+
         self.mock["registry"].return_value.list_all_formats = AsyncMock(return_value=formats)
+        self.mock["registry"].return_value.list_all_formats_with_errors = AsyncMock(
+            return_value=FormatFetchResult(formats=list(formats), errors=[])
+        )
 
     def call_impl(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call _list_creative_formats_impl.
