@@ -121,6 +121,22 @@ class TestExtractActivationKey:
         assert result is not None
         assert result["key"] == "k"
 
+    def test_no_agent_url_fallback_segment_id_type(self):
+        """When our_agent_url is None, fallback loop returns segment_id activation key."""
+        signal = {
+            "deployments": [
+                {
+                    "destination": {"agent_url": "https://any.com"},
+                    "is_live": True,
+                    "activation_key": {"type": "segment_id", "segment_id": "seg_fallback"},
+                }
+            ]
+        }
+        result = extract_activation_key(signal, None)
+        assert result is not None
+        assert result["type"] == "segment_id"
+        assert result["segment_id"] == "seg_fallback"
+
     def test_key_value_missing_value_field(self):
         """key_value type without 'value' field returns None."""
         signal = {
