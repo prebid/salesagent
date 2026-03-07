@@ -46,7 +46,10 @@ def _make_formats(count: int, prefix: str = "fmt") -> list[Format]:
 
 
 class TestCreativeAgentReferrals:
-    """UC-005-MAIN-MCP-13: creative_agents referrals included in response."""
+    """UC-005-MAIN-MCP-13: creative_agents referrals included in response.
+
+    Covers: UC-005-MAIN-MCP-13
+    """
 
     @staticmethod
     def _configure_registry_agents(env):
@@ -148,7 +151,10 @@ class TestCreativeAgentReferrals:
 
 
 class TestPaginationCursorBased:
-    """UC-005-MAIN-MCP-14: cursor-based pagination on list_creative_formats."""
+    """UC-005-MAIN-MCP-14: cursor-based pagination on list_creative_formats.
+
+    Covers: UC-005-MAIN-MCP-14
+    """
 
     def test_max_results_limits_response(self, integration_db):
         """UC-005-MAIN-MCP-14: max_results=10 returns at most 10 formats."""

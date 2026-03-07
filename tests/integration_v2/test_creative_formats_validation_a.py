@@ -24,6 +24,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 class TestAdapterFormatsViaA2A:
     """UC-005-MAIN-REST-02: adapter-specific formats included via A2A.
 
+    Covers: UC-005-MAIN-REST-02
+
     Given the tenant uses an adapter (e.g., Broadstreet) that provides
     additional format templates, when the Buyer sends list_creative_formats
     via A2A, adapter-specific formats are merged into the response alongside
@@ -174,6 +176,8 @@ class TestAdapterFormatsViaA2A:
 class TestInvalidFormatCategoryEnum:
     """UC-005-EXT-B-01: invalid format category enum -> VALIDATION_ERROR.
 
+    Covers: UC-005-EXT-B-01
+
     When the Buyer calls list_creative_formats with type='invalid_category',
     the response is an error with code VALIDATION_ERROR. The error must
     identify the invalid type field, explain why it failed, and suggest
@@ -243,6 +247,8 @@ class TestInvalidFormatCategoryEnum:
 
 class TestMalformedFormatIdObjects:
     """UC-005-EXT-B-02: malformed FormatId objects -> VALIDATION_ERROR.
+
+    Covers: UC-005-EXT-B-02
 
     When the Buyer calls list_creative_formats with malformed format_ids
     (e.g., missing agent_url), the response is a VALIDATION_ERROR that

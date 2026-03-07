@@ -54,6 +54,8 @@ def _fmt(
 class TestAssetTypesFilter:
     """UC-005-MAIN-MCP-07: asset_types filter returns only matching formats.
 
+    Covers: UC-005-MAIN-MCP-07
+
     BR-6: Asset type filters match formats containing at least one of the
     requested types.
     """
@@ -162,6 +164,8 @@ class TestAssetTypesFilter:
 class TestNameSearchFilter:
     """UC-005-MAIN-MCP-11: name_search is case-insensitive partial match.
 
+    Covers: UC-005-MAIN-MCP-11
+
     BR-7: Name search is case-insensitive partial match.
     """
 
@@ -249,6 +253,8 @@ class TestNameSearchFilter:
 
 class TestWcagLevelFilter:
     """UC-005-MAIN-MCP-12: wcag_level filter returns formats meeting at least that level.
+
+    Covers: UC-005-MAIN-MCP-12
 
     BR-1: Filter semantics — hierarchical: A < AA < AAA.
     wcag_level=AA returns formats with AA or AAA.
