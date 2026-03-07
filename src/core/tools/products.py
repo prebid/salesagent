@@ -38,11 +38,28 @@ from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 logger = logging.getLogger(__name__)
 
 
+def _get_adapter_classes() -> dict[str, type]:
+    """Return mapping of adapter type names to their classes.
+
+    All adapters are first-party code in this repo, always installed.
+    """
+    from src.adapters.google_ad_manager import GoogleAdManager
+    from src.adapters.kevel import Kevel
+    from src.adapters.mock_ad_server import MockAdServer
+    from src.adapters.triton_digital import TritonDigital
+
+    return {
+        "google_ad_manager": GoogleAdManager,
+        "mock": MockAdServer,
+        "kevel": Kevel,
+        "triton": TritonDigital,
+    }
+
+
 def get_adapter_default_channels(adapter_type: str) -> list[str]:
     """Get default advertising channels for an adapter type.
 
     Default channels are defined on each adapter class's default_channels attribute.
-    This function dynamically loads the adapter class to get its defaults.
 
     Args:
         adapter_type: Adapter type name (e.g., "google_ad_manager", "mock", "kevel", "triton")
@@ -50,41 +67,9 @@ def get_adapter_default_channels(adapter_type: str) -> list[str]:
     Returns:
         List of default channel names for the adapter
     """
-    # Import adapter classes lazily to avoid circular imports
-    adapter_classes: dict[str, type] = {}
-
-    try:
-        from src.adapters.google_ad_manager import GoogleAdManager
-
-        adapter_classes["google_ad_manager"] = GoogleAdManager
-    except ImportError:
-        pass
-
-    try:
-        from src.adapters.mock_ad_server import MockAdServer
-
-        adapter_classes["mock"] = MockAdServer
-    except ImportError:
-        pass
-
-    try:
-        from src.adapters.kevel import Kevel
-
-        adapter_classes["kevel"] = Kevel
-    except ImportError:
-        pass
-
-    try:
-        from src.adapters.triton_digital import TritonDigital
-
-        adapter_classes["triton"] = TritonDigital
-    except ImportError:
-        pass
-
-    adapter_class = adapter_classes.get(adapter_type)
+    adapter_class = _get_adapter_classes().get(adapter_type)
     if adapter_class and hasattr(adapter_class, "default_channels"):
         return adapter_class.default_channels
-
     return []
 
 
@@ -101,40 +86,9 @@ def get_adapter_default_delivery_measurement(adapter_type: str) -> dict[str, str
     Returns:
         Dict with at least "provider" key for the adapter's default measurement.
     """
-    adapter_classes: dict[str, type] = {}
-
-    try:
-        from src.adapters.google_ad_manager import GoogleAdManager
-
-        adapter_classes["google_ad_manager"] = GoogleAdManager
-    except ImportError:
-        pass
-
-    try:
-        from src.adapters.mock_ad_server import MockAdServer
-
-        adapter_classes["mock"] = MockAdServer
-    except ImportError:
-        pass
-
-    try:
-        from src.adapters.kevel import Kevel
-
-        adapter_classes["kevel"] = Kevel
-    except ImportError:
-        pass
-
-    try:
-        from src.adapters.triton_digital import TritonDigital
-
-        adapter_classes["triton"] = TritonDigital
-    except ImportError:
-        pass
-
-    adapter_class = adapter_classes.get(adapter_type)
+    adapter_class = _get_adapter_classes().get(adapter_type)
     if adapter_class and hasattr(adapter_class, "default_delivery_measurement"):
         return adapter_class.default_delivery_measurement
-
     return {"provider": "publisher"}
 
 
