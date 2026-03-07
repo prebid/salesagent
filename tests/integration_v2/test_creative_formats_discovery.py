@@ -2,6 +2,7 @@
 
 Covers:
 - UC-005-MAIN-MCP-02: Authentication optional for discovery
+- UC-005-EXT-A-01: Tenant resolution failure returns TENANT_REQUIRED error
 
 The list_creative_formats endpoint is a discovery/catalog endpoint.
 While tenant context is required to resolve the format catalog, an
@@ -207,3 +208,58 @@ class TestAuthOptionalForDiscovery:
         authed_ids = {f.format_id.id for f in authed_response.formats}
         unauthed_ids = {f.format_id.id for f in unauthed_response.formats}
         assert authed_ids == unauthed_ids
+
+
+# ---------------------------------------------------------------------------
+# UC-005-EXT-A-01: Tenant resolution failure
+# ---------------------------------------------------------------------------
+
+
+class TestTenantResolutionFailure:
+    """Covers: UC-005-EXT-A-01
+
+    Given no auth token AND no hostname mapping resolves to a tenant,
+    When Buyer calls list_creative_formats,
+    Then error with tenant context message and suggestion to provide credentials.
+    """
+
+    def test_no_tenant_no_auth_raises_auth_error(self, integration_db):
+        """UC-005-EXT-A-01: tenant=None + auth_token=None -> AdCPAuthenticationError."""
+        from src.core.exceptions import AdCPAuthenticationError
+
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([_make_format("unreachable", "Should Not Reach")])
+
+            identity = PrincipalFactory.make_identity(
+                principal_id="anon_buyer",
+                tenant_id="unknown",
+                tenant=None,
+                protocol="mcp",
+                auth_token=None,
+            )
+            result = env.call_via(Transport.IMPL, identity=identity)
+
+        assert result.is_error
+        assert isinstance(result.error, AdCPAuthenticationError)
+
+    def test_error_message_mentions_tenant(self, integration_db):
+        """UC-005-EXT-A-01: error message indicates tenant context could not be determined."""
+        from src.core.exceptions import AdCPAuthenticationError
+
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([])
+
+            identity = PrincipalFactory.make_identity(
+                principal_id="anon_buyer",
+                tenant_id="unknown",
+                tenant=None,
+                protocol="a2a",
+                auth_token=None,
+            )
+            result = env.call_via(Transport.A2A, identity=identity)
+
+        assert result.is_error
+        assert isinstance(result.error, AdCPAuthenticationError)
+        assert "tenant" in str(result.error).lower()
