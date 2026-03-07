@@ -28,7 +28,12 @@ UNIT_DIR = Path(__file__).resolve().parents[2] / "tests" / "unit"
 ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_coverage_allowlist.json"
 
 # Unit test entity files that carry Covers: tags
-_UNIT_ENTITY_FILES = ["test_media_buy.py", "test_creative.py", "test_delivery.py"]
+_UNIT_ENTITY_FILES = [
+    "test_media_buy.py",
+    "test_creative.py",
+    "test_delivery.py",
+    "test_creative_formats_behavioral.py",
+]
 
 # Obligation ID pattern: PREFIX-SECTION-SEQ (e.g., UC-002-MAIN-01, BR-RULE-006-01)
 _OBLIGATION_ID_RE = re.compile(r"[A-Z][A-Z0-9]+-[\w-]+-\d{2}")
@@ -76,7 +81,7 @@ def _get_covered_obligations() -> set[str]:
 
     def _scan_file(path: Path) -> None:
         for line in path.read_text().splitlines():
-            m = re.match(r"\s+Covers:\s+([\w-]+)", line)
+            m = re.search(r"Covers:\s+([\w-]+)", line)
             if m and _OBLIGATION_ID_RE.match(m.group(1)):
                 covered.add(m.group(1))
 

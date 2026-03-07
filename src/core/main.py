@@ -32,7 +32,6 @@ from src.core.database.models import (
 from src.core.schemas import (
     Creative,
     CreativeAssignment,
-    CreativeGroup,
     CreativeStatus,
     Error,  # noqa: F401 - Required for MCP protocol error handling (regression test PR #332)
     Product,
@@ -152,7 +151,6 @@ creative_assignments: dict[str, dict[str, list[str]]] = {}
 creative_statuses: dict[str, CreativeStatus] = {}
 product_catalog: list[Product] = []
 creative_library: dict[str, Creative] = {}  # creative_id -> Creative
-creative_groups: dict[str, CreativeGroup] = {}  # group_id -> CreativeGroup
 creative_assignments_v2: dict[str, CreativeAssignment] = {}  # assignment_id -> CreativeAssignment
 # REMOVED: human_tasks dictionary - now using direct database queries only
 
