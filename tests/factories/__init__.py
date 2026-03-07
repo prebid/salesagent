@@ -14,6 +14,7 @@ Usage::
 
 from tests.factories.core import CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory, TenantFactory
 from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
+from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
 from tests.factories.webhook import PushNotificationConfigFactory
@@ -29,11 +30,13 @@ ALL_FACTORIES = [
     MediaBuyFactory,
     MediaPackageFactory,
     PushNotificationConfigFactory,
+    FormatPerformanceMetricsFactory,
 ]
 
 __all__ = [
     "ALL_FACTORIES",
     "CurrencyLimitFactory",
+    "FormatPerformanceMetricsFactory",
     "MediaBuyFactory",
     "MediaPackageFactory",
     "PricingOptionFactory",

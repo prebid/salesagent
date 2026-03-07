@@ -1,9 +1,9 @@
 """ProductEnv — integration test environment for _get_products_impl.
 
-Patches: PolicyCheckService, generate_variants_for_brief, DynamicPricingService,
+Patches: PolicyCheckService, generate_variants_for_brief,
          get_factory (ranking), resolve_property_list.
 Real: ProductUoW, get_principal_object, convert_product_model_to_schema,
-      adapter metadata, audit logger, get_db_session.
+      DynamicPricingService, adapter metadata, audit logger, get_db_session.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -24,7 +24,6 @@ Available mocks via env.mock:
     "policy_service"       -- PolicyCheckService class mock
     "dynamic_variants"     -- generate_variants_for_brief AsyncMock
     "ranking_factory"      -- get_factory mock (AI ranking)
-    "dynamic_pricing"      -- DynamicPricingService class mock
     "resolve_property_list" -- resolve_property_list AsyncMock
 """
 
@@ -39,11 +38,12 @@ from tests.harness._mixins import ProductMixin
 class ProductEnv(ProductMixin, IntegrationEnv):
     """Integration test environment for _get_products_impl.
 
-    Only mocks external services (policy, dynamic variants, pricing enrichment,
+    Only mocks external services (policy, dynamic variants,
     AI ranking, property list resolution). Everything else is real:
     - Real ProductUoW -> real DB queries
     - Real get_principal_object -> real DB queries
     - Real convert_product_model_to_schema -> real conversion
+    - Real DynamicPricingService -> real DB queries (FormatPerformanceMetrics)
     - Real audit logging
 
     Fluent API (from ProductMixin):
@@ -59,7 +59,6 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         "policy_service": "src.core.tools.products.PolicyCheckService",
         "dynamic_variants": "src.services.dynamic_products.generate_variants_for_brief",
         "ranking_factory": "src.services.ai.factory.get_factory",
-        "dynamic_pricing": "src.services.dynamic_pricing_service.DynamicPricingService",
         "resolve_property_list": "src.core.property_list_resolver.resolve_property_list",
     }
 

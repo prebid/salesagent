@@ -358,17 +358,20 @@ class ProductMixin:
         Defaults:
         - PolicyCheckService: not invoked (no gemini_api_key in tenant dict)
         - Dynamic variants: returns [] (already AsyncMock via ASYNC_PATCHES)
-        - Dynamic pricing: passes products through unchanged
+        - DynamicPricingService: pass-through in unit mode, real in integration mode
         - Property list resolver: returns [] (already AsyncMock via ASYNC_PATCHES)
         - Ranking factory: AI not enabled
         """
         # Dynamic variants: returns empty list (AsyncMock from ASYNC_PATCHES)
         self.mock["dynamic_variants"].return_value = []  # type: ignore[attr-defined]
 
-        # Dynamic pricing: pass products through unchanged
-        mock_pricing_instance = MagicMock()
-        mock_pricing_instance.enrich_products_with_pricing.side_effect = lambda products, **kw: products
-        self.mock["dynamic_pricing"].return_value = mock_pricing_instance  # type: ignore[attr-defined]
+        # DynamicPricingService: configure pass-through mock in unit mode only.
+        # In integration mode (ProductEnv from product.py), dynamic_pricing is NOT
+        # in EXTERNAL_PATCHES, so self.mock won't have it — runs against real DB.
+        if "dynamic_pricing" in self.mock:  # type: ignore[attr-defined]
+            mock_pricing_instance = MagicMock()
+            mock_pricing_instance.enrich_products_with_pricing.side_effect = lambda products, **kw: products
+            self.mock["dynamic_pricing"].return_value = mock_pricing_instance  # type: ignore[attr-defined]
 
         # Ranking factory: AI not enabled
         self.set_ranking_disabled()
