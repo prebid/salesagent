@@ -11,8 +11,8 @@ import inspect
 import pytest
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetMediaBuysRequest
-from tests.factories import PrincipalFactory
 
 
 class TestGetMediaBuysImplAcceptsResolvedIdentity:
@@ -54,9 +54,10 @@ class TestGetMediaBuysImplRaisesAdCPError:
         """Passing account_id should raise AdCPValidationError (not ToolError)."""
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
         )
         req = GetMediaBuysRequest(account_id="some_account")
         with pytest.raises(AdCPValidationError):

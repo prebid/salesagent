@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # Models that require tenant_id in every query
 TENANT_SCOPED_MODELS = {
     "Principal",
+    "ModelPrincipal",
     "Creative",
     "CreativeModel",
     "DBCreative",
@@ -112,25 +113,25 @@ def _extract_select_calls(
 
 
 class TestAuthUtilsTenantIsolation:
-    """salesagent-0kba: auth_utils.py Principal lookup missing tenant_id."""
+    """salesagent-0kba: auth.py Principal lookup missing tenant_id."""
 
     def test_get_principal_object_scopes_by_tenant(self):
-        """get_principal_object's inner _get_principal_object must filter Principal by tenant_id.
+        """get_principal_object must filter Principal by tenant_id.
 
         Principal has composite PK (tenant_id, principal_id). Querying by
         principal_id alone can return a principal from a different tenant.
         """
         selects = _extract_select_calls(
-            "src/core/auth_utils.py",
-            "_get_principal_object",
+            "src/core/auth.py",
+            "get_principal_object",
         )
 
-        principal_selects = [s for s in selects if s["model"] == "Principal"]
+        principal_selects = [s for s in selects if s["model"] == "Principal" or s["model"] == "ModelPrincipal"]
         assert principal_selects, "Expected at least one Principal select() call"
 
         for s in principal_selects:
             assert s["has_tenant_filter"], (
-                f"Principal query at auth_utils.py:{s['lineno']} is missing tenant_id filter. "
+                f"Principal query at auth.py:{s['lineno']} is missing tenant_id filter. "
                 f"This is a cross-tenant data leak (salesagent-0kba)."
             )
 

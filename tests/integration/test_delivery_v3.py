@@ -24,6 +24,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
@@ -31,14 +32,32 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     ReportingPeriod,
 )
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
-from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 _PATCH_PREFIX = "src.core.tools.media_buy_delivery"
+
+
+def _make_identity(
+    principal_id: str = "test_principal",
+    tenant_id: str = "test_tenant",
+) -> ResolvedIdentity:
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant={"tenant_id": tenant_id, "name": "Test Tenant"},
+        protocol="mcp",
+        testing_context=AdCPTestContext(
+            dry_run=False,
+            mock_time=None,
+            jump_to_event=None,
+            test_session_id=None,
+        ),
+    )
 
 
 def _make_adapter_response(
@@ -266,7 +285,7 @@ class TestDeliverySingleBuyIntegration:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity()
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -350,7 +369,7 @@ class TestDeliveryIdentificationModesIntegration:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity()
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -390,7 +409,7 @@ class TestDeliveryIdentificationModesIntegration:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity()
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -468,7 +487,7 @@ class TestDeliveryStatusFilterIntegration:
             end_date="2025-06-15",
         )
 
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity()
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -517,7 +536,7 @@ class TestDeliveryStatusFilterIntegration:
             start_date="2025-01-01",
             end_date="2025-06-15",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity()
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -550,7 +569,7 @@ class TestDeliveryStatusFilterIntegration:
             start_date="2025-01-01",
             end_date="2025-06-15",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity()
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=MagicMock()):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -608,7 +627,7 @@ class TestDeliveryPricingOptionIntegration:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity()
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -672,7 +691,7 @@ class TestDeliveryOwnershipIntegration:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity(principal_id="test_principal")
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=MagicMock()):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -720,7 +739,7 @@ class TestDeliveryOwnershipIntegration:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity(principal_id="test_principal")
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=MagicMock()):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -782,7 +801,7 @@ class TestDeliveryOwnershipIntegration:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity(principal_id="test_principal")
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -839,7 +858,7 @@ class TestDeliverySerializationIntegration:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(name="Test Tenant")
+        identity = _make_identity()
 
         with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)

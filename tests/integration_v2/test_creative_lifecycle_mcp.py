@@ -28,8 +28,9 @@ from src.core.database.models import (
     MediaBuy,
     Principal,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, SyncCreativesResponse
-from tests.factories import PrincipalFactory
+from src.core.testing_hooks import AdCPTestContext
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -62,11 +63,11 @@ class TestCreativeLifecycleMCP:
         tenant_dict = {"tenant_id": tid}
         if tenant_overrides:
             tenant_dict.update(tenant_overrides)
-        return PrincipalFactory.make_identity(
+        return ResolvedIdentity(
             principal_id=pid,
             tenant_id=tid,
             tenant=tenant_dict,
-            dry_run=True,
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
 
@@ -275,10 +276,7 @@ class TestCreativeLifecycleMCP:
         ]
 
     def test_sync_creatives_create_new_creatives(self, sample_creatives):
-        """Test sync_creatives creates new creatives successfully.
-
-        Covers: UC-006-MAIN-MCP-02
-        """
+        """Test sync_creatives creates new creatives successfully."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
         identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
@@ -321,10 +319,7 @@ class TestCreativeLifecycleMCP:
             assert leaderboard_creative.data.get("height") == 90
 
     def test_sync_creatives_upsert_existing_creative(self):
-        """Test sync_creatives updates existing creative (default patch=False behavior).
-
-        Covers: UC-006-MAIN-MCP-03
-        """
+        """Test sync_creatives updates existing creative (default patch=False behavior)."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
         # First, create an existing creative
         with get_db_session() as session:
@@ -385,10 +380,7 @@ class TestCreativeLifecycleMCP:
             assert updated_creative.updated_at is not None
 
     def test_sync_creatives_with_package_assignments(self, sample_creatives):
-        """Test sync_creatives assigns creatives to packages using spec-compliant assignments dict.
-
-        Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01
-        """
+        """Test sync_creatives assigns creatives to packages using spec-compliant assignments dict."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
         # Get the creative_id from the first sample creative
@@ -451,10 +443,7 @@ class TestCreativeLifecycleMCP:
             assert assignment.media_buy_id == self.test_media_buy_id
 
     def test_sync_creatives_validation_failures(self):
-        """Test sync_creatives handles validation failures gracefully.
-
-        Covers: UC-006-EXT-C-01
-        """
+        """Test sync_creatives handles validation failures gracefully."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
         invalid_creatives = [
             {
@@ -902,10 +891,7 @@ class TestCreativeLifecycleMCP:
         assert creative_id == "assignment_test_1"
 
     def test_sync_creatives_authentication_required(self, sample_creatives):
-        """Test sync_creatives requires proper authentication.
-
-        Covers: UC-006-EXT-A-01
-        """
+        """Test sync_creatives requires proper authentication."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
         mock_context = MockContext("invalid-token")
 
@@ -1060,17 +1046,21 @@ class TestCreativeLifecycleMCP:
         creative_ids = [c["creative_id"] for c in sample_creatives]
 
         # Build ResolvedIdentity instead of patching removed auth functions
-        identity = PrincipalFactory.make_identity(
+        from src.core.resolved_identity import ResolvedIdentity
+        from src.core.testing_hooks import AdCPTestContext
+
+        identity = ResolvedIdentity(
             principal_id=self.test_principal_id,
             tenant_id=self.test_tenant_id,
             tenant={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="creative_lifecycle_test"),
             protocol="mcp",
         )
 
         with (
             patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter,
-            patch("src.core.main.get_product_catalog") as mock_catalog,
+            patch("src.core.tools.products.get_product_catalog") as mock_catalog,
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch(
                 "src.core.tools.media_buy_create._validate_creatives_before_adapter_call"

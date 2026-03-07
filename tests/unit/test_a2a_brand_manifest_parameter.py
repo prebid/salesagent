@@ -15,14 +15,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from tests.factories import PrincipalFactory
+from src.core.resolved_identity import ResolvedIdentity
 
 logger = logging.getLogger(__name__)
 
-_MOCK_IDENTITY = PrincipalFactory.make_identity(
-    principal_id="test_principal",
-    tenant_id="test_tenant",
-    protocol="a2a",
+_MOCK_IDENTITY = ResolvedIdentity(
+    principal_id="test_principal", tenant_id="test_tenant", tenant={"tenant_id": "test_tenant"}, protocol="a2a"
 )
 
 
@@ -83,6 +81,34 @@ async def test_handle_get_products_skill_extracts_all_parameters():
         assert call_kwargs["strategy_id"] == "test_strategy_123"
         assert "adcp_version" not in call_kwargs
         assert "brand_manifest" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_handle_get_products_skill_forwards_property_list():
+    """Test that _handle_get_products_skill forwards property_list to core tool.
+
+    Regression test for salesagent-bosc: A2A handler was silently dropping
+    property_list while MCP and get_products_raw both forwarded it correctly.
+    """
+    handler = AdCPRequestHandler()
+
+    with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
+        mock_response = MagicMock()
+        mock_response.model_dump.return_value = {"products": [], "message": "Test products"}
+        mock_core_tool.return_value = mock_response
+
+        parameters = {
+            "brief": "Video ads",
+            "property_list": {"agent_url": "https://buyer.example.com/properties"},
+        }
+
+        await handler._handle_get_products_skill(parameters, _MOCK_IDENTITY)
+
+        mock_core_tool.assert_called_once()
+        call_kwargs = mock_core_tool.call_args.kwargs
+
+        assert "property_list" in call_kwargs, "property_list should be forwarded to core tool"
+        assert call_kwargs["property_list"] == {"agent_url": "https://buyer.example.com/properties"}
 
 
 @pytest.mark.asyncio

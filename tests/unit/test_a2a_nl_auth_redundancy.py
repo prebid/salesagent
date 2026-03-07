@@ -14,12 +14,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.resolved_identity import ResolvedIdentity
 from tests.a2a_helpers import make_a2a_context
-from tests.factories import PrincipalFactory
 
-_MOCK_IDENTITY = PrincipalFactory.make_identity(
+_MOCK_IDENTITY = ResolvedIdentity(
     principal_id="test-principal",
     tenant_id="test-tenant",
+    tenant={"tenant_id": "test-tenant"},
     protocol="a2a",
 )
 

@@ -7,9 +7,7 @@ must either:
 
 The guard scans:
 - Integration tests: tests/integration/test_*_v3.py
-- Integration V2 tests: tests/integration_v2/test_*.py
 - Unit entity tests: tests/unit/test_media_buy.py, test_creative.py, test_delivery.py
-- Unit behavioral tests: tests/unit/test_*_behavioral.py
 
 The allowlist can only SHRINK — adding new uncovered obligations fails CI.
 When tests are written, remove the covered ID from the allowlist
@@ -26,7 +24,6 @@ from pathlib import Path
 
 OBLIGATIONS_DIR = Path(__file__).resolve().parents[2] / "docs" / "test-obligations"
 INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration"
-INTEGRATION_V2_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration_v2"
 UNIT_DIR = Path(__file__).resolve().parents[2] / "tests" / "unit"
 ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_coverage_allowlist.json"
 
@@ -72,15 +69,14 @@ def _get_behavioral_obligations() -> set[str]:
 def _get_covered_obligations() -> set[str]:
     """Extract ``Covers: <id>`` tags from test docstrings.
 
-    Scans integration, integration_v2, unit entity, and unit behavioral tests.
-    Uses ``re.search`` to find ``Covers:`` tags inside docstrings
-    (e.g., ``\"\"\"Covers: UC-005-MAIN-MCP-16``).
+    Scans both integration tests (test_*_v3.py) and unit entity tests.
+    Only matches single-line ``Covers: ID`` patterns (not bullet lists).
     """
     covered: set[str] = set()
 
     def _scan_file(path: Path) -> None:
         for line in path.read_text().splitlines():
-            m = re.search(r"Covers:\s+([\w-]+)", line)
+            m = re.match(r"\s+Covers:\s+([\w-]+)", line)
             if m and _OBLIGATION_ID_RE.match(m.group(1)):
                 covered.add(m.group(1))
 
@@ -88,19 +84,11 @@ def _get_covered_obligations() -> set[str]:
     for tf in INTEGRATION_DIR.glob("test_*_v3.py"):
         _scan_file(tf)
 
-    # Integration V2 tests
-    for tf in INTEGRATION_V2_DIR.glob("test_*.py"):
-        _scan_file(tf)
-
     # Unit entity tests
     for name in _UNIT_ENTITY_FILES:
         tf = UNIT_DIR / name
         if tf.exists():
             _scan_file(tf)
-
-    # Unit behavioral tests
-    for tf in UNIT_DIR.glob("test_*_behavioral.py"):
-        _scan_file(tf)
 
     return covered
 
@@ -254,26 +242,4 @@ class TestObligationCoverage:
             f"({expected_allowlist_size}). Update the allowlist with:\n"
             f"  python scripts/tag_obligation_ids.py && "
             f"regenerate obligation_coverage_allowlist.json"
-        )
-
-    def test_scanner_finds_integration_v2_covers_tags(self):
-        """Regression: scanner must discover Covers: tags in integration_v2 tests.
-
-        integration_v2 test files use Covers: tags inside docstrings
-        (e.g., '\"\"\"Covers: UC-005-MAIN-MCP-16'). The scanner must find
-        these even when preceded by triple-quotes.
-        """
-        covered = _get_covered_obligations()
-        # These obligations have Covers: tags in integration_v2 test files
-        integration_v2_obligations = {
-            "UC-005-MAIN-MCP-16",  # test_creative_formats_protocol.py
-            "UC-005-MAIN-MCP-17",  # test_creative_formats_protocol.py
-            "UC-005-MAIN-REST-01",  # test_creative_formats_protocol.py
-            "UC-005-MAIN-REST-03",  # test_creative_formats_protocol.py
-            "UC-005-MAIN-MCP-15",  # test_creative_formats_pagination.py
-        }
-        missing = integration_v2_obligations - covered
-        assert not missing, (
-            f"Scanner failed to discover {len(missing)} Covers: tags from "
-            f"integration_v2 tests:\n" + "\n".join(f"  {oid}" for oid in sorted(missing))
         )

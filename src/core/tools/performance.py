@@ -173,6 +173,10 @@ def update_performance_index_raw(
     Returns:
         UpdatePerformanceIndexResponse
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=True)
     return _update_performance_index_impl(media_buy_id, performance_data, context, identity)
 
 

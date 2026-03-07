@@ -14,9 +14,9 @@ import pytest
 from adcp.types.generated_poc.core.format_id import FormatId
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
-from tests.factories import PrincipalFactory
 
 
 class TestRunAsyncInSyncContext:
@@ -72,10 +72,11 @@ class TestSyncCreativesErrorHandling:
         mock_session = MagicMock()
 
         # ResolvedIdentity replaces context-based auth
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
+            protocol="mcp",
         )
 
         # Mock tenant context
@@ -130,10 +131,11 @@ class TestSyncCreativesErrorHandling:
         """
         mock_session = MagicMock()
 
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
+            protocol="mcp",
         )
 
         mock_tenant = {
@@ -218,10 +220,11 @@ class TestSyncCreativesAsyncScenario:
         """
         mock_session = MagicMock()
 
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
+            protocol="mcp",
         )
 
         mock_tenant = {

@@ -10,8 +10,6 @@ principal_id to satisfy the NOT NULL constraint:
 Each test verifies that creative_assignment rows have principal_id populated
 after the respective code path executes. Mutation verification: temporarily
 removing principal_id= from the production site should cause IntegrityError.
-
-Covers: salesagent-9t7f
 """
 
 from __future__ import annotations
@@ -19,54 +17,24 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
+from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
-from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Tenant as TenantModel
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyRequest,
     UpdateMediaBuyRequest,
 )
-from tests.factories import CreativeFactory, PrincipalFactory
-from tests.harness._base import IntegrationEnv
+from src.core.testing_hooks import AdCPTestContext
 from tests.helpers.adcp_factories import create_test_format
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
-
-
-# ---------------------------------------------------------------------------
-# Custom test environment — patches _get_format_spec_sync only.
-# ---------------------------------------------------------------------------
-
-DEFAULT_FORMAT_ID = "display_300x250"
-
-
-class _AssignmentTestEnv(IntegrationEnv):
-    """Integration env for creative assignment principal_id tests.
-
-    Patches _get_format_spec_sync to avoid asyncio.run() inside running event loop.
-    The auto-approve path calls _get_format_spec_sync which wraps
-    CreativeAgentRegistry.get_format() in asyncio.run(). This fails inside
-    pytest-asyncio. We mock the sync wrapper directly to return a valid format.
-    """
-
-    EXTERNAL_PATCHES = {
-        "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
-    }
-
-    def _configure_mocks(self) -> None:
-        mock_formats = {
-            DEFAULT_FORMAT_ID: create_test_format(
-                format_id=DEFAULT_FORMAT_ID,
-                name="Display 300x250",
-                type="display",
-            ),
-        }
-        self.mock["format_spec"].side_effect = lambda agent_url, format_id: mock_formats.get(format_id)
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +44,26 @@ class _AssignmentTestEnv(IntegrationEnv):
 
 def _future(days: int = 1) -> datetime:
     return datetime.now(UTC) + timedelta(days=days)
+
+
+def _make_identity(
+    principal_id: str,
+    tenant_id: str,
+    tenant: dict[str, Any],
+    dry_run: bool = False,
+) -> ResolvedIdentity:
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant=tenant,
+        protocol="mcp",
+        testing_context=AdCPTestContext(
+            dry_run=dry_run,
+            mock_time=None,
+            jump_to_event=None,
+            test_session_id=None,
+        ),
+    )
 
 
 def _get_tenant_dict(tenant_id: str) -> dict[str, Any]:
@@ -126,36 +114,118 @@ def _query_assignments(tenant_id: str, media_buy_id: str) -> list[DBAssignment]:
         return list(session.scalars(stmt).all())
 
 
-def _create_test_creatives(env: _AssignmentTestEnv, tenant_id: str, principal_id: str) -> list[str]:
-    """Create test creatives using factory (inside env context for session binding).
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
-    Loads the Tenant ORM object from the env session to satisfy SQLAlchemy's
-    relationship sync. principal=None is safe because CreativeFactory excludes
-    it from Meta (won't be passed to ORM constructor).
+DEFAULT_FORMAT_ID = "display_300x250"
+
+
+@pytest.fixture(autouse=True)
+def mock_format_spec():
+    """Mock _get_format_spec_sync to avoid asyncio.run() inside running event loop.
+
+    The auto-approve path calls _get_format_spec_sync which wraps
+    CreativeAgentRegistry.get_format() in asyncio.run(). This fails inside
+    pytest-asyncio. We mock the sync wrapper directly to return a valid format.
     """
-    # Load tenant from env's factory session (conftest already committed it)
-    tenant_orm = env._session.scalars(select(TenantModel).where(TenantModel.tenant_id == tenant_id)).first()
-    assert tenant_orm is not None, f"Tenant {tenant_id} not found in env session"
+    mock_formats = {
+        DEFAULT_FORMAT_ID: create_test_format(
+            format_id=DEFAULT_FORMAT_ID,
+            name="Display 300x250",
+            type="display",
+        ),
+    }
 
+    def format_spec_side_effect(agent_url, format_id):
+        return mock_formats.get(format_id)
+
+    with patch(
+        "src.core.tools.media_buy_create._get_format_spec_sync",
+        side_effect=format_spec_side_effect,
+    ):
+        yield
+
+
+@pytest.fixture
+def ca_tenant(sample_tenant):
+    """Tenant dict with human_review_required=False (auto-approve)."""
+    return _get_tenant_dict(sample_tenant["tenant_id"])
+
+
+@pytest.fixture
+def ca_tenant_with_approval(integration_db, sample_tenant):
+    """Tenant with human_review_required=True (manual approval path)."""
+    with get_db_session() as session:
+        stmt = select(TenantModel).where(TenantModel.tenant_id == sample_tenant["tenant_id"])
+        tenant = session.scalars(stmt).first()
+        assert tenant is not None
+        tenant.human_review_required = True
+        session.commit()
+    return _get_tenant_dict(sample_tenant["tenant_id"])
+
+
+@pytest.fixture
+def ca_principal(sample_principal):
+    return sample_principal
+
+
+@pytest.fixture
+def ca_products(sample_products):
+    return sample_products
+
+
+@pytest.fixture
+def ca_creatives(integration_db, ca_tenant, ca_principal):
+    """Create test creatives required for creative_assignments FK."""
     creative_ids = ["c_regress_1", "c_regress_2"]
-    for cid in creative_ids:
-        CreativeFactory(
-            tenant=tenant_orm,  # Real ORM object — avoids relationship blank-out
-            principal=None,  # Excluded from Meta — won't be passed to ORM
-            creative_id=cid,
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            name=f"Regression Creative {cid}",
-            format="display_300x250",
-            data={
-                "url": "https://example.com/creative.jpg",
-                "width": 300,
-                "height": 250,
-                "primary": {"url": "https://example.com/creative.jpg"},
-                "platform_creative_id": f"mock_creative_{cid}",
-            },
-        )
+    with get_db_session() as session:
+        for cid in creative_ids:
+            existing = session.scalars(
+                select(DBCreative).where(
+                    DBCreative.creative_id == cid,
+                    DBCreative.tenant_id == ca_tenant["tenant_id"],
+                    DBCreative.principal_id == ca_principal["principal_id"],
+                )
+            ).first()
+            if not existing:
+                session.add(
+                    DBCreative(
+                        creative_id=cid,
+                        tenant_id=ca_tenant["tenant_id"],
+                        principal_id=ca_principal["principal_id"],
+                        name=f"Regression Creative {cid}",
+                        agent_url="https://creative.adcontextprotocol.org",
+                        format="display_300x250",
+                        data={
+                            "url": "https://example.com/creative.jpg",
+                            "width": 300,
+                            "height": 250,
+                            "primary": {"url": "https://example.com/creative.jpg"},
+                            "platform_creative_id": f"mock_creative_{cid}",
+                        },
+                    )
+                )
+        session.commit()
     return creative_ids
+
+
+@pytest.fixture
+def ca_identity(ca_tenant, ca_principal):
+    return _make_identity(
+        principal_id=ca_principal["principal_id"],
+        tenant_id=ca_tenant["tenant_id"],
+        tenant=ca_tenant,
+    )
+
+
+@pytest.fixture
+def ca_identity_with_approval(ca_tenant_with_approval, ca_principal):
+    return _make_identity(
+        principal_id=ca_principal["principal_id"],
+        tenant_id=ca_tenant_with_approval["tenant_id"],
+        tenant=ca_tenant_with_approval,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -169,65 +239,48 @@ class TestCreativeAssignmentPrincipalIdManualApproval:
     @pytest.mark.asyncio
     async def test_assignment_has_principal_id_on_manual_approval_create(
         self,
-        integration_db,
-        sample_tenant,
-        sample_principal,
-        sample_products,
+        ca_tenant_with_approval,
+        ca_principal,
+        ca_products,
+        ca_creatives,
+        ca_identity_with_approval,
     ):
         """Site 1: creative_assignments created during manual-approval create_media_buy
         must have principal_id populated (NOT NULL constraint).
-
-        Covers: UC-006-ASSIGNMENT-PRINCIPAL-ID-01
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        with _AssignmentTestEnv() as env:
-            # Set tenant to require human review
-            with get_db_session() as session:
-                stmt = select(TenantModel).where(TenantModel.tenant_id == sample_tenant["tenant_id"])
-                tenant_obj = session.scalars(stmt).first()
-                assert tenant_obj is not None
-                tenant_obj.human_review_required = True
-                session.commit()
+        req = _make_create_request(
+            packages=[
+                {
+                    "product_id": "guaranteed_display",
+                    "buyer_ref": "approval-pkg-1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ca_creatives,
+                }
+            ],
+        )
 
-            tenant_dict = _get_tenant_dict(sample_tenant["tenant_id"])
-            creative_ids = _create_test_creatives(env, sample_tenant["tenant_id"], sample_principal["principal_id"])
-            env._commit_factory_data()
+        result = await _create_media_buy_impl(req=req, identity=ca_identity_with_approval)
 
-            identity = PrincipalFactory.make_identity(
-                principal_id=sample_principal["principal_id"],
-                tenant_id=sample_tenant["tenant_id"],
-                tenant=tenant_dict,
-            )
-
-            req = _make_create_request(
-                packages=[
-                    {
-                        "product_id": "guaranteed_display",
-                        "buyer_ref": "approval-pkg-1",
-                        "budget": 5000.0,
-                        "pricing_option_id": "cpm_usd_fixed",
-                        "creative_ids": creative_ids,
-                    }
-                ],
-            )
-
-            result = await _create_media_buy_impl(req=req, identity=identity)
-
+        # The result should succeed (submitted for approval)
         assert result.status in ("submitted", "completed"), f"Unexpected status: {result.status}"
         assert result.response is not None
 
+        # Extract media_buy_id from the response
         media_buy_id = getattr(result.response, "media_buy_id", None)
         assert media_buy_id is not None, "Response should contain media_buy_id"
 
-        assignments = _query_assignments(sample_tenant["tenant_id"], media_buy_id)
+        # Verify creative_assignment rows have principal_id populated
+        assignments = _query_assignments(ca_tenant_with_approval["tenant_id"], media_buy_id)
         assert len(assignments) > 0, "Expected at least one creative assignment"
 
         for assignment in assignments:
             assert assignment.principal_id is not None, f"Assignment {assignment.assignment_id} has NULL principal_id"
-            assert assignment.principal_id == sample_principal["principal_id"], (
+            assert assignment.principal_id == ca_principal["principal_id"], (
                 f"Assignment {assignment.assignment_id} has wrong principal_id: "
-                f"{assignment.principal_id} != {sample_principal['principal_id']}"
+                f"{assignment.principal_id} != {ca_principal['principal_id']}"
             )
 
 
@@ -242,57 +295,47 @@ class TestCreativeAssignmentPrincipalIdAutoApprove:
     @pytest.mark.asyncio
     async def test_assignment_has_principal_id_on_auto_approve_create(
         self,
-        integration_db,
-        sample_tenant,
-        sample_principal,
-        sample_products,
+        ca_tenant,
+        ca_principal,
+        ca_products,
+        ca_creatives,
+        ca_identity,
     ):
         """Site 2: creative_assignments created during auto-approve create_media_buy
         must have principal_id populated (NOT NULL constraint).
-
-        Covers: UC-006-ASSIGNMENT-PRINCIPAL-ID-02
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        with _AssignmentTestEnv() as env:
-            tenant_dict = _get_tenant_dict(sample_tenant["tenant_id"])
-            creative_ids = _create_test_creatives(env, sample_tenant["tenant_id"], sample_principal["principal_id"])
-            env._commit_factory_data()
+        req = _make_create_request(
+            packages=[
+                {
+                    "product_id": "guaranteed_display",
+                    "buyer_ref": "auto-pkg-1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ca_creatives,
+                }
+            ],
+        )
 
-            identity = PrincipalFactory.make_identity(
-                principal_id=sample_principal["principal_id"],
-                tenant_id=sample_tenant["tenant_id"],
-                tenant=tenant_dict,
-            )
+        result = await _create_media_buy_impl(req=req, identity=ca_identity)
 
-            req = _make_create_request(
-                packages=[
-                    {
-                        "product_id": "guaranteed_display",
-                        "buyer_ref": "auto-pkg-1",
-                        "budget": 5000.0,
-                        "pricing_option_id": "cpm_usd_fixed",
-                        "creative_ids": creative_ids,
-                    }
-                ],
-            )
-
-            result = await _create_media_buy_impl(req=req, identity=identity)
-
+        # Auto-approve should succeed
         assert result.status in ("completed", "submitted"), f"Unexpected status: {result.status}"
         assert result.response is not None
 
         media_buy_id = getattr(result.response, "media_buy_id", None)
         assert media_buy_id is not None, "Response should contain media_buy_id"
 
-        assignments = _query_assignments(sample_tenant["tenant_id"], media_buy_id)
+        # Verify creative_assignment rows have principal_id populated
+        assignments = _query_assignments(ca_tenant["tenant_id"], media_buy_id)
         assert len(assignments) > 0, "Expected at least one creative assignment"
 
         for assignment in assignments:
             assert assignment.principal_id is not None, f"Assignment {assignment.assignment_id} has NULL principal_id"
-            assert assignment.principal_id == sample_principal["principal_id"], (
+            assert assignment.principal_id == ca_principal["principal_id"], (
                 f"Assignment {assignment.assignment_id} has wrong principal_id: "
-                f"{assignment.principal_id} != {sample_principal['principal_id']}"
+                f"{assignment.principal_id} != {ca_principal['principal_id']}"
             )
 
 
@@ -307,82 +350,72 @@ class TestCreativeAssignmentPrincipalIdUpdate:
     @pytest.mark.asyncio
     async def test_assignment_has_principal_id_on_update_creative_ids(
         self,
-        integration_db,
-        sample_tenant,
-        sample_principal,
-        sample_products,
+        ca_tenant,
+        ca_principal,
+        ca_products,
+        ca_creatives,
+        ca_identity,
     ):
         """Site 3: creative_assignments created during update_media_buy with creative_ids
         must have principal_id populated (NOT NULL constraint).
-
-        Covers: UC-006-ASSIGNMENT-PRINCIPAL-ID-03
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        with _AssignmentTestEnv() as env:
-            tenant_dict = _get_tenant_dict(sample_tenant["tenant_id"])
-            creative_ids = _create_test_creatives(env, sample_tenant["tenant_id"], sample_principal["principal_id"])
-            env._commit_factory_data()
+        # Step 1: Create a media buy WITHOUT creatives (so we can add them via update)
+        create_req = _make_create_request(
+            packages=[
+                {
+                    "product_id": "guaranteed_display",
+                    "buyer_ref": "update-pkg-1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                }
+            ],
+        )
 
-            identity = PrincipalFactory.make_identity(
-                principal_id=sample_principal["principal_id"],
-                tenant_id=sample_tenant["tenant_id"],
-                tenant=tenant_dict,
+        create_result = await _create_media_buy_impl(req=create_req, identity=ca_identity)
+        assert create_result.status in ("completed", "submitted"), f"Create failed with status: {create_result.status}"
+        media_buy_id = getattr(create_result.response, "media_buy_id", None)
+        assert media_buy_id is not None
+
+        # We need to get the package_id that was created
+        with get_db_session() as session:
+            from src.core.database.models import MediaPackage as DBMediaPackage
+
+            pkg_stmt = select(DBMediaPackage).where(
+                DBMediaPackage.media_buy_id == media_buy_id,
             )
+            packages = session.scalars(pkg_stmt).all()
+            assert len(packages) > 0, "Expected at least one package"
+            package_id = packages[0].package_id
 
-            # Step 1: Create a media buy WITHOUT creatives
-            create_req = _make_create_request(
-                packages=[
-                    {
-                        "product_id": "guaranteed_display",
-                        "buyer_ref": "update-pkg-1",
-                        "budget": 5000.0,
-                        "pricing_option_id": "cpm_usd_fixed",
-                    }
-                ],
-            )
+        # Step 2: Update the media buy to add creative_ids
+        # Note: AdCP oneOf constraint — provide media_buy_id OR buyer_ref, not both
+        update_req = UpdateMediaBuyRequest(
+            media_buy_id=media_buy_id,
+            packages=[
+                {
+                    "package_id": package_id,
+                    "creative_ids": ca_creatives,
+                }
+            ],
+        )
 
-            create_result = await _create_media_buy_impl(req=create_req, identity=identity)
-            assert create_result.status in ("completed", "submitted"), (
-                f"Create failed with status: {create_result.status}"
-            )
-            media_buy_id = getattr(create_result.response, "media_buy_id", None)
-            assert media_buy_id is not None
+        update_result = _update_media_buy_impl(req=update_req, identity=ca_identity)
 
-            # Get the package_id that was created
-            with get_db_session() as session:
-                pkg_stmt = select(DBMediaPackage).where(
-                    DBMediaPackage.media_buy_id == media_buy_id,
-                )
-                packages = session.scalars(pkg_stmt).all()
-                assert len(packages) > 0, "Expected at least one package"
-                package_id = packages[0].package_id
-
-            # Step 2: Update the media buy to add creative_ids
-            update_req = UpdateMediaBuyRequest(
-                media_buy_id=media_buy_id,
-                packages=[
-                    {
-                        "package_id": package_id,
-                        "creative_ids": creative_ids,
-                    }
-                ],
-            )
-
-            update_result = _update_media_buy_impl(req=update_req, identity=identity)
-
+        # Update should succeed (not return error)
         from src.core.schemas import UpdateMediaBuyError
 
         assert not isinstance(update_result, UpdateMediaBuyError), f"Update failed: {update_result}"
 
         # Verify creative_assignment rows have principal_id populated
-        assignments = _query_assignments(sample_tenant["tenant_id"], media_buy_id)
+        assignments = _query_assignments(ca_tenant["tenant_id"], media_buy_id)
         assert len(assignments) > 0, "Expected at least one creative assignment after update"
 
         for assignment in assignments:
             assert assignment.principal_id is not None, f"Assignment {assignment.assignment_id} has NULL principal_id"
-            assert assignment.principal_id == sample_principal["principal_id"], (
+            assert assignment.principal_id == ca_principal["principal_id"], (
                 f"Assignment {assignment.assignment_id} has wrong principal_id: "
-                f"{assignment.principal_id} != {sample_principal['principal_id']}"
+                f"{assignment.principal_id} != {ca_principal['principal_id']}"
             )

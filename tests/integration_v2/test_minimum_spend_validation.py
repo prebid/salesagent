@@ -33,9 +33,10 @@ from src.core.database.models import (
     TenantAuthConfig,
 )
 from src.core.exceptions import AdCPAdapterError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.integration_v2.conftest import create_test_product_with_pricing, get_pricing_option_id
 
@@ -296,10 +297,11 @@ class TestMinimumSpendValidation:
 
     async def test_currency_minimum_spend_enforced(self, setup_test_data):
         """Test that currency-specific minimum spend is enforced."""
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
-            dry_run=True,
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
 
@@ -333,10 +335,11 @@ class TestMinimumSpendValidation:
 
     async def test_product_override_enforced(self, setup_test_data):
         """Test that product-specific minimum spend override is enforced."""
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
-            dry_run=True,
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
 
@@ -370,10 +373,11 @@ class TestMinimumSpendValidation:
 
     async def test_lower_override_allows_smaller_spend(self, setup_test_data):
         """Test that lower product override allows smaller spend than currency limit."""
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
-            dry_run=True,
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
 
@@ -404,10 +408,11 @@ class TestMinimumSpendValidation:
 
     async def test_minimum_spend_met_success(self, setup_test_data):
         """Test that media buy succeeds when minimum spend is met."""
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
-            dry_run=True,
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
 
@@ -443,10 +448,11 @@ class TestMinimumSpendValidation:
     )
     async def test_unsupported_currency_rejected(self, setup_test_data):
         """Test that excessively high budgets are rejected by the adapter (raises ToolError)."""
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
-            dry_run=True,
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
 
@@ -478,10 +484,11 @@ class TestMinimumSpendValidation:
 
     async def test_different_currency_different_minimum(self, setup_test_data):
         """Test that different currencies have different minimums."""
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
-            dry_run=True,
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
 
@@ -526,10 +533,11 @@ class TestMinimumSpendValidation:
             session.add(currency_limit_gbp)
             session.commit()
 
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
-            dry_run=True,
+            tenant={"tenant_id": "test_minspend_tenant"},
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
 

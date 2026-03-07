@@ -24,11 +24,12 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.exceptions import AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyRequest,
     UpdateMediaBuyRequest,
 )
-from tests.factories import PrincipalFactory
+from src.core.testing_hooks import AdCPTestContext
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -41,6 +42,31 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _future(days: int = 1) -> datetime:
     """Return a timezone-aware datetime N days in the future."""
     return datetime.now(UTC) + timedelta(days=days)
+
+
+def _make_identity(
+    principal_id: str = "test_principal",
+    tenant_id: str = "test_tenant",
+    tenant: dict[str, Any] | None = None,
+    testing_context: AdCPTestContext | None = None,
+    dry_run: bool = False,
+) -> ResolvedIdentity:
+    """Build a ResolvedIdentity for integration tests."""
+    if tenant is None:
+        tenant = {"tenant_id": tenant_id}
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant=tenant,
+        protocol="mcp",
+        testing_context=testing_context
+        or AdCPTestContext(
+            dry_run=dry_run,
+            mock_time=None,
+            jump_to_event=None,
+            test_session_id=None,
+        ),
+    )
 
 
 def _make_create_request(**overrides: Any) -> CreateMediaBuyRequest:
@@ -116,7 +142,7 @@ def mb_products(sample_products):
 @pytest.fixture
 def mb_identity(mb_tenant, mb_principal):
     """Provide a ResolvedIdentity backed by real DB state."""
-    return PrincipalFactory.make_identity(
+    return _make_identity(
         principal_id=mb_principal["principal_id"],
         tenant_id=mb_tenant["tenant_id"],
         tenant=mb_tenant,
@@ -221,7 +247,7 @@ class TestCreateMediaBuyCurrencyValidation:
             session.add(eur_po)
             session.commit()
 
-        identity = PrincipalFactory.make_identity(
+        identity = _make_identity(
             principal_id=mb_principal["principal_id"],
             tenant_id=mb_tenant["tenant_id"],
             tenant=mb_tenant,
@@ -262,7 +288,7 @@ class TestCreateMediaBuyManualApproval:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        identity = PrincipalFactory.make_identity(
+        identity = _make_identity(
             principal_id=mb_principal["principal_id"],
             tenant_id=mb_tenant_with_approval["tenant_id"],
             tenant=mb_tenant_with_approval,
@@ -300,7 +326,7 @@ class TestCreateMediaBuyManualApproval:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        identity = PrincipalFactory.make_identity(
+        identity = _make_identity(
             principal_id=mb_principal["principal_id"],
             tenant_id=mb_tenant_with_approval["tenant_id"],
             tenant=mb_tenant_with_approval,
@@ -340,7 +366,7 @@ class TestCreateMediaBuyManualApproval:
             execute_approved_media_buy,
         )
 
-        identity = PrincipalFactory.make_identity(
+        identity = _make_identity(
             principal_id=mb_principal["principal_id"],
             tenant_id=mb_tenant_with_approval["tenant_id"],
             tenant=mb_tenant_with_approval,
@@ -737,7 +763,7 @@ class TestCreateMediaBuyPrincipalResolution:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        identity = PrincipalFactory.make_identity(
+        identity = _make_identity(
             principal_id="nonexistent_principal_xyz",
             tenant_id=mb_tenant["tenant_id"],
             tenant=mb_tenant,
@@ -834,7 +860,7 @@ class TestUpdateMediaBuyOwnership:
             session.add(other_principal)
             session.commit()
 
-        other_identity = PrincipalFactory.make_identity(
+        other_identity = _make_identity(
             principal_id=other_pid,
             tenant_id=mb_tenant["tenant_id"],
             tenant=mb_tenant,

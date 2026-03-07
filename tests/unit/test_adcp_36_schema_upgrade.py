@@ -29,14 +29,16 @@ class TestCreativeListingBoundary:
             Creative(creative_id="c1")
 
     def test_creative_with_minimal_fields_is_valid(self):
-        """Creative with creative_id + format_id is valid (other required fields have defaults)."""
+        """Creative with creative_id + format_id + name is valid (dates have default_factory)."""
         from src.core.schemas import Creative, FormatId
 
         c = Creative(
             creative_id="c1",
+            name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
         )
         assert c.creative_id == "c1"
+        assert c.name == "Test Creative"
         assert c.format_id.id == "display_300x250"
 
     def test_creative_variants_silently_stripped(self):
@@ -45,6 +47,7 @@ class TestCreativeListingBoundary:
 
         c = Creative(
             creative_id="c1",
+            name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             variants=[],
         )
@@ -82,6 +85,7 @@ class TestCreativeListingBoundary:
 
         c = Creative(
             creative_id="c1",
+            name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             principal_id="p1",
         )
@@ -94,6 +98,7 @@ class TestCreativeListingBoundary:
 
         c = Creative(
             creative_id="c1",
+            name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             principal_id="p1",
         )

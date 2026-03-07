@@ -19,10 +19,22 @@ from src.core.database.models import (
     PricingOption,
     Principal,
 )
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
+
+
+def _make_context(tenant_id: str, principal_id: str) -> ResolvedIdentity:
+    """Create a ResolvedIdentity for testing."""
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant={"tenant_id": tenant_id},
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
+        protocol="mcp",
+    )
 
 
 def _get_future_date_range() -> tuple[datetime, datetime]:
@@ -93,9 +105,7 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         session.commit()
 
         start_time, end_time = _get_future_date_range()
-        ctx = PrincipalFactory.make_identity(
-            tenant_id=sample_tenant["tenant_id"], principal_id=principal.principal_id, dry_run=True
-        )
+        ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_profile",
@@ -184,9 +194,7 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
         session.commit()
 
         start_time, end_time = _get_future_date_range()
-        ctx = PrincipalFactory.make_identity(
-            tenant_id=sample_tenant["tenant_id"], principal_id=principal.principal_id, dry_run=True
-        )
+        ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
         # Create media buy - should succeed or return structured error, not crash
         try:
@@ -276,9 +284,7 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
         session.commit()
 
         start_time, end_time = _get_future_date_range()
-        ctx = PrincipalFactory.make_identity(
-            tenant_id=sample_tenant["tenant_id"], principal_id=principal.principal_id, dry_run=True
-        )
+        ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
         # Use only the first product (AdCP spec: package has singular product_id)
         req = CreateMediaBuyRequest(
@@ -387,9 +393,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
 
         # Create media buy AFTER profile update — should still succeed
         start_time, end_time = _get_future_date_range()
-        ctx = PrincipalFactory.make_identity(
-            tenant_id=sample_tenant["tenant_id"], principal_id=principal.principal_id, dry_run=True
-        )
+        ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
         req = CreateMediaBuyRequest(
             buyer_ref="test_buyer_updates",

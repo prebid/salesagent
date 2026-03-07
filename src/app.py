@@ -133,6 +133,9 @@ def _create_dynamic_agent_card(request: Request):
         server_url = f"{protocol}://{apx_incoming_host}/a2a"
     else:
         host = _get_header_case_insensitive(request.headers, "Host") or ""
+        if host and not _is_valid_hostname(host):
+            logger.warning(f"Invalid Host header value, ignoring: {host!r}")
+            host = ""
         sales_domain = get_sales_agent_domain()
         if host and host != sales_domain:
             protocol = get_protocol(host)

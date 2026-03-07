@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
@@ -19,13 +20,34 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     ReportingPeriod,
 )
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState
-from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _make_identity(
+    principal_id: str = "test_principal",
+    tenant_id: str = "test_tenant",
+    testing_context: AdCPTestContext | None = None,
+) -> ResolvedIdentity:
+    """Build a ResolvedIdentity with no testing flags set (reaches adapter path)."""
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant={"tenant_id": tenant_id},
+        protocol="mcp",
+        testing_context=testing_context
+        or AdCPTestContext(
+            dry_run=False,
+            mock_time=None,
+            jump_to_event=None,
+            test_session_id=None,
+        ),
+    )
 
 
 def _make_mock_media_buy(
@@ -154,10 +176,6 @@ def _standard_patches(
             f"{_PATCH_PREFIX}._get_pricing_options",
             return_value=pricing_options or {},
         ),
-        # Mock the inner get_db_session used for PricingOption query
-        "db_session": patch(
-            f"{_PATCH_PREFIX}.get_db_session",
-        ),
         # Mock UoW so _get_media_buy_delivery_impl doesn't hit real DB
         "uow": patch(
             f"{_PATCH_PREFIX}.MediaBuyUoW",
@@ -214,22 +232,17 @@ class TestDeliveryImplSingleBuyOrchestration:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         # Provide a mock session for the MediaPackage inner query
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # -- Assertions --
@@ -328,21 +341,15 @@ class TestDeliveryImplMultiBuyAggregation:
             start_date="2025-01-01",
             end_date="2025-06-30",
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
+        identity = _make_identity()
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Sum invariants
@@ -389,21 +396,22 @@ class TestDeliveryImplAdapterError:
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_err"])
         # Ensure no testing flags are set -> adapter path is reached
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
+        identity = _make_identity(
+            testing_context=AdCPTestContext(
+                dry_run=False,
+                mock_time=None,
+                jump_to_event=None,
+                test_session_id=None,
+            ),
+        )
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Should return error response, not raise
@@ -437,21 +445,22 @@ class TestDeliveryImplAdapterError:
             start_date="2025-03-01",
             end_date="2025-03-31",
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
+        identity = _make_identity(
+            testing_context=AdCPTestContext(
+                dry_run=False,
+                mock_time=None,
+                jump_to_event=None,
+                test_session_id=None,
+            ),
+        )
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert response.reporting_period.start.month == 3
@@ -491,7 +500,7 @@ class TestDeliveryImplIdentificationModes:
         principal_obj.principal_id = "test_principal"
         principal_obj.platform_mappings = {}
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         # Mock UoW with repo that returns db_buys
         mock_uow = _make_mock_uow()
@@ -503,7 +512,6 @@ class TestDeliveryImplIdentificationModes:
             patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter),
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test_tenant"}),
             patch(f"{_PATCH_PREFIX}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH_PREFIX}.get_db_session"),
             patch(f"{_PATCH_PREFIX}.MediaBuyUoW", return_value=mock_uow),
         ):
             return _get_media_buy_delivery_impl(req, identity)
@@ -527,21 +535,15 @@ class TestDeliveryImplIdentificationModes:
         )
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_id1"])
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
+        identity = _make_identity()
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert len(response.media_buy_deliveries) == 1
@@ -569,21 +571,15 @@ class TestDeliveryImplIdentificationModes:
         )
 
         req = GetMediaBuyDeliveryRequest(buyer_refs=["buyer_A"])
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
+        identity = _make_identity()
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert len(response.media_buy_deliveries) == 1
@@ -611,21 +607,15 @@ class TestDeliveryImplIdentificationModes:
             media_buy_ids=["mb_priority"],
             buyer_refs=["should_be_ignored"],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
+        identity = _make_identity()
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # The request passed to _get_target_media_buys has both set
@@ -653,21 +643,15 @@ class TestDeliveryImplIdentificationModes:
         )
 
         req = GetMediaBuyDeliveryRequest()  # no media_buy_ids, no buyer_refs
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
+        identity = _make_identity()
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         call_req = mock_target.call_args[0][0]
@@ -695,21 +679,15 @@ class TestDeliveryImplIdentificationModes:
         )
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_valid", "mb_nonexistent"])
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
+        identity = _make_identity()
         with (
             patches["principal_obj"],
             patches["adapter"],
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"] as mock_db,
             patches["uow"],
         ):
-            mock_db.return_value.__enter__.return_value = mock_inner_session
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Only 1 delivery returned, error reported for missing ID (salesagent-mexj fix)
@@ -727,7 +705,7 @@ class TestDeliveryImplIdentificationModes:
         )
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_ghost1", "mb_ghost2"])
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with (
             patches["principal_obj"],
@@ -735,7 +713,6 @@ class TestDeliveryImplIdentificationModes:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -818,7 +795,7 @@ class TestDeliveryImplStatusFilter:
         patches = _standard_patches(target_buys=[])
 
         req = GetMediaBuyDeliveryRequest()  # no status_filter
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with (
             patches["principal_obj"],
@@ -826,7 +803,6 @@ class TestDeliveryImplStatusFilter:
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             _get_media_buy_delivery_impl(req, identity)
@@ -995,7 +971,7 @@ class TestDeliveryImplCustomDateRange:
             start_date="2025-03-15",
             end_date="2025-04-15",
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with (
             patches["principal_obj"],
@@ -1003,7 +979,6 @@ class TestDeliveryImplCustomDateRange:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -1016,7 +991,7 @@ class TestDeliveryImplCustomDateRange:
         patches = _standard_patches(target_buys=[])
 
         req = GetMediaBuyDeliveryRequest()
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with (
             patches["principal_obj"],
@@ -1024,7 +999,6 @@ class TestDeliveryImplCustomDateRange:
             patches["tenant"],
             patches["target_buys"],
             patches["pricing_options"],
-            patches["db_session"],
             patches["uow"],
         ):
             response = _get_media_buy_delivery_impl(req, identity)
@@ -1042,7 +1016,7 @@ class TestDeliveryImplPrincipalNotFound:
     def test_principal_not_found_returns_error(self):
         """Valid token but principal lookup returns None -> principal_not_found."""
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-        identity = PrincipalFactory.make_identity(principal_id="ghost_principal", tenant_id="test_tenant")
+        identity = _make_identity(principal_id="ghost_principal")
 
         with (
             patch(f"{_PATCH_PREFIX}.get_principal_object", return_value=None),

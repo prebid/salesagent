@@ -8,8 +8,8 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.properties import _list_authorized_properties_impl
-from tests.factories import PrincipalFactory
 
 
 @pytest.mark.requires_db
@@ -55,8 +55,10 @@ def test_list_authorized_properties_reads_from_publisher_partner(integration_db)
         session.commit()
 
         # Pass identity directly to the impl function
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
+            protocol="mcp",
         )
         response = _list_authorized_properties_impl(req=None, identity=identity)
 
@@ -116,8 +118,10 @@ def test_list_authorized_properties_returns_all_registered_publishers(integratio
         session.commit()
 
         # Pass identity directly to the impl function
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             tenant_id="test_tenant2",
+            tenant={"tenant_id": "test_tenant2"},
+            protocol="mcp",
         )
         response = _list_authorized_properties_impl(req=None, identity=identity)
 
@@ -145,8 +149,10 @@ def test_list_authorized_properties_returns_empty_when_no_publishers(integration
         session.commit()
 
         # Pass identity directly - should return empty list, not error
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             tenant_id="test_tenant3",
+            tenant={"tenant_id": "test_tenant3"},
+            protocol="mcp",
         )
         response = _list_authorized_properties_impl(req=None, identity=identity)
 
@@ -198,8 +204,10 @@ def test_list_authorized_properties_returns_sorted_domains(integration_db):
         session.commit()
 
         # Pass identity directly to the impl function
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             tenant_id="test_tenant4",
+            tenant={"tenant_id": "test_tenant4"},
+            protocol="mcp",
         )
         response = _list_authorized_properties_impl(req=None, identity=identity)
 
@@ -257,8 +265,10 @@ def test_list_authorized_properties_tenant_isolation(integration_db):
         session.commit()
 
         # Query tenant A
-        identity_a = PrincipalFactory.make_identity(
+        identity_a = ResolvedIdentity(
             tenant_id="tenant_a",
+            tenant={"tenant_id": "tenant_a"},
+            protocol="mcp",
         )
         response_a = _list_authorized_properties_impl(req=None, identity=identity_a)
 
@@ -269,8 +279,10 @@ def test_list_authorized_properties_tenant_isolation(integration_db):
         assert "tenantb-pub1.com" not in response_a.publisher_domains
 
         # Query tenant B
-        identity_b = PrincipalFactory.make_identity(
+        identity_b = ResolvedIdentity(
             tenant_id="tenant_b",
+            tenant={"tenant_id": "tenant_b"},
+            protocol="mcp",
         )
         response_b = _list_authorized_properties_impl(req=None, identity=identity_b)
 

@@ -14,11 +14,12 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.factories import PrincipalFactory
+from src.core.resolved_identity import ResolvedIdentity
 
-_MOCK_IDENTITY = PrincipalFactory.make_identity(
+_MOCK_IDENTITY = ResolvedIdentity(
     principal_id="principal_123",
     tenant_id="tenant_123",
+    tenant={"tenant_id": "tenant_123"},
     protocol="a2a",
 )
 

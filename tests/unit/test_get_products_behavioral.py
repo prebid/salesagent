@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.products import _get_products_impl
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
-from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import (
     create_test_cpm_pricing_option,
     create_test_publisher_properties_by_tag,
@@ -56,13 +56,8 @@ def _make_identity(
 ):
     """Create a ResolvedIdentity for testing _get_products_impl."""
     if tenant is None:
-        return PrincipalFactory.make_identity(
-            principal_id=principal_id,
-            tenant_id=tenant_id,
-            brand_manifest_policy="public",
-            advertising_policy={},
-        )
-    return PrincipalFactory.make_identity(
+        tenant = {"tenant_id": tenant_id, "brand_manifest_policy": "public", "advertising_policy": {}}
+    return ResolvedIdentity(
         principal_id=principal_id,
         tenant_id=tenant.get("tenant_id", tenant_id),
         tenant=tenant,
@@ -125,11 +120,12 @@ def _make_real_product(product_id: str = "prod_1", **kwargs):
 
 
 def _mock_db_returning_products(products_to_return, mock_db_session):
-    """Configure mock_db_session to return given products from DB query."""
+    """Configure mock_db_session to return given products from DB query.
+
+    Matches ProductRepository.get_all_for_tenant() which uses session.scalars(stmt).all().
+    """
     mock_session = MagicMock()
-    mock_result = MagicMock()
-    mock_result.unique.return_value.scalars.return_value.all.return_value = products_to_return
-    mock_session.execute.return_value = mock_result
+    mock_session.scalars.return_value.all.return_value = products_to_return
     mock_db_session.return_value.__enter__.return_value = mock_session
     return mock_session
 

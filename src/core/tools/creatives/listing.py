@@ -514,6 +514,11 @@ def list_creatives_raw(
     Returns:
         ListCreativesResponse with filtered creative assets and pagination info
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx)
+
     return _list_creatives_impl(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,

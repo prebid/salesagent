@@ -333,6 +333,10 @@ async def get_signals_raw(
     Returns:
         GetSignalsResponse containing matching signals
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return await _get_signals_impl(req, identity)
 
 
@@ -359,4 +363,8 @@ async def activate_signal_raw(
     Returns:
         ActivateSignalResponse with activation status
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx)
     return await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)

@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
-from tests.factories import PrincipalFactory
 
 
 class TestSyncCreativesFormatValidation:
@@ -19,10 +19,11 @@ class TestSyncCreativesFormatValidation:
     @pytest.fixture
     def identity(self):
         """ResolvedIdentity for tests."""
-        return PrincipalFactory.make_identity(
+        return ResolvedIdentity(
             principal_id="principal_123",
             tenant_id="tenant_123",
             tenant={"tenant_id": "tenant_123", "approval_mode": "auto-approve", "slack_webhook_url": None},
+            protocol="mcp",
         )
 
     @pytest.fixture

@@ -18,7 +18,6 @@ from fastmcp.exceptions import ToolError
 from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.services.policy_check_service import PolicyStatus
-from tests.factories import PrincipalFactory
 
 # --- Helpers ---
 
@@ -30,14 +29,12 @@ def _make_identity(
 ) -> ResolvedIdentity:
     """Create a ResolvedIdentity for testing."""
     if tenant is None:
-        return PrincipalFactory.make_identity(
-            principal_id=principal_id,
-            tenant_id=tenant_id,
-        )
-    return PrincipalFactory.make_identity(
+        tenant = {"tenant_id": tenant_id, "name": "Test"}
+    return ResolvedIdentity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
+        protocol="mcp",
     )
 
 
@@ -206,10 +203,11 @@ class TestDiscoveryEndpointsAnonymousAccess:
         from src.core.tools.products import _get_products_impl
 
         # brand_manifest_policy="public" allows anonymous access without auth requirement
-        identity = PrincipalFactory.make_identity(
+        mock_tenant = {"tenant_id": "test-tenant", "name": "Test", "brand_manifest_policy": "public"}
+        identity = ResolvedIdentity(
             principal_id=None,
             tenant_id="test-tenant",
-            brand_manifest_policy="public",
+            tenant=mock_tenant,
         )
 
         with (
@@ -243,7 +241,6 @@ class TestDiscoveryEndpointsAnonymousAccess:
 
     def test_list_creative_formats_works_without_auth(self):
         """list_creative_formats should succeed without authentication."""
-        from src.core.creative_agent_registry import FormatFetchResult
         from src.core.tools.creative_formats import _list_creative_formats_impl
 
         # Create anonymous identity with tenant
@@ -259,11 +256,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
             async def mock_list_formats(**kwargs):
                 return []
 
-            async def mock_list_formats_with_errors(**kwargs):
-                return FormatFetchResult(formats=[], errors=[])
-
             mock_reg.list_all_formats = mock_list_formats
-            mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
             mock_registry.return_value = mock_reg
 
             req = MagicMock()
@@ -277,8 +270,6 @@ class TestDiscoveryEndpointsAnonymousAccess:
             req.min_height = None
             req.max_height = None
             req.context = None
-            req.pagination = None
-            req.wcag_level = None
 
             try:
                 result = _list_creative_formats_impl(req, identity)
@@ -330,9 +321,11 @@ class TestDiscoveryEndpointsInvalidAuth:
 
         # With require_valid_token=False at the transport boundary, invalid tokens
         # result in an anonymous ResolvedIdentity (principal_id=None)
-        identity = PrincipalFactory.make_identity(
+        mock_tenant = {"tenant_id": "test-tenant"}
+        identity = ResolvedIdentity(
             principal_id=None,
             tenant_id="test-tenant",
+            tenant=mock_tenant,
         )
 
         with (
@@ -360,7 +353,6 @@ class TestDiscoveryEndpointsInvalidAuth:
 
     def test_list_creative_formats_with_invalid_token_gets_anonymous_identity(self):
         """list_creative_formats with invalid token gets anonymous identity at the boundary."""
-        from src.core.creative_agent_registry import FormatFetchResult
         from src.core.tools.creative_formats import _list_creative_formats_impl
 
         # At the boundary, require_valid_token=False means invalid tokens
@@ -376,11 +368,7 @@ class TestDiscoveryEndpointsInvalidAuth:
             async def mock_list_formats(**kwargs):
                 return []
 
-            async def mock_list_formats_with_errors(**kwargs):
-                return FormatFetchResult(formats=[], errors=[])
-
             mock_reg.list_all_formats = mock_list_formats
-            mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
             mock_registry.return_value = mock_reg
 
             try:

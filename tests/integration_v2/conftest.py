@@ -358,10 +358,10 @@ def mock_identity(sample_tenant, sample_principal):
     that mutate tenant settings (e.g. human_review_required) between setup
     and assertion.
     """
+    from src.core.resolved_identity import ResolvedIdentity
     from src.core.tenant_context import LazyTenantContext
-    from tests.factories import PrincipalFactory
 
-    return PrincipalFactory.make_identity(
+    return ResolvedIdentity(
         principal_id=sample_principal["principal_id"],
         tenant_id=sample_tenant["tenant_id"],
         tenant=LazyTenantContext(sample_tenant["tenant_id"]),

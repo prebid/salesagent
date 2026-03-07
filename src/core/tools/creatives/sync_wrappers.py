@@ -93,6 +93,11 @@ def sync_creatives_raw(
     Returns:
         SyncCreativesResponse with synced creatives and assignments
     """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx)
+
     return _sync_creatives_impl(
         creatives=creatives,
         assignments=assignments,

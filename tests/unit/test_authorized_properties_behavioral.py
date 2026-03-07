@@ -29,8 +29,8 @@ import pytest
 from adcp.types.generated_poc.core.context import ContextObject
 
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
-from tests.factories import PrincipalFactory
 
 # --- Helpers ---
 
@@ -46,11 +46,12 @@ def _make_mock_tenant(tenant_id="test-tenant", name="Test Tenant", advertising_p
 def _make_identity(tenant, principal_id=None):
     """Build a ResolvedIdentity from a tenant dict and optional principal_id."""
     if tenant is None:
-        return PrincipalFactory.make_identity(principal_id=principal_id, tenant=None)
-    return PrincipalFactory.make_identity(
+        return ResolvedIdentity(principal_id=principal_id, tenant=None, protocol="mcp")
+    return ResolvedIdentity(
         principal_id=principal_id,
         tenant_id=tenant.get("tenant_id"),
         tenant=tenant,
+        protocol="mcp",
     )
 
 

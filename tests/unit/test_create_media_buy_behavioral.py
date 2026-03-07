@@ -24,13 +24,14 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     PricingOption,
 )
-from tests.factories import PrincipalFactory
+from src.core.testing_hooks import AdCPTestContext
 
 # ---------------------------------------------------------------------------
 # Shared helpers for building mocks/fixtures
@@ -131,11 +132,13 @@ class _PatchContext:
 
     def __enter__(self):
         # Build a ResolvedIdentity instead of mock context
-        self.identity = PrincipalFactory.make_identity(
+        self.identity = ResolvedIdentity(
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
             auth_token="test-token",
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
         )
 
         # tenant
@@ -589,7 +592,7 @@ class TestCreativeUploadFailure:
                     "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
                 ),
                 patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
                 patch("src.core.helpers.validate_creative_format_against_product", return_value=(True, None)),
                 patch(
                     "src.core.tools.media_buy_create._get_format_spec_sync",
@@ -913,7 +916,7 @@ class TestCreativeIdsNotFound:
                     "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
                 ),
                 patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
                 patch("src.core.tools.media_buy_create.get_slack_notifier"),
                 patch("src.core.tools.media_buy_create.activity_feed"),
             ):

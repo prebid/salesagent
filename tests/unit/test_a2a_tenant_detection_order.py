@@ -17,7 +17,6 @@ Additionally, A2A is missing the localhost fallback (strategy 4).
 from unittest.mock import patch
 
 from src.core.resolved_identity import _detect_tenant
-from tests.factories import PrincipalFactory
 
 
 class TestTenantDetectionStrategyOrder:
@@ -77,12 +76,14 @@ class TestA2ATenantDetectionMatchesCanonical:
         inline tenant detection, resolve_identity() would NOT be called.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.resolved_identity import ResolvedIdentity
         from tests.a2a_helpers import make_a2a_context
 
         ctx = make_a2a_context(auth_token="test-token", headers={"host": "acme.example.com"})
-        mock_resolve.return_value = PrincipalFactory.make_identity(
+        mock_resolve.return_value = ResolvedIdentity(
             principal_id="test-principal",
             tenant_id="acme",
+            tenant={"tenant_id": "acme"},
             protocol="a2a",
         )
 

@@ -24,6 +24,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
@@ -45,8 +46,8 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
     UpdateMediaBuySuccess,
 )
+from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
-from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -88,6 +89,28 @@ def _make_success(**overrides) -> CreateMediaBuySuccess:
     }
     defaults.update(overrides)
     return CreateMediaBuySuccess(**defaults)
+
+
+def _make_identity(
+    principal_id: str = "test_principal",
+    tenant_id: str = "test_tenant",
+    testing_context: AdCPTestContext | None = None,
+    dry_run: bool = False,
+) -> ResolvedIdentity:
+    """Build a ResolvedIdentity with default test values."""
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant={"tenant_id": tenant_id},
+        protocol="mcp",
+        testing_context=testing_context
+        or AdCPTestContext(
+            dry_run=dry_run,
+            mock_time=None,
+            jump_to_event=None,
+            test_session_id=None,
+        ),
+    )
 
 
 def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMock:
@@ -360,12 +383,13 @@ class TestCreateMediaBuyValidation:
             ]
         )
 
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="principal_1",
             tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
             auth_token="test-token",
-            human_review_required=False,
-            auto_create_media_buys=True,
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
         )
 
         # Build a mock UoW that provides session via context manager
@@ -431,12 +455,13 @@ class TestCreateMediaBuyValidation:
         cl.max_daily_package_spend = Decimal("500")
         cl.min_package_budget = None
 
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="principal_1",
             tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
             auth_token="test-token",
-            human_review_required=False,
-            auto_create_media_buys=True,
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
         )
 
         # Build a mock UoW that provides session via context manager
@@ -604,7 +629,7 @@ class TestCreateMediaBuyValidation:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         req = _make_request(buyer_ref="duplicate-ref")
 
         # Build a mock UoW whose repo signals a duplicate buyer_ref exists
@@ -1105,7 +1130,7 @@ class TestCreateMediaBuyImplAuth:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         req = _make_request()
 
         with (
@@ -1130,10 +1155,12 @@ class TestCreateMediaBuyImplAuth:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant=None,
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=False, test_session_id=None),
         )
         with pytest.raises(AdCPAuthenticationError, match="(?i)tenant"):
             await _create_media_buy_impl(req, identity=identity)
@@ -1152,9 +1179,12 @@ class TestCreateMediaBuyImplAuth:
         from src.services.setup_checklist_service import SetupIncompleteError
 
         req = _make_request()
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=False, test_session_id=None),
         )
 
         with (
@@ -1252,7 +1282,7 @@ class TestCreateMediaBuyAdapterInteraction:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant", dry_run=True)
+        identity = _make_identity(dry_run=True)
         req = _make_request()
 
         # Build mock adapter that should NEVER be called
@@ -1334,7 +1364,7 @@ class TestCreateMediaBuyAdapterInteraction:
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=MagicMock()),
             patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
-            patch("src.core.main.get_product_catalog", return_value=[mock_schema_product]),
+            patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
             patch(
                 "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
                 side_effect=AssertionError("adapter must not be called in dry_run mode"),
@@ -1520,7 +1550,7 @@ class TestUpdateMediaBuyMainFlow:
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         mock_buy = _mock_media_buy(media_buy_id="mb_1")
         mock_buy.principal_id = "test_principal"
@@ -1597,7 +1627,7 @@ class TestUpdateMediaBuyMainFlow:
             buyer_ref="test-buyer",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         mock_buy = _mock_media_buy(media_buy_id="mb_resolved", buyer_ref="test-buyer")
         mock_buy.principal_id = "test_principal"
@@ -1713,7 +1743,7 @@ class TestUpdateMediaBuyPauseResume:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         adapter_result = UpdateMediaBuySuccess(
             media_buy_id="mb_1",
@@ -1771,7 +1801,7 @@ class TestUpdateMediaBuyPauseResume:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=False)
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         adapter_result = UpdateMediaBuySuccess(
             media_buy_id="mb_1",
@@ -1828,7 +1858,7 @@ class TestUpdateMediaBuyPauseResume:
 
         # Pause request with no budget or date changes should not trigger currency validation
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         adapter_result = UpdateMediaBuySuccess(
             media_buy_id="mb_1",
@@ -1910,7 +1940,7 @@ class TestUpdateMediaBuyTiming:
             start_time="2026-04-15T00:00:00+00:00",
             end_time="2026-04-01T00:00:00+00:00",  # end before start
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         mock_buy = _mock_media_buy(media_buy_id="mb_1")
         mock_buy.principal_id = "test_principal"
@@ -1980,7 +2010,7 @@ class TestUpdateMediaBuyTiming:
             end_time="2026-03-03T00:00:00+00:00",  # much shorter than original
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=5000.0)],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         mock_buy = _mock_media_buy(media_buy_id="mb_1")
         mock_buy.principal_id = "test_principal"
@@ -2116,7 +2146,7 @@ class TestUpdateMediaBuyCreativeIds:
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_new1", "c_new2"])],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         # Mock DB creative objects
         mock_c1 = MagicMock()
@@ -2217,7 +2247,7 @@ class TestUpdateMediaBuyCreativeIds:
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_nonexistent"])],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         mock_buy = MagicMock()
         mock_buy.media_buy_id = "mb_1"
@@ -2283,7 +2313,7 @@ class TestUpdateMediaBuyCreativeIds:
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_err"])],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_err"
@@ -2366,7 +2396,7 @@ class TestUpdateMediaBuyCreativeIds:
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_wrong_fmt"])],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_wrong_fmt"
@@ -2451,7 +2481,7 @@ class TestUpdateMediaBuyCreativeIds:
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c2", "c4"])],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         # New creatives
         mock_c2 = MagicMock()
@@ -2594,7 +2624,7 @@ class TestUpdateMediaBuyIdentification:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent", packages=[])
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -2630,7 +2660,7 @@ class TestUpdateMediaBuyIdentification:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(buyer_ref="nonexistent_ref", packages=[])
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -2669,7 +2699,7 @@ class TestUpdateMediaBuyOwnership:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
-        identity = PrincipalFactory.make_identity(principal_id="different_principal", tenant_id="test_tenant")
+        identity = _make_identity(principal_id="different_principal")
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -2720,7 +2750,7 @@ class TestUpdateMediaBuyManualApproval:
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -2778,7 +2808,7 @@ class TestUpdateMediaBuyManualApproval:
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -2833,7 +2863,7 @@ class TestUpdateMediaBuyAdapterFailure:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         adapter_error = UpdateMediaBuyError(
             errors=[Error(code="activation_workflow_failed", message="Network timeout")],
@@ -2892,7 +2922,7 @@ class TestUpdateMediaBuyAdapterFailure:
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         mock_buy = _mock_media_buy(media_buy_id="mb_1")
         mock_buy.principal_id = "test_principal"
@@ -2978,7 +3008,7 @@ class TestDeliveryImplSingleBuy:
             currency="USD",
         )
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
         adapter_mock.get_media_buy_delivery.return_value = adapter_response
 
@@ -2988,7 +3018,6 @@ class TestDeliveryImplSingleBuy:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
-            patch(f"{_PATCH}.get_db_session") as mock_db,
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -2998,10 +3027,6 @@ class TestDeliveryImplSingleBuy:
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
-            # Inner session for PricingOption query
-            mock_inner_session = MagicMock()
-            mock_inner_session.scalars.return_value.all.return_value = []
-            mock_db.return_value.__enter__.return_value = mock_inner_session
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3039,7 +3064,7 @@ class TestDeliveryImplSingleBuy:
             currency="USD",
         )
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
         adapter_mock.get_media_buy_delivery.return_value = adapter_response
 
@@ -3104,7 +3129,7 @@ class TestDeliveryImplSingleBuy:
             currency="USD",
         )
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
         adapter_mock.get_media_buy_delivery.side_effect = [adapter_resp1, adapter_resp2]
 
@@ -3174,7 +3199,7 @@ class TestDeliveryImplSingleBuy:
             currency="USD",
         )
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
         adapter_mock.get_media_buy_delivery.side_effect = [adapter_resp1, adapter_resp2]
 
@@ -3227,7 +3252,7 @@ class TestDeliveryImplSingleBuy:
             currency="USD",
         )
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
         adapter_mock.get_media_buy_delivery.return_value = adapter_resp
 
@@ -3291,7 +3316,7 @@ class TestDeliveryImplStatusFilter:
             currency="USD",
         )
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
         adapter_mock.get_media_buy_delivery.return_value = adapter_resp
 
@@ -3367,7 +3392,7 @@ class TestDeliveryImplStatusFilter:
             currency="USD",
         )
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
         adapter_mock.get_media_buy_delivery.side_effect = [adapter_resp1, adapter_resp2]
 
@@ -3410,7 +3435,7 @@ class TestDeliveryImplStatusFilter:
         Type: unit
         Source: UC-004 alt-filtered
         """
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
 
         _PATCH = "src.core.tools.media_buy_delivery"
@@ -3451,7 +3476,7 @@ class TestDeliveryImplStatusFilter:
         Type: unit
         Source: UC-004 alt-filtered
         """
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
 
         _PATCH = "src.core.tools.media_buy_delivery"
@@ -3493,7 +3518,7 @@ class TestDeliveryImplDateRange:
         Type: unit
         Source: UC-004 alt-date-range
         """
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
 
         _PATCH = "src.core.tools.media_buy_delivery"
@@ -3536,7 +3561,7 @@ class TestDeliveryImplDateRange:
         Type: unit
         Source: UC-004 main flow
         """
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
 
         _PATCH = "src.core.tools.media_buy_delivery"
@@ -3573,7 +3598,7 @@ class TestDeliveryImplDateRange:
 
         Spec: UNSPECIFIED (implementation-defined date range validation)
         """
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with (
             patch("src.core.tools.media_buy_delivery.get_principal_object") as mock_principal,
@@ -3612,7 +3637,7 @@ class TestDeliveryImplErrors:
         Spec: UNSPECIFIED (implementation-defined principal resolution)
         Ported from test_delivery_behavioral.py::test_principal_not_found_returns_error
         """
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
 
         with patch("src.core.tools.media_buy_delivery.get_principal_object", return_value=None):
             req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
@@ -3637,7 +3662,7 @@ class TestDeliveryImplErrors:
             "buyer_ref": "test",
         }
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
         adapter_mock.get_media_buy_delivery.side_effect = RuntimeError("Network timeout")
 
@@ -3675,7 +3700,7 @@ class TestDeliveryImplErrors:
         Type: unit
         Source: UC-004 ext-d
         """
-        identity = PrincipalFactory.make_identity(principal_id="different_principal", tenant_id="test_tenant")
+        identity = _make_identity(principal_id="different_principal")
         adapter_mock = MagicMock()
 
         _PATCH = "src.core.tools.media_buy_delivery"
@@ -3724,16 +3749,14 @@ class TestDeliveryImplPricingLookup:
         mock_po.id = 42
         mock_po.pricing_model = "cpm"
 
-        with patch("src.core.tools.media_buy_delivery.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_session.scalars.return_value.all.return_value = [mock_po]
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.all.return_value = [mock_po]
 
-            # String ID "42" should be cast to int for PK lookup
-            result = _get_pricing_options(["42"])
+        # String ID "42" should be cast to int for PK lookup
+        result = _get_pricing_options(["42"], session=mock_session)
 
-            assert "42" in result
-            assert result["42"] == mock_po
+        assert "42" in result
+        assert result["42"] == mock_po
 
     def test_delivery_spend_with_correct_pricing(self):
         """UC-004-PL02: spend computed from rate and impressions.
@@ -3763,7 +3786,7 @@ class TestDeliveryImplPricingLookup:
         mock_po.pricing_model = "cpm"
         mock_po.rate = Decimal("5.00")
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
         adapter_mock.get_media_buy_delivery.return_value = adapter_resp
 
@@ -4102,13 +4125,16 @@ class TestGetMediaBuysImplAuth:
         Type: unit
         Source: get_media_buys
         """
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         req = GetMediaBuysRequest()
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id=None,
             tenant_id="tenant_1",
-            adapter_type="mock",
+            tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
+            protocol="mcp",
+            testing_context=None,
         )
 
         resp = _get_media_buys_impl(req, identity=identity)
@@ -4128,13 +4154,16 @@ class TestGetMediaBuysImplAuth:
         Source: get_media_buys
         """
         from src.core.exceptions import AdCPValidationError
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         req = GetMediaBuysRequest(account_id="acc_123")
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="principal_1",
             tenant_id="tenant_1",
-            adapter_type="mock",
+            tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
+            protocol="mcp",
+            testing_context=None,
         )
 
         with pytest.raises(AdCPValidationError, match="(?i)account_id.*not.*supported"):
@@ -4250,7 +4279,7 @@ class TestBRRule043ContextEcho:
         """
         context_obj = {"conversation_id": "conv_456", "request_id": "req_789"}
 
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
+        identity = _make_identity()
         adapter_mock = MagicMock()
 
         _PATCH = "src.core.tools.media_buy_delivery"

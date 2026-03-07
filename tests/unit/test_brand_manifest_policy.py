@@ -12,19 +12,20 @@ import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.products import _get_products_impl
-from tests.factories import PrincipalFactory
 
 logger = logging.getLogger(__name__)
 
 
 def _make_identity(principal_id=None, tenant=None):
     """Create a ResolvedIdentity for testing."""
-    return PrincipalFactory.make_identity(
+    return ResolvedIdentity(
         principal_id=principal_id,
-        tenant_id=tenant.get("tenant_id") if tenant else "test_tenant",
+        tenant_id=tenant.get("tenant_id") if tenant else None,
         tenant=tenant,
     )
 
@@ -114,8 +115,8 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
 async def test_require_brand_policy_accepts_with_brand_manifest():
     """Test that require_brand policy accepts requests with brand (adcp 3.6.0: brand replaces brand_manifest)."""
     mock_request = MagicMock()
-    # adcp 3.6.0: brand replaces brand_manifest; use dict with domain field
-    mock_request.brand = {"domain": "nike.com"}
+    # adcp 3.6.0: brand replaces brand_manifest; use BrandReference model
+    mock_request.brand = BrandReference(domain="nike.com")
     mock_request.brief = "Athletic footwear"
     mock_request.filters = None
     mock_request.context = None

@@ -15,8 +15,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedProtocol,
 )
 
-from tests.factories import PrincipalFactory
-
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
@@ -200,10 +198,13 @@ class TestGetAdcpCapabilitiesWithTenant:
                 mock_session.scalars.return_value.all.return_value = []
 
                 # Pass identity with tenant info directly (no auth extraction in _impl)
-                identity = PrincipalFactory.make_identity(
+                from src.core.resolved_identity import ResolvedIdentity
+
+                identity = ResolvedIdentity(
                     principal_id=None,
                     tenant_id="test-tenant-123",
                     tenant=mock_tenant,
+                    protocol="mcp",
                 )
                 response = _get_adcp_capabilities_impl(None, identity)
 
@@ -258,10 +259,13 @@ class TestGetAdcpCapabilitiesWithTenant:
                 mock_db.return_value.__exit__ = MagicMock(return_value=False)
                 mock_session.scalars.return_value.all.return_value = []
 
-                identity = PrincipalFactory.make_identity(
+                from src.core.resolved_identity import ResolvedIdentity
+
+                identity = ResolvedIdentity(
                     principal_id="principal-123",
                     tenant_id="test-tenant-456",
                     tenant=mock_tenant,
+                    protocol="mcp",
                 )
 
                 with patch("src.core.tools.capabilities.get_principal_object") as mock_principal:
@@ -321,12 +325,15 @@ def _make_capabilities_identity(
     tenant: dict | None = None,
 ) -> ResolvedIdentity:
     """Build a ResolvedIdentity for capabilities tests."""
+    from src.core.resolved_identity import ResolvedIdentity
+
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "name": "Test Publisher", "subdomain": "testpub"}
-    return PrincipalFactory.make_identity(
+    return ResolvedIdentity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
+        protocol="mcp",
     )
 
 

@@ -8,8 +8,8 @@ from fastmcp.server import Context as FastMCPContext
 from pydantic import BaseModel
 
 from src.core.mcp_context_wrapper import MCPContextWrapper
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
-from tests.factories import PrincipalFactory
 
 
 class RequestModel(BaseModel):
@@ -54,9 +54,11 @@ class MockSetup:
             "tenant": {"tenant_id": "tenant_test", "name": "Test Tenant"},
             "principal_id": "principal_test",
             "context_manager": mock_context_manager,
-            "identity": PrincipalFactory.make_identity(
+            "identity": ResolvedIdentity(
                 principal_id="principal_test",
                 tenant_id="tenant_test",
+                tenant={"tenant_id": "tenant_test", "name": "Test Tenant"},
+                protocol="mcp",
             ),
         }
 

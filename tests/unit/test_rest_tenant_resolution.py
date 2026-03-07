@@ -10,7 +10,6 @@ import inspect
 from unittest.mock import patch
 
 from src.core.resolved_identity import ResolvedIdentity
-from tests.factories import PrincipalFactory
 
 
 class TestRestResolveAuthReturnsResolvedIdentity:
@@ -22,10 +21,8 @@ class TestRestResolveAuthReturnsResolvedIdentity:
 
         auth_ctx = AuthContext(auth_token="test-token", headers={"x-adcp-auth": "test-token"})
 
-        mock_identity = PrincipalFactory.make_identity(
-            principal_id="test_principal",
-            tenant_id="default",
-            protocol="rest",
+        mock_identity = ResolvedIdentity(
+            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="rest"
         )
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
@@ -46,10 +43,8 @@ class TestRestResolveAuthReturnsResolvedIdentity:
         )
 
         # resolve_identity reads x-adcp-tenant from headers → tenant_id="acme"
-        mock_identity = PrincipalFactory.make_identity(
-            principal_id="regular_user",
-            tenant_id="acme",
-            protocol="rest",
+        mock_identity = ResolvedIdentity(
+            principal_id="regular_user", tenant_id="acme", tenant={"tenant_id": "acme"}, protocol="rest"
         )
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):

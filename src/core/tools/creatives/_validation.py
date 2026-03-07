@@ -51,7 +51,7 @@ def _validate_creative_input(
     # Only include AdCP spec fields + internal fields
     schema_data: dict[str, Any] = {
         "creative_id": creative.creative_id or str(uuid.uuid4()),
-        "name": creative.name or "",  # Ensure name is never None
+        "name": creative.name,
         "format_id": creative.format_id,
         "assets": creative.assets or {},  # Required by AdCP v1 spec
         # adcp 3.6.0: variants is required by Creative schema (list[CreativeVariant]).

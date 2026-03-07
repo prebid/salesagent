@@ -23,8 +23,6 @@ from adcp.types.generated_poc.core.publisher_property_selector import (
     PublisherPropertySelector2,
 )
 
-from tests.factories import PrincipalFactory
-
 
 def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector:
     """Create a 'select all' publisher property selector."""
@@ -306,12 +304,17 @@ class TestCapabilitiesPropertyListFiltering:
     """Test that capabilities reports property_list_filtering=True."""
 
     def test_capabilities_reports_property_list_filtering(self):
+        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        identity = PrincipalFactory.make_identity(
+        identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_tenant",
-            subdomain="test",
+            tenant={
+                "tenant_id": "test_tenant",
+                "name": "Test Tenant",
+                "subdomain": "test",
+            },
         )
 
         with (
