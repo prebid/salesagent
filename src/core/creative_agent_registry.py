@@ -28,6 +28,7 @@ from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPEr
 from adcp.types import AssetContentType as AssetType
 from adcp.types import FormatCategory as FormatType
 from adcp.types.generated_poc.core.format import Assets
+from yarl import URL
 
 from src.core.schemas import Format, FormatId, url
 from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
@@ -149,7 +150,16 @@ class CreativeAgentRegistry:
 
     def __init__(self):
         """Initialize registry with empty cache."""
-        self._format_cache: dict[str, CachedFormats] = {}  # Key: agent_url
+        self._format_cache: dict[str, CachedFormats] = {}  # Key: normalized agent_url
+
+    @staticmethod
+    def _cache_key(agent_url: str) -> str:
+        """Canonicalize agent URL for consistent cache keys (RFC 3986).
+
+        yarl handles: scheme/host lowercase, default port removal, percent-encoding.
+        We additionally strip trailing slash so `/` and empty path are equivalent.
+        """
+        return str(URL(agent_url)).rstrip("/")
 
     def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
         """Build AdCP client from creative agent configs.
@@ -401,7 +411,8 @@ class CreativeAgentRegistry:
             ]
         )
 
-        cached = self._format_cache.get(agent.agent_url)
+        cache_key = self._cache_key(agent.agent_url)
+        cached = self._format_cache.get(cache_key)
         if cached and not cached.is_expired() and not force_refresh and not has_filters:
             return cached.formats
 
@@ -424,7 +435,7 @@ class CreativeAgentRegistry:
 
         # Update cache only if no filtering parameters (cache full result set)
         if not has_filters:
-            self._format_cache[agent.agent_url] = CachedFormats(
+            self._format_cache[cache_key] = CachedFormats(
                 formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
             )
 
@@ -495,7 +506,8 @@ class CreativeAgentRegistry:
                     ]
                 )
 
-                cached = self._format_cache.get(agent.agent_url)
+                cache_key = self._cache_key(agent.agent_url)
+                cached = self._format_cache.get(cache_key)
                 if cached and not cached.is_expired() and not force_refresh and not has_filters:
                     formats = cached.formats
                 else:
@@ -515,7 +527,7 @@ class CreativeAgentRegistry:
 
                     # Update cache only if no filtering parameters
                     if not has_filters:
-                        self._format_cache[agent.agent_url] = CachedFormats(
+                        self._format_cache[cache_key] = CachedFormats(
                             formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
                         )
 

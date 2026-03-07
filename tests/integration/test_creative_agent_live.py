@@ -6,14 +6,10 @@ to verify format discovery and resolution works correctly.
 The creative agent is stable production infrastructure that doesn't change frequently,
 making it suitable for integration testing.
 
-NOTE: These tests are skipped when ADCP_TESTING=true because mock mode
-returns mock formats instead of calling the live creative agent. The skip
-is checked at runtime via the fixture below (not collection time), because
-the test_environment fixture in conftest.py sets ADCP_TESTING=true after
-module collection.
+NOTE: The conftest test_environment fixture sets ADCP_TESTING=true globally,
+which enables mock mode. These tests override it back to false via the
+enable_live_mode fixture so they call the real creative agent.
 """
-
-import os
 
 import pytest
 
@@ -25,14 +21,14 @@ CREATIVE_AGENT_URL_WITH_SLASH = "https://creative.adcontextprotocol.org/"
 
 
 @pytest.fixture(autouse=True)
-def skip_in_testing_mode():
-    """Skip tests when ADCP_TESTING=true (mock mode bypasses live creative agent).
+def enable_live_mode(monkeypatch):
+    """Override ADCP_TESTING for live creative agent tests.
 
-    This is a runtime check because test_environment fixture sets ADCP_TESTING
-    after module collection (when pytestmark.skipif would be evaluated).
+    The conftest test_environment fixture sets ADCP_TESTING=true globally,
+    which enables mock mode. These tests intentionally call the real creative
+    agent, so we override it back to false.
     """
-    if os.environ.get("ADCP_TESTING", "").lower() == "true":
-        pytest.skip("Skipped: ADCP_TESTING=true enables mock mode, bypassing live creative agent")
+    monkeypatch.setenv("ADCP_TESTING", "false")
 
 
 @pytest.fixture
@@ -210,8 +206,8 @@ class TestCacheConsistency:
         assert expected_key in cache_keys, f"Expected cache key '{expected_key}' not found. Keys: {cache_keys}"
 
     @pytest.mark.asyncio
-    async def test_different_url_variations_may_create_separate_cache_entries(self, registry):
-        """Document that URL variations create separate cache entries (potential bug)."""
+    async def test_url_variations_share_single_cache_entry(self, registry):
+        """URL with and without trailing slash share the same cache entry."""
         # Fetch with no trailing slash (DEFAULT_AGENT style)
         agent_no_slash = CreativeAgent(
             agent_url=CREATIVE_AGENT_URL,
@@ -221,7 +217,7 @@ class TestCacheConsistency:
         await registry.get_formats_for_agent(agent_no_slash)
         cache_after_no_slash = len(registry._format_cache)
 
-        # Fetch with trailing slash
+        # Fetch with trailing slash — should hit cache, not create new entry
         agent_with_slash = CreativeAgent(
             agent_url=CREATIVE_AGENT_URL_WITH_SLASH,
             name="With Slash",
@@ -230,14 +226,9 @@ class TestCacheConsistency:
         await registry.get_formats_for_agent(agent_with_slash)
         cache_after_with_slash = len(registry._format_cache)
 
-        print(f"Cache entries after no slash: {cache_after_no_slash}")
-        print(f"Cache entries after with slash: {cache_after_with_slash}")
-        print(f"Cache keys: {list(registry._format_cache.keys())}")
-
-        # This documents current behavior - we may want to change this
-        # If URLs are not normalized, we get duplicate cache entries
-        if cache_after_with_slash > cache_after_no_slash:
-            pytest.xfail("URL variations create duplicate cache entries - needs normalization fix")
+        assert cache_after_with_slash == cache_after_no_slash, (
+            f"Expected 1 cache entry, got {cache_after_with_slash}. Keys: {list(registry._format_cache.keys())}"
+        )
 
 
 class TestFormatResolverIntegration:
