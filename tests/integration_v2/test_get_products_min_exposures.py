@@ -14,7 +14,7 @@ Obligations covered:
 """
 
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -49,8 +49,20 @@ class TestMinExposuresFilter:
 
     @pytest.fixture
     def env(self, integration_db):
-        """ProductEnv with guaranteed and non-guaranteed products."""
-        with ProductEnv(tenant_id="min-exp-test", principal_id="test-principal") as env:
+        """ProductEnv with guaranteed and non-guaranteed products.
+
+        Re-patches DynamicPricingService because these tests need to control
+        estimated_exposures values deterministically (the real service would
+        compute from FormatPerformanceMetrics which is not the focus here).
+        """
+        with (
+            ProductEnv(tenant_id="min-exp-test", principal_id="test-principal") as env,
+            patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_cls,
+        ):
+            # Default pass-through until tests configure specific enrichment
+            mock_pricing_cls.return_value.enrich_products_with_pricing.side_effect = lambda products, **kw: products
+            env.mock["dynamic_pricing"] = mock_pricing_cls  # expose for test methods
+
             tenant = TenantFactory(tenant_id="min-exp-test", subdomain="min-exp-test")
             PrincipalFactory(tenant=tenant, principal_id="test-principal")
 
