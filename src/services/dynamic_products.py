@@ -292,7 +292,7 @@ def create_variant_from_template(
         "description": customize_description(
             template.description, signal, activation_key, brief, template.variant_description_template
         ),
-        "formats": template.format_ids,
+        "format_ids": template.format_ids,
         "targeting_template": template.targeting_template,
         "delivery_type": template.delivery_type,
         "measurement": template.measurement,
