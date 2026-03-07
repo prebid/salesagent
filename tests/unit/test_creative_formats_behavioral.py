@@ -10,6 +10,7 @@ Each test references its upstream BDD scenario ID for traceability.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from adcp.types.generated_poc.core.format import (
     Assets,
     Assets5,
@@ -578,3 +579,39 @@ class TestBroadstreetTemplateAssetParsing:
             assert asset.asset_type == expected_type, (
                 f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
             )
+
+
+class TestMCPWrapperStringCoercion:
+    """Regression: MCP wrapper must handle raw string inputs for enum params.
+
+    The MCP wrapper (list_creative_formats) does type.value and at.value
+    to extract enum values. If called directly with raw strings (bypassing
+    FastMCP's auto-coercion), this crashes with AttributeError.
+    The wrapper must coerce strings to enums before accessing .value.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mcp_wrapper_handles_string_type(self):
+        """MCP wrapper must not crash when type is a raw string instead of FormatCategory enum."""
+        from src.core.tools.creative_formats import list_creative_formats
+
+        # Calling with a raw string bypasses FastMCP's enum coercion
+        # This should NOT raise AttributeError
+        try:
+            await list_creative_formats(type="display", ctx=None)
+        except AttributeError:
+            pytest.fail("MCP wrapper crashed on raw string type — must coerce to enum first")
+        except Exception:
+            pass  # Other errors (no identity, etc.) are fine — we're testing type handling
+
+    @pytest.mark.asyncio
+    async def test_mcp_wrapper_handles_string_asset_types(self):
+        """MCP wrapper must not crash when asset_types contains raw strings."""
+        from src.core.tools.creative_formats import list_creative_formats
+
+        try:
+            await list_creative_formats(asset_types=["image", "video"], ctx=None)
+        except AttributeError:
+            pytest.fail("MCP wrapper crashed on raw string asset_types — must coerce to enum first")
+        except Exception:
+            pass  # Other errors are fine

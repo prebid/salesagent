@@ -451,10 +451,12 @@ async def list_creative_formats(
         ToolResult with ListCreativeFormatsResponse data
     """
     try:
-        # Convert typed Pydantic models to values for the request
-        # FastMCP already coerced JSON inputs to these types
-        type_str = type.value if type else None
-        asset_types_strs = [at.value for at in asset_types] if asset_types else None
+        # Coerce raw strings to enums at the transport boundary (Pattern #5).
+        # FastMCP normally coerces, but direct callers may pass raw strings.
+        type_str = (type if isinstance(type, FormatCategory) else FormatCategory(type)).value if type else None
+        asset_types_strs = (
+            [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
+        )
         req = ListCreativeFormatsRequest(
             type=type_str,
             format_ids=format_ids,
