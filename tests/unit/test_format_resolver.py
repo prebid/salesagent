@@ -10,6 +10,35 @@ and list_available_formats() error paths — 67% → 100%.
 
 Note: Must use src.core.schemas.Format (which has exclude=True on platform_config),
 not the adcp library Format (which does not).
+
+# --- Test Source-of-Truth Audit ---
+# Audited: 2026-03-07
+#
+# SPEC_BACKED (2 tests):
+#   test_search_all_agents_no_match_raises_valueerror — AdCP error.json: unknown format_id is an error
+#   test_success_returns_formats — AdCP list-creative-formats-response.json: returns formats array
+#
+# DECISION_BACKED (2 tests):
+#   test_base_platform_config_preserved_during_override — bug fix (salesagent-c4s)
+#   test_override_merges_into_existing_platform — bug fix (salesagent-c4s)
+#
+# CHARACTERIZATION (10 tests):
+#   test_no_platform_config_override_preserves_base — locks: base preserved when no override
+#   test_base_with_none_platform_config — locks: override applies to None base
+#   test_product_override_path — locks: resolution order (override → agent → error)
+#   test_product_override_none_falls_through_to_agent — locks: fallthrough path
+#   test_search_all_agents_no_agent_url — locks: search-all behavior
+#   test_not_found_error_includes_agent_url — locks: error message format
+#   test_not_found_error_no_agent_url_no_tenant — locks: minimal error format
+#   test_no_product_row_returns_none — locks: None for missing DB row
+#   test_format_id_not_in_overrides_returns_none — locks: None for missing format_id
+#   test_no_format_overrides_key_returns_none — locks: None for missing key
+#
+# SUSPECT (3 tests):
+#   test_base_format_lookup_fails_returns_none — salesagent-z4zl: swallows ValueError silently
+#   test_registry_creation_fails_returns_empty — salesagent-z60b: infrastructure error → []
+#   test_format_fetch_fails_returns_empty — salesagent-z60b: connection error → []
+# ---
 """
 
 from unittest.mock import MagicMock, patch
@@ -351,6 +380,7 @@ class TestProductFormatOverrideEdgeCases:
 
         assert result is None
 
+    # SUSPECT(salesagent-z4zl): swallows ValueError — should override path propagate?
     def test_base_format_lookup_fails_returns_none(self):
         """Returns None when recursive get_format call raises ValueError."""
         format_overrides = {"display_300x250": {"platform_config": {"gam": {"width": 1}}}}
@@ -381,6 +411,7 @@ class TestProductFormatOverrideEdgeCases:
 class TestListAvailableFormats:
     """Tests for list_available_formats() error and success paths."""
 
+    # SUSPECT(salesagent-z60b): infrastructure error silently returns [] — should it propagate?
     def test_registry_creation_fails_returns_empty(self):
         """Returns empty list when get_creative_agent_registry raises."""
         with patch(
@@ -393,6 +424,7 @@ class TestListAvailableFormats:
 
         assert result == []
 
+    # SUSPECT(salesagent-z60b): connection error silently returns [] — should it propagate?
     def test_format_fetch_fails_returns_empty(self):
         """Returns empty list when list_all_formats raises."""
         with (

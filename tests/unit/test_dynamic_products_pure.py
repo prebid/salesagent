@@ -2,6 +2,37 @@
 
 Tests extract_activation_key, generate_variant_id, customize_name,
 and customize_description — all pure functions with no DB or HTTP deps.
+
+# --- Test Source-of-Truth Audit ---
+# Audited: 2026-03-07
+# AdCP spec commit: adcp/dist/schemas/3.0.0-beta.3/
+#
+# SPEC_BACKED (5 tests):
+#   test_key_value_type_matching_deployment — activation-key.json: key_value requires type,key,value
+#   test_segment_id_type_matching_deployment — activation-key.json: segment_id requires type,segment_id
+#   test_not_live_deployment_skipped — deployment.json: activation_key only when is_live=true
+#   test_key_value_missing_value_field — activation-key.json: key_value requires value
+#   test_segment_id_missing_segment_id_field — activation-key.json: segment_id requires segment_id
+#
+# CHARACTERIZATION (21 tests):
+#   extract_activation_key:
+#     test_no_matching_deployment_url — locks: fallback to first live deployment
+#     test_no_deployments — locks: None for empty deployments
+#     test_missing_deployments_key — locks: None for missing key
+#     test_no_agent_url_uses_first_live — locks: first live used when no URL
+#     test_no_agent_url_fallback_segment_id_type — locks: segment_id in fallback
+#   generate_variant_id (all 6):
+#     test_deterministic_for_key_value — locks: deterministic hashing
+#     test_different_activation_keys_differ — locks: collision avoidance
+#     test_different_templates_differ — locks: template isolation
+#     test_format_includes_template_prefix — locks: ID format convention
+#     test_segment_id_type — locks: segment_id variant generation
+#     test_unknown_type_fallback — locks: fallback for unknown types
+#   customize_name (all 5):
+#     No spec defines variant name customization — all lock current conventions
+#   customize_description (all 5):
+#     No spec defines variant description customization — all lock current conventions
+# ---
 """
 
 from __future__ import annotations

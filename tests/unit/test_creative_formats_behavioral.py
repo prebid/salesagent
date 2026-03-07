@@ -615,3 +615,214 @@ class TestMCPWrapperStringCoercion:
             pytest.fail("MCP wrapper crashed on raw string asset_types — must coerce to enum first")
         except Exception:
             pass  # Other errors are fine
+
+
+# ---------------------------------------------------------------------------
+# Extension C: Error propagation in format discovery
+# Decision: docs/design/error-propagation-in-format-discovery.md
+# ---------------------------------------------------------------------------
+
+
+def _call_impl_raw(
+    formats: list[Format],
+    registry_side_effect: Exception | None = None,
+    agent_errors: dict[str, Exception] | None = None,
+):
+    """Call _list_creative_formats_impl and return the full response (not just formats).
+
+    Args:
+        formats: Formats returned by healthy agents.
+        registry_side_effect: If set, get_creative_agent_registry() raises this.
+        agent_errors: Dict of agent_url → Exception for per-agent failures.
+            When set, simulates a registry where some agents fail and others succeed.
+    """
+    from src.core.tools.creative_formats import _list_creative_formats_impl
+
+    req = ListCreativeFormatsRequest()
+    identity = PrincipalFactory.make_identity(
+        principal_id=None,
+        tenant_id=MOCK_TENANT["tenant_id"],
+        tenant=MOCK_TENANT,
+    )
+
+    if registry_side_effect:
+        with patch(
+            "src.core.creative_agent_registry.get_creative_agent_registry",
+            side_effect=registry_side_effect,
+        ):
+            with patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit:
+                mock_audit.return_value = MagicMock()
+                return _list_creative_formats_impl(req, identity)
+
+    with (
+        patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
+        patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit,
+    ):
+        mock_reg = MagicMock()
+
+        async def mock_list_formats(**kwargs):
+            return list(formats)
+
+        mock_reg.list_all_formats = mock_list_formats
+        mock_registry.return_value = mock_reg
+        mock_audit.return_value = MagicMock()
+
+        return _list_creative_formats_impl(req, identity)
+
+
+class TestPartialAgentFailureReturnsFormatsAndErrors:
+    """UC-005-EXT-C-01: Partial agent failure returns formats from healthy agents plus errors.
+
+    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-01)
+    """
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Not implemented: _list_creative_formats_impl always sets errors=None. Tracked in salesagent-ofuk.",
+    )
+    def test_partial_agent_failure_returns_formats_and_errors(self):
+        """Covers: UC-005-EXT-C-01
+
+        Given two registered creative agents, one healthy and one unreachable,
+        when list_creative_formats is called,
+        then the response contains formats from the healthy agent
+        and an errors[] entry for the failed agent.
+        """
+        healthy_formats = [
+            _make_format("display_300x250", "Display 300x250"),
+        ]
+        response = _call_impl_raw(healthy_formats)
+
+        # Formats from healthy agent should be present
+        assert len(response.formats) >= 1
+
+        # Errors should report the failed agent
+        assert response.errors is not None, "Response must include errors[] for failed agents, not silently drop them"
+        assert len(response.errors) >= 1
+        # Each error must have code and message per AdCP error.json
+        for err in response.errors:
+            assert err.code is not None
+            assert err.message is not None
+
+
+class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
+    """UC-005-EXT-C-02: All agents fail returns empty formats plus errors.
+
+    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-02)
+    """
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Not implemented: registry.list_all_formats silently skips failed agents "
+        "and _impl sets errors=None. Tracked in salesagent-ofuk.",
+    )
+    def test_all_agents_fail_returns_empty_formats_and_errors(self):
+        """Covers: UC-005-EXT-C-02
+
+        Given all registered creative agents are unreachable,
+        when list_creative_formats is called,
+        then the response contains an empty formats array
+        and errors[] with one entry per failed agent.
+        """
+        # Simulate all agents failing — registry returns empty list but should report errors
+        response = _call_impl_raw(formats=[])
+
+        assert response.formats == []
+        assert response.errors is not None, (
+            "Total agent failure must return errors[], not bare empty formats. "
+            "An empty formats[] without errors[] means 'no formats configured', "
+            "not 'agents are down'."
+        )
+        assert len(response.errors) >= 1
+        for err in response.errors:
+            assert err.code is not None
+            assert err.message is not None
+
+
+class TestRegistryCreationFailureReturnsErrors:
+    """UC-005-EXT-C-03: Registry creation failure returns empty formats plus errors.
+
+    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-03)
+    """
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Not implemented: get_creative_agent_registry() failure raises unhandled "
+        "exception instead of returning response with errors[]. Tracked in salesagent-ofuk.",
+    )
+    def test_registry_creation_failure_returns_errors(self):
+        """Covers: UC-005-EXT-C-03
+
+        Given the creative agent registry cannot be initialized,
+        when list_creative_formats is called,
+        then the response contains an empty formats array
+        and errors[] describing the infrastructure failure.
+        """
+        response = _call_impl_raw(
+            formats=[],
+            registry_side_effect=RuntimeError("Cannot connect to agent registry"),
+        )
+
+        assert response.formats == []
+        assert response.errors is not None, "Infrastructure failure must be reported in errors[], not swallowed"
+        assert len(response.errors) >= 1
+        assert any("registry" in err.message.lower() for err in response.errors)
+
+
+class TestErrorEntriesFollowAdCPSchema:
+    """UC-005-EXT-C-04: Error entries follow AdCP error.json schema.
+
+    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-04)
+    """
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Not implemented: no errors are ever populated in the response. Tracked in salesagent-ofuk.",
+    )
+    def test_error_entries_have_code_and_message(self):
+        """Covers: UC-005-EXT-C-04
+
+        Given a list_creative_formats response with errors,
+        when the Buyer inspects the errors[] array,
+        then each error has code (string) and message (string) at minimum,
+        conforming to error.json schema.
+        """
+        from adcp.types.generated_poc.core.error import Error
+
+        response = _call_impl_raw(
+            formats=[],
+            registry_side_effect=RuntimeError("Test infrastructure failure"),
+        )
+
+        assert response.errors is not None
+        for err in response.errors:
+            assert isinstance(err, Error), f"Error must be an AdCP Error instance, got {type(err)}"
+            assert isinstance(err.code, str) and len(err.code) > 0
+            assert isinstance(err.message, str) and len(err.message) > 0
+
+
+class TestSuccessfulDiscoveryHasNoErrors:
+    """UC-005-EXT-C-05: Successful discovery has no errors.
+
+    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-05)
+    """
+
+    def test_successful_discovery_has_no_errors(self):
+        """Covers: UC-005-EXT-C-05
+
+        Given all registered creative agents are healthy,
+        when list_creative_formats is called,
+        then the response contains formats from all agents
+        and the errors field is absent or an empty array.
+        """
+        formats = [
+            _make_format("display_300x250", "Display 300x250"),
+            _make_format("video_16x9", "Video 16:9", type=FormatCategory.video),
+        ]
+
+        response = _call_impl_raw(formats)
+
+        assert len(response.formats) == 2
+        assert response.errors is None or response.errors == [], (
+            f"Successful discovery must have no errors, got {response.errors}"
+        )

@@ -5,6 +5,33 @@ salesagent-pm9k: Cover MCP/A2A transport wrapper lines in products.py.
 Tests the wrapper logic (request construction, error translation,
 response serialization, version compat) independent of business logic.
 Business logic is mocked via _get_products_impl.
+
+# --- Test Source-of-Truth Audit ---
+# Audited: 2026-03-07
+#
+# SPEC_BACKED (1 test):
+#   test_rest_returns_json_response — AdCP get-products-response.json + protocol-envelope.json
+#
+# ARCH_BACKED (9 tests):
+#   test_mcp_wrapper_returns_tool_result — CLAUDE.md #5: MCP returns ToolResult
+#   test_mcp_wrapper_validation_error_raises_adcp_validation — CLAUDE.md #5 + no-ToolError guard
+#   test_mcp_wrapper_value_error_raises_adcp_validation — CLAUDE.md #5: error translation
+#   test_mcp_wrapper_reads_identity_from_ctx_state — CLAUDE.md #5: wrapper resolves identity
+#   test_a2a_wrapper_returns_response_model — CLAUDE.md #5 + protocol-envelope.json notes
+#   test_a2a_wrapper_passes_identity_to_impl — CLAUDE.md #5: forward all params
+#   test_a2a_wrapper_constructs_request_from_params — CLAUDE.md #5: wrapper builds request
+#   test_mcp_passes_none_identity_when_no_ctx — CLAUDE.md #5: identity optional
+#   test_a2a_passes_none_identity_when_not_provided — CLAUDE.md #5: identity optional
+#
+# DECISION_BACKED (1 test):
+#   test_a2a_wrapper_no_version_compat — arch decision: compat at handler level
+#
+# CHARACTERIZATION (4 tests):
+#   test_mcp_wrapper_version_compat_v2 — locks: compat applied for pre-3.0
+#   test_mcp_wrapper_version_compat_v3_skips — locks: compat skipped for v3+
+#   test_a2a_wrapper_empty_brief_uses_empty_string — locks: empty brief handling
+#   test_rest_applies_version_compat — locks: REST applies compat
+# ---
 """
 
 from __future__ import annotations
