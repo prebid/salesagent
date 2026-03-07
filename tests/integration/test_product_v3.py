@@ -1076,6 +1076,51 @@ class TestFilteredDiscovery:
             if product.countries:
                 assert "US" in product.countries or not product.countries
 
+    @pytest.mark.asyncio
+    async def test_is_fixed_price_filter_returns_fixed_products(self, uc001_products):
+        """is_fixed_price=true returns products with at least one fixed_price option.
+
+        Covers: UC-001-ALT-FILTERED-DISCOVERY-02
+
+        Spec: product-filters.json — "true = products offering fixed pricing
+        (at least one option with fixed_price)"
+
+        Bug: salesagent-srim — getattr(po, "is_fixed", None) returns None on
+        PricingOption RootModel wrappers because fixed_price lives on po.root,
+        not po directly.
+        """
+        result = await _call_get_products(
+            brief="display ads",
+            filters={"is_fixed_price": True},
+        )
+        # uc001_products has 3 fixed-price products (guaranteed_display,
+        # restricted_product, global_audio) and 1 auction (auction_video).
+        # With is_fixed_price=true, we should get at least the fixed ones.
+        fixed_ids = {p.product_id for p in result.products}
+        assert len(fixed_ids) > 0, (
+            "is_fixed_price=True filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
+        )
+        assert "guaranteed_display" in fixed_ids
+
+    @pytest.mark.asyncio
+    async def test_is_fixed_price_false_returns_auction_products(self, uc001_products):
+        """is_fixed_price=false returns products with at least one auction option.
+
+        Covers: UC-001-ALT-FILTERED-DISCOVERY-03
+
+        Spec: product-filters.json — "false = products offering auction pricing
+        (at least one option without fixed_price)"
+        """
+        result = await _call_get_products(
+            brief="video ads",
+            filters={"is_fixed_price": False},
+        )
+        auction_ids = {p.product_id for p in result.products}
+        assert len(auction_ids) > 0, (
+            "is_fixed_price=False filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
+        )
+        assert "auction_video" in auction_ids
+
 
 # ===========================================================================
 # ALTERNATIVE: Paginated Discovery

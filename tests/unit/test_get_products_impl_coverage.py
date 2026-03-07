@@ -310,34 +310,31 @@ class TestFilterBranches:
 
     @pytest.mark.asyncio
     async def test_is_fixed_price_exercises_pricing_check(self):
-        """Cover is_fixed_price filter branch (L536-543).
+        """Cover is_fixed_price filter branch.
 
-        The filter iterates product.pricing_options and checks
-        getattr(po, "is_fixed", None). With PricingOption (RootModel) wrappers,
-        is_fixed lives on po.root, not po directly, so getattr returns None.
-        This means the filter currently excludes all products when is_fixed_price
-        is set. This test documents the current behavior and covers the branch.
+        Spec: is_fixed_price=true matches products with at least one pricing
+        option that has fixed_price set. Uses po.root.fixed_price on the
+        PricingOption RootModel wrapper.
         """
         product = create_test_product(
             product_id="fixed-prod",
-            pricing_options=[create_test_cpm_pricing_option(is_fixed=True)],
+            pricing_options=[create_test_cpm_pricing_option(is_fixed=True, fixed_price=10.0)],
         )
 
         result = await self._run_with_products_and_filters([product], {"is_fixed_price": True})
-        # PricingOption wrapper: getattr(po, "is_fixed", None) → None, so filter always excludes
-        assert len(result.products) == 0
+        assert len(result.products) == 1
 
     @pytest.mark.asyncio
     async def test_is_fixed_price_false_also_exercises_branch(self):
-        """Cover is_fixed_price=False path — same branch, different comparison value."""
+        """Cover is_fixed_price=False — matches products with auction pricing (no fixed_price)."""
         product = create_test_product(
             product_id="auction-prod",
             pricing_options=[create_test_cpm_pricing_option(is_fixed=False)],
         )
 
         result = await self._run_with_products_and_filters([product], {"is_fixed_price": False})
-        # Same issue: getattr(po, "is_fixed", None) → None != False
-        assert len(result.products) == 0
+        # Auction option has fixed_price=None, so matches is_fixed_price=False
+        assert len(result.products) == 1
 
     @pytest.mark.asyncio
     async def test_format_types_filter_with_format_id_objects(self):

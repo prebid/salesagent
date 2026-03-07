@@ -533,12 +533,20 @@ async def _get_products_impl(
                 continue
 
             # Filter by is_fixed_price (check pricing_options)
+            # Spec: true = at least one option with fixed_price,
+            #        false = at least one option without fixed_price.
+            #        Products with both fixed and auction options match both.
             if req.filters.is_fixed_price is not None:
-                # Check if product has any pricing option matching the fixed/auction filter
-                # Use getattr for discriminated union field access
-                has_matching_pricing = any(
-                    getattr(po, "is_fixed", None) == req.filters.is_fixed_price for po in product.pricing_options
-                )
+                # PricingOption is a Pydantic RootModel — unwrap via .root
+                # to access inner variant fields (fixed_price lives on the variant)
+                if req.filters.is_fixed_price:
+                    has_matching_pricing = any(
+                        getattr(po.root, "fixed_price", None) is not None for po in product.pricing_options
+                    )
+                else:
+                    has_matching_pricing = any(
+                        getattr(po.root, "fixed_price", None) is None for po in product.pricing_options
+                    )
                 if not has_matching_pricing:
                     continue
 
