@@ -61,5 +61,5 @@ def assert_payload_field(
 ) -> None:
     """Assert a specific field on the payload matches expected value."""
     assert result.is_success, f"Expected success but got error: {result.error}"
-    actual = getattr(result.payload, field, None)
+    actual = getattr(result.payload, field)  # Let AttributeError propagate for typos
     assert actual == expected, f"payload.{field}: expected {expected!r}, got {actual!r}"
