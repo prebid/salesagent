@@ -1200,6 +1200,39 @@ class TestCreateMediaBuyImplAuth:
             with pytest.raises(AdCPValidationError, match="(?i)setup.*incomplete|required.*tasks"):
                 await _create_media_buy_impl(req, identity=identity)
 
+    @pytest.mark.asyncio
+    async def test_setup_incomplete_recovery_is_terminal(self):
+        """Setup incomplete errors are terminal — buyer can't fix by retrying.
+
+        Admin must complete tenant setup (currency limits, property tags).
+        Covers: salesagent-91pp (PR #1083 review)
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.services.setup_checklist_service import SetupIncompleteError
+
+        req = _make_request()
+        identity = ResolvedIdentity(
+            principal_id="test_principal",
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant"},
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=False, test_session_id=None),
+        )
+
+        with (
+            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
+            patch(
+                "src.core.tools.media_buy_create.validate_setup_complete",
+                side_effect=SetupIncompleteError(
+                    "Complete required setup tasks",
+                    missing_tasks=[{"name": "Add Products", "description": "Add at least one product"}],
+                ),
+            ),
+        ):
+            with pytest.raises(AdCPValidationError) as exc_info:
+                await _create_media_buy_impl(req, identity=identity)
+            assert exc_info.value.recovery == "terminal"
+
 
 class TestCreateMediaBuyAdapterInteraction:
     """UC-002 adapter call: _execute_adapter_media_buy_creation behavior."""
@@ -4170,6 +4203,28 @@ class TestGetMediaBuysImplAuth:
 
         with pytest.raises(AdCPValidationError, match="(?i)account_id.*not.*supported"):
             _get_media_buys_impl(req, identity=identity)
+
+    def test_account_id_unsupported_recovery_is_correctable(self):
+        """Unsupported account_id should be correctable — buyer removes the param.
+
+        Covers: salesagent-bmlk (PR #1083 review)
+        """
+        from src.core.exceptions import AdCPValidationError
+        from src.core.resolved_identity import ResolvedIdentity
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+
+        req = GetMediaBuysRequest(account_id="acc_123")
+        identity = ResolvedIdentity(
+            principal_id="principal_1",
+            tenant_id="tenant_1",
+            tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
+            protocol="mcp",
+            testing_context=None,
+        )
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            _get_media_buys_impl(req, identity=identity)
+        assert exc_info.value.recovery == "correctable"
 
 
 # ===========================================================================

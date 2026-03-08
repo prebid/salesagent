@@ -3,8 +3,8 @@
 Validates that:
 - Exception classes exist with proper inheritance and attributes
 - FastAPI handlers return correct HTTP status codes and response format
-- Exception → A2A SDK error mapping exists
 - Exception → ToolError format mapping exists
+- Dead A2A error map is not present (real translation in adcp_a2a_server.py)
 
 beads: salesagent-b61l.11
 """
@@ -207,12 +207,16 @@ class TestRecoveryClassification:
         exc = AdCPGoneError("proposal expired")
         assert exc.recovery == "terminal"
 
-    def test_budget_exhausted_error_defaults_to_terminal(self):
-        """AdCPBudgetExhaustedError defaults to recovery='terminal'."""
+    def test_budget_exhausted_error_defaults_to_correctable(self):
+        """AdCPBudgetExhaustedError defaults to recovery='correctable'.
+
+        Buyer can fix by increasing budget or adjusting spend caps.
+        Covers: salesagent-u60m (PR #1083 review)
+        """
         from src.core.exceptions import AdCPBudgetExhaustedError
 
         exc = AdCPBudgetExhaustedError("budget limit reached")
-        assert exc.recovery == "terminal"
+        assert exc.recovery == "correctable"
 
     def test_service_unavailable_error_defaults_to_transient(self):
         """AdCPServiceUnavailableError defaults to recovery='transient'."""
@@ -399,59 +403,21 @@ class TestFastAPIExceptionHandlers:
 # ---------------------------------------------------------------------------
 
 
-class TestA2AErrorMapping:
-    """Verify mapping from AdCP exceptions to A2A SDK error types."""
+class TestNoDeadA2AMap:
+    """Dead A2A error map must not exist in exceptions module (PR #1083 review)."""
 
-    def test_validation_maps_to_invalid_params(self):
-        """AdCPValidationError should map to InvalidParamsError code (-32602)."""
-        from src.core.exceptions import AdCPValidationError, to_a2a_error_code
+    def test_no_a2a_error_code_map_in_exceptions(self):
+        """_A2A_ERROR_CODE_MAP was dead code — real translation is in adcp_a2a_server.py."""
+        import src.core.exceptions as exc_module
 
-        assert to_a2a_error_code(AdCPValidationError("x")) == -32602
+        assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), (
+            "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
+        )
 
-    def test_auth_maps_to_invalid_request(self):
-        """AdCPAuthenticationError should map to InvalidRequestError code (-32600)."""
-        from src.core.exceptions import AdCPAuthenticationError, to_a2a_error_code
+    def test_no_to_a2a_error_code_in_exceptions(self):
+        """to_a2a_error_code() was dead code — real translation is in adcp_a2a_server.py."""
+        import src.core.exceptions as exc_module
 
-        assert to_a2a_error_code(AdCPAuthenticationError("x")) == -32600
-
-    def test_not_found_maps_to_task_not_found(self):
-        """AdCPNotFoundError should map to a not-found code."""
-        from src.core.exceptions import AdCPNotFoundError, to_a2a_error_code
-
-        assert to_a2a_error_code(AdCPNotFoundError("x")) == -32001
-
-    def test_adapter_maps_to_internal_error(self):
-        """AdCPAdapterError should map to InternalError code (-32603)."""
-        from src.core.exceptions import AdCPAdapterError, to_a2a_error_code
-
-        assert to_a2a_error_code(AdCPAdapterError("x")) == -32603
-
-    def test_conflict_maps_to_invalid_params(self):
-        """AdCPConflictError should map to InvalidParamsError code (-32602)."""
-        from src.core.exceptions import AdCPConflictError, to_a2a_error_code
-
-        assert to_a2a_error_code(AdCPConflictError("x")) == -32602
-
-    def test_gone_maps_to_task_not_found(self):
-        """AdCPGoneError should map to TaskNotFoundError code (-32001)."""
-        from src.core.exceptions import AdCPGoneError, to_a2a_error_code
-
-        assert to_a2a_error_code(AdCPGoneError("x")) == -32001
-
-    def test_budget_exhausted_maps_to_invalid_params(self):
-        """AdCPBudgetExhaustedError should map to InvalidParamsError code (-32602)."""
-        from src.core.exceptions import AdCPBudgetExhaustedError, to_a2a_error_code
-
-        assert to_a2a_error_code(AdCPBudgetExhaustedError("x")) == -32602
-
-    def test_service_unavailable_maps_to_internal_error(self):
-        """AdCPServiceUnavailableError should map to InternalError code (-32603)."""
-        from src.core.exceptions import AdCPServiceUnavailableError, to_a2a_error_code
-
-        assert to_a2a_error_code(AdCPServiceUnavailableError("x")) == -32603
-
-    def test_rate_limit_maps_to_internal_error(self):
-        """AdCPRateLimitError should map to InternalError code (-32603)."""
-        from src.core.exceptions import AdCPRateLimitError, to_a2a_error_code
-
-        assert to_a2a_error_code(AdCPRateLimitError("x")) == -32603
+        assert not hasattr(exc_module, "to_a2a_error_code"), (
+            "to_a2a_error_code() is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
+        )

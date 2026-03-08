@@ -93,7 +93,7 @@ class TestExtractErrorInfoAdCPError:
         assert recovery == "terminal"
 
     def test_adcp_budget_exhausted_error_extracts_code_and_message(self):
-        """AdCPBudgetExhaustedError → ('BUDGET_EXHAUSTED', 'budget limit reached', 'terminal')."""
+        """AdCPBudgetExhaustedError → ('BUDGET_EXHAUSTED', 'budget limit reached', 'correctable')."""
         from src.core.exceptions import AdCPBudgetExhaustedError
         from src.core.tool_error_logging import extract_error_info
 
@@ -101,7 +101,7 @@ class TestExtractErrorInfoAdCPError:
         code, message, recovery = extract_error_info(exc)
         assert code == "BUDGET_EXHAUSTED"
         assert message == "budget limit reached"
-        assert recovery == "terminal"
+        assert recovery == "correctable"
 
     def test_adcp_service_unavailable_error_extracts_code_and_message(self):
         """AdCPServiceUnavailableError → ('SERVICE_UNAVAILABLE', 'product unavailable', 'transient')."""
@@ -565,7 +565,7 @@ class TestToDictRecoveryField:
             (AdCPNotFoundError("missing"), "terminal"),
             (AdCPConflictError("duplicate"), "correctable"),
             (AdCPGoneError("expired"), "terminal"),
-            (AdCPBudgetExhaustedError("no budget"), "terminal"),
+            (AdCPBudgetExhaustedError("no budget"), "correctable"),
             (AdCPRateLimitError("slow down"), "transient"),
             (AdCPAdapterError("GAM down"), "transient"),
             (AdCPServiceUnavailableError("unavailable"), "transient"),
@@ -724,7 +724,7 @@ class TestRecoveryRoundtrip:
             (AdCPNotFoundError, "missing", "NOT_FOUND", "terminal"),
             (AdCPConflictError, "dup", "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", "GONE", "terminal"),
-            (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "terminal"),
+            (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "correctable"),
             (AdCPRateLimitError, "slow", "RATE_LIMIT_EXCEEDED", "transient"),
             (AdCPAdapterError, "down", "ADAPTER_ERROR", "transient"),
             (AdCPServiceUnavailableError, "offline", "SERVICE_UNAVAILABLE", "transient"),
@@ -788,7 +788,7 @@ class TestRecoveryRoundtrip:
             (AdCPNotFoundError, "missing", -32603, "terminal"),
             (AdCPConflictError, "dup", -32602, "correctable"),
             (AdCPGoneError, "expired", -32603, "terminal"),
-            (AdCPBudgetExhaustedError, "broke", -32602, "terminal"),
+            (AdCPBudgetExhaustedError, "broke", -32602, "correctable"),
             (AdCPRateLimitError, "slow", -32603, "transient"),
             (AdCPAdapterError, "down", -32603, "transient"),
             (AdCPServiceUnavailableError, "offline", -32603, "transient"),
@@ -840,7 +840,7 @@ class TestRecoveryRoundtrip:
             (AdCPNotFoundError, "missing", 404, "NOT_FOUND", "terminal"),
             (AdCPConflictError, "dup", 409, "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", 410, "GONE", "terminal"),
-            (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "terminal"),
+            (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "correctable"),
             (AdCPRateLimitError, "slow", 429, "RATE_LIMIT_EXCEEDED", "transient"),
             (AdCPAdapterError, "down", 502, "ADAPTER_ERROR", "transient"),
             (AdCPServiceUnavailableError, "offline", 503, "SERVICE_UNAVAILABLE", "transient"),

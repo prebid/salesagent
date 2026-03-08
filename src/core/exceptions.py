@@ -106,6 +106,7 @@ class AdCPBudgetExhaustedError(AdCPError):
 
     status_code = 422
     error_code = "BUDGET_EXHAUSTED"
+    recovery: RecoveryHint = "correctable"
 
 
 class AdCPRateLimitError(AdCPError):
@@ -130,27 +131,3 @@ class AdCPServiceUnavailableError(AdCPError):
     status_code = 503
     error_code = "SERVICE_UNAVAILABLE"
     recovery: RecoveryHint = "transient"
-
-
-# ---------------------------------------------------------------------------
-# Transport mapping utilities
-# ---------------------------------------------------------------------------
-
-# A2A SDK JSON-RPC error codes
-_A2A_ERROR_CODE_MAP: dict[type[AdCPError], int] = {
-    AdCPValidationError: -32602,  # InvalidParamsError
-    AdCPAuthenticationError: -32600,  # InvalidRequestError
-    AdCPAuthorizationError: -32600,  # InvalidRequestError
-    AdCPNotFoundError: -32001,  # TaskNotFoundError
-    AdCPConflictError: -32602,  # InvalidParamsError (correctable client error)
-    AdCPGoneError: -32001,  # TaskNotFoundError (resource no longer exists)
-    AdCPBudgetExhaustedError: -32602,  # InvalidParamsError (client-correctable)
-    AdCPRateLimitError: -32603,  # InternalError
-    AdCPAdapterError: -32603,  # InternalError
-    AdCPServiceUnavailableError: -32603,  # InternalError
-}
-
-
-def to_a2a_error_code(exc: AdCPError) -> int:
-    """Map an AdCP exception to its A2A SDK JSON-RPC error code."""
-    return _A2A_ERROR_CODE_MAP.get(type(exc), -32603)

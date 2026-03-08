@@ -1336,7 +1336,7 @@ async def _create_media_buy_impl(
                 f"Setup incomplete. Please complete the following required tasks:\n\n{task_list}\n\n"
                 f"Visit the setup checklist at /tenant/{tenant['tenant_id']}/setup-checklist for details."
             )
-            raise AdCPValidationError(error_msg, recovery="transient")
+            raise AdCPValidationError(error_msg, recovery="terminal")
 
     # Validate principal exists BEFORE creating context (foreign key constraint)
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
