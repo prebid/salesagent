@@ -353,7 +353,9 @@ class BaseTestEnv:
         self._identity_cache.clear()
 
         if errors:
-            raise errors[0]
+            if len(errors) == 1:
+                raise errors[0]
+            raise ExceptionGroup("Multiple teardown errors", errors)
         return False
 
 
