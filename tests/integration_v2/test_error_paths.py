@@ -570,7 +570,7 @@ class TestRecoveryFieldInErrorResponses:
         cases = [
             (AdCPValidationError("bad"), "correctable"),
             (AdCPRateLimitError("slow"), "transient"),
-            (AdCPBudgetExhaustedError("broke"), "terminal"),
+            (AdCPBudgetExhaustedError("broke"), "correctable"),
         ]
 
         for exc, expected_recovery in cases:
