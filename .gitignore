@@ -133,6 +133,7 @@ test-results/
 .test-stack.env
 
 # Agentic coding — local-only files
+.beads
 .claude/research/
 .claude/settings.local.json
 .claude/agent-memory/
