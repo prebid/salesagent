@@ -91,7 +91,7 @@ _ASSET_TYPE_TO_CLASS: dict[str, type] = {
 }
 
 
-def _make_asset(asset_id: str, asset_type: str, required: bool) -> Assets | Assets5:
+def _make_asset(asset_id: str, asset_type: str, required: bool) -> Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14:
     """Build the correct Assets variant for a given asset type string."""
     cls = _ASSET_TYPE_TO_CLASS.get(asset_type, Assets7)  # default to text
     return cls(
