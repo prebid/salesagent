@@ -670,35 +670,10 @@ class CreateCreativeRequest(SalesAgentBaseModel):
     metadata: dict[str, Any] | None = {}
 
 
-class CreateCreativeResponse(SalesAgentBaseModel):
+class CreateCreativeResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     creative: Creative
     status: CreativeApprovalStatus
     suggested_adaptations: list[CreativeAdaptation] = Field(default_factory=list)
-
-    @model_serializer(mode="wrap")
-    def _serialize_nested_models(self, serializer, info):
-        """Ensure nested Pydantic models use their custom model_dump().
-
-        This approach is resilient to schema changes - introspects all fields
-        instead of hardcoding specific field names.
-        """
-        data = serializer(self)
-
-        for field_name, _ in self.__class__.model_fields.items():
-            if field_name not in data:
-                continue
-
-            field_value = getattr(self, field_name, None)
-            if field_value is None:
-                continue
-
-            if isinstance(field_value, list) and field_value:
-                if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
-            elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump(mode=info.mode)
-
-        return data
 
     def __str__(self) -> str:
         """Return human-readable text for MCP content field."""
@@ -746,34 +721,9 @@ class GetCreativesRequest(SalesAgentBaseModel):
     include_assignments: bool = False
 
 
-class GetCreativesResponse(SalesAgentBaseModel):
+class GetCreativesResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     creatives: list[Creative]
     assignments: list[CreativeAssignment] | None = None
-
-    @model_serializer(mode="wrap")
-    def _serialize_nested_models(self, serializer, info):
-        """Ensure nested Pydantic models use their custom model_dump().
-
-        This approach is resilient to schema changes - introspects all fields
-        instead of hardcoding specific field names.
-        """
-        data = serializer(self)
-
-        for field_name, _ in self.__class__.model_fields.items():
-            if field_name not in data:
-                continue
-
-            field_value = getattr(self, field_name, None)
-            if field_value is None:
-                continue
-
-            if isinstance(field_value, list) and field_value:
-                if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
-            elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump(mode=info.mode)
-
-        return data
 
 
 # Admin tools
