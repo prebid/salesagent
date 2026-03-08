@@ -267,7 +267,11 @@ class Product(Base, JSONValidatorMixin):
 
     # Product detail fields (AdCP v1 spec compliance)
     # Type hint: delivery measurement dict with provider (required) and notes (optional)
-    delivery_measurement: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    delivery_measurement: Mapped[dict] = mapped_column(
+        JSONType,
+        nullable=False,
+        server_default=text('\'{"provider": "publisher"}\'::jsonb'),
+    )
     # Type hint: product card dict with format_id and manifest
     product_card: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # Type hint: detailed product card dict with format_id and manifest

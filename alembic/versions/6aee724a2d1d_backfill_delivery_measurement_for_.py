@@ -76,10 +76,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Revert backfilled delivery_measurement to NULL for auto-filled products.
+    """Revert backfilled delivery_measurement to NULL for products matching defaults.
 
-    Only clears products whose delivery_measurement matches one of the known
-    backfill defaults. Manually configured values are left untouched.
+    Clears products whose delivery_measurement matches one of the known backfill
+    defaults. NOTE: This cannot distinguish between backfilled and manually-set
+    values when they happen to match a default pattern (e.g., a user who manually
+    set {"provider": "publisher"} will also have their value cleared).
     """
     conn = op.get_bind()
     all_defaults = list(ADAPTER_DEFAULTS.values()) + [FALLBACK_DEFAULT]
