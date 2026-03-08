@@ -839,3 +839,61 @@ class TestSuccessfulDiscoveryHasNoErrors:
         assert response.errors is None or response.errors == [], (
             f"Successful discovery must have no errors, got {response.errors}"
         )
+
+
+class TestAgentReferralFailureLogsWarning:
+    """Agent referral building errors must be logged, not silently swallowed.
+
+    CLAUDE.md: No Quiet Failures pattern. If _get_tenant_agents raises,
+    creative_agents_list should remain None (non-critical) but a warning
+    must be logged so operators can diagnose the issue.
+    """
+
+    def test_referral_error_logs_warning(self, caplog):
+        """When _get_tenant_agents raises, a warning is logged (not silent pass)."""
+        import logging
+
+        from src.core.creative_agent_registry import FormatFetchResult
+        from src.core.tools.creative_formats import _list_creative_formats_impl
+
+        formats = [_make_format("display_300x250", "Display 300x250")]
+        mock_reg = MagicMock()
+        mock_reg._get_tenant_agents = MagicMock(side_effect=RuntimeError("Agent DB connection refused"))
+        fetch_result = FormatFetchResult(formats=list(formats), errors=[])
+
+        async def mock_list_formats_with_errors(**kwargs):
+            return fetch_result
+
+        async def mock_list_formats(**kwargs):
+            return list(formats)
+
+        mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
+        mock_reg.list_all_formats = mock_list_formats
+
+        identity = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id=MOCK_TENANT["tenant_id"],
+            tenant=MOCK_TENANT,
+        )
+
+        with (
+            patch(
+                "src.core.creative_agent_registry.get_creative_agent_registry",
+                return_value=mock_reg,
+            ),
+            patch(
+                "src.core.tools.creative_formats.get_audit_logger",
+                return_value=MagicMock(),
+            ),
+            caplog.at_level(logging.WARNING, logger="src.core.tools.creative_formats"),
+        ):
+            _list_creative_formats_impl(
+                req=ListCreativeFormatsRequest(),
+                identity=identity,
+            )
+
+        # After fix: should log a warning about the referral failure
+        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs), (
+            f"Expected a warning about agent referral failure, got: {warning_msgs}"
+        )

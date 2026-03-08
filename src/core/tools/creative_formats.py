@@ -353,7 +353,7 @@ def _list_creative_formats_impl(
 
             try:
                 start_index = int(base64.b64decode(req.pagination.cursor).decode("utf-8"))
-            except (ValueError, Exception):
+            except ValueError:
                 start_index = 0
 
     end_index = start_index + max_results
@@ -400,8 +400,7 @@ def _list_creative_formats_impl(
                     )
                 )
     except Exception:
-        # Don't fail if agent referrals can't be built
-        pass
+        logger.warning("Failed to build agent referrals for tenant %s", tenant["tenant_id"], exc_info=True)
 
     # Log the operation
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
