@@ -447,7 +447,7 @@ async def _get_products_impl(
                 products.append(variant_schema)
 
             logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
-    except Exception as e:
+    except (ImportError, RuntimeError, OSError) as e:
         logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
 
     logger.info(f"[GET_PRODUCTS] Total products (static + dynamic): {len(products)}")
@@ -468,7 +468,7 @@ async def _get_products_impl(
                 country_code=country_code,
                 min_exposures=getattr(req.filters, "min_exposures", None) if req.filters else None,
             )
-    except Exception as e:
+    except (ImportError, RuntimeError, OSError) as e:
         logger.warning(f"Failed to enrich products with dynamic pricing: {e}. Using defaults.")
 
     # Apply AdCP filters if provided
@@ -733,7 +733,7 @@ async def _get_products_impl(
                 )
             else:
                 logger.debug("[GET_PRODUCTS] AI ranking configured but AI not enabled (no API key)")
-        except Exception as e:
+        except (ImportError, RuntimeError, OSError) as e:
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
 
     # Annotate pricing options with adapter support (AdCP PR #88)
@@ -763,7 +763,7 @@ async def _get_products_impl(
                             inner.unsupported_reason = (  # type: ignore[union-attr]
                                 f"Current adapter does not support {str(pricing_model).upper()} pricing"
                             )
-        except Exception as e:
+        except (ImportError, RuntimeError, OSError, ValueError) as e:
             logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
 
     # Filter pricing data for anonymous users
