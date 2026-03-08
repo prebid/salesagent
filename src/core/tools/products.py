@@ -20,6 +20,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
+from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
 from src.core.database.database_session import get_db_session
@@ -36,60 +37,6 @@ from src.core.validation_helpers import format_validation_error, safe_parse_json
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
-
-
-def _get_adapter_classes() -> dict[str, type]:
-    """Return mapping of adapter type names to their classes.
-
-    All adapters are first-party code in this repo, always installed.
-    """
-    from src.adapters.google_ad_manager import GoogleAdManager
-    from src.adapters.kevel import Kevel
-    from src.adapters.mock_ad_server import MockAdServer
-    from src.adapters.triton_digital import TritonDigital
-
-    return {
-        "google_ad_manager": GoogleAdManager,
-        "mock": MockAdServer,
-        "kevel": Kevel,
-        "triton": TritonDigital,
-    }
-
-
-def get_adapter_default_channels(adapter_type: str) -> list[str]:
-    """Get default advertising channels for an adapter type.
-
-    Default channels are defined on each adapter class's default_channels attribute.
-
-    Args:
-        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock", "kevel", "triton")
-
-    Returns:
-        List of default channel names for the adapter
-    """
-    adapter_class = _get_adapter_classes().get(adapter_type)
-    if adapter_class and hasattr(adapter_class, "default_channels"):
-        return adapter_class.default_channels
-    return []
-
-
-def get_adapter_default_delivery_measurement(adapter_type: str) -> dict[str, str]:
-    """Get default delivery_measurement for an adapter type.
-
-    Per AdCP spec, delivery_measurement is REQUIRED on all products.
-    This function returns the adapter-specific default when a product
-    does not have delivery_measurement configured.
-
-    Args:
-        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock")
-
-    Returns:
-        Dict with at least "provider" key for the adapter's default measurement.
-    """
-    adapter_class = _get_adapter_classes().get(adapter_type)
-    if adapter_class and hasattr(adapter_class, "default_delivery_measurement"):
-        return adapter_class.default_delivery_measurement
-    return {"provider": "publisher"}
 
 
 def get_recommended_cpm(product: Product) -> float | None:

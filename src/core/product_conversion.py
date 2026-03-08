@@ -301,8 +301,8 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     if product_model.delivery_measurement:
         product_data["delivery_measurement"] = product_model.delivery_measurement
     else:
+        from src.adapters import get_adapter_default_delivery_measurement
         from src.core.config import is_production
-        from src.core.tools.products import get_adapter_default_delivery_measurement
 
         default_dm = get_adapter_default_delivery_measurement(adapter_type or "")
         if is_production():

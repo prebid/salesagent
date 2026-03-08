@@ -72,3 +72,39 @@ def get_adapter_class(adapter_type: str):
     if not adapter_class:
         raise ValueError(f"Unknown adapter type: {adapter_type}")
     return adapter_class
+
+
+def get_adapter_default_channels(adapter_type: str) -> list[str]:
+    """Get default advertising channels for an adapter type.
+
+    Default channels are defined on each adapter class's default_channels attribute.
+
+    Args:
+        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock", "kevel", "triton")
+
+    Returns:
+        List of default channel names for the adapter
+    """
+    adapter_class = ADAPTER_REGISTRY.get(adapter_type)
+    if adapter_class and hasattr(adapter_class, "default_channels"):
+        return adapter_class.default_channels
+    return []
+
+
+def get_adapter_default_delivery_measurement(adapter_type: str) -> dict[str, str]:
+    """Get default delivery_measurement for an adapter type.
+
+    Per AdCP spec, delivery_measurement is REQUIRED on all products.
+    This function returns the adapter-specific default when a product
+    does not have delivery_measurement configured.
+
+    Args:
+        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock")
+
+    Returns:
+        Dict with at least "provider" key for the adapter's default measurement.
+    """
+    adapter_class = ADAPTER_REGISTRY.get(adapter_type)
+    if adapter_class and hasattr(adapter_class, "default_delivery_measurement"):
+        return adapter_class.default_delivery_measurement
+    return {"provider": "publisher"}

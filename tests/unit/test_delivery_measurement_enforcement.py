@@ -19,11 +19,11 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from src.adapters import get_adapter_default_delivery_measurement
 from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product
-from src.core.tools.products import get_adapter_default_delivery_measurement
 from tests.helpers.adcp_factories import (
     create_test_cpm_pricing_option,
     create_test_db_product,
