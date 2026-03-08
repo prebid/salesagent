@@ -67,7 +67,7 @@ class TestFormatsAuth:
 
 
 # ---------------------------------------------------------------------------
-# Filtering Tests — Covers: UC-005-FILTER
+# Filtering Tests — Covers: UC-005-MAIN-MCP
 # ---------------------------------------------------------------------------
 
 
@@ -75,7 +75,7 @@ class TestFormatsFiltering:
     """Filtering by type, format_ids, name_search."""
 
     def test_no_filter_returns_all(self, integration_db):
-        """Covers: UC-005-FILTER-01 — no filters returns entire catalog."""
+        """Covers: UC-005-MAIN-MCP-01 — no filters returns entire catalog."""
         formats = [
             _make_format("d1", "Display Banner"),
             _make_format("v1", "Video Pre-roll", type=FormatCategory.video),
@@ -88,7 +88,7 @@ class TestFormatsFiltering:
         assert len(response.formats) == 3
 
     def test_type_filter_returns_matching(self, integration_db):
-        """Covers: UC-005-FILTER-02 — type=video returns only video formats."""
+        """Covers: UC-005-MAIN-MCP-05 — type=video returns only video formats."""
         formats = [
             _make_format("d1", "Display Banner", type=FormatCategory.display),
             _make_format("v1", "Video Pre-roll", type=FormatCategory.video),
@@ -103,7 +103,7 @@ class TestFormatsFiltering:
         assert response.formats[0].name == "Video Pre-roll"
 
     def test_native_type_filter(self, integration_db):
-        """Covers: UC-005-FILTER-03 — type=native returns only native formats."""
+        """Covers: UC-005-MAIN-MCP-05 — type=native returns only native formats."""
         formats = [
             _make_format("d1", "Display Banner", type=FormatCategory.display),
             _make_format("n1", "Native Feed", type=FormatCategory.native),
@@ -120,7 +120,7 @@ class TestFormatsFiltering:
         assert names == {"Native Feed", "Native Recommendation"}
 
     def test_format_ids_no_match_returns_empty(self, integration_db):
-        """Covers: UC-005-FILTER-04 — non-existent format_ids returns empty list."""
+        """Covers: UC-005-MAIN-MCP-06 — non-existent format_ids returns empty list."""
         formats = [
             _make_format("display_300x250", "Display 300x250"),
             _make_format("display_728x90", "Display 728x90"),

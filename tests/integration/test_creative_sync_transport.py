@@ -672,7 +672,7 @@ class TestGenerativeBuildUserAssetPriority:
 class TestFormatValidationAdapter:
     """Adapter-provided formats skip external agent validation.
 
-    Covers: UC-006-FORMAT-VALIDATION-ADAPTER-01
+    Covers: UC-006-CREATIVE-FORMAT-VALIDATION-02
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
@@ -707,7 +707,7 @@ class TestFormatValidationAdapter:
 class TestFormatValidationUnreachable:
     """Unreachable creative agent → per-creative failure.
 
-    Covers: UC-006-FORMAT-VALIDATION-UNREACHABLE-01
+    Covers: UC-006-CREATIVE-FORMAT-VALIDATION-03
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
@@ -842,7 +842,7 @@ class TestAssignmentFormatCompatibility:
 class TestAssignmentResultFields:
     """Successful assignment populates assigned_to on the creative result.
 
-    Covers: UC-006-ASSIGNMENT-RESULT-01
+    Behavior: UC-006-ASSIGNMENT-RESULT-01
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)

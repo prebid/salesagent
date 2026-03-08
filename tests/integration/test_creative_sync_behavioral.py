@@ -41,7 +41,7 @@ _make_identity = make_identity  # Canonical version from tests.harness
 
 
 # ---------------------------------------------------------------------------
-# Auth Tests — Covers: UC-006-MAIN-01
+# Auth Tests — UC-006-EXT-A, UC-006-EXT-B
 # ---------------------------------------------------------------------------
 
 
@@ -49,34 +49,34 @@ class TestSyncAuthRequired:
     """Auth errors are operation-level — raised before any creative processing."""
 
     def test_no_identity_raises_auth_error(self, integration_db):
-        """Covers: UC-006-MAIN-A-01 — identity=None → AdCPAuthenticationError."""
+        """Covers: UC-006-EXT-A-01 — identity=None → AdCPAuthenticationError."""
         with CreativeSyncEnv() as env:
             with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
                 env.call_impl(creatives=[_make_creative_asset()], identity=None)
 
     def test_identity_without_principal_raises(self, integration_db):
-        """Covers: UC-006-MAIN-A-02 — principal_id=None → AdCPAuthenticationError."""
+        """Covers: UC-006-EXT-A-01 — principal_id=None → AdCPAuthenticationError."""
         identity = _make_identity(principal_id=None, tenant={"tenant_id": "t1", "name": "T1"})
         with CreativeSyncEnv() as env:
             with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
                 env.call_impl(creatives=[_make_creative_asset()], identity=identity)
 
     def test_identity_without_tenant_raises(self, integration_db):
-        """Covers: UC-006-MAIN-A-03 — tenant=None → AdCPAuthenticationError."""
+        """Covers: UC-006-EXT-B-01 — tenant=None → AdCPAuthenticationError."""
         identity = _make_identity(principal_id="p1", tenant=None)
         with CreativeSyncEnv() as env:
             with pytest.raises(AdCPAuthenticationError, match="tenant"):
                 env.call_impl(creatives=[_make_creative_asset()], identity=identity)
 
     def test_auth_error_before_db_access(self, integration_db):
-        """Covers: UC-006-MAIN-A-04 — auth error is operation-level, no partial results."""
+        """Covers: UC-006-EXT-A-02 — auth error is operation-level, no partial results."""
         with CreativeSyncEnv() as env:
             with pytest.raises(AdCPAuthenticationError):
                 # If this returned a response instead of raising, auth is broken
                 env.call_impl(creatives=[_make_creative_asset()], identity=None)
 
     def test_empty_principal_id_raises(self, integration_db):
-        """Covers: UC-006-MAIN-A-05 — empty string principal_id → AdCPAuthenticationError."""
+        """Covers: UC-006-EXT-A-01 — empty string principal_id → AdCPAuthenticationError."""
         identity = _make_identity(principal_id="", tenant={"tenant_id": "t1", "name": "T1"})
         with CreativeSyncEnv() as env:
             with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
@@ -84,7 +84,7 @@ class TestSyncAuthRequired:
 
 
 # ---------------------------------------------------------------------------
-# Cross-Principal Isolation — Covers: UC-006-ISO-01
+# Cross-Principal Isolation — Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-01
 # ---------------------------------------------------------------------------
 
 
@@ -92,7 +92,7 @@ class TestCrossPrincipalIsolation:
     """Creatives are scoped by (tenant_id, principal_id) — real DB proves isolation."""
 
     def test_creative_visible_only_to_owning_principal(self, integration_db):
-        """Covers: UC-006-ISO-01 — creative created by P1 not visible to P2 query."""
+        """Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-01 — creative created by P1 not visible to P2 query."""
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -141,7 +141,7 @@ class TestCrossPrincipalIsolation:
             assert len(p1_creatives) == 1
 
     def test_same_creative_id_different_principals_are_separate(self, integration_db):
-        """Covers: UC-006-ISO-02 — same creative_id under different principals = separate records."""
+        """Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-02 — same creative_id under different principals = separate records."""
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -180,7 +180,7 @@ class TestCrossPrincipalIsolation:
             assert principal_ids == {p1_id, p2_id}
 
     def test_new_creative_stamped_with_correct_principal(self, integration_db):
-        """Covers: UC-006-ISO-03 — created creative has correct principal_id in DB."""
+        """Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-03 — created creative has correct principal_id in DB."""
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -213,7 +213,7 @@ class TestCrossPrincipalIsolation:
 
 
 # ---------------------------------------------------------------------------
-# Validation Tests — Covers: UC-006-VAL-01
+# Validation Tests — Covers: UC-006-EXT-D-01
 # ---------------------------------------------------------------------------
 
 
@@ -221,7 +221,7 @@ class TestCreativeValidation:
     """Input validation for _sync_creatives_impl with real format registry mock."""
 
     def test_empty_name_rejected(self, integration_db):
-        """Covers: UC-006-VAL-01 — empty creative name → failed result."""
+        """Covers: UC-006-EXT-D-01 — empty creative name → failed result."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -232,7 +232,7 @@ class TestCreativeValidation:
             assert result.action == CreativeAction.failed or (result.errors and len(result.errors) > 0)
 
     def test_whitespace_only_name_rejected(self, integration_db):
-        """Covers: UC-006-VAL-02 — whitespace-only name → failed result."""
+        """Covers: UC-006-EXT-D-01 — whitespace-only name → failed result."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -243,7 +243,7 @@ class TestCreativeValidation:
             assert result.action == CreativeAction.failed or (result.errors and len(result.errors) > 0)
 
     def test_valid_creative_accepted(self, integration_db):
-        """Covers: UC-006-VAL-03 — valid creative → created action."""
+        """Covers: UC-006-MAIN-MCP-01 — valid creative → created action."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -256,7 +256,7 @@ class TestCreativeValidation:
             assert result.action != CreativeAction.failed
 
     def test_adapter_format_skips_registry_validation(self, integration_db):
-        """Covers: UC-006-VAL-04 — adapter:// agent_url skips external format lookup."""
+        """Covers: UC-006-CREATIVE-FORMAT-VALIDATION-02 — adapter:// agent_url skips external format lookup."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -275,7 +275,7 @@ class TestCreativeValidation:
 
 
 # ---------------------------------------------------------------------------
-# Validation Mode Tests — Covers: UC-006-VAL-MODE-01
+# Validation Mode Tests — Covers: UC-006-MAIN-MCP-05
 # ---------------------------------------------------------------------------
 
 
@@ -283,7 +283,7 @@ class TestValidationModeSemantics:
     """Strict vs lenient validation mode behavior with real DB savepoints."""
 
     def test_lenient_mode_continues_after_validation_error(self, integration_db):
-        """Covers: UC-006-VAL-MODE-01 — lenient: one bad creative doesn't block others."""
+        """Covers: UC-006-MAIN-MCP-05 — lenient: one bad creative doesn't block others."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -307,7 +307,7 @@ class TestValidationModeSemantics:
                 assert r.action != CreativeAction.failed, f"Creative {r.creative_id} should succeed in lenient mode"
 
     def test_strict_mode_also_processes_all_creatives(self, integration_db):
-        """Covers: UC-006-VAL-MODE-02 — strict: validation errors still per-creative in strict mode."""
+        """Covers: UC-006-EXT-C-02 — strict: validation errors still per-creative in strict mode."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -323,7 +323,7 @@ class TestValidationModeSemantics:
             assert len(response.creatives) >= 1
 
     def test_lenient_savepoint_isolation_with_real_db(self, integration_db):
-        """Covers: UC-006-VAL-MODE-03 — lenient: DB savepoints isolate per-creative failures."""
+        """Covers: UC-006-MAIN-MCP-05 — lenient: DB savepoints isolate per-creative failures."""
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -520,7 +520,7 @@ class TestCreativeIdsFilter:
         assert "c2" not in result_ids
 
     def test_empty_creative_ids_processes_all(self, integration_db):
-        """Covers: UC-006-CREATIVE-IDS-SCOPE-02 — empty list is falsy, processes all creatives."""
+        """Behavior: UC-006-CREATIVE-IDS-SCOPE-02 — empty list is falsy, processes all creatives."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")

@@ -140,7 +140,7 @@ class TestCreativeSyncDataPreservation:
     def test_sync_preserves_user_url_when_preview_available(self, integration_db):
         """Test that user-provided URL from assets is NOT overwritten by preview URL.
 
-        Covers: UC-006-DATA-PRESERVE-URL-01
+        Covers: UC-006-GENERATIVE-CREATIVE-BUILD-08
 
         Bug Context:
         -----------
@@ -196,7 +196,7 @@ class TestCreativeSyncDataPreservation:
     def test_sync_preserves_dimensions_when_preview_has_different_size(self, integration_db):
         """Test that user-provided dimensions are NOT overwritten by preview dimensions.
 
-        Covers: UC-006-DATA-PRESERVE-DIM-01
+        Covers: UC-006-GENERATIVE-CREATIVE-BUILD-08
 
         Bug Context:
         -----------
@@ -259,7 +259,7 @@ class TestCreativeSyncDataPreservation:
     def test_generative_output_preserves_user_assets(self, integration_db):
         """Test that user-provided assets are NOT replaced by generative output.
 
-        Covers: UC-006-DATA-PRESERVE-ASSETS-01
+        Covers: UC-006-GENERATIVE-CREATIVE-BUILD-08
 
         Bug Context:
         -----------
@@ -331,7 +331,7 @@ class TestCreativeSyncDataPreservation:
     def test_generative_output_preserves_user_url(self, integration_db):
         """Test that user-provided URL is NOT replaced by generative output URL.
 
-        Covers: UC-006-DATA-PRESERVE-GEN-URL-01
+        Covers: UC-006-GENERATIVE-CREATIVE-BUILD-08
 
         Bug Context:
         -----------
@@ -383,7 +383,7 @@ class TestCreativeSyncDataPreservation:
     def test_update_preserves_user_url_when_preview_changes(self, integration_db):
         """Test that UPDATE path also preserves user URL over preview URL.
 
-        Covers: UC-006-DATA-PRESERVE-UPDATE-01
+        Covers: UC-006-GENERATIVE-CREATIVE-BUILD-07
 
         Bug Context:
         -----------

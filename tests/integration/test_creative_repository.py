@@ -48,7 +48,7 @@ class TestCreativeRepoInit:
     """Repository construction."""
 
     def test_tenant_id_stored(self, integration_db):
-        """Covers: REPO-INIT-01 — tenant_id stored at construction."""
+        """Internal: REPO-INIT-01 — tenant_id stored at construction."""
         with _RepoEnv() as env:
             session = env.get_session()
             repo = CreativeRepository(session, "t1")
@@ -59,7 +59,7 @@ class TestCreativeRepoGetById:
     """get_by_id — scoped by tenant, principal, and creative_id."""
 
     def test_returns_matching_creative(self, integration_db):
-        """Covers: REPO-GET-01 — returns creative when found."""
+        """Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-01 — returns creative when found."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -76,7 +76,7 @@ class TestCreativeRepoGetById:
         assert result.creative_id == "c1"
 
     def test_returns_none_when_not_found(self, integration_db):
-        """Covers: REPO-GET-02 — returns None when no matching creative."""
+        """Internal: REPO-GET-02 — returns None when no matching creative."""
         with _RepoEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             session = env.get_session()
@@ -86,7 +86,7 @@ class TestCreativeRepoGetById:
         assert result is None
 
     def test_cross_tenant_isolation(self, integration_db):
-        """Covers: REPO-GET-03 — tenant A's creative invisible to tenant B repo."""
+        """Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-01 — tenant A's creative invisible to tenant B repo."""
         with _RepoEnv() as env:
             t1 = TenantFactory(tenant_id="t1")
             t2 = TenantFactory(tenant_id="t2")
@@ -105,7 +105,7 @@ class TestCreativeRepoGetByPrincipal:
     """get_by_principal — paginated results with total count."""
 
     def test_returns_creative_list_result(self, integration_db):
-        """Covers: REPO-LIST-01 — returns CreativeListResult with correct count."""
+        """Internal: REPO-LIST-01 — returns CreativeListResult with correct count."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -125,7 +125,7 @@ class TestCreativeRepoGetByPrincipal:
         assert len(result.creatives) == 5
 
     def test_zero_results(self, integration_db):
-        """Covers: REPO-LIST-02 — empty result for principal with no creatives."""
+        """Internal: REPO-LIST-02 — empty result for principal with no creatives."""
         with _RepoEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             session = env.get_session()
@@ -136,7 +136,7 @@ class TestCreativeRepoGetByPrincipal:
         assert result.creatives == []
 
     def test_pagination(self, integration_db):
-        """Covers: REPO-LIST-03 — offset/limit pagination works correctly."""
+        """Internal: REPO-LIST-03 — offset/limit pagination works correctly."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -161,7 +161,7 @@ class TestCreativeRepoGetByPrincipal:
         assert p1_ids.isdisjoint(p2_ids)
 
     def test_status_filter(self, integration_db):
-        """Covers: REPO-LIST-04 — status filter narrows results."""
+        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — status filter narrows results."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -180,7 +180,7 @@ class TestCreativeRepoListByPrincipal:
     """list_by_principal — all creatives without pagination."""
 
     def test_returns_list(self, integration_db):
-        """Covers: REPO-LISTALL-01 — returns all creatives for principal."""
+        """Covers: UC-006-DELETE-MISSING-01 — returns all creatives for principal."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -198,7 +198,7 @@ class TestCreativeRepoCreate:
     """create() — persists a new creative."""
 
     def test_creates_and_persists(self, integration_db):
-        """Covers: REPO-CREATE-01 — creates creative in DB with correct fields."""
+        """Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-03 — creates creative in DB with correct fields."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -220,7 +220,7 @@ class TestCreativeRepoCreate:
         assert result.name == "Test Banner"
 
     def test_generates_id_when_not_provided(self, integration_db):
-        """Covers: REPO-CREATE-02 — auto-generates UUID creative_id."""
+        """Internal: REPO-CREATE-02 — auto-generates UUID creative_id."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -242,7 +242,7 @@ class TestCreativeRepoUpdateData:
     """update_data() — sets data field."""
 
     def test_updates_data_field(self, integration_db):
-        """Covers: REPO-UPDATE-01 — data field updated and persisted."""
+        """Covers: UC-006-MAIN-MCP-03 — data field updated and persisted."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -270,7 +270,7 @@ class TestAssignmentRepoInit:
     """Repository construction."""
 
     def test_tenant_id_stored(self, integration_db):
-        """Covers: ASSIGN-INIT-01 — tenant_id stored."""
+        """Internal: ASSIGN-INIT-01 — tenant_id stored."""
         with _RepoEnv() as env:
             session = env.get_session()
             repo = CreativeAssignmentRepository(session, "t1")
@@ -281,7 +281,7 @@ class TestAssignmentRepoGetByCreative:
     """get_by_creative — assignments for a creative."""
 
     def test_returns_matching_assignments(self, integration_db):
-        """Covers: ASSIGN-GET-CREATIVE-01 — returns assignments for creative."""
+        """Covers: UC-006-ASSIGNMENTS-RESPONSE-COMPLETENESS-01 — returns assignments for creative."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -307,7 +307,7 @@ class TestAssignmentRepoGetByPackage:
     """get_by_package — assignments for a package."""
 
     def test_returns_matching_assignments(self, integration_db):
-        """Covers: ASSIGN-GET-PACKAGE-01 — returns assignments for package."""
+        """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-04 — returns assignments for package."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -333,7 +333,7 @@ class TestAssignmentRepoGetExisting:
     """get_existing — lookup by composite key."""
 
     def test_returns_existing_assignment(self, integration_db):
-        """Covers: ASSIGN-EXISTING-01 — returns assignment when found."""
+        """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-04 — returns assignment when found."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -356,7 +356,7 @@ class TestAssignmentRepoGetExisting:
         assert result.assignment_id == assignment.assignment_id
 
     def test_returns_none_when_not_found(self, integration_db):
-        """Covers: ASSIGN-EXISTING-02 — returns None when not found."""
+        """Internal: ASSIGN-EXISTING-02 — returns None when not found."""
         with _RepoEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             session = env.get_session()
@@ -370,7 +370,7 @@ class TestAssignmentRepoCreate:
     """create() — persists a new assignment."""
 
     def test_creates_assignment(self, integration_db):
-        """Covers: ASSIGN-CREATE-01 — creates assignment with correct fields."""
+        """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01 — creates assignment with correct fields."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -394,7 +394,7 @@ class TestAssignmentRepoCreate:
         assert result.weight == 75
 
     def test_default_weight_100(self, integration_db):
-        """Covers: ASSIGN-CREATE-02 — default weight is 100."""
+        """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-04 — default weight is 100."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -419,7 +419,7 @@ class TestAssignmentRepoDelete:
     """delete() — removes assignment by ID."""
 
     def test_deletes_existing(self, integration_db):
-        """Covers: ASSIGN-DELETE-01 — returns True when found and deleted."""
+        """Covers: UC-006-DELETE-MISSING-01 — returns True when found and deleted."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -442,7 +442,7 @@ class TestAssignmentRepoDelete:
         assert result is True
 
     def test_returns_false_when_not_found(self, integration_db):
-        """Covers: ASSIGN-DELETE-02 — returns False when not found."""
+        """Internal: ASSIGN-DELETE-02 — returns False when not found."""
         with _RepoEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             session = env.get_session()
