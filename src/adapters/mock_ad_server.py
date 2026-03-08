@@ -369,14 +369,14 @@ class MockAdServer(AdServerAdapter):
         except Exception as e:
             self.log(f"⚠️ Webhook failed for {step_id}: {e}")
 
-    def _validate_media_buy_request(
+    def validate_media_buy_request(
         self,
         request: CreateMediaBuyRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ):
+    ) -> list[str]:
         """Validate media buy request with GAM-like validation rules."""
         errors = []
 
@@ -420,10 +420,7 @@ class MockAdServer(AdServerAdapter):
         else:
             errors.append("InvalidArgumentError @ order.totalBudget")
 
-        # If we have errors, format them like GAM does
-        if errors:
-            error_message = "[" + ", ".join(errors) + "]"
-            raise Exception(error_message)
+        return errors
 
     def create_media_buy(
         self,
@@ -551,7 +548,12 @@ class MockAdServer(AdServerAdapter):
                     )
 
         # GAM-like validation (based on real GAM behavior)
-        self._validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+        validation_errors = self.validate_media_buy_request(
+            request, packages, start_time, end_time, package_pricing_info
+        )
+        if validation_errors:
+            error_message = "[" + ", ".join(validation_errors) + "]"
+            raise Exception(error_message)
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
