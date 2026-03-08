@@ -582,13 +582,12 @@ class TestAdapterPricingAnnotation:
 class TestGetProductCatalogConversionError:
     """Test get_product_catalog conversion error.
 
-    Intent: get_product_catalog is for admin/internal views. Showing a partial
-    catalog is better than failing entirely. This is intentionally different
-    from _get_products_impl (buyer-facing) where errors ARE fatal.
+    Per "No Quiet Failures" (CLAUDE.md) and commit 5444a3fb, conversion errors
+    must propagate. Corrupt products indicate data integrity issues.
     """
 
-    def test_corrupt_product_skipped_others_returned(self):
-        """Products that fail conversion are skipped; good products are returned."""
+    def test_corrupt_product_raises_valueerror(self):
+        """Conversion error propagates — not silently swallowed."""
         good_product = MagicMock()
         good_product.product_id = "good-prod"
         bad_product = MagicMock()
@@ -613,12 +612,11 @@ class TestGetProductCatalogConversionError:
         ):
             from src.core.tools.products import get_product_catalog
 
-            result = get_product_catalog(tenant_id="test-tenant")
+            with pytest.raises(ValueError, match="corrupt pricing_options JSON"):
+                get_product_catalog(tenant_id="test-tenant")
 
-        assert len(result) == 1
-
-    def test_all_products_corrupt_returns_empty(self):
-        """When all products fail conversion, returns empty list (not error)."""
+    def test_conversion_error_propagates_not_empty_list(self):
+        """Conversion error raises, not returns empty list."""
         bad_product = MagicMock()
         bad_product.product_id = "bad-prod"
 
@@ -636,6 +634,5 @@ class TestGetProductCatalogConversionError:
         ):
             from src.core.tools.products import get_product_catalog
 
-            result = get_product_catalog(tenant_id="test-tenant")
-
-        assert result == []
+            with pytest.raises(ValueError, match="corrupt"):
+                get_product_catalog(tenant_id="test-tenant")
