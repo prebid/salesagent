@@ -65,7 +65,7 @@ def _get_media_buy_delivery_impl(
 
     # Validate identity is provided
     if identity is None:
-        raise AdCPValidationError("Context is required", recovery="terminal")
+        raise AdCPValidationError("Context is required", recovery="correctable")
 
     # Extract testing context for time simulation and event jumping
     testing_ctx = identity.testing_context or AdCPTestContext()

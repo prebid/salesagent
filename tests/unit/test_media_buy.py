@@ -3666,6 +3666,16 @@ class TestDeliveryImplErrors:
         with pytest.raises(AdCPValidationError):
             _get_media_buy_delivery_impl(req, identity=None)
 
+    def test_missing_identity_recovery_is_correctable(self):
+        """Missing identity is correctable — buyer can fix by including auth headers.
+
+        Covers: salesagent-80je (PR #1083 review)
+        """
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
+        with pytest.raises(AdCPValidationError) as exc_info:
+            _get_media_buy_delivery_impl(req, identity=None)
+        assert exc_info.value.recovery == "correctable"
+
     def test_principal_not_found_returns_error_response(self):
         """UC-004-E02: principal not in DB returns error in response.
 

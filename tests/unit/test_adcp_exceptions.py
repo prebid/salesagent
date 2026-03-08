@@ -396,6 +396,8 @@ class TestFastAPIExceptionHandlers:
         assert "message" in body
         assert "details" in body
         assert body["details"] == {"field": "x"}
+        assert "recovery" in body
+        assert body["recovery"] == "correctable"
 
 
 # ---------------------------------------------------------------------------

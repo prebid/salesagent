@@ -58,7 +58,7 @@ from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPValidationError
 from src.core.schemas import (
     Creative,
     CreativeApprovalStatus,
@@ -2297,6 +2297,29 @@ class TestWorkflowStepCreation:
             mapping = mock_session.add.call_args[0][0]
             assert mapping.object_type == "creative"
             assert mapping.object_id == "c1"
+
+    def test_workflow_context_failure_recovery_is_transient(self):
+        """Failed workflow context creation should be transient — adapter failures are retryable.
+
+        Covers: salesagent-eber (PR #1083 review)
+        """
+        from src.core.tools.creatives._workflow import _create_sync_workflow_steps
+
+        with patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr_getter:
+            mock_ctx_mgr = MagicMock()
+            mock_ctx_mgr.get_or_create_context.return_value = None
+            mock_ctx_mgr_getter.return_value = mock_ctx_mgr
+
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                _create_sync_workflow_steps(
+                    creatives_needing_approval=[{"creative_id": "c1", "format": "display", "name": "Test"}],
+                    principal_id="p1",
+                    tenant={"tenant_id": "t1"},
+                    approval_mode="require-human",
+                    push_notification_config=None,
+                    context=None,
+                )
+            assert exc_info.value.recovery == "transient"
 
 
 # ============================================================================
