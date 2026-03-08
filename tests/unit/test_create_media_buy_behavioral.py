@@ -355,17 +355,13 @@ class TestMaxDailySpendExceeded:
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
+                except AdCPValidationError as e:
+                    # Validation errors must NOT be about daily spend
+                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
+                        f"Daily spend validation should have passed but got: {e}"
+                    )
                 except Exception:
-                    # Downstream failures are fine — we only care that daily spend
-                    # validation did NOT produce a validation_error
-                    result = None
-
-        # If we got a result, it should NOT be a daily-spend validation error
-        if result is not None and isinstance(result.response, CreateMediaBuyError):
-            for err in result.response.errors:
-                assert "daily" not in err.message.lower() or "exceeds" not in err.message.lower(), (
-                    f"Daily spend validation should have passed but got: {err.message}"
-                )
+                    pass  # Downstream failures unrelated to daily spend validation are fine
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_same_day_flight_uses_min_one_day(self):
@@ -433,13 +429,10 @@ class TestMaxDailySpendExceeded:
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
+                except AdCPValidationError as e:
+                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
                 except Exception:
-                    result = None
-
-        # Should not fail on daily spend (any failure is from something else)
-        if result is not None and isinstance(result.response, CreateMediaBuyError):
-            for err in result.response.errors:
-                assert "daily" not in err.message.lower() or "exceeds" not in err.message.lower()
+                    pass  # Downstream failures unrelated to daily spend are fine
 
 
 class TestCreativeMissingUrl:
@@ -1148,13 +1141,12 @@ class TestMainFlowObligations:
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
+                except AdCPValidationError as e:
+                    assert "not found" not in str(e).lower() or "product" not in str(e).lower(), (
+                        f"Product validation should have passed but got: {e}"
+                    )
                 except Exception:
-                    result = None
-
-        # If we got a result, product validation should NOT have failed
-        if result is not None and isinstance(result.response, CreateMediaBuyError):
-            for err in result.response.errors:
-                assert "not found" not in err.message.lower() or "product" not in err.message.lower()
+                    pass  # Downstream failures unrelated to product validation are fine
 
     @pytest.mark.asyncio
     async def test_currency_validation_supported(self):
@@ -1177,13 +1169,12 @@ class TestMainFlowObligations:
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
+                except AdCPValidationError as e:
+                    assert "currency" not in str(e).lower() or "not supported" not in str(e).lower(), (
+                        f"Currency validation should have passed but got: {e}"
+                    )
                 except Exception:
-                    result = None
-
-        # Currency validation should NOT have failed
-        if result is not None and isinstance(result.response, CreateMediaBuyError):
-            for err in result.response.errors:
-                assert "currency" not in err.message.lower() or "not supported" not in err.message.lower()
+                    pass  # Downstream failures unrelated to currency validation are fine
 
     @pytest.mark.asyncio
     async def test_targeting_overlay_validation(self):
@@ -1220,13 +1211,10 @@ class TestMainFlowObligations:
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
+                except AdCPValidationError as e:
+                    assert "targeting" not in str(e).lower(), f"Targeting validation should have passed but got: {e}"
                 except Exception:
-                    result = None
-
-        # Targeting validation should NOT have failed
-        if result is not None and isinstance(result.response, CreateMediaBuyError):
-            for err in result.response.errors:
-                assert "targeting" not in err.message.lower()
+                    pass  # Downstream failures unrelated to targeting validation are fine
 
     @pytest.mark.asyncio
     async def test_auto_approval_determination(self):
@@ -1463,13 +1451,12 @@ class TestAsapStartTimingObligations:
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
+                except AdCPValidationError as e:
+                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
+                        f"Daily spend validation should have passed but got: {e}"
+                    )
                 except Exception:
-                    result = None
-
-        # Daily spend check should pass since budget/flight_days < max daily cap
-        if result is not None and isinstance(result.response, CreateMediaBuyError):
-            for err in result.response.errors:
-                assert "daily" not in err.message.lower() or "exceeds" not in err.message.lower()
+                    pass  # Downstream failures unrelated to daily spend are fine
 
 
 class TestManualApprovalObligations:
@@ -2197,13 +2184,10 @@ class TestExtensionObligations:
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
+                except AdCPValidationError as e:
+                    assert "daily" not in str(e).lower(), f"Daily spend validation should have passed but got: {e}"
                 except Exception:
-                    result = None
-
-        # Should not fail on daily spend
-        if result is not None and isinstance(result.response, CreateMediaBuyError):
-            for err in result.response.errors:
-                assert "daily" not in err.message.lower()
+                    pass  # Downstream failures unrelated to daily spend are fine
 
     def test_proposal_not_found_error_code(self):
         """PROPOSAL_NOT_FOUND error code is used for missing proposals.

@@ -173,35 +173,6 @@ class DailyBreakdown(SalesAgentBaseModel):
     conversions, conversion_value, roas, new_to_brand_rate fields.
     """
 
-    # FIXME(salesagent-jz3y): notification_type, partial_data, unavailable_count,
-    # sequence_number, next_expected_at are response-level webhook metadata, NOT
-    # per-day fields. The adcp library correctly places these on
-    # GetMediaBuyDeliveryResponse (already inherited). These fields are never
-    # populated on DailyBreakdown instances -- remove them once webhook service
-    # is confirmed not to depend on them here.
-    notification_type: str | None = Field(
-        None,
-        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
-    )
-    partial_data: bool | None = Field(
-        None,
-        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
-    )
-    unavailable_count: int | None = Field(
-        None,
-        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
-        ge=0,
-    )
-    sequence_number: int | None = Field(
-        None,
-        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
-        ge=1,
-    )
-    next_expected_at: str | None = Field(
-        None,
-        description="MISPLACED: response-level webhook field, not per-day. See GetMediaBuyDeliveryResponse.",
-    )
-
     date: str = Field(description="Date (YYYY-MM-DD)", pattern=r"^\d{4}-\d{2}-\d{2}$")
     impressions: float = Field(ge=0, description="Daily impressions")
     spend: float = Field(ge=0, description="Daily spend")

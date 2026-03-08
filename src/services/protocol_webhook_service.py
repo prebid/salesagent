@@ -92,6 +92,14 @@ class ProtocolWebhookService:
             )
             return False
 
+        # Validate webhook URL for SSRF protection
+        from src.core.webhook_validator import WebhookURLValidator
+
+        is_valid, error_msg = WebhookURLValidator.validate_webhook_url(push_notification_config.url)
+        if not is_valid:
+            logger.error(f"Protocol webhook URL validation failed for {push_notification_config.url}: {error_msg}")
+            return False
+
         url = _normalize_localhost_for_docker(push_notification_config.url)
 
         # Prepare headers

@@ -520,6 +520,13 @@ class WebhookDeliveryService:
             if media_buy_id in self._sequence_numbers:
                 del self._sequence_numbers[media_buy_id]
 
+    def has_open_circuit_breaker(self, tenant_id: str) -> bool:
+        """Check if any circuit breaker is OPEN for endpoints belonging to a tenant."""
+        for key, cb in self._circuit_breakers.items():
+            if key.startswith(f"{tenant_id}:") and cb.state == CircuitState.OPEN:
+                return True
+        return False
+
     def get_circuit_breaker_state(self, endpoint_url: str) -> tuple[CircuitState, int]:
         """Get circuit breaker state for an endpoint.
 
