@@ -49,10 +49,8 @@ from adcp.types.generated_poc.media_buy.sync_creatives_response import (
     SyncCreativesResponse2 as LibrarySyncCreativesError,
 )
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
-    model_serializer,
     model_validator,
 )
 

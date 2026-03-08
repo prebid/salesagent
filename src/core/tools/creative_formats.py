@@ -91,7 +91,9 @@ _ASSET_TYPE_TO_CLASS: dict[str, type] = {
 }
 
 
-def _make_asset(asset_id: str, asset_type: str, required: bool) -> Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14:
+def _make_asset(
+    asset_id: str, asset_type: str, required: bool
+) -> Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14:
     """Build the correct Assets variant for a given asset type string."""
     cls = _ASSET_TYPE_TO_CLASS.get(asset_type, Assets7)  # default to text
     return cls(
@@ -198,7 +200,7 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[Assets | Assets5] = []
+                        assets_list: list[Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14] = []
                         for asset_id in template.get("required_assets", []):
                             asset_type = _infer_asset_type(asset_id)
                             assets_list.append(_make_asset(asset_id, asset_type, required=True))
