@@ -305,12 +305,35 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 **Then** dynamic product variants are generated with `is_custom: true` and `expires_at`
 **Priority:** P2
 
+#### Scenario: Dynamic variant generation failure -- fail open (Step 11)
+**Obligation ID** UC-001-MAIN-41
+**Layer** behavioral
+**Origin** product decision
+**Given** a brief is provided in the request
+**And** the signals agent service is unavailable (network error, timeout, import error)
+**When** the system attempts dynamic variant generation
+**Then** static products are returned without dynamic variants
+**And** a warning is logged
+**And** programming errors (TypeError, AttributeError) propagate as exceptions
+**Priority:** P1
+
 #### Scenario: Pricing enrichment with price_guidance and forecast (Step 12)
 **Obligation ID** UC-001-MAIN-25
 **Layer** behavioral
 **Given** products have dynamic pricing data available
 **When** the system enriches products
 **Then** each product includes `price_guidance` and/or `forecast` data
+**Priority:** P1
+
+#### Scenario: Pricing enrichment failure -- fail open (Step 12)
+**Obligation ID** UC-001-MAIN-42
+**Layer** behavioral
+**Origin** product decision
+**Given** the dynamic pricing service fails (database error, import error)
+**When** the system attempts pricing enrichment
+**Then** products are returned with their original static pricing options
+**And** a warning is logged
+**And** programming errors (TypeError, AttributeError) propagate as exceptions
 **Priority:** P1
 
 #### Scenario: Pricing enrichment -- forecast field from DB (Step 12, qo8a fix)
@@ -394,6 +417,17 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 **When** the system annotates adapter support for pricing options
 **Then** the pricing option lookup correctly resolves by pricing option ID (not by string-to-integer comparison mismatch)
 **Priority:** P0
+
+#### Scenario: Adapter support annotation failure -- fail open (Step 17)
+**Obligation ID** UC-001-MAIN-43
+**Layer** behavioral
+**Origin** product decision
+**Given** the adapter cannot be instantiated (missing config, import error, network_code missing)
+**When** the system attempts to annotate pricing options
+**Then** products are returned without `supported`/`unsupported_reason` annotations
+**And** a warning is logged
+**And** programming errors (TypeError, AttributeError) propagate as exceptions
+**Priority:** P1
 
 #### Scenario: Proposal generation (Step 18)
 **Obligation ID** UC-001-MAIN-35

@@ -542,15 +542,20 @@ class TestAIRankingDisabled:
 
 
 class TestAdapterPricingAnnotation:
-    """Test adapter pricing annotation error path.
+    """Adapter annotation fail-open on expected errors.
 
-    Intent: pricing annotation is best-effort enrichment. If the adapter
-    fails, products must still be returned without annotations.
+    Product decision: pricing annotation is best-effort enrichment. If the adapter
+    fails with a service error, products must still be returned without annotations.
+
+        Covers: UC-001-MAIN-43
     """
 
     @pytest.mark.asyncio
     async def test_adapter_error_returns_products_without_annotations(self):
-        """When get_adapter raises, products are returned without pricing annotations."""
+        """RuntimeError degrades gracefully.
+
+        Covers: UC-001-MAIN-43
+        """
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
         req = _make_request()

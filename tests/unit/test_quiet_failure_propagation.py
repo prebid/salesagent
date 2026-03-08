@@ -1,14 +1,10 @@
-"""Regression test: unexpected exceptions in enrichment services must propagate.
+"""Enrichment service fail-open with exception narrowing.
 
-GitHub issue #1093: Four bare `except Exception` catches in _get_products_impl
-silently swallow ALL exceptions — including programming errors (TypeError,
-AttributeError, KeyError). While graceful degradation is correct for expected
-service failures (ImportError, RuntimeError from network), actual bugs must
-surface immediately.
+Product decision (GitHub #1093): Optional enrichment services degrade
+gracefully on expected service failures but propagate programming errors
+(TypeError, AttributeError) immediately.
 
-This test verifies that unexpected exception types (TypeError, AttributeError)
-propagate out of _get_products_impl, while expected service failures
-(ImportError, RuntimeError) are handled gracefully.
+    Covers: BR-RULE-079-01
 
 beads: salesagent-o3x6
 """
@@ -65,11 +61,17 @@ def _base_patches(mock_uow, convert_fn=None):
 
 
 class TestDynamicVariantsExceptionPropagation:
-    """TypeError in dynamic variant generation must propagate, not be swallowed."""
+    """Dynamic variant generation fail-open.
+
+    Covers: UC-001-MAIN-41
+    """
 
     @pytest.mark.asyncio
     async def test_type_error_propagates(self):
-        """A TypeError (programming bug) in generate_variants_for_brief must not be caught."""
+        """TypeError (bug) propagates, not swallowed.
+
+        Covers: UC-001-MAIN-41
+        """
         from tests.helpers.adcp_factories import create_test_product
 
         product = create_test_product(product_id="p1")
@@ -96,7 +98,10 @@ class TestDynamicVariantsExceptionPropagation:
 
     @pytest.mark.asyncio
     async def test_runtime_error_is_graceful(self):
-        """A RuntimeError (network/service failure) should degrade gracefully."""
+        """RuntimeError (service failure) degrades gracefully.
+
+        Covers: UC-001-MAIN-41
+        """
         from tests.helpers.adcp_factories import create_test_product
 
         product = create_test_product(product_id="p1")
@@ -124,11 +129,17 @@ class TestDynamicVariantsExceptionPropagation:
 
 
 class TestDynamicPricingExceptionPropagation:
-    """TypeError in dynamic pricing must propagate, not be swallowed."""
+    """Dynamic pricing fail-open.
+
+    Covers: UC-001-MAIN-42
+    """
 
     @pytest.mark.asyncio
     async def test_type_error_propagates(self):
-        """A TypeError (programming bug) in DynamicPricingService must not be caught."""
+        """TypeError (bug) propagates, not swallowed.
+
+        Covers: UC-001-MAIN-42
+        """
         from tests.helpers.adcp_factories import create_test_product
 
         product = create_test_product(product_id="p1")
@@ -170,11 +181,17 @@ class TestDynamicPricingExceptionPropagation:
 
 
 class TestAIRankingExceptionPropagation:
-    """TypeError in AI ranking must propagate, not be swallowed."""
+    """AI ranking fail-open (obligation already existed).
+
+    Covers: UC-001-MAIN-32
+    """
 
     @pytest.mark.asyncio
     async def test_type_error_propagates(self):
-        """A TypeError (programming bug) in rank_products_async must not be caught."""
+        """TypeError (bug) propagates even though service failures degrade.
+
+        Covers: UC-001-MAIN-32
+        """
         from tests.helpers.adcp_factories import create_test_product
 
         product = create_test_product(product_id="p1")
@@ -230,11 +247,17 @@ class TestAIRankingExceptionPropagation:
 
 
 class TestAdapterAnnotationExceptionPropagation:
-    """TypeError in adapter pricing annotation must propagate, not be swallowed."""
+    """Adapter annotation fail-open.
+
+    Covers: UC-001-MAIN-43
+    """
 
     @pytest.mark.asyncio
     async def test_type_error_propagates(self):
-        """A TypeError (programming bug) in adapter annotation must not be caught."""
+        """TypeError (bug) propagates, not swallowed.
+
+        Covers: UC-001-MAIN-43
+        """
         from tests.helpers.adcp_factories import create_test_product
 
         product = create_test_product(product_id="p1")

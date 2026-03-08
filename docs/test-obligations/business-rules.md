@@ -1352,3 +1352,29 @@ Then all property lists for the tenant are returned
 ```
 **Priority:** P3
 **Affected by 3.6:** Yes -- property lists domain is new in v3
+
+---
+
+### BR-RULE-079: Enrichment Service Fail-Open with Exception Narrowing
+**Obligation ID** BR-RULE-079-01
+**Layer** behavioral
+**Origin** product decision (GitHub #1093)
+**Invariant:** Optional enrichment services (dynamic variants, dynamic pricing, AI ranking, adapter annotation) degrade gracefully on expected service failures (ImportError, RuntimeError, OSError). Programming errors (TypeError, AttributeError, KeyError) must propagate — they indicate bugs, not transient failures. Core data path services (product conversion, property list resolution) always fail closed.
+**Scenario:**
+```gherkin
+Given the dynamic variant service raises RuntimeError (network failure)
+When _get_products_impl processes the request
+Then static products are returned without dynamic variants
+And a warning is logged
+
+Given the dynamic variant service raises TypeError (programming bug)
+When _get_products_impl processes the request
+Then the TypeError propagates as an unhandled exception
+
+Given product conversion raises ValueError (data corruption)
+When _get_products_impl processes the request
+Then the ValueError propagates (core path — never fail open)
+```
+**Priority:** P1
+**Affected by 3.6:** No
+**Cross-references:** UC-001-MAIN-41, UC-001-MAIN-42, UC-001-MAIN-32, UC-001-MAIN-43, UC-001-EXT-A-03

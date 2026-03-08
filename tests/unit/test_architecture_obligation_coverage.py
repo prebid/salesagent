@@ -36,6 +36,8 @@ _UNIT_ENTITY_FILES = [
     "test_product.py",
     "test_product_schema_obligations.py",
     "test_property_list_schema.py",
+    "test_quiet_failure_propagation.py",
+    "test_get_products_impl_coverage.py",
 ]
 
 # Obligation ID pattern: PREFIX-SECTION-SEQ (e.g., UC-002-MAIN-01, BR-RULE-006-01)
