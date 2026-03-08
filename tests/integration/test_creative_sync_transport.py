@@ -67,6 +67,14 @@ class TestSyncCreativeCreateTransport:
         creative = result.payload.creatives[0]
         assert creative.creative_id == "c_transport_test"
 
+        # DB verification: creative must be persisted
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_transport_test", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is not None, "Created creative should be persisted in DB"
+            assert db_creative.name == "Transport Test Creative"
+
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_empty_creative_list_returns_success(self, integration_db, transport):
         """Empty creative list is a valid no-op across all transports."""
@@ -157,6 +165,13 @@ class TestSyncUpsertReturnsUpdatedTransport:
         upserted = result.payload.creatives[0]
         assert upserted.creative_id == "c_upsert"
         assert upserted.action == CreativeAction.updated
+
+        # DB verification: upserted creative exists in DB
+        with get_db_session() as session:
+            db_creative = session.scalars(
+                select(DBCreative).filter_by(creative_id="c_upsert", tenant_id="test_tenant")
+            ).first()
+            assert db_creative is not None, "Upserted creative should be persisted in DB"
 
 
 @pytest.mark.requires_db
