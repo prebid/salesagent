@@ -21,6 +21,25 @@ from tests.harness import CreativeListEnv, make_identity
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
+class TestInvalidTokenAtTransportBoundary:
+    """Transport boundary rejects invalid token strings via resolve_identity()."""
+
+    def test_bad_token_string_rejected(self, integration_db):
+        """SECURITY: An actual bad token string → AdCPAuthenticationError at boundary."""
+        from src.core.resolved_identity import resolve_identity
+
+        # Create a real tenant so _detect_tenant succeeds
+        with CreativeListEnv():
+            tenant = TenantFactory(tenant_id="token_test_tenant")
+            # Pass a fabricated bad token that doesn't match any principal in the DB
+            headers = {
+                "x-adcp-auth": "bad-token-xyz-not-a-real-token",
+                "x-adcp-tenant": tenant.tenant_id,
+            }
+            with pytest.raises(AdCPAuthenticationError, match="invalid"):
+                resolve_identity(headers, require_valid_token=True)
+
+
 class TestListCreativesAuthentication:
     """Integration tests for list_creatives authentication."""
 
