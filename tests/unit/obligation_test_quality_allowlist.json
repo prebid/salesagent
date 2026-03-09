@@ -1,13 +1,7 @@
 [
   "tests/unit/test_creative.py:TestCreativeAssetTypes.test_all_11_asset_types_accepted",
-  "tests/unit/test_creative.py:TestCreativeIdsFilter.test_empty_creative_ids_filters_all",
-  "tests/unit/test_creative.py:TestCreativeValidation.test_missing_format_id_rejected_at_schema_level",
-  "tests/unit/test_creative.py:TestSyncCreativeResultSchema.test_creative_action_enum_values",
   "tests/unit/test_product_schema_obligations.py:TestBrandManifestExtraction.test_brand_name_derives_offering_text",
   "tests/unit/test_product_schema_obligations.py:TestBrandManifestExtraction.test_brand_url_derives_offering_text",
-  "tests/unit/test_product_schema_obligations.py:TestPaginatedDiscoverySchema.test_pagination_max_max_results_bounds",
-  "tests/unit/test_product_schema_obligations.py:TestPaginatedDiscoverySchema.test_pagination_min_max_results_bounds",
-  "tests/unit/test_product_schema_obligations.py:TestPrecondSchemaObligations.test_product_selectors_without_brand_rejected",
   "tests/unit/test_product_schema_obligations.py:TestProductUniquenessSchema.test_duplicate_product_ids_detectable",
   "tests/unit/test_product_schema_obligations.py:TestProposalSchemaObligations.test_allocation_pricing_option_id",
   "tests/unit/test_product_schema_obligations.py:TestProposalSchemaObligations.test_allocation_sequence",

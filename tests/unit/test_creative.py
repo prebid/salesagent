@@ -391,16 +391,79 @@ class TestSyncCreativeResultSchema:
         assert result.assignment_errors == {"pkg_3": "Not found"}
 
     def test_creative_action_enum_values(self):
-        """CreativeAction enum must include all spec values.
+        """_sync_creatives_impl returns results with valid CreativeAction values.
 
         Spec: CONFIRMED -- creative-action enum defines exactly:
         created, updated, unchanged, failed, deleted.
         https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/enums/creative_action.py
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-09
+
+        MULTI-ROUTE: _impl (verifies action values), sync_creatives_raw (A2A), REST route.
         """
-        expected = {"created", "updated", "unchanged", "failed", "deleted"}
-        actual = {action.value for action in CreativeAction}
-        assert expected.issubset(actual), f"Missing actions: {expected - actual}"
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
+
+        identity = _make_identity()
+
+        valid_actions = {"created", "updated", "unchanged", "failed", "deleted"}
+
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch(
+                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                return_value=MagicMock(),
+            ),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+        ):
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = MagicMock()
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.first.return_value = None
+
+            # Route 1: _impl — new creative returns action="created"
+            result = _sync_creatives_impl(
+                creatives=[_make_creative_asset()],
+                identity=identity,
+            )
+            assert isinstance(result, SyncCreativesResponse)
+            for creative_result in result.creatives:
+                action_val = creative_result.action
+                if hasattr(action_val, "value"):
+                    action_val = action_val.value
+                assert action_val in valid_actions, (
+                    f"Action '{action_val}' not in valid CreativeAction values: {valid_actions}"
+                )
+
+            # Route 2: A2A — same action validation
+            mock_session.scalars.return_value.first.return_value = None
+            a2a_result = sync_creatives_raw(
+                creatives=[_make_creative_asset()],
+                identity=identity,
+            )
+            for creative_result in a2a_result.creatives:
+                action_val = creative_result.action
+                if hasattr(action_val, "value"):
+                    action_val = action_val.value
+                assert action_val in valid_actions
+
+        # Route 3: REST route exists
+        from src.routes.api_v1 import router
+
+        paths = [route.path for route in router.routes]
+        assert any(p.endswith("/creatives/sync") for p in paths)
 
 
 class TestSyncCreativesResponseSchema:
@@ -991,21 +1054,70 @@ class TestCreativeValidation:
             _validate_creative_input(creative, mock_registry, "p1")
 
     def test_missing_format_id_rejected_at_schema_level(self):
-        """Creative with format_id=None is rejected at Pydantic schema level.
+        """_sync_creatives_impl rejects a creative with missing format_id.
 
         Spec: CONFIRMED -- creative-asset.json lists format_id in required array.
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-asset.json
         Covers: UC-006-EXT-E-01
-        """
-        from pydantic import ValidationError as PydanticValidationError
 
-        with pytest.raises(PydanticValidationError, match="format_id"):
-            CreativeAsset(
-                creative_id="c_test_1",
-                name="No Format",
-                format_id=None,
-                assets={"banner": {"url": "https://example.com/banner.png"}},
+        MULTI-ROUTE: _impl (validation happens at schema level before _impl processes),
+        sync_creatives_raw (A2A), REST route.
+        """
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
+
+        identity = _make_identity()
+
+        # Creative as dict with missing format_id — _impl normalizes dicts to CreativeAsset
+        bad_creative = {
+            "creative_id": "c_no_format",
+            "name": "No Format",
+            "assets": {"banner": {"url": "https://example.com/banner.png"}},
+        }
+
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+        ):
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = MagicMock()
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+
+            # Route 1: _impl — missing format_id results in a failed creative
+            result = _sync_creatives_impl(
+                creatives=[bad_creative],
+                identity=identity,
             )
+            assert isinstance(result, SyncCreativesResponse)
+            assert len(result.creatives) == 1
+            action_val = result.creatives[0].action
+            if hasattr(action_val, "value"):
+                action_val = action_val.value
+            assert action_val == "failed", "Creative without format_id must fail"
+            assert result.creatives[0].errors, "Failed creative must have error messages"
+
+            # Route 2: A2A — same behavior
+            a2a_result = sync_creatives_raw(
+                creatives=[bad_creative],
+                identity=identity,
+            )
+            assert isinstance(a2a_result, SyncCreativesResponse)
+            a2a_action = a2a_result.creatives[0].action
+            if hasattr(a2a_action, "value"):
+                a2a_action = a2a_action.value
+            assert a2a_action == "failed"
+
+        # Route 3: REST route exists
+        from src.routes.api_v1 import router
+
+        paths = [route.path for route in router.routes]
+        assert any(p.endswith("/creatives/sync") for p in paths)
 
     def test_adapter_format_skips_external_validation(self):
         """Non-HTTP agent_url (adapter format) skips creative agent check.
@@ -2367,24 +2479,70 @@ class TestCreativeIdsFilter:
         assert filtered[1]["creative_id"] == "c3"
 
     def test_empty_creative_ids_filters_all(self):
-        """Empty creative_ids list [] means process nothing.
+        """Empty creative_ids=[] is falsy, so _sync_creatives_impl processes all creatives.
 
         Spec: CONFIRMED -- sync-creatives-request.json specifies minItems:1
         for creative_ids, so empty [] is invalid per schema. Implementation
         treats falsy [] as no-filter (documents actual behavior).
         Covers: UC-006-CREATIVE-IDS-SCOPE-01
+
+        MULTI-ROUTE: _impl, sync_creatives_raw (A2A), REST route.
         """
-        creatives = [{"creative_id": "c1"}]
-        creative_ids: list[str] = []
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 
-        # Current behavior: empty list is falsy, so no filtering happens
-        if creative_ids:
-            filtered = [c for c in creatives if c["creative_id"] in set(creative_ids)]
-        else:
-            filtered = list(creatives)
+        identity = _make_identity()
 
-        # Documenting actual behavior: all creatives pass through
-        assert len(filtered) == 1
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch(
+                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                return_value=MagicMock(),
+            ),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+        ):
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = MagicMock()
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.first.return_value = None
+
+            # Route 1: _impl with creative_ids=[] — all creatives pass through
+            result = _sync_creatives_impl(
+                creatives=[_make_creative_asset()],
+                creative_ids=[],
+                identity=identity,
+            )
+            assert isinstance(result, SyncCreativesResponse)
+            assert len(result.creatives) == 1, "Empty creative_ids=[] is falsy, all creatives processed"
+
+            # Route 2: A2A with creative_ids=[]
+            mock_session.scalars.return_value.first.return_value = None
+            a2a_result = sync_creatives_raw(
+                creatives=[_make_creative_asset()],
+                creative_ids=[],
+                identity=identity,
+            )
+            assert isinstance(a2a_result, SyncCreativesResponse)
+            assert len(a2a_result.creatives) == 1
+
+        # Route 3: REST route exists
+        from src.routes.api_v1 import router
+
+        paths = [route.path for route in router.routes]
+        assert any(p.endswith("/creatives/sync") for p in paths)
 
 
 # ============================================================================
