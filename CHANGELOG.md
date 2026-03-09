@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0](https://github.com/prebid/salesagent/compare/v1.4.0...v1.5.0) (2026-03-09)
+
+
+### Features
+
+* AdCP v3.6 upgrade — schema migration, auth hardening, repository pattern, multi-tenant isolation ([#1071](https://github.com/prebid/salesagent/issues/1071)) ([3398aab](https://github.com/prebid/salesagent/commit/3398aabf387447ccfbd20402703a60ff99f62bd5))
+* Creative domain completion — v3.6 schema, auth hardening, error propagation, 3300+ tests ([#1080](https://github.com/prebid/salesagent/issues/1080)) ([0cbe97c](https://github.com/prebid/salesagent/commit/0cbe97cf33d240cb10d4388091c126fb541baf22))
+* delivery domain completion + media buy test coverage (v3.6) ([#1081](https://github.com/prebid/salesagent/issues/1081)) ([46db70f](https://github.com/prebid/salesagent/commit/46db70fcc38cdec6d84d663fa7bfc547f4e86100))
+* Error recovery classification and standard error vocabulary ([#1083](https://github.com/prebid/salesagent/issues/1083)) ([96ed70f](https://github.com/prebid/salesagent/commit/96ed70fa72e3b594693dd1f94dc0acb548750f9b))
+* Product v3.6 completion — schema extraction, repository pattern, obligation test coverage ([#1082](https://github.com/prebid/salesagent/issues/1082)) ([90e1dfa](https://github.com/prebid/salesagent/commit/90e1dfad0c5809544be6375a29571077be8174ae))
+
+
+### Bug Fixes
+
+* resolve FormatId AttributeError crashing Add/Edit Product pages ([#1079](https://github.com/prebid/salesagent/issues/1079)) ([0b22f1e](https://github.com/prebid/salesagent/commit/0b22f1e4f54a219bd3e5cd54879c52872e9c468e))
+
+
+### Code Refactoring
+
+* FastAPI migration — unify MCP + A2A + Admin into single process ([#1066](https://github.com/prebid/salesagent/issues/1066)) ([7d2b1d9](https://github.com/prebid/salesagent/commit/7d2b1d9e05d30388c74259ec29bd03f24390e2e7))
+
 ## [1.4.0](https://github.com/prebid/salesagent/compare/v1.3.1...v1.4.0) (2026-02-27)
 
 
